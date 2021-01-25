@@ -869,8 +869,8 @@ def run(request):
 	`, classname)
 }
 
-func DeployAppToDatastore(ctx context.Context, gceProject string, workflowapp WorkflowApp, bucketName string) error {
-	err := setWorkflowAppDatastore(ctx, gceProject, workflowapp, workflowapp.ID)
+func DeployAppToDatastore(ctx context.Context, workflowapp WorkflowApp, bucketName string) error {
+	err := SetWorkflowAppDatastore(ctx, workflowapp, workflowapp.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflowapp: %s", err)
 		return err
