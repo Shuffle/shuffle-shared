@@ -14,6 +14,13 @@ type ExecutionRequestWrapper struct {
 	Data []ExecutionRequest `json:"data"`
 }
 
+type RetStruct struct {
+	Success         bool         `json:"success"`
+	SyncFeatures    SyncFeatures `json:"sync_features"`
+	SessionKey      string       `json:"session_key"`
+	IntervalSeconds int64        `json:"interval_seconds"`
+}
+
 type ExecutionRequest struct {
 	ExecutionId       string `json:"execution_id"`
 	ExecutionArgument string `json:"execution_argument"`

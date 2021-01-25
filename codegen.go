@@ -504,7 +504,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			var parse parsed
 			err := json.Unmarshal([]byte(parsedCategories), &parse)
 			if err != nil {
-				log.Printf("Failed unmarshaling categories", err)
+				log.Printf("Failed unmarshaling categories: %s", err)
 			} else {
 				api.Categories = parse.Categories
 			}

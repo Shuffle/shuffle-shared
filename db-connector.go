@@ -489,3 +489,25 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	return users[0], nil
 }
+
+func GetHook(ctx context.Context, hookId string) (*Hook, error) {
+	key := datastore.NameKey("hooks", strings.ToLower(hookId), nil)
+	hook := &Hook{}
+	if err := project.Dbclient.Get(ctx, key, hook); err != nil {
+		return &Hook{}, err
+	}
+
+	return hook, nil
+}
+
+func SetHook(ctx context.Context, hook Hook) error {
+	key1 := datastore.NameKey("hooks", strings.ToLower(hook.Id), nil)
+
+	// New struct, to not add body, author etc
+	if _, err := project.Dbclient.Put(ctx, key1, &hook); err != nil {
+		log.Printf("Error adding hook: %s", err)
+		return err
+	}
+
+	return nil
+}
