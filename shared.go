@@ -43,7 +43,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	return false
 }
 
-func handleGetOrgs(resp http.ResponseWriter, request *http.Request) {
+func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -105,7 +105,7 @@ func handleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func handleGetOrg(resp http.ResponseWriter, request *http.Request) {
+func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -184,7 +184,7 @@ func handleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func handleLogout(resp http.ResponseWriter, request *http.Request) {
+func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -245,7 +245,7 @@ func handleLogout(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": false, "reason": "Successfully logged out"}`))
 }
 
-func setNewWorkflow(resp http.ResponseWriter, request *http.Request) {
+func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -410,7 +410,7 @@ func setNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 }
 
 // Basically a search for apps that aren't activated yet
-func getSpecificApps(resp http.ResponseWriter, request *http.Request) {
+func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -491,7 +491,7 @@ func getSpecificApps(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(returnData))
 }
 
-func getAppAuthentication(resp http.ResponseWriter, request *http.Request) {
+func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -604,7 +604,7 @@ func getAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	*/
 }
 
-func addAppAuthentication(resp http.ResponseWriter, request *http.Request) {
+func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -692,7 +692,7 @@ func addAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
-func deleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
+func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -745,7 +745,7 @@ func deleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
-func handleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
+func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -844,7 +844,7 @@ func handleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
-func handleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
+func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return

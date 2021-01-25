@@ -392,7 +392,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 	return apps, nil
 }
 
-func setWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWrapper, id string) error {
+func SetWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWrapper, id string) error {
 	key := datastore.NameKey("workflowqueue", id, nil)
 
 	// New struct, to not add body, author etc
@@ -404,7 +404,7 @@ func setWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWra
 	return nil
 }
 
-func getWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, error) {
+func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, error) {
 
 	key := datastore.NameKey("workflowqueue", id, nil)
 	workflows := ExecutionRequestWrapper{}

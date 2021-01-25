@@ -22,12 +22,15 @@ type RetStruct struct {
 }
 
 type ExecutionRequest struct {
-	ExecutionId       string `json:"execution_id"`
-	ExecutionArgument string `json:"execution_argument"`
-	WorkflowId        string `json:"workflow_id"`
-	Authorization     string `json:"authorization"`
-	Status            string `json:"status"`
-	Type              string `json:"type"`
+	ExecutionId       string   `json:"execution_id"`
+	ExecutionArgument string   `json:"execution_argument"`
+	ExecutionSource   string   `json:"execution_source"`
+	WorkflowId        string   `json:"workflow_id"`
+	Environments      []string `json:"environments"`
+	Authorization     string   `json:"authorization"`
+	Status            string   `json:"status"`
+	Start             string   `json:"start"`
+	Type              string   `json:"type"`
 }
 
 type WorkflowApp struct {
