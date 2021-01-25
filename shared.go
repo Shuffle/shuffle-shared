@@ -19,7 +19,7 @@ import (
 
 var project ShuffleStorage
 
-func handleCors(resp http.ResponseWriter, request *http.Request) bool {
+func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 	// FIXME - this is to handle multiple frontends in test rofl
 	origin := request.Header["Origin"]
@@ -44,12 +44,12 @@ func handleCors(resp http.ResponseWriter, request *http.Request) bool {
 }
 
 func handleGetOrgs(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	user, err := handleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
 		resp.WriteHeader(401)
@@ -106,7 +106,7 @@ func handleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 }
 
 func handleGetOrg(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
@@ -124,7 +124,7 @@ func handleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	user, err := handleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
 		resp.WriteHeader(401)
@@ -185,7 +185,7 @@ func handleGetOrg(resp http.ResponseWriter, request *http.Request) {
 }
 
 func handleLogout(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
@@ -197,7 +197,7 @@ func handleLogout(resp http.ResponseWriter, request *http.Request) {
 		Expires: time.Unix(0, 0),
 	})
 
-	userInfo, err := handleApiAuthentication(resp, request)
+	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in handleLogout: %s", err)
 		resp.WriteHeader(200)
@@ -246,12 +246,12 @@ func handleLogout(resp http.ResponseWriter, request *http.Request) {
 }
 
 func setNewWorkflow(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	user, err := handleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
 		resp.WriteHeader(401)
@@ -411,7 +411,7 @@ func setNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 // Basically a search for apps that aren't activated yet
 func getSpecificApps(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
@@ -424,7 +424,7 @@ func getSpecificApps(resp http.ResponseWriter, request *http.Request) {
 
 	// Just need to be logged in
 	// FIXME - should have some permissions?
-	_, err := handleApiAuthentication(resp, request)
+	_, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in set new app: %s", err)
 		resp.WriteHeader(401)
@@ -492,12 +492,12 @@ func getSpecificApps(resp http.ResponseWriter, request *http.Request) {
 }
 
 func getAppAuthentication(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	user, userErr := handleApiAuthentication(resp, request)
+	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
 		log.Printf("Api authentication failed in get all apps: %s", userErr)
 		resp.WriteHeader(401)
@@ -605,12 +605,12 @@ func getAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 }
 
 func addAppAuthentication(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	user, userErr := handleApiAuthentication(resp, request)
+	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
 		log.Printf("Api authentication failed in get all apps: %s", userErr)
 		resp.WriteHeader(401)
@@ -693,12 +693,12 @@ func addAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 }
 
 func deleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	user, userErr := handleApiAuthentication(resp, request)
+	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
 		log.Printf("Api authentication failed in edit workflow: %s", userErr)
 		resp.WriteHeader(401)
@@ -746,14 +746,14 @@ func deleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 }
 
 func handleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
 	// FIXME: Overhaul the top part.
 	// Only admin can change environments, but if there are no users, anyone can make (first)
-	user, err := handleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't handle set env auth"}`))
@@ -845,12 +845,12 @@ func handleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 }
 
 func handleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	user, err := handleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
 		resp.WriteHeader(401)
@@ -882,7 +882,7 @@ func handleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func handleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
+func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	apikey := request.Header.Get("Authorization")
 	if len(apikey) > 0 {
 		if !strings.HasPrefix(apikey, "Bearer ") {
