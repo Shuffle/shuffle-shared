@@ -20,7 +20,7 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func copyFile(fromfile, tofile string) error {
+func CopyFile(fromfile, tofile string) error {
 	from, err := os.Open(fromfile)
 	if err != nil {
 		return err
@@ -41,7 +41,7 @@ func copyFile(fromfile, tofile string) error {
 	return nil
 }
 
-func formatAppfile(filedata string) (string, string) {
+func FormatAppfile(filedata string) (string, string) {
 	lines := strings.Split(filedata, "\n")
 
 	newfile := []string{}
@@ -86,7 +86,7 @@ func formatAppfile(filedata string) (string, string) {
 }
 
 // Streams the data into a zip to be used for a cloud function
-func streamZipdata(ctx context.Context, identifier, pythoncode, requirements string) (string, error) {
+func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements string) (string, error) {
 	filename := fmt.Sprintf("generated_cloudfunctions/%s.zip", identifier)
 
 	buf := new(bytes.Buffer)
@@ -121,7 +121,7 @@ func streamZipdata(ctx context.Context, identifier, pythoncode, requirements str
 	return filename, nil
 }
 
-func getAppbase() ([]byte, []byte, error) {
+func GetAppbase() ([]byte, []byte, error) {
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
 	static := "../app_sdk/static_baseline.py"
@@ -141,7 +141,7 @@ func getAppbase() ([]byte, []byte, error) {
 }
 
 // Builds the structure for the new generated app in storage (copying baseline files)
-func getAppbaseGCP(ctx context.Context, client *storage.Client, bucketName string) ([]byte, []byte, error) {
+func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName string) ([]byte, []byte, error) {
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
 	basePath := "generated_apps/baseline"
@@ -170,7 +170,7 @@ func getAppbaseGCP(ctx context.Context, client *storage.Client, bucketName strin
 	return appbaseData, staticData, nil
 }
 
-func fixAppbase(appbase []byte) []string {
+func FixAppbase(appbase []byte) []string {
 	record := false
 	validLines := []string{}
 	for _, line := range strings.Split(string(appbase), "\n") {
@@ -193,7 +193,7 @@ func fixAppbase(appbase []byte) []string {
 }
 
 // Builds the structure for the new generated app in storage (copying baseline files)
-func buildStructureGCP(ctx context.Context, client *storage.Client, swagger *openapi3.Swagger, curHash, bucketName string) (string, error) {
+func BuildStructureGCP(ctx context.Context, client *storage.Client, swagger *openapi3.Swagger, curHash, bucketName string) (string, error) {
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
 
@@ -215,7 +215,7 @@ func buildStructureGCP(ctx context.Context, client *storage.Client, swagger *ope
 // Builds the base structure for the app that we're making
 // Returns error if anything goes wrong. This has to work if
 // the python code is supposed to be generated
-func buildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
+func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 	//log.Printf("%#v", swagger)
 
 	// adding md5 based on input data to not overwrite earlier data.
@@ -227,13 +227,13 @@ func buildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 	os.MkdirAll(appPath, os.ModePerm)
 	os.Mkdir(fmt.Sprintf("%s/src", appPath), os.ModePerm)
 
-	err := copyFile(fmt.Sprintf("%sbaseline/Dockerfile", subpath), fmt.Sprintf("%s/%s", appPath, "Dockerfile"))
+	err := CopyFile(fmt.Sprintf("%sbaseline/Dockerfile", subpath), fmt.Sprintf("%s/%s", appPath, "Dockerfile"))
 	if err != nil {
 		log.Println("Failed to move Dockerfile")
 		return appPath, err
 	}
 
-	err = copyFile(fmt.Sprintf("%sbaseline/requirements.txt", subpath), fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
+	err = CopyFile(fmt.Sprintf("%sbaseline/requirements.txt", subpath), fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
 	if err != nil {
 		log.Println("Failed to move requrements.txt")
 		return appPath, err
@@ -244,7 +244,7 @@ func buildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 // This function generates the python code that's being used.
 // This is really meta when you program it. Handling parameters is hard here.
-func makePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string) (string, string) {
+func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string) (string, string) {
 	method = strings.ToLower(method)
 	queryString := ""
 	queryData := ""
@@ -428,7 +428,7 @@ func makePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	return functionname, data
 }
 
-func generateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, WorkflowApp, []string, error) {
+func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, WorkflowApp, []string, error) {
 	api := WorkflowApp{}
 	//log.Printf("%#v", swagger.Info)
 
@@ -672,37 +672,37 @@ func generateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		// FIXME: Handle everything behind questionmark (?) with dots as well.
 		// https://godoc.org/github.com/getkin/kin-openapi/openapi3#PathItem
 		if path.Get != nil {
-			action, curCode := handleGet(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleGet(swagger, api, extraParameters, path, actualPath)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Connect != nil {
-			action, curCode := handleConnect(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleConnect(swagger, api, extraParameters, path, actualPath)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Head != nil {
-			action, curCode := handleHead(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleHead(swagger, api, extraParameters, path, actualPath)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Delete != nil {
-			action, curCode := handleDelete(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleDelete(swagger, api, extraParameters, path, actualPath)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Post != nil {
-			action, curCode := handlePost(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandlePost(swagger, api, extraParameters, path, actualPath)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Patch != nil {
-			action, curCode := handlePatch(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandlePatch(swagger, api, extraParameters, path, actualPath)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Put != nil {
-			action, curCode := handlePut(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandlePut(swagger, api, extraParameters, path, actualPath)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
@@ -722,7 +722,7 @@ func generateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 }
 
 // FIXME - have this give a real version?
-func verifyApi(api WorkflowApp) WorkflowApp {
+func VerifyApi(api WorkflowApp) WorkflowApp {
 	if api.AppVersion == "" {
 		api.AppVersion = "1.0.0"
 	}
@@ -730,7 +730,7 @@ func verifyApi(api WorkflowApp) WorkflowApp {
 	return api
 }
 
-func getBasePython() string {
+func GetBasePython() string {
 	baseString := `import requests
 import asyncio
 import json
@@ -759,8 +759,8 @@ if __name__ == "__main__":
 	return baseString
 }
 
-func dumpPythonGCP(ctx context.Context, client *storage.Client, basePath, name, version string, pythonFunctions []string, bucketName string) (string, error) {
-	parsedCode := fmt.Sprintf(getBasePython(), name, version, name, strings.Join(pythonFunctions, "\n"), name)
+func DumpPythonGCP(ctx context.Context, client *storage.Client, basePath, name, version string, pythonFunctions []string, bucketName string) (string, error) {
+	parsedCode := fmt.Sprintf(GetBasePython(), name, version, name, strings.Join(pythonFunctions, "\n"), name)
 
 	// Create bucket handle
 	bucket := client.Bucket(bucketName)
@@ -777,11 +777,11 @@ func dumpPythonGCP(ctx context.Context, client *storage.Client, basePath, name, 
 	return parsedCode, nil
 }
 
-func dumpPython(basePath, name, version string, pythonFunctions []string) (string, error) {
+func DumpPython(basePath, name, version string, pythonFunctions []string) (string, error) {
 	//log.Printf("%#v", api)
 	//log.Printf(strings.Join(pythonFunctions, "\n"))
 
-	parsedCode := fmt.Sprintf(getBasePython(), name, version, name, strings.Join(pythonFunctions, "\n"), name)
+	parsedCode := fmt.Sprintf(GetBasePython(), name, version, name, strings.Join(pythonFunctions, "\n"), name)
 
 	err := ioutil.WriteFile(fmt.Sprintf("%s/src/app.py", basePath), []byte(parsedCode), os.ModePerm)
 	if err != nil {
@@ -792,7 +792,7 @@ func dumpPython(basePath, name, version string, pythonFunctions []string) (strin
 	return parsedCode, nil
 }
 
-func dumpApiGCP(ctx context.Context, client *storage.Client, swagger *openapi3.Swagger, basePath string, api WorkflowApp, bucketName string) error {
+func DumpApiGCP(ctx context.Context, client *storage.Client, swagger *openapi3.Swagger, basePath string, api WorkflowApp, bucketName string) error {
 	//log.Printf("%#v", api)
 	data, err := yaml.Marshal(api)
 	if err != nil {
@@ -832,7 +832,7 @@ func dumpApiGCP(ctx context.Context, client *storage.Client, swagger *openapi3.S
 	return nil
 }
 
-func dumpApi(basePath string, api WorkflowApp) error {
+func DumpApi(basePath string, api WorkflowApp) error {
 	//log.Printf("%#v", api)
 	data, err := yaml.Marshal(api)
 	if err != nil {
@@ -849,7 +849,7 @@ func dumpApi(basePath string, api WorkflowApp) error {
 	return nil
 }
 
-func getRunner(classname string) string {
+func GetRunner(classname string) string {
 	return fmt.Sprintf(`
 # Run the actual thing after we've checked params
 def run(request):
@@ -869,7 +869,7 @@ def run(request):
 	`, classname)
 }
 
-func deployAppToDatastore(ctx context.Context, gceProject string, workflowapp WorkflowApp, bucketName string) error {
+func DeployAppToDatastore(ctx context.Context, gceProject string, workflowapp WorkflowApp, bucketName string) error {
 	err := setWorkflowAppDatastore(ctx, gceProject, workflowapp, workflowapp.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflowapp: %s", err)
@@ -884,7 +884,7 @@ func deployAppToDatastore(ctx context.Context, gceProject string, workflowapp Wo
 // FIXME:
 // https://docs.python.org/3.2/reference/lexical_analysis.html#identifiers
 // This is used to build the python functions.
-func fixFunctionName(functionName, actualPath string) string {
+func FixFunctionName(functionName, actualPath string) string {
 	if len(functionName) == 0 {
 		functionName = actualPath
 	}
@@ -927,7 +927,7 @@ func fixFunctionName(functionName, actualPath string) string {
 }
 
 // Returns a valid param name
-func validateParameterName(name string) string {
+func ValidateParameterName(name string) string {
 	invalid := []string{"False",
 		"await",
 		"else",
@@ -983,9 +983,9 @@ func validateParameterName(name string) string {
 	return newname
 }
 
-func handleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := fixFunctionName(path.Connect.Summary, actualPath)
+	functionName := FixFunctionName(path.Connect.Summary, actualPath)
 
 	action := WorkflowAppAction{
 		Description: path.Connect.Description,
@@ -1034,7 +1034,7 @@ func handleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 			parsedName = strings.ReplaceAll(parsedName, ".", "_")
 			parsedName = strings.ReplaceAll(parsedName, "|", "_")
 			parsedName = strings.ReplaceAll(parsedName, "-", "_")
-			parsedName = validateParameterName(parsedName)
+			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Connect.Parameters[counter].Value.Name = parsedName
 
@@ -1109,7 +1109,7 @@ func handleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := makePythoncode(swagger, functionName, baseUrl, "connect", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "connect", parameters, optionalQueries, headersFound, "")
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1118,9 +1118,9 @@ func handleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	return action, curCode
 }
 
-func handleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := fixFunctionName(path.Get.Summary, actualPath)
+	functionName := FixFunctionName(path.Get.Summary, actualPath)
 
 	action := WorkflowAppAction{
 		Description: path.Get.Description,
@@ -1168,7 +1168,7 @@ func handleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 			parsedName = strings.ReplaceAll(parsedName, ",", "_")
 			parsedName = strings.ReplaceAll(parsedName, ".", "_")
 			parsedName = strings.ReplaceAll(parsedName, "|", "_")
-			parsedName = validateParameterName(parsedName)
+			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Get.Parameters[counter].Value.Name = parsedName
 
@@ -1244,7 +1244,7 @@ func handleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := makePythoncode(swagger, functionName, baseUrl, "get", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "get", parameters, optionalQueries, headersFound, "")
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1253,9 +1253,9 @@ func handleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	return action, curCode
 }
 
-func handleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := fixFunctionName(path.Head.Summary, actualPath)
+	functionName := FixFunctionName(path.Head.Summary, actualPath)
 
 	action := WorkflowAppAction{
 		Description: path.Head.Description,
@@ -1303,7 +1303,7 @@ func handleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 			parsedName = strings.ReplaceAll(parsedName, ",", "_")
 			parsedName = strings.ReplaceAll(parsedName, ".", "_")
 			parsedName = strings.ReplaceAll(parsedName, "|", "_")
-			parsedName = validateParameterName(parsedName)
+			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Head.Parameters[counter].Value.Name = parsedName
 
@@ -1377,7 +1377,7 @@ func handleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := makePythoncode(swagger, functionName, baseUrl, "head", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "head", parameters, optionalQueries, headersFound, "")
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1386,9 +1386,9 @@ func handleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	return action, curCode
 }
 
-func handleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := fixFunctionName(path.Delete.Summary, actualPath)
+	functionName := FixFunctionName(path.Delete.Summary, actualPath)
 
 	action := WorkflowAppAction{
 		Description: path.Delete.Description,
@@ -1436,7 +1436,7 @@ func handleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 			parsedName = strings.ReplaceAll(parsedName, ",", "_")
 			parsedName = strings.ReplaceAll(parsedName, ".", "_")
 			parsedName = strings.ReplaceAll(parsedName, "|", "_")
-			parsedName = validateParameterName(parsedName)
+			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Delete.Parameters[counter].Value.Name = parsedName
 
@@ -1511,7 +1511,7 @@ func handleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := makePythoncode(swagger, functionName, baseUrl, "delete", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "delete", parameters, optionalQueries, headersFound, "")
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1520,10 +1520,10 @@ func handleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	return action, curCode
 }
 
-func handlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	//log.Printf("PATH: %s", actualPath)
-	functionName := fixFunctionName(path.Post.Summary, actualPath)
+	functionName := FixFunctionName(path.Post.Summary, actualPath)
 
 	action := WorkflowAppAction{
 		Description: path.Post.Description,
@@ -1603,7 +1603,7 @@ func handlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 			parsedName = strings.ReplaceAll(parsedName, ",", "_")
 			parsedName = strings.ReplaceAll(parsedName, ".", "_")
 			parsedName = strings.ReplaceAll(parsedName, "|", "_")
-			parsedName = validateParameterName(parsedName)
+			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Post.Parameters[counter].Value.Name = parsedName
 
@@ -1677,7 +1677,7 @@ func handlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := makePythoncode(swagger, functionName, baseUrl, "post", parameters, optionalQueries, headersFound, fileField)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "post", parameters, optionalQueries, headersFound, fileField)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1691,9 +1691,9 @@ func handlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	return action, curCode
 }
 
-func handlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := fixFunctionName(path.Patch.Summary, actualPath)
+	functionName := FixFunctionName(path.Patch.Summary, actualPath)
 
 	action := WorkflowAppAction{
 		Description: path.Patch.Description,
@@ -1741,7 +1741,7 @@ func handlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 			parsedName = strings.ReplaceAll(parsedName, ",", "_")
 			parsedName = strings.ReplaceAll(parsedName, ".", "_")
 			parsedName = strings.ReplaceAll(parsedName, "|", "_")
-			parsedName = validateParameterName(parsedName)
+			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Patch.Parameters[counter].Value.Name = parsedName
 
@@ -1815,7 +1815,7 @@ func handlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := makePythoncode(swagger, functionName, baseUrl, "patch", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "patch", parameters, optionalQueries, headersFound, "")
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1824,9 +1824,9 @@ func handlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	return action, curCode
 }
 
-func handlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := fixFunctionName(path.Put.Summary, actualPath)
+	functionName := FixFunctionName(path.Put.Summary, actualPath)
 
 	action := WorkflowAppAction{
 		Description: path.Put.Description,
@@ -1874,7 +1874,7 @@ func handlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 			parsedName = strings.ReplaceAll(parsedName, ",", "_")
 			parsedName = strings.ReplaceAll(parsedName, ".", "_")
 			parsedName = strings.ReplaceAll(parsedName, "|", "_")
-			parsedName = validateParameterName(parsedName)
+			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Put.Parameters[counter].Value.Name = parsedName
 
@@ -1949,7 +1949,7 @@ func handlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := makePythoncode(swagger, functionName, baseUrl, "put", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "put", parameters, optionalQueries, headersFound, "")
 
 	if len(functionname) > 0 {
 		action.Name = functionname
