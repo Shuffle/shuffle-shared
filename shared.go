@@ -31,7 +31,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	}
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
 	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me")
-	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE")
+	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, POST")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
 	if request.Method == "OPTIONS" {
@@ -1044,4 +1044,92 @@ func RunInit(dbclient datastore.Client, gceProject, environment string) ShuffleS
 	}
 
 	return project
+}
+
+func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
+	cors := handleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := handleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	ctx := context.Background()
+	app, err := getApp(ctx, fileId)
+	if err != nil {
+		log.Printf("Error getting app (update app): %s", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != app.Owner && user.Role != "admin" {
+		log.Printf("Wrong user (%s) for app %s in update app", user.Username, app.Name)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read in update app: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type updatefields struct {
+		Sharing       bool   `json:"sharing"`
+		SharingConfig string `json:"sharing_config"`
+	}
+
+	var tmpfields updatefields
+	err = json.Unmarshal(body, &tmpfields)
+	if err != nil {
+		log.Printf("Error with unmarshal body in update app: %s\n%s", err, string(body))
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if tmpfields.Sharing != app.Sharing {
+		app.Sharing = tmpfields.Sharing
+	}
+
+	if tmpfields.SharingConfig != app.SharingConfig {
+		app.SharingConfig = tmpfields.SharingConfig
+	}
+
+	err = setWorkflowAppDatastore(ctx, *app, app.ID)
+	if err != nil {
+		log.Printf("Failed patching workflowapp: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	cacheKey := fmt.Sprintf("workflowapps-sorted")
+	requestCache.Delete(cacheKey)
+
+	log.Printf("Changed workflow app %s", app.ID)
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }

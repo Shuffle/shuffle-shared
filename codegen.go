@@ -92,6 +92,7 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
+	log.Printf("Upload project: %s", project.Environment)
 	if project.Environment == "cloud" {
 		client, err := storage.NewClient(ctx)
 		if err != nil {
