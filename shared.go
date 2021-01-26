@@ -2,9 +2,15 @@ package shuffle
 
 import (
 	"context"
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/getkin/kin-openapi/openapi2"
+	"github.com/getkin/kin-openapi/openapi2conv"
+	"github.com/getkin/kin-openapi/openapi3"
+	"gopkg.in/yaml.v3"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -1047,12 +1053,12 @@ func RunInit(dbclient datastore.Client, gceProject, environment string) ShuffleS
 }
 
 func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
-	cors := handleCors(resp, request)
+	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	user, userErr := handleApiAuthentication(resp, request)
+	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
 		log.Printf("Api authentication failed in get all apps: %s", userErr)
 		resp.WriteHeader(401)
@@ -1073,7 +1079,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := context.Background()
-	app, err := getApp(ctx, fileId)
+	app, err := GetApp(ctx, fileId)
 	if err != nil {
 		log.Printf("Error getting app (update app): %s", fileId)
 		resp.WriteHeader(401)
@@ -1118,7 +1124,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		app.SharingConfig = tmpfields.SharingConfig
 	}
 
-	err = setWorkflowAppDatastore(ctx, *app, app.ID)
+	err = SetWorkflowAppDatastore(ctx, *app, app.ID)
 	if err != nil {
 		log.Printf("Failed patching workflowapp: %s", err)
 		resp.WriteHeader(401)
@@ -1126,10 +1132,202 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	cacheKey := fmt.Sprintf("workflowapps-sorted")
-	requestCache.Delete(cacheKey)
+	//cacheKey := fmt.Sprintf("workflowapps-sorted")
+	//requestCache.Delete(cacheKey)
 
 	log.Printf("Changed workflow app %s", app.ID)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just here to verify that the user is logged in
+	_, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in validate swagger: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	type versionCheck struct {
+		Swagger        string `datastore:"swagger" json:"swagger" yaml:"swagger"`
+		SwaggerVersion string `datastore:"swaggerVersion" json:"swaggerVersion" yaml:"swaggerVersion"`
+		OpenAPI        string `datastore:"openapi" json:"openapi" yaml:"openapi"`
+	}
+
+	//body = []byte(`swagger: "2.0"`)
+	//body = []byte(`swagger: '1.0'`)
+	//newbody := string(body)
+	//newbody = strings.TrimSpace(newbody)
+	//body = []byte(newbody)
+	//log.Println(string(body))
+	//tmpbody, err := yaml.YAMLToJSON(body)
+	//log.Println(err)
+	//log.Println(string(tmpbody))
+
+	// This has to be done in a weird way because Datastore doesn't
+	// support map[string]interface and similar (openapi3.Swagger)
+	var version versionCheck
+
+	log.Printf("API length SET: %d", len(string(body)))
+
+	isJson := false
+	err = json.Unmarshal(body, &version)
+	if err != nil {
+		log.Printf("Json err: %s", err)
+		err = yaml.Unmarshal(body, &version)
+		if err != nil {
+			log.Printf("Yaml error (3): %s", err)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi to json and yaml. Is version defined?: %s"}`, err)))
+			return
+		} else {
+			log.Printf("[INFO] Successfully parsed YAML (3)!")
+		}
+	} else {
+		isJson = true
+		log.Printf("[INFO] Successfully parsed JSON!")
+	}
+
+	if len(version.SwaggerVersion) > 0 && len(version.Swagger) == 0 {
+		version.Swagger = version.SwaggerVersion
+	}
+	log.Printf("[INFO] Version: %#v", version)
+	log.Printf("[INFO] OpenAPI: %s", version.OpenAPI)
+
+	if strings.HasPrefix(version.Swagger, "3.") || strings.HasPrefix(version.OpenAPI, "3.") {
+		log.Println("[INFO] Handling v3 API")
+		swaggerLoader := openapi3.NewSwaggerLoader()
+		swaggerLoader.IsExternalRefsAllowed = true
+		swagger, err := swaggerLoader.LoadSwaggerFromData(body)
+		if err != nil {
+			log.Printf("[WARNING] Failed to convert v3 API: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		hasher := md5.New()
+		hasher.Write(body)
+		idstring := hex.EncodeToString(hasher.Sum(nil))
+
+		log.Printf("Swagger v3 validation success with ID %s and %d paths!", idstring, len(swagger.Paths))
+
+		if !isJson {
+			log.Printf("[INFO] NEED TO TRANSFORM FROM YAML TO JSON for %s", idstring)
+		}
+
+		swaggerdata, err := json.Marshal(swagger)
+		if err != nil {
+			log.Printf("Failed unmarshaling v3 data: %s", err)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling swaggerv3 data: %s"}`, err)))
+			return
+		}
+		parsed := ParsedOpenApi{
+			ID:   idstring,
+			Body: string(swaggerdata),
+		}
+
+		ctx := context.Background()
+		err = SetOpenApiDatastore(ctx, idstring, parsed)
+		if err != nil {
+			log.Printf("Failed uploading openapi to datastore: %s", err)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
+			return
+		}
+
+		log.Printf("[INFO] Successfully set OpenAPI with ID %s", idstring)
+		resp.WriteHeader(200)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
+		return
+	} else { //strings.HasPrefix(version.Swagger, "2.") || strings.HasPrefix(version.OpenAPI, "2.") {
+		// Convert
+		log.Println("Handling v2 API")
+		var swagger openapi2.Swagger
+		//log.Println(string(body))
+		err = json.Unmarshal(body, &swagger)
+		if err != nil {
+			log.Printf("Json error for v2 - trying yaml: %s", err)
+			err = yaml.Unmarshal([]byte(body), &swagger)
+			if err != nil {
+				log.Printf("Yaml error (4): %s", err)
+
+				resp.WriteHeader(422)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
+				return
+			} else {
+				log.Printf("Found valid yaml!")
+			}
+
+		}
+
+		swaggerv3, err := openapi2conv.ToV3Swagger(&swagger)
+		if err != nil {
+			log.Printf("Failed converting from openapi2 to 3: %s", err)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed converting from openapi2 to openapi3: %s"}`, err)))
+			return
+		}
+
+		swaggerdata, err := json.Marshal(swaggerv3)
+		if err != nil {
+			log.Printf("Failed unmarshaling v3 from v2 data: %s", err)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling swaggerv3 data: %s"}`, err)))
+			return
+		}
+
+		hasher := md5.New()
+		hasher.Write(swaggerdata)
+		idstring := hex.EncodeToString(hasher.Sum(nil))
+		if !isJson {
+			log.Printf("FIXME: NEED TO TRANSFORM FROM YAML TO JSON for %s?", idstring)
+		}
+		log.Printf("Swagger v2 -> v3 validation success with ID %s!", idstring)
+
+		parsed := ParsedOpenApi{
+			ID:   idstring,
+			Body: string(swaggerdata),
+		}
+
+		ctx := context.Background()
+		err = SetOpenApiDatastore(ctx, idstring, parsed)
+		if err != nil {
+			log.Printf("Failed uploading openapi2 to datastore: %s", err)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
+		return
+	}
+	/*
+		else {
+			log.Printf("Swagger / OpenAPI version %s is not supported or there is an error.", version.Swagger)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Swagger version %s is not currently supported"}`, version.Swagger)))
+			return
+		}
+	*/
+
+	// save the openapi ID
+	resp.WriteHeader(422)
+	resp.Write([]byte(`{"success": false}`))
 }
