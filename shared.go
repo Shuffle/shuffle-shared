@@ -407,8 +407,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//memcacheName := fmt.Sprintf("%s_workflows", user.Username)
-	//memcache.Delete(ctx, memcacheName)
+	memcacheName := fmt.Sprintf("%s_workflows", user.Username)
+	memcache.Delete(ctx, memcacheName)
 
 	resp.WriteHeader(200)
 	//log.Println(string(workflowjson))
@@ -1147,7 +1147,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just here to verify that the user is logged in
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in validate swagger: %s", err)
 		resp.WriteHeader(401)
@@ -1208,6 +1208,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Version: %#v", version)
 	log.Printf("[INFO] OpenAPI: %s", version.OpenAPI)
 
+	ctx := context.Background()
 	if strings.HasPrefix(version.Swagger, "3.") || strings.HasPrefix(version.OpenAPI, "3.") {
 		log.Println("[INFO] Handling v3 API")
 		swaggerLoader := openapi3.NewSwaggerLoader()
@@ -1254,6 +1255,9 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Successfully set OpenAPI with ID %s", idstring)
 		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
+
+		memcache.Delete(ctx, "all_apps")
+		memcache.Delete(ctx, fmt.Sprintf("apps_%s", user.Id))
 		return
 	} else { //strings.HasPrefix(version.Swagger, "2.") || strings.HasPrefix(version.OpenAPI, "2.") {
 		// Convert
@@ -1305,7 +1309,6 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			Body: string(swaggerdata),
 		}
 
-		ctx := context.Background()
 		err = SetOpenApiDatastore(ctx, idstring, parsed)
 		if err != nil {
 			log.Printf("Failed uploading openapi2 to datastore: %s", err)
@@ -1316,6 +1319,9 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 
 		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
+
+		memcache.Delete(ctx, "all_apps")
+		memcache.Delete(ctx, fmt.Sprintf("apps_%s", user.Id))
 		return
 	}
 	/*
@@ -1389,4 +1395,65 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
+}
+
+func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just here to verify that the user is logged in
+	_, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in validate swagger: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var id string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		id = location[4]
+	}
+
+	if len(id) != 32 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// FIXME - FIX AUTH WITH APP
+	ctx := context.Background()
+	//_, err = GetApp(ctx, id)
+	//if err == nil {
+	//	log.Println("You're supposed to be able to continue now.")
+	//}
+
+	parsedApi, err := GetOpenApiDatastore(ctx, id)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[INFO] API LENGTH GET: %d, ID: %s", len(parsedApi.Body), id)
+
+	parsedApi.Success = true
+	data, err := json.Marshal(parsedApi)
+	if err != nil {
+		resp.WriteHeader(422)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling parsed swagger: %s"}`, err)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(data)
 }
