@@ -3,13 +3,53 @@ package shuffle
 import (
 	"cloud.google.com/go/datastore"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"strings"
+	"time"
+
+	"google.golang.org/appengine/memcache"
 )
 
 var err error
+
+// Cache handlers
+func GetCache(ctx context.Context, name string) (interface{}, error) {
+	if project.Environment == "cloud" {
+		if item, err := memcache.Get(ctx, name); err == memcache.ErrCacheMiss {
+		} else if err != nil {
+			return "", errors.New(fmt.Sprintf("Failed getting cache: %s", err))
+		} else {
+			return item.Value, nil
+		}
+	} else {
+		return "", errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
+	}
+
+	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
+}
+
+func SetCache(ctx context.Context, name string, data []byte) error {
+	if project.Environment == "cloud" {
+		item := &memcache.Item{
+			Key:        name,
+			Value:      data,
+			Expiration: time.Minute * 30,
+		}
+
+		if err := memcache.Set(ctx, item); err != nil {
+			log.Printf("[WARNING] Failed setting org cache: %s", err)
+		}
+
+		return nil
+	} else {
+		return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
+	}
+
+	return nil
+}
 
 func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
 	// FIXME - this doesn't work
@@ -99,23 +139,61 @@ func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 
 // ListBooks returns a list of books, ordered by title.
 func GetOrg(ctx context.Context, id string) (*Org, error) {
+	curOrg := &Org{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, id)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &curOrg)
+			if err == nil {
+				return curOrg, nil
+			}
+		} else {
+			log.Printf("Failed getting cache for org: %s", err)
+		}
+	}
 
 	key := datastore.NameKey("Organizations", id, nil)
-	curOrg := &Org{}
 	if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
 		return &Org{}, err
+	}
+
+	if project.CacheDb {
+		neworg, err := json.Marshal(curOrg)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling org: %s", err)
+			return curOrg, nil
+		}
+
+		err = SetCache(ctx, id, neworg)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache: %s", err)
+		}
 	}
 
 	return curOrg, nil
 }
 
 func SetOrg(ctx context.Context, data Org, id string) error {
-
 	// clear session_token and API_token for user
 	k := datastore.NameKey("Organizations", id, nil)
 	if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
 		log.Println(err)
 		return err
+	}
+
+	if project.CacheDb {
+		neworg, err := json.Marshal(data)
+		if err != nil {
+			return nil
+		}
+
+		err = SetCache(ctx, id, neworg)
+		if err != nil {
+			log.Printf("Failed setting cache: %s", err)
+			//DeleteCache(neworg)
+		}
 	}
 
 	return nil
@@ -126,17 +204,6 @@ func GetSession(ctx context.Context, thissession string) (*session, error) {
 	curUser := &session{}
 	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 		return &session{}, err
-	}
-
-	return curUser, nil
-}
-
-// ListBooks returns a list of books, ordered by title.
-func GetUser(ctx context.Context, Username string) (*User, error) {
-	key := datastore.NameKey("Users", strings.ToLower(Username), nil)
-	curUser := &User{}
-	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
-		return &User{}, err
 	}
 
 	return curUser, nil
@@ -174,6 +241,26 @@ func SetApikey(ctx context.Context, Userdata User) error {
 	return nil
 }
 
+func SetOpenApiDatastore(ctx context.Context, id string, data ParsedOpenApi) error {
+	k := datastore.NameKey("openapi3", id, nil)
+	if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) {
+	key := datastore.NameKey("openapi3", id, nil)
+	api := &ParsedOpenApi{}
+	if err := project.Dbclient.Get(ctx, key, api); err != nil {
+		return ParsedOpenApi{}, err
+	}
+
+	return *api, nil
+}
+
 // Index = Username
 func SetSession(ctx context.Context, Userdata User, value string) error {
 
@@ -203,36 +290,68 @@ func SetSession(ctx context.Context, Userdata User, value string) error {
 	return nil
 }
 
-func SetOpenApiDatastore(ctx context.Context, id string, data ParsedOpenApi) error {
-	k := datastore.NameKey("openapi3", id, nil)
-	if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
-		log.Println(err)
-		return err
+// ListBooks returns a list of books, ordered by title.
+func GetUser(ctx context.Context, username string) (*User, error) {
+	curUser := &User{}
+
+	cacheKey := fmt.Sprintf("user_%s", strings.ToLower(username))
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &curUser)
+			if err == nil {
+				return curUser, nil
+			}
+		} else {
+			log.Printf("Failed getting cache for org: %s", err)
+		}
 	}
 
-	return nil
-}
-
-func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) {
-	key := datastore.NameKey("openapi3", id, nil)
-	api := &ParsedOpenApi{}
-	if err := project.Dbclient.Get(ctx, key, api); err != nil {
-		return ParsedOpenApi{}, err
+	key := datastore.NameKey("Users", strings.ToLower(username), nil)
+	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
+		return &User{}, err
 	}
 
-	return *api, nil
+	if project.CacheDb {
+		data, err := json.Marshal(curUser)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling org: %s", err)
+			return curUser, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache: %s", err)
+		}
+	}
+
+	return curUser, nil
 }
 
-func SetUser(ctx context.Context, data *User) error {
-
-	log.Printf("[INFO] Role: %s", data.Role)
-	data = fixUserOrg(ctx, data)
+func SetUser(ctx context.Context, user *User) error {
+	log.Printf("[INFO] Role: %s", user.Role)
+	user = fixUserOrg(ctx, user)
 
 	// clear session_token and API_token for user
-	k := datastore.NameKey("Users", strings.ToLower(data.Username), nil)
-	if _, err := project.Dbclient.Put(ctx, k, data); err != nil {
+	k := datastore.NameKey("Users", strings.ToLower(user.Username), nil)
+	if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
 		log.Println(err)
 		return err
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("user_%s", strings.ToLower(user.Username))
+		data, err := json.Marshal(user)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling org: %s", err)
+			return nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache: %s", err)
+		}
 	}
 
 	return nil

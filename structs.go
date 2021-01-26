@@ -8,6 +8,7 @@ type ShuffleStorage struct {
 	GceProject  string
 	Dbclient    datastore.Client
 	Environment string
+	CacheDb     bool
 }
 
 type ExecutionRequestWrapper struct {

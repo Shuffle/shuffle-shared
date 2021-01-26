@@ -25,6 +25,14 @@ import (
 
 var project ShuffleStorage
 
+func getContext(request *http.Request) context.Context {
+	if project.Environment == "cloud" {
+		return appengine.NewContext(request)
+	}
+
+	return context.Background()
+}
+
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 
 	// FIXME - this is to handle multiple frontends in test rofl
@@ -138,7 +146,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	org, err := GetOrg(ctx, fileId)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -1042,11 +1050,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-func RunInit(dbclient datastore.Client, gceProject, environment string) ShuffleStorage {
+func RunInit(dbclient datastore.Client, gceProject, environment string, cacheDb bool) ShuffleStorage {
 	project = ShuffleStorage{
 		Dbclient:    dbclient,
 		GceProject:  gceProject,
 		Environment: environment,
+		CacheDb:     cacheDb,
 	}
 
 	return project
