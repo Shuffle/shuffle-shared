@@ -86,11 +86,27 @@ func FormatAppfile(filedata string) (string, string) {
 }
 
 // Streams the data into a zip to be used for a cloud function
-func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements string) (string, error) {
+func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bucketName string) (string, error) {
 	filename := fmt.Sprintf("generated_cloudfunctions/%s.zip", identifier)
 
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
+
+	if project.Environment == "cloud" {
+		client, err := storage.NewClient(ctx)
+		if err != nil {
+			log.Printf("Failed to create datastore client: %v", err)
+			return filename, err
+		}
+
+		bucket := client.Bucket(bucketName)
+
+		obj := bucket.Object(filename)
+		storageWriter := obj.NewWriter(ctx)
+		defer storageWriter.Close()
+
+		zipWriter = zip.NewWriter(storageWriter)
+	}
 
 	zipFile, err := zipWriter.Create("main.py")
 	if err != nil {
@@ -117,6 +133,12 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements str
 		log.Printf("Packing failed to close zip file writer from bucket: %v", err)
 		return filename, err
 	}
+
+	//src := client.Bucket(bucketName).Object(fmt.Sprintf("%s/baseline/%s", basePath, file))
+	//dst := client.Bucket(bucketName).Object(fmt.Sprintf("%s/%s", appPath, file))
+	//if _, err := dst.CopierFrom(src).Run(ctx); err != nil {
+	//	return "", err
+	//}
 
 	return filename, nil
 }
