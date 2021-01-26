@@ -1331,3 +1331,62 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(422)
 	resp.Write([]byte(`{"success": false}`))
 }
+
+func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+		return
+	}
+
+	// FIXME: Check by org.
+	ctx := context.Background()
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org users"}`))
+		return
+	}
+
+	newUsers := []User{}
+	for _, item := range org.Users {
+		if len(item.Username) == 0 {
+			continue
+		}
+
+		//for _, tmpUser := range newUsers {
+		//	if tmpUser.Name
+		//}
+
+		item.Password = ""
+		item.Session = ""
+		item.VerificationToken = ""
+		item.Orgs = []string{}
+
+		newUsers = append(newUsers, item)
+	}
+
+	newjson, err := json.Marshal(newUsers)
+	if err != nil {
+		log.Printf("Failed unmarshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
