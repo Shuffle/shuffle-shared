@@ -244,6 +244,10 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	cacheKey := fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username))
+	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, userInfo.Session)
+
 	userInfo.Session = ""
 	err = SetUser(ctx, &userInfo)
 	if err != nil {
@@ -252,8 +256,6 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed updating apikey"}`))
 		return
 	}
-
-	//memcache.Delete(request.Context(), sessionToken)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": false, "reason": "Successfully logged out"}`))

@@ -16,6 +16,17 @@ import (
 var err error
 
 // Cache handlers
+func DeleteCache(ctx context.Context, name string) error {
+	if project.Environment == "cloud" {
+		return memcache.Delete(ctx, name)
+	} else {
+		return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
+	}
+
+	return errors.New(fmt.Sprintf("No cache found for %s", name))
+}
+
+// Cache handlers
 func GetCache(ctx context.Context, name string) (interface{}, error) {
 	if project.Environment == "cloud" {
 		if item, err := memcache.Get(ctx, name); err == memcache.ErrCacheMiss {
@@ -32,7 +43,19 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 }
 
 func SetCache(ctx context.Context, name string, data []byte) error {
+	log.Printf("DATA SIZE: %d", len(data))
+	// Maxsize ish~
+
 	if project.Environment == "cloud" {
+		maxSize := 1020000
+		loop := false
+		if len(data) > maxSize {
+			loop = true
+			log.Printf("Should make multiple cache items for %s", name)
+			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxSize))
+		}
+		_ = loop
+
 		item := &memcache.Item{
 			Key:        name,
 			Value:      data,
@@ -40,7 +63,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 		}
 
 		if err := memcache.Set(ctx, item); err != nil {
-			log.Printf("[WARNING] Failed setting org cache: %s", err)
+			log.Printf("[WARNING] Failed setting cache for %s: %s", name, err)
 		}
 
 		return nil
@@ -304,7 +327,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 				return curUser, nil
 			}
 		} else {
-			log.Printf("Failed getting cache for org: %s", err)
+			log.Printf("Failed getting cache for user: %s", err)
 		}
 	}
 
@@ -316,7 +339,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	if project.CacheDb {
 		data, err := json.Marshal(curUser)
 		if err != nil {
-			log.Printf("[WARNING] Failed marshalling org: %s", err)
+			log.Printf("[WARNING] Failed marshalling user: %s", err)
 			return curUser, nil
 		}
 
@@ -503,7 +526,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 			//break
 		}
 
-		if len(apps) > maxLen {
+		if len(apps) >= maxLen {
 			break
 		}
 	}
