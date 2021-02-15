@@ -1468,3 +1468,36 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(data)
 }
+
+func GetResult(workflowExecution WorkflowExecution, id string) ActionResult {
+	for _, actionResult := range workflowExecution.Results {
+		if actionResult.Action.ID == id {
+			return actionResult
+		}
+	}
+
+	return ActionResult{}
+}
+
+func GetAction(workflowExecution WorkflowExecution, id, environment string) Action {
+	for _, action := range workflowExecution.Workflow.Actions {
+		if action.ID == id {
+			return action
+		}
+	}
+
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.ID == id {
+			return Action{
+				ID:          trigger.ID,
+				AppName:     trigger.AppName,
+				Name:        trigger.AppName,
+				Environment: environment,
+				Label:       trigger.Label,
+			}
+			log.Printf("FOUND TRIGGER: %#v!", trigger)
+		}
+	}
+
+	return Action{}
+}

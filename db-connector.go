@@ -43,7 +43,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 }
 
 func SetCache(ctx context.Context, name string, data []byte) error {
-	log.Printf("DATA SIZE: %d", len(data))
+	//log.Printf("DATA SIZE: %d", len(data))
 	// Maxsize ish~
 
 	if project.Environment == "cloud" {
@@ -113,14 +113,88 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	return nil
+
+	// FIXME: Use this?
+	//if len(workflowExecution.ExecutionId) == 0 {
+	//	log.Printf("Workflowexeciton executionId can't be empty.")
+	//	return errors.New("ExecutionId can't be empty.")
+	//}
+
+	//cacheKey := fmt.Sprintf("workflowexecution-%s", workflowExecution.ExecutionId)
+	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
+
+	//handleExecutionResult(workflowExecution)
+	//validateFinished(workflowExecution)
+	//if dbSave {
+	//	shutdown(workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
+	//}
+	//return nil
+}
+
+func GetExecutionActions(ctx context.Context, executionId string) (string, int, map[string][]string, map[string][]string, []string, []string, []string, []string) {
+	type Wrapper struct {
+		StartNode    string              `json:"startnode"`
+		Children     map[string][]string `json:"children"`
+		Parents      map[string][]string `json:"parents""`
+		Visited      []string            `json:"visited"`
+		Executed     []string            `json:"executed"`
+		NextActions  []string            `json:"nextActions"`
+		Environments []string            `json:"environments"`
+		Extra        int                 `json:"extra"`
+	}
+
+	cacheKey := fmt.Sprintf("%s-actions", executionId)
+	wrapper := &Wrapper{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &wrapper)
+			if err == nil {
+				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache for execution data %s: %s", executionId, err)
+		}
+	}
+
+	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
 }
 
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
+	cacheKey := fmt.Sprintf("workflowexecution-%s", id)
+	workflowExecution := &WorkflowExecution{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &workflowExecution)
+			if err == nil {
+				return workflowExecution, nil
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache for execution: %s", err)
+		}
+	}
 
 	key := datastore.NameKey("workflowexecution", strings.ToLower(id), nil)
-	workflowExecution := &WorkflowExecution{}
 	if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
 		return &WorkflowExecution{}, err
+	}
+
+	if project.CacheDb {
+		newexecution, err := json.Marshal(workflowExecution)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling execution: %s", err)
+			return workflowExecution, nil
+		}
+
+		err = SetCache(ctx, id, newexecution)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating execution: %s", err)
+		}
 	}
 
 	return workflowExecution, nil
