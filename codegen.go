@@ -147,13 +147,14 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 func GetAppbase() ([]byte, []byte, error) {
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
-	static := "../app_sdk/static_baseline.py"
 	appbase := "../app_sdk/app_base.py"
 
-	staticData, err := ioutil.ReadFile(static)
-	if err != nil {
-		return []byte{}, []byte{}, err
-	}
+	//static := "../app_sdk/static_baseline.py"
+	//staticData, err := ioutil.ReadFile(static)
+	//if err != nil {
+	//	return []byte{}, []byte{}, err
+	//}
+	staticData := []byte{}
 
 	appbaseData, err := ioutil.ReadFile(appbase)
 	if err != nil {
@@ -172,6 +173,7 @@ func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName strin
 	if err != nil {
 		return []byte{}, []byte{}, err
 	}
+
 	appbase, err := client.Bucket(bucketName).Object(fmt.Sprintf("%s/app_base.py", basePath)).NewReader(ctx)
 	if err != nil {
 		return []byte{}, []byte{}, err
@@ -184,6 +186,7 @@ func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName strin
 	if err != nil {
 		return []byte{}, []byte{}, err
 	}
+	staticData = []byte{}
 
 	appbaseData, err := ioutil.ReadAll(appbase)
 	if err != nil {
@@ -194,22 +197,22 @@ func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName strin
 }
 
 func FixAppbase(appbase []byte) []string {
-	record := false
+	record := true
 	validLines := []string{}
 	for _, line := range strings.Split(string(appbase), "\n") {
-		if strings.Contains(line, "#STOPCOPY") {
-			//log.Println("Stopping copy")
-			break
-		}
+		//if strings.Contains(line, "#STOPCOPY") {
+		//	//log.Println("Stopping copy")
+		//	break
+		//}
 
 		if record {
 			validLines = append(validLines, line)
 		}
 
-		if strings.Contains(line, "#STARTCOPY") {
-			//log.Println("Starting copy")
-			record = true
-		}
+		//if strings.Contains(line, "#STARTCOPY") {
+		//	//log.Println("Starting copy")
+		//	record = true
+		//}
 	}
 
 	return validLines
@@ -780,6 +783,7 @@ if __name__ == "__main__":
     asyncio.run(%s.run(), debug=True)
 `
 	return baseString
+
 }
 
 func DumpPythonGCP(ctx context.Context, client *storage.Client, basePath, name, version string, pythonFunctions []string, bucketName string) (string, error) {
@@ -876,18 +880,25 @@ func GetRunner(classname string) string {
 	return fmt.Sprintf(`
 # Run the actual thing after we've checked params
 def run(request):
-    print("Started execution!")
-    action = request.get_json() 
-    print(action)
-    print(type(action))
-    authorization_key = action.get("authorization")
-    current_execution_id = action.get("execution_id")
+	print(request.data)
+	try:
+		action = request.get_json(force=True)
+	except:
+		return f'Error parsing JSON'
+
+	print(f'ACTION: {action}')
+	if action == None:
+		print("Returning because no action defined")
+		return f'No JSON detected'
+
+	#authorization_key = action.get("authorization")
+	#current_execution_id = action.get("execution_id")
 	
-    if action and "name" in action and "app_name" in action:
-        asyncio.run(%s.run(action), debug=True)
-        return f'Attempting to execute function {action["name"]} in app {action["app_name"]}' 
-    else:
-        return f'Invalid action'
+	if action and "name" in action and "app_name" in action:
+		asyncio.run(%s.run(action=action))
+		return f'Attempting to execute function {action["name"]} in app {action["app_name"]}' 
+
+	return f'Action ran!'
 
 	`, classname)
 }

@@ -31,7 +31,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	if project.Environment == "cloud" {
 		if item, err := memcache.Get(ctx, name); err == memcache.ErrCacheMiss {
 		} else if err != nil {
-			return "", errors.New(fmt.Sprintf("Failed getting cache: %s", err))
+			return "", errors.New(fmt.Sprintf("[INFO] Failed getting cache for %s: %s", name, err))
 		} else {
 			return item.Value, nil
 		}
@@ -51,7 +51,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 		loop := false
 		if len(data) > maxSize {
 			loop = true
-			log.Printf("Should make multiple cache items for %s", name)
+			//log.Printf("Should make multiple cache items for %s", name)
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxSize))
 		}
 		_ = loop
@@ -104,9 +104,21 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("ExecutionId can't be empty.")
 	}
 
-	key := datastore.NameKey("workflowexecution", workflowExecution.ExecutionId, nil)
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("workflowexecution-%s", workflowExecution.ExecutionId)
+		data, err := json.Marshal(workflowExecution)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating cache for execution: %s", err)
+			}
+		} else {
+			log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		}
+	}
 
 	// New struct, to not add body, author etc
+	key := datastore.NameKey("workflowexecution", workflowExecution.ExecutionId, nil)
 	if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
 		log.Printf("Error adding workflow_execution: %s", err)
 		return err
@@ -131,20 +143,151 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	//return nil
 }
 
-func GetExecutionActions(ctx context.Context, executionId string) (string, int, map[string][]string, map[string][]string, []string, []string, []string, []string) {
-	type Wrapper struct {
-		StartNode    string              `json:"startnode"`
-		Children     map[string][]string `json:"children"`
-		Parents      map[string][]string `json:"parents""`
-		Visited      []string            `json:"visited"`
-		Executed     []string            `json:"executed"`
-		NextActions  []string            `json:"nextActions"`
-		Environments []string            `json:"environments"`
-		Extra        int                 `json:"extra"`
+type ExecutionVariableWrapper struct {
+	StartNode    string              `json:"startnode"`
+	Children     map[string][]string `json:"children"`
+	Parents      map[string][]string `json:"parents""`
+	Visited      []string            `json:"visited"`
+	Executed     []string            `json:"executed"`
+	NextActions  []string            `json:"nextActions"`
+	Environments []string            `json:"environments"`
+	Extra        int                 `json:"extra"`
+}
+
+// Initializes an execution's extra variables
+func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowExecution) {
+	environments := []string{}
+	nextActions := []string{}
+	startAction := ""
+	extra := 0
+	parents := map[string][]string{}
+	children := map[string][]string{}
+
+	// Hmm
+	triggersHandled := []string{}
+
+	for _, action := range workflowExecution.Workflow.Actions {
+		if !ArrayContains(environments, action.Environment) {
+			environments = append(environments, action.Environment)
+		}
+
+		if action.ID == workflowExecution.Start {
+			/*
+				functionName = fmt.Sprintf("%s-%s", action.AppName, action.AppVersion)
+
+				if !action.Sharing {
+					functionName = fmt.Sprintf("%s-%s", action.AppName, action.PrivateID)
+				}
+			*/
+
+			startAction = action.ID
+		}
 	}
 
+	nextActions = append(nextActions, startAction)
+	for _, branch := range workflowExecution.Workflow.Branches {
+		// Check what the parent is first. If it's trigger - skip
+		sourceFound := false
+		destinationFound := false
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.ID == branch.SourceID {
+				sourceFound = true
+			}
+
+			if action.ID == branch.DestinationID {
+				destinationFound = true
+			}
+		}
+
+		for _, trigger := range workflowExecution.Workflow.Triggers {
+			//log.Printf("Appname trigger (0): %s", trigger.AppName)
+			if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+				//log.Printf("%s is a special trigger. Checking where.", trigger.AppName)
+
+				found := false
+				for _, check := range triggersHandled {
+					if check == trigger.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					extra += 1
+				} else {
+					triggersHandled = append(triggersHandled, trigger.ID)
+				}
+
+				if trigger.ID == branch.SourceID {
+					log.Printf("Trigger %s is the source!", trigger.AppName)
+					sourceFound = true
+				} else if trigger.ID == branch.DestinationID {
+					log.Printf("Trigger %s is the destination!", trigger.AppName)
+					destinationFound = true
+				}
+			}
+		}
+
+		if sourceFound {
+			parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
+		} else {
+			log.Printf("ID %s was not found in actions! Skipping parent. (TRIGGER?)", branch.SourceID)
+		}
+
+		if destinationFound {
+			children[branch.SourceID] = append(children[branch.SourceID], branch.DestinationID)
+		} else {
+			log.Printf("ID %s was not found in actions! Skipping child. (TRIGGER?)", branch.SourceID)
+		}
+	}
+
+	/*
+		log.Printf("\n\nEnvironments: %#v", environments)
+		log.Printf("Startnode: %s", startAction)
+		log.Printf("Parents: %#v", parents)
+		log.Printf("NextActions: %#v", nextActions)
+		log.Printf("Extra: %d", extra)
+		log.Printf("Children: %s", children)
+	*/
+
+	UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, startAction, children, parents, []string{startAction}, []string{startAction}, nextActions, environments, extra)
+
+}
+
+func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) {
 	cacheKey := fmt.Sprintf("%s-actions", executionId)
-	wrapper := &Wrapper{}
+	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s\n\n", executionId)
+	_ = cacheKey
+
+	newVariableWrapper := ExecutionVariableWrapper{
+		StartNode:    startnode,
+		Children:     children,
+		Parents:      parents,
+		NextActions:  nextActions,
+		Environments: environments,
+		Extra:        extra,
+		Visited:      visited,
+		Executed:     visited,
+	}
+
+	variableWrapperData, err := json.Marshal(newVariableWrapper)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		return
+	}
+
+	err = SetCache(ctx, cacheKey, variableWrapperData)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating execution: %s", err)
+	}
+
+	log.Printf("[INFO] Successfully set cache for execution variables %s\n\n", cacheKey)
+}
+
+func GetExecutionVariables(ctx context.Context, executionId string) (string, int, map[string][]string, map[string][]string, []string, []string, []string, []string) {
+
+	cacheKey := fmt.Sprintf("%s-actions", executionId)
+	wrapper := &ExecutionVariableWrapper{}
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -247,7 +390,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				return curOrg, nil
 			}
 		} else {
-			log.Printf("Failed getting cache for org: %s", err)
+			log.Printf("[INFO] Failed getting cache for org: %s", err)
 		}
 	}
 
@@ -401,7 +544,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 				return curUser, nil
 			}
 		} else {
-			log.Printf("Failed getting cache for user: %s", err)
+			log.Printf("[INFO] Failed getting cache for user: %s", err)
 		}
 	}
 

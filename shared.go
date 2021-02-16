@@ -77,7 +77,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	dbclient, err := getDatastoreClient(ctx, project.GceProject)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -219,7 +219,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	session, err := GetSession(ctx, userInfo.Session)
 	if err != nil {
 		log.Printf("Session %#v doesn't exist: %s", session, err)
@@ -298,8 +298,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.ExecutingOrg = user.ActiveOrg
 	workflow.OrgId = user.ActiveOrg.Id
 
-	ctx := context.Background()
-	log.Printf("Saved new workflow %s with name %s", workflow.ID, workflow.Name)
+	ctx := getContext(request)
+	log.Printf("[INFO] Saved new workflow %s with name %s", workflow.ID, workflow.Name)
 
 	if len(workflow.Actions) == 0 {
 		workflow.Actions = []Action{}
@@ -326,53 +326,55 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	// Initialized without functions = adding a hello world node.
 	if len(newActions) == 0 {
-		log.Printf("APPENDING NEW APP FOR NEW WORKFLOW")
+		log.Printf("[INFO] APPENDING NEW APP FOR NEW WORKFLOW. PS: This is disabled.")
 
 		// Adds the Testing app if it's a new workflow
-		workflowapps, err := GetAllWorkflowApps(ctx, 100)
-		if err == nil {
-			// FIXME: Add real env
-			envName := "Shuffle"
-			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		/*
+			workflowapps, err := GetAllWorkflowApps(ctx, 100)
 			if err == nil {
-				for _, env := range environments {
-					if env.Default {
-						envName = env.Name
+				// FIXME: Add real env
+				envName := "Shuffle"
+				environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+				if err == nil {
+					for _, env := range environments {
+						if env.Default {
+							envName = env.Name
+							break
+						}
+					}
+				}
+
+				for _, item := range workflowapps {
+					if item.Name == "Testing" && item.AppVersion == "1.0.0" {
+						nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
+						workflow.Start = nodeId
+						newActions = append(newActions, Action{
+							Label:       "Start node",
+							Name:        "hello_world",
+							Environment: envName,
+							Parameters:  []WorkflowAppActionParameter{},
+							Position: struct {
+								X float64 "json:\"x\" datastore:\"x\""
+								Y float64 "json:\"y\" datastore:\"y\""
+							}{X: 449.5, Y: 446},
+							Priority:    0,
+							Errors:      []string{},
+							ID:          nodeId,
+							IsValid:     true,
+							IsStartNode: true,
+							Sharing:     true,
+							PrivateID:   "",
+							SmallImage:  "",
+							AppName:     item.Name,
+							AppVersion:  item.AppVersion,
+							AppID:       item.ID,
+							LargeImage:  item.LargeImage,
+						})
 						break
 					}
 				}
 			}
-
-			for _, item := range workflowapps {
-				if item.Name == "Testing" && item.AppVersion == "1.0.0" {
-					nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
-					workflow.Start = nodeId
-					newActions = append(newActions, Action{
-						Label:       "Start node",
-						Name:        "hello_world",
-						Environment: envName,
-						Parameters:  []WorkflowAppActionParameter{},
-						Position: struct {
-							X float64 "json:\"x\" datastore:\"x\""
-							Y float64 "json:\"y\" datastore:\"y\""
-						}{X: 449.5, Y: 446},
-						Priority:    0,
-						Errors:      []string{},
-						ID:          nodeId,
-						IsValid:     true,
-						IsStartNode: true,
-						Sharing:     true,
-						PrivateID:   "",
-						SmallImage:  "",
-						AppName:     item.Name,
-						AppVersion:  item.AppVersion,
-						AppID:       item.ID,
-						LargeImage:  item.LargeImage,
-					})
-					break
-				}
-			}
-		}
+		*/
 	} else {
 		log.Printf("Has %d actions already", len(newActions))
 	}
@@ -417,11 +419,9 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	memcacheName := fmt.Sprintf("%s_workflows", user.Username)
-	memcache.Delete(ctx, memcacheName)
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 
 	resp.WriteHeader(200)
-	//log.Println(string(workflowjson))
 	resp.Write(workflowjson)
 }
 
@@ -471,7 +471,7 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME - continue the search here with github repos etc.
 	// Caching might be smart :D
-	ctx := context.Background()
+	ctx := getContext(request)
 	workflowapps, err := GetAllWorkflowApps(ctx, 100)
 	if err != nil {
 		log.Printf("Error: Failed getting workflowapps: %s", err)
@@ -528,7 +528,7 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	//	resp.Write([]byte(`{"success": false}`))
 	//	return
 	//}
-	ctx := context.Background()
+	ctx := getContext(request)
 	allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("Api authentication failed in get all app auth: %s", err)
@@ -655,7 +655,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		appAuth.Id = uuid.NewV4().String()
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	if len(appAuth.Label) == 0 {
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Label can't be empty"}`)))
@@ -748,7 +748,7 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	// 3. Loop the nodes in workflows and do the same
 
 	log.Printf("ID: %s", fileId)
-	ctx := context.Background()
+	ctx := getContext(request)
 	err := DeleteKey(ctx, "workflowappauth", fileId)
 	if err != nil {
 		log.Printf("Failed deleting workflowapp")
@@ -782,7 +782,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	var environments []Environment
 	q := datastore.NewQuery("Environments").Filter("org_id =", user.ActiveOrg.Id)
 	_, err = project.Dbclient.GetAll(ctx, q, &environments)
@@ -874,7 +874,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	var environments []Environment
 	q := datastore.NewQuery("Environments").Filter("org_id =", user.ActiveOrg.Id)
 	_, err = project.Dbclient.GetAll(ctx, q, &environments)
@@ -1089,7 +1089,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	app, err := GetApp(ctx, fileId)
 	if err != nil {
 		log.Printf("Error getting app (update app): %s", fileId)
@@ -1219,7 +1219,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Version: %#v", version)
 	log.Printf("[INFO] OpenAPI: %s", version.OpenAPI)
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	if strings.HasPrefix(version.Swagger, "3.") || strings.HasPrefix(version.OpenAPI, "3.") {
 		log.Println("[INFO] Handling v3 API")
 		swaggerLoader := openapi3.NewSwaggerLoader()
@@ -1254,7 +1254,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			Body: string(swaggerdata),
 		}
 
-		ctx := context.Background()
+		ctx := getContext(request)
 		err = SetOpenApiDatastore(ctx, idstring, parsed)
 		if err != nil {
 			log.Printf("Failed uploading openapi to datastore: %s", err)
@@ -1370,7 +1370,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME: Check by org.
-	ctx := context.Background()
+	ctx := getContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -1442,7 +1442,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME - FIX AUTH WITH APP
-	ctx := context.Background()
+	ctx := getContext(request)
 	//_, err = GetApp(ctx, id)
 	//if err == nil {
 	//	log.Println("You're supposed to be able to continue now.")
@@ -1501,3 +1501,311 @@ func GetAction(workflowExecution WorkflowExecution, id, environment string) Acti
 
 	return Action{}
 }
+
+func ArrayContains(visited []string, id string) bool {
+	found := false
+	for _, item := range visited {
+		if item == id {
+			found = true
+		}
+	}
+
+	return found
+}
+
+func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in getting specific workflow: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow executions is not valid"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("Failed getting the workflow %s locally (get executions): %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// FIXME - have a check for org etc too..
+	if user.Id != workflow.Owner && user.Role != "admin" {
+		log.Printf("Wrong user (%s) for workflow %s (get execution)", user.Username, workflow.ID)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Query for the specifci workflowId
+	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
+	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId)
+	q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
+	var workflowExecutions []WorkflowExecution
+	_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
+	if err != nil {
+		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+			q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(15)
+			_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
+			if err != nil {
+				log.Printf("[WARNING] Error getting workflowexec (2): %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
+				return
+			}
+		} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
+			q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Limit(25)
+			_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
+			if err != nil {
+				log.Printf("[WARNING] Error getting workflowexec (3): %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
+				return
+			}
+		} else {
+			log.Printf("[WARNING] Error getting workflowexec: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
+			return
+		}
+	}
+
+	if len(workflowExecutions) == 0 {
+		resp.WriteHeader(200)
+		resp.Write([]byte("[]"))
+		return
+	}
+
+	newjson, err := json.Marshal(workflowExecutions)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflow executions"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in getworkflows: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := getContext(request)
+	var workflows []Workflow
+
+	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &workflows)
+			if err == nil {
+				resp.WriteHeader(200)
+				resp.Write(cacheData)
+				return
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
+		}
+	}
+
+	// With user, do a search for workflows with user or user's org attached
+	q := datastore.NewQuery("workflow").Filter("owner =", user.Id)
+	if user.Role == "admin" {
+		q = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id)
+		log.Printf("[INFO] Getting workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
+	}
+
+	q = q.Order("-edited")
+
+	_, err = project.Dbclient.GetAll(ctx, q, &workflows)
+	if err != nil {
+		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+			q = q.Limit(35)
+			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
+			if err != nil {
+				log.Printf("Failed getting workflows for user %s: %s (0)", user.Username, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+		} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
+			//log.Printf("IN FAILED CONDITION")
+			q = datastore.NewQuery("workflow").Filter("owner =", user.Id)
+			if user.Role == "admin" {
+				q = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id)
+				log.Printf("[INFO] Getting workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
+			}
+
+			q.Limit(30)
+			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
+			if err != nil {
+				log.Printf("Failed getting workflows for user %s: %s (0)", user.Username, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+		} else {
+			log.Printf("Failed getting workflows for user %s: %s (1)", user.Username, err)
+			//DeleteKey(ctx, "workflow", "5694357e-8063-4580-8529-301cc72df951")
+
+			//log.Printf("Workflows: %#v", workflows)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+	}
+
+	if len(workflows) == 0 {
+		log.Printf("[INFO] No workflows found for user %s", user.Username)
+		resp.WriteHeader(200)
+		resp.Write([]byte("[]"))
+		return
+	}
+
+	newjson, err := json.Marshal(workflows)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflows"}`)))
+		return
+	}
+
+	if project.CacheDb {
+		err = SetCache(ctx, cacheKey, newjson)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating workflows: %s", err)
+		}
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+/*
+func DeleteWorkflows(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in deleting workflow: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID to delete is not valid"}`))
+		return
+	}
+
+	ctx := appengine.NewContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("Failed getting the workflow locally: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// FIXME - have a check for org etc too..
+	if user.Id != workflow.Owner {
+		log.Printf("Wrong user (%s) for workflow %s", user.Username, workflow.ID)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Clean up triggers and executions
+	for _, item := range workflow.Triggers {
+		if item.TriggerType == "SCHEDULE" {
+			err = deleteSchedule(ctx, item.ID)
+			if err != nil {
+				log.Printf("Failed to delete schedule: %s", err)
+			}
+		} else if item.TriggerType == "WEBHOOK" {
+			err = removeWebhookFunction(ctx, item.ID)
+			if err != nil {
+				log.Printf("Failed to delete webhook: %s", err)
+			}
+		} else if item.TriggerType == "EMAIL" {
+			err = handleOutlookSubRemoval(ctx, workflow.ID, item.ID)
+			if err != nil {
+				log.Printf("Failed to delete email sub: %s", err)
+			}
+		}
+	}
+
+	// FIXME - maybe delete workflow executions
+	log.Printf("Should delete workflow %s", fileId)
+	err = DeleteKey(ctx, "workflow", fileId)
+	if err != nil {
+		log.Printf("Failed deleting key %s", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed deleting key"}`))
+		return
+	}
+
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", user.Username, fileId))
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+*/
