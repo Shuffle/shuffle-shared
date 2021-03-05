@@ -57,6 +57,27 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	return false
 }
 
+func Md5sum(data []byte) string {
+	hasher := md5.New()
+	hasher.Write(data)
+	newmd5 := hex.EncodeToString(hasher.Sum(nil))
+	return newmd5
+}
+
+func Md5sumfile(filepath string) string {
+	dat, err := ioutil.ReadFile(filepath)
+	if err != nil {
+		log.Printf("Error in dat: %s", err)
+	}
+
+	hasher := md5.New()
+	hasher.Write(dat)
+	newmd5 := hex.EncodeToString(hasher.Sum(nil))
+
+	log.Printf("%s: %s", filepath, newmd5)
+	return newmd5
+}
+
 func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1809,3 +1830,328 @@ func DeleteWorkflows(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 */
+
+func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[WARNING] User isn't admin during auth edit config")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 5 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[5]
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type configAuth struct {
+		Id     string `json:"id"`
+		Action string `json:"action"`
+	}
+
+	var config configAuth
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("Failed unmarshaling (appauth): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if config.Id != fileId {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Bad ID match"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	auth, err := GetWorkflowAppAuthDatastore(ctx, fileId)
+	if err != nil {
+		log.Printf("Authget error: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": ":("}`))
+		return
+	}
+
+	if auth.OrgId != user.ActiveOrg.Id {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User can't edit this org"}`))
+		return
+	}
+
+	if config.Action == "assign_everywhere" {
+		log.Printf("Should set authentication config")
+		q := datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id)
+		q = q.Order("-edited").Limit(35)
+
+		var workflows []Workflow
+		_, err = project.Dbclient.GetAll(ctx, q, &workflows)
+		if err != nil {
+			log.Printf("Getall error in auth update: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting workflows to update"}`))
+			return
+		}
+
+		// FIXME: Add function to remove auth from other auth's
+		actionCnt := 0
+		workflowCnt := 0
+		authenticationUsage := []AuthenticationUsage{}
+		for _, workflow := range workflows {
+			newActions := []Action{}
+			edited := false
+			usage := AuthenticationUsage{
+				WorkflowId: workflow.ID,
+				Nodes:      []string{},
+			}
+
+			for _, action := range workflow.Actions {
+				if action.AppName == auth.App.Name {
+					action.AuthenticationId = auth.Id
+
+					edited = true
+					actionCnt += 1
+					usage.Nodes = append(usage.Nodes, action.ID)
+				}
+
+				newActions = append(newActions, action)
+			}
+
+			workflow.Actions = newActions
+			if edited {
+				//auth.Usage = usage
+				authenticationUsage = append(authenticationUsage, usage)
+				err = SetWorkflow(ctx, workflow, workflow.ID)
+				if err != nil {
+					log.Printf("Failed setting (authupdate) workflow: %s", err)
+					continue
+				}
+
+				workflowCnt += 1
+			}
+		}
+
+		//Usage         []AuthenticationUsage `json:"usage" datastore:"usage"`
+		log.Printf("[INFO] Found %d workflows, %d actions", workflowCnt, actionCnt)
+		if actionCnt > 0 && workflowCnt > 0 {
+			auth.WorkflowCount = int64(workflowCnt)
+			auth.NodeCount = int64(actionCnt)
+			auth.Usage = authenticationUsage
+			auth.Defined = true
+
+			err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
+			if err != nil {
+				log.Printf("Failed setting appauth: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed setting app auth for all workflows"}`))
+				return
+			} else {
+				// FIXME: Remove ALL workflows from other auths using the same
+			}
+		}
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+	//var config configAuth
+
+	//log.Printf("Should set %s
+}
+
+func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("Failed getting schedules: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Couldn't get schedules"}`))
+		return
+	}
+
+	newjson, err := json.Marshal(schedules)
+	if err != nil {
+		log.Printf("Failed unmarshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environments"}`)))
+		return
+	}
+
+	//log.Printf("Existing environments: %s", string(newjson))
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	userInfo, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in update user: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Println("Failed reading body")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Missing field: user_id"}`)))
+		return
+	}
+
+	type newUserStruct struct {
+		Role     string `json:"role"`
+		Username string `json:"username"`
+		UserId   string `json:"user_id"`
+	}
+
+	ctx := getContext(request)
+	var t newUserStruct
+	err = json.Unmarshal(body, &t)
+	if err != nil {
+		log.Printf("Failed unmarshaling userId: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Missing field: user_id"}`)))
+		return
+	}
+
+	// Should this role reflect the users' org access?
+	// When you change org -> change user role
+	if userInfo.Role != "admin" {
+		log.Printf("%s tried to update user %s", userInfo.Username, t.UserId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change other users"}`)))
+		return
+	}
+
+	foundUser, err := GetUser(ctx, t.UserId)
+	if err != nil {
+		log.Printf("Can't find user %s (update user): %s", t.UserId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	orgFound := false
+	for _, item := range foundUser.Orgs {
+		if item == userInfo.ActiveOrg.Id {
+			orgFound = true
+			break
+		}
+	}
+
+	if !orgFound {
+		log.Printf("User %s is admin, but can't edit users outside their own org.", userInfo.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+		return
+	}
+
+	if t.Role != "admin" && t.Role != "user" {
+		log.Printf("%s tried and failed to update user %s", userInfo.Username, t.UserId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to role user and admin"}`)))
+		return
+	} else {
+		// Same user - can't edit yourself
+		if userInfo.Id == t.UserId {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't update the role of your own user"}`)))
+			return
+		}
+
+		log.Printf("Updated user %s from %s to %s", foundUser.Username, foundUser.Role, t.Role)
+		foundUser.Role = t.Role
+		foundUser.Roles = []string{t.Role}
+	}
+
+	if len(t.Username) > 0 {
+		q := datastore.NewQuery("Users").Filter("username =", t.Username)
+		var users []User
+		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting users when updating user"}`))
+			return
+		}
+
+		found := false
+		for _, item := range users {
+			if item.Username == t.Username {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User with username %s already exists"}`, t.Username)))
+			return
+		}
+
+		foundUser.Username = t.Username
+	}
+
+	err = SetUser(ctx, foundUser)
+	if err != nil {
+		log.Printf("Error patching user %s: %s", foundUser.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}

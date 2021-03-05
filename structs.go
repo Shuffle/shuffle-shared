@@ -715,6 +715,34 @@ type ActionResult struct {
 	Status        string `json:"status" datastore:"status"`
 }
 
+type AuthenticationUsage struct {
+	WorkflowId string   `json:"workflow_id" datastore:"workflow_id"`
+	Nodes      []string `json:"nodes" datastore:"nodes"`
+}
+
+type File struct {
+	Id           string   `json:"id" datastore:"id"`
+	Type         string   `json:"type" datastore:"type"`
+	CreatedAt    int64    `json:"created_at" datastore:"created_at"`
+	UpdatedAt    int64    `json:"updated_at" datastore:"updated_at"`
+	MetaAccessAt int64    `json:"meta_access_at" datastore:"meta_access_at"`
+	DownloadAt   int64    `json:"last_downloaded" datastore:"last_downloaded"`
+	Description  string   `json:"description" datastore:"description"`
+	ExpiresAt    string   `json:"expires_at" datastore:"expires_at"`
+	Status       string   `json:"status" datastore:"status"`
+	Filename     string   `json:"filename" datastore:"filename"`
+	URL          string   `json:"url" datastore:"org"`
+	OrgId        string   `json:"org_id" datastore:"org_id"`
+	WorkflowId   string   `json:"workflow_id" datastore:"workflow_id"`
+	Workflows    []string `json:"workflows" datastore:"workflows"`
+	DownloadPath string   `json:"download_path" datastore:"download_path"`
+	Md5sum       string   `json:"md5_sum" datastore:"md5_sum"`
+	Sha256sum    string   `json:"sha256_sum" datastore:"sha256_sum"`
+	FileSize     int64    `json:"filesize" datastore:"filesize"`
+	Duplicate    bool     `json:"duplicate" datastore:"duplicate"`
+	Subflows     []string `json:"subflows" datastore:"subflows"`
+}
+
 type AppAuthenticationStorage struct {
 	Active        bool                  `json:"active" datastore:"active"`
 	Label         string                `json:"label" datastore:"label"`
@@ -725,9 +753,7 @@ type AppAuthenticationStorage struct {
 	WorkflowCount int64                 `json:"workflow_count" datastore:"workflow_count"`
 	NodeCount     int64                 `json:"node_count" datastore:"node_count"`
 	OrgId         string                `json:"org_id" datastore:"org_id"`
-}
-
-type AuthenticationUsage struct {
-	WorkflowId string   `json:"workflow_id" datastore:"workflow_id"`
-	Nodes      []string `json:"nodes" datastore:"nodes"`
+	Created       int64                 `json:"created" datastore:"created"`
+	Edited        int64                 `json:"edited" datastore:"edited"`
+	Defined       bool                  `json:"defined" datastore:"defined"`
 }

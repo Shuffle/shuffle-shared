@@ -365,11 +365,11 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	return workflow, nil
 }
 
-func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
-	q := datastore.NewQuery("workflow")
+func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 	var allworkflows []Workflow
+	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId)
 
-	_, err = project.Dbclient.GetAll(ctx, q, &allworkflows)
+	_, err := project.Dbclient.GetAll(ctx, q, &allworkflows)
 	if err != nil {
 		return []Workflow{}, err
 	}
@@ -869,4 +869,76 @@ func SetHook(ctx context.Context, hook Hook) error {
 	}
 
 	return nil
+}
+
+func GetFile(ctx context.Context, id string) (*File, error) {
+	key := datastore.NameKey("Files", id, nil)
+	curFile := &File{}
+	if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
+		return &File{}, err
+	}
+
+	return curFile, nil
+}
+
+func SetFile(ctx context.Context, file File) error {
+	// clear session_token and API_token for user
+	timeNow := time.Now().Unix()
+	file.UpdatedAt = timeNow
+
+	k := datastore.NameKey("Files", file.Id, nil)
+	if _, err := project.Dbclient.Put(ctx, k, &file); err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return nil
+}
+
+func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
+	var files []File
+	q := datastore.NewQuery("Files").Filter("org_id =", orgId).Limit(100)
+
+	_, err := project.Dbclient.GetAll(ctx, q, &files)
+	if err != nil {
+		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+			q = q.Limit(50)
+			_, err := project.Dbclient.GetAll(ctx, q, &files)
+			if err != nil {
+				return []File{}, err
+			}
+		} else {
+			return []File{}, err
+		}
+	}
+
+	return files, nil
+}
+
+func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthenticationStorage, error) {
+
+	key := datastore.NameKey("workflowappauth", id, nil)
+	appAuth := &AppAuthenticationStorage{}
+	// New struct, to not add body, author etc
+	if err := project.Dbclient.Get(ctx, key, appAuth); err != nil {
+		return &AppAuthenticationStorage{}, err
+	}
+
+	return appAuth, nil
+}
+
+func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
+	var schedules []ScheduleOld
+
+	q := datastore.NewQuery("schedules").Filter("org = ", orgId)
+	if orgId == "ALL" {
+		q = datastore.NewQuery("schedules")
+	}
+
+	_, err := project.Dbclient.GetAll(ctx, q, &schedules)
+	if err != nil {
+		return []ScheduleOld{}, err
+	}
+
+	return schedules, nil
 }
