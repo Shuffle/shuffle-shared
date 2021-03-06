@@ -23,6 +23,7 @@ import (
 )
 
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
+var orgFileBucket = "shuffle_org_files"
 
 func fileAuthentication(request *http.Request) (string, error) {
 	executionId, ok := request.URL.Query()["execution_id"]
@@ -436,50 +437,85 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 	// Fixme: More auth: org and workflow!
 	downloadPath := file.DownloadPath
-	log.Printf("[INFO] Downloadpath: %s", downloadPath)
-	Openfile, err := os.Open(downloadPath)
-	defer Openfile.Close() //Close after function return
-	if err != nil {
-		file.Status = "deleted"
-		err = SetFile(ctx, *file)
+
+	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
+		log.Printf("[INFO] Trying to get file %s from google storage", file.Id)
+
+		bucket := project.StorageClient.Bucket(orgFileBucket)
+		obj := bucket.Object(file.DownloadPath)
+		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			log.Printf("Failed setting file to uploading")
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to uploading"}`))
+			log.Printf("[ERROR] Reader error: %s", err)
+
+			file.Status = "deleted"
+			err = SetFile(ctx, *file)
+			if err != nil {
+				log.Printf("[ERROR] SetFile error while uploading")
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+				return
+			}
+
+			//File not found, send 404
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "File doesn't exist in google cloud storage"}`))
 			return
 		}
 
-		//File not found, send 404
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "File doesn't exist locally"}`))
-		return
+		defer fileReader.Close()
+
+		FileHeader := make([]byte, 512)
+		FileContentType := http.DetectContentType(FileHeader)
+		resp.Header().Set("Content-Disposition", "attachment; filename="+fileId)
+		resp.Header().Set("Content-Type", FileContentType)
+
+		io.Copy(resp, fileReader)
+
+	} else if file.StorageArea == "s3" {
+		log.Printf("[INFO] Trying to download file %s from s3", file.Id)
+	} else {
+		log.Printf("[INFO] Downloadpath: %s", downloadPath)
+		Openfile, err := os.Open(downloadPath)
+		defer Openfile.Close() //Close after function return
+		if err != nil {
+			file.Status = "deleted"
+			err = SetFile(ctx, *file)
+			if err != nil {
+				log.Printf("Failed setting file to uploading")
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+				return
+			}
+
+			//File not found, send 404
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "File doesn't exist locally"}`))
+			return
+		}
+
+		//File is found, create and send the correct headers
+		//Get the Content-Type of the file
+		//Create a buffer to store the header of the file in
+		FileHeader := make([]byte, 512)
+		//Copy the headers into the FileHeader buffer
+		Openfile.Read(FileHeader)
+		//Get content type of file
+		FileContentType := http.DetectContentType(FileHeader)
+
+		//Get the file size
+		FileStat, _ := Openfile.Stat()                     //Get info from file
+		FileSize := strconv.FormatInt(FileStat.Size(), 10) //Get file size as a string
+
+		//Send the headers
+		resp.Header().Set("Content-Disposition", "attachment; filename="+fileId)
+		resp.Header().Set("Content-Type", FileContentType)
+		resp.Header().Set("Content-Length", FileSize)
+
+		//Send the file
+		//We read 512 bytes from the file already, so we reset the offset back to 0
+		Openfile.Seek(0, 0)
+		io.Copy(resp, Openfile) //'Copy' the file to the client
 	}
-
-	//File is found, create and send the correct headers
-	//Get the Content-Type of the file
-	//Create a buffer to store the header of the file in
-	FileHeader := make([]byte, 512)
-	//Copy the headers into the FileHeader buffer
-	Openfile.Read(FileHeader)
-	//Get content type of file
-	FileContentType := http.DetectContentType(FileHeader)
-
-	//Get the file size
-	FileStat, _ := Openfile.Stat()                     //Get info from file
-	FileSize := strconv.FormatInt(FileStat.Size(), 10) //Get file size as a string
-
-	//Send the headers
-	resp.Header().Set("Content-Disposition", "attachment; filename="+fileId)
-	resp.Header().Set("Content-Type", FileContentType)
-	resp.Header().Set("Content-Length", FileSize)
-
-	//Send the file
-	//We read 512 bytes from the file already, so we reset the offset back to 0
-	Openfile.Seek(0, 0)
-	io.Copy(resp, Openfile) //'Copy' the file to the client
-	return
-
-	//log.Printf("Should download file %s", downloadPath)
 }
 func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -563,15 +599,15 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	request.ParseMultipartForm(32 << 20)
-	parsedFile, _, err := request.FormFile("file")
+	parsedFile, _, err := request.FormFile("shuffle_file")
 	if err != nil {
 		log.Printf("[ERROR] Couldn't upload file: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed uploading file"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed uploading file. Correct usage is: shuffle_file=@filepath"}`))
 		return
 	}
-	defer parsedFile.Close()
 
+	defer parsedFile.Close()
 	file.Status = "uploading"
 	err = SetFile(ctx, *file)
 	if err != nil {
@@ -590,23 +626,45 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	buf.Reset()
 
 	sha256Sum := sha256.Sum256(contents)
-	//parsedFile.Reset()
 
-	f, err := os.OpenFile(file.DownloadPath, os.O_WRONLY|os.O_CREATE, os.ModePerm)
-	if err != nil {
-		// Rolling back file
-		file.Status = "created"
-		SetFile(ctx, *file)
+	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
+		log.Printf("[INFO] SHOULD UPLOAD TO FILE TO GOOGLE STORAGE")
+		file.StorageArea = "google_storage"
 
-		log.Printf("[ERROR] Failed uploading and creating file: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		//applocation := fmt.Sprintf("gs://%s/triggers/outlooktrigger.zip", bucketName)
+
+		bucket := project.StorageClient.Bucket(orgFileBucket)
+		obj := bucket.Object(file.DownloadPath)
+
+		w := obj.NewWriter(ctx)
+		if _, err := fmt.Fprintf(w, string(contents)); err != nil {
+			log.Printf("[ERROR] Failed to write the file to datastore: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to initialize with google cloud"}`))
+			return
+		}
+
+		// Close, just like writing a file.
+		defer w.Close()
+	} else if file.StorageArea == "s3" {
+		log.Printf("SHOULD UPLOAD TO S3!")
+	} else {
+		f, err := os.OpenFile(file.DownloadPath, os.O_WRONLY|os.O_CREATE, os.ModePerm)
+		if err != nil {
+			// Rolling back file
+			file.Status = "created"
+			SetFile(ctx, *file)
+
+			log.Printf("[ERROR] Failed uploading and creating file: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		defer f.Close()
+		parsedFile.Seek(0, io.SeekStart)
+		io.Copy(f, parsedFile)
 	}
-
-	defer f.Close()
-	parsedFile.Seek(0, io.SeekStart)
-	io.Copy(f, parsedFile)
 
 	// FIXME: Set this one to 200 anyway? Can't download file then tho..
 	file.Status = "active"
@@ -795,6 +853,11 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		WorkflowId:   curfile.WorkflowId,
 		DownloadPath: downloadPath,
 		Subflows:     duplicateWorkflows,
+		StorageArea:  "local",
+	}
+
+	if project.Environment == "cloud" {
+		newFile.StorageArea = "google_storage"
 	}
 
 	err = SetFile(ctx, newFile)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/datastore"
+	"cloud.google.com/go/storage"
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
@@ -1073,12 +1074,13 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-func RunInit(dbclient datastore.Client, gceProject, environment string, cacheDb bool) ShuffleStorage {
+func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool) ShuffleStorage {
 	project = ShuffleStorage{
-		Dbclient:    dbclient,
-		GceProject:  gceProject,
-		Environment: environment,
-		CacheDb:     cacheDb,
+		Dbclient:      dbclient,
+		StorageClient: storageClient,
+		GceProject:    gceProject,
+		Environment:   environment,
+		CacheDb:       cacheDb,
 	}
 
 	return project
@@ -2061,7 +2063,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	var t newUserStruct
 	err = json.Unmarshal(body, &t)
 	if err != nil {
-		log.Printf("Failed unmarshaling userId: %s", err)
+		log.Printf("[WARNING] Failed unmarshaling userId: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Missing field: user_id"}`)))
 		return
@@ -2070,7 +2072,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	// Should this role reflect the users' org access?
 	// When you change org -> change user role
 	if userInfo.Role != "admin" {
-		log.Printf("%s tried to update user %s", userInfo.Username, t.UserId)
+		log.Printf("[WARNING] %s tried to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change other users"}`)))
 		return
@@ -2078,7 +2080,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	foundUser, err := GetUser(ctx, t.UserId)
 	if err != nil {
-		log.Printf("Can't find user %s (update user): %s", t.UserId, err)
+		log.Printf("[WARNING] Can't find user %s (update user): %s", t.UserId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
@@ -2093,26 +2095,26 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !orgFound {
-		log.Printf("User %s is admin, but can't edit users outside their own org.", userInfo.Id)
+		log.Printf("[WARNING] User %s is admin, but can't edit users outside their own org.", userInfo.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 		return
 	}
 
 	if t.Role != "admin" && t.Role != "user" {
-		log.Printf("%s tried and failed to update user %s", userInfo.Username, t.UserId)
+		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to role user and admin"}`)))
 		return
 	} else {
 		// Same user - can't edit yourself
-		if userInfo.Id == t.UserId {
+		if userInfo.Id == t.UserId || userInfo.Username == t.UserId {
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't update the role of your own user"}`)))
 			return
 		}
 
-		log.Printf("Updated user %s from %s to %s", foundUser.Username, foundUser.Role, t.Role)
+		log.Printf("[INFO] Updated user %s from %s to %s", foundUser.Username, foundUser.Role, t.Role)
 		foundUser.Role = t.Role
 		foundUser.Roles = []string{t.Role}
 	}

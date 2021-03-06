@@ -2,13 +2,15 @@ package shuffle
 
 import (
 	"cloud.google.com/go/datastore"
+	"cloud.google.com/go/storage"
 )
 
 type ShuffleStorage struct {
-	GceProject  string
-	Dbclient    datastore.Client
-	Environment string
-	CacheDb     bool
+	GceProject    string
+	Dbclient      datastore.Client
+	StorageClient storage.Client
+	Environment   string
+	CacheDb       bool
 }
 
 type ExecutionRequestWrapper struct {
@@ -741,6 +743,7 @@ type File struct {
 	FileSize     int64    `json:"filesize" datastore:"filesize"`
 	Duplicate    bool     `json:"duplicate" datastore:"duplicate"`
 	Subflows     []string `json:"subflows" datastore:"subflows"`
+	StorageArea  string   `json:"storage_area" datastore:"storage_area"`
 }
 
 type AppAuthenticationStorage struct {
