@@ -1450,6 +1450,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	var id string
 	if location[1] == "api" {
 		if len(location) <= 4 {
+			log.Printf("Missing parts of API in request!")
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -1458,21 +1459,24 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 		id = location[4]
 	}
 
-	if len(id) != 32 {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	// FIXME - FIX AUTH WITH APP
-	ctx := getContext(request)
+	/*
+		if len(id) != 32 {
+			log.Printf("Missing parts of API in request!")
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	*/
 	//_, err = GetApp(ctx, id)
 	//if err == nil {
 	//	log.Println("You're supposed to be able to continue now.")
 	//}
 
+	// FIXME - FIX AUTH WITH APP
+	ctx := getContext(request)
 	parsedApi, err := GetOpenApiDatastore(ctx, id)
 	if err != nil {
+		log.Printf("[ERROR] Failed getting OpenAPI: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1483,6 +1487,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	parsedApi.Success = true
 	data, err := json.Marshal(parsedApi)
 	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling OpenAPI: %s", err)
 		resp.WriteHeader(422)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling parsed swagger: %s"}`, err)))
 		return
