@@ -10,17 +10,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/patrickmn/go-cache"
+	"google.golang.org/api/iterator"
 	"google.golang.org/appengine/memcache"
 )
 
 var err error
+var requestCache *cache.Cache
 
 // Cache handlers
 func DeleteCache(ctx context.Context, name string) error {
 	if project.Environment == "cloud" {
 		return memcache.Delete(ctx, name)
+	} else if project.Environment == "onprem" {
+		requestCache.Delete(name)
+		return nil
 	} else {
-		return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
+		return errors.New(fmt.Sprintf("No cache handler for environment %s yet WHILE DELETING", project.Environment))
 	}
 
 	return errors.New(fmt.Sprintf("No cache found for %s", name))
@@ -31,9 +37,16 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	if project.Environment == "cloud" {
 		if item, err := memcache.Get(ctx, name); err == memcache.ErrCacheMiss {
 		} else if err != nil {
-			return "", errors.New(fmt.Sprintf("[INFO] Failed getting cache for %s: %s", name, err))
+			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", name, err))
 		} else {
 			return item.Value, nil
+		}
+	} else if project.Environment == "onprem" {
+		//log.Printf("[INFO] GETTING CACHE FOR %s ONPREM", name)
+		if value, found := requestCache.Get(name); found {
+			return value, nil
+		} else {
+			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", name))
 		}
 	} else {
 		return "", errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
@@ -67,6 +80,9 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 		}
 
 		return nil
+	} else if project.Environment == "onprem" {
+		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
+		requestCache.Set(name, data, cache.DefaultExpiration)
 	} else {
 		return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
@@ -98,23 +114,30 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 	return nil
 }
 
-func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution) error {
+func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
+	//log.Printf("\n\n\nRESULT: %s\n\n\n", workflowExecution.Status)
 	if len(workflowExecution.ExecutionId) == 0 {
 		log.Printf("Workflowexeciton executionId can't be empty.")
 		return errors.New("ExecutionId can't be empty.")
 	}
 
-	if project.CacheDb {
-		cacheKey := fmt.Sprintf("workflowexecution-%s", workflowExecution.ExecutionId)
-		data, err := json.Marshal(workflowExecution)
-		if err == nil {
-			err = SetCache(ctx, cacheKey, data)
-			if err != nil {
-				log.Printf("[WARNING] Failed updating cache for execution: %s", err)
-			}
-		} else {
-			log.Printf("[WARNING] Failed marshalling execution: %s", err)
+	cacheKey := fmt.Sprintf("workflowexecution-%s", workflowExecution.ExecutionId)
+	executionData, err := json.Marshal(workflowExecution)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling execution: %s", err)
+
+		err = SetCache(ctx, cacheKey, executionData)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}
+	} else {
+		log.Printf("[WARNING] Failed to set execution cache for workflow.")
+	}
+
+	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
+	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
+		//log.Printf("[WARNING] SHOULD skip DB saving for execution")
+		return nil
 	}
 
 	// New struct, to not add body, author etc
@@ -125,22 +148,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	return nil
-
-	// FIXME: Use this?
-	//if len(workflowExecution.ExecutionId) == 0 {
-	//	log.Printf("Workflowexeciton executionId can't be empty.")
-	//	return errors.New("ExecutionId can't be empty.")
-	//}
-
-	//cacheKey := fmt.Sprintf("workflowexecution-%s", workflowExecution.ExecutionId)
-	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
-
-	//handleExecutionResult(workflowExecution)
-	//validateFinished(workflowExecution)
-	//if dbSave {
-	//	shutdown(workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
-	//}
-	//return nil
 }
 
 type ExecutionVariableWrapper struct {
@@ -298,7 +305,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for execution data %s: %s", executionId, err)
+			//log.Printf("[INFO] Failed getting cache for execution variables data %s: %s", executionId, err)
 		}
 	}
 
@@ -318,7 +325,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				return workflowExecution, nil
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for execution: %s", err)
+			//log.Printf("[INFO] Failed getting cache for workflow execution: %s", err)
 		}
 	}
 
@@ -390,7 +397,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				return curOrg, nil
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for org: %s", err)
+			//log.Printf("[INFO] Failed getting cache for org: %s", err)
 		}
 	}
 
@@ -416,6 +423,13 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func SetOrg(ctx context.Context, data Org, id string) error {
+	timeNow := int64(time.Now().Unix())
+	if data.Created == 0 {
+		data.Created = timeNow
+	}
+
+	data.Edited = timeNow
+
 	// clear session_token and API_token for user
 	k := datastore.NameKey("Organizations", id, nil)
 	if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
@@ -439,14 +453,39 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	return nil
 }
 
-func GetSession(ctx context.Context, thissession string) (*session, error) {
-	key := datastore.NameKey("sessions", thissession, nil)
-	curUser := &session{}
-	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
-		return &session{}, err
+func GetSession(ctx context.Context, thissession string) (*Session, error) {
+	session := &Session{}
+	cache, err := GetCache(ctx, thissession)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %#v", cacheData)
+		err = json.Unmarshal(cacheData, &session)
+		if err == nil {
+			return session, nil
+		}
+	} else {
+		log.Printf("[WARNING] Error getting session cache for %s: %v", thissession, err)
 	}
 
-	return curUser, nil
+	key := datastore.NameKey("sessions", thissession, nil)
+	if err := project.Dbclient.Get(ctx, key, session); err != nil {
+		return &Session{}, err
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(thissession)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling session: %s", err)
+			return session, nil
+		}
+
+		err = SetCache(ctx, thissession, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating session cache: %s", err)
+		}
+	}
+
+	return session, nil
 }
 
 // Index = Username
@@ -502,23 +541,28 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 }
 
 // Index = Username
-func SetSession(ctx context.Context, Userdata User, value string) error {
+func SetSession(ctx context.Context, user User, value string) error {
+	parsedKey := strings.ToLower(user.Username)
+	if project.Environment != "cloud" {
+		parsedKey = user.Id
+	}
 
 	// Non indexed User data
-	Userdata.Session = value
-	key1 := datastore.NameKey("Users", strings.ToLower(Userdata.Username), nil)
+	user.Session = value
+	key1 := datastore.NameKey("Users", parsedKey, nil)
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key1, &Userdata); err != nil {
+	if _, err := project.Dbclient.Put(ctx, key1, &user); err != nil {
 		log.Printf("rror adding Usersession: %s", err)
 		return err
 	}
 
-	if len(Userdata.Session) > 0 {
+	if len(user.Session) > 0 {
 		// Indexed session data
-		sessiondata := new(session)
-		sessiondata.Username = Userdata.Username
-		sessiondata.Session = Userdata.Session
+		sessiondata := new(Session)
+		sessiondata.Username = user.Username
+		sessiondata.Session = user.Session
+		sessiondata.Id = user.Id
 		key2 := datastore.NameKey("sessions", sessiondata.Session, nil)
 
 		if _, err := project.Dbclient.Put(ctx, key2, sessiondata); err != nil {
@@ -534,7 +578,8 @@ func SetSession(ctx context.Context, Userdata User, value string) error {
 func GetUser(ctx context.Context, username string) (*User, error) {
 	curUser := &User{}
 
-	cacheKey := fmt.Sprintf("user_%s", strings.ToLower(username))
+	parsedKey := strings.ToLower(username)
+	cacheKey := fmt.Sprintf("user_%s", parsedKey)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -544,11 +589,11 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 				return curUser, nil
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for user: %s", err)
+			//log.Printf("[INFO] Failed getting cache for user: %s", err)
 		}
 	}
 
-	key := datastore.NameKey("Users", strings.ToLower(username), nil)
+	key := datastore.NameKey("Users", parsedKey, nil)
 	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 		return &User{}, err
 	}
@@ -574,7 +619,12 @@ func SetUser(ctx context.Context, user *User) error {
 	user = fixUserOrg(ctx, user)
 
 	// clear session_token and API_token for user
-	k := datastore.NameKey("Users", strings.ToLower(user.Username), nil)
+	parsedKey := strings.ToLower(user.Username)
+	if project.Environment != "cloud" {
+		parsedKey = user.Id
+	}
+
+	k := datastore.NameKey("Users", parsedKey, nil)
 	if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
 		log.Println(err)
 		return err
@@ -584,13 +634,13 @@ func SetUser(ctx context.Context, user *User) error {
 		cacheKey := fmt.Sprintf("user_%s", strings.ToLower(user.Username))
 		data, err := json.Marshal(user)
 		if err != nil {
-			log.Printf("[WARNING] Failed marshalling org: %s", err)
+			log.Printf("[WARNING] Failed marshalling user: %s", err)
 			return nil
 		}
 
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating cache: %s", err)
+			log.Printf("[WARNING] Failed updating user cache: %s", err)
 		}
 	}
 
@@ -688,41 +738,135 @@ func GetEnvironments(ctx context.Context, OrgId string) ([]Environment, error) {
 	return environments, nil
 }
 
+//func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) {
+//	var apps []WorkflowApp
+//	query := datastore.NewQuery("workflowapp").Order("-edited").Limit(20)
+//	//query := datastore.NewQuery("workflowapp").Order("-edited").Limit(40)
+//
+//	cursorStr := ""
+//
+//	// NOT BEING UPDATED
+//	// FIXME: Update the app with the correct actions. HOW DOES THIS WORK??
+//	// Seems like only actions are wrong. Could get the app individually.
+//	// Guessing it's a memory issue.
+//	//Actions        []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
+//	//errors.New(nil)
+//	for {
+//		it := project.Dbclient.Run(ctx, query)
+//		//_, err = it.Next(&app)
+//		for {
+//			var app WorkflowApp
+//			_, err := it.Next(&app)
+//			if err != nil {
+//				break
+//			}
+//
+//			found := false
+//			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
+//			for _, innerapp := range apps {
+//				if innerapp.Name == app.Name {
+//					found = true
+//					break
+//				}
+//			}
+//
+//			if !found {
+//				apps = append(apps, app)
+//			}
+//		}
+//
+//		// Get the cursor for the next page of results.
+//		nextCursor, err := it.Cursor()
+//		if err != nil {
+//			log.Printf("Cursorerror: %s", err)
+//			break
+//		} else {
+//			//log.Printf("NEXTCURSOR: %s", nextCursor)
+//			nextStr := fmt.Sprintf("%s", nextCursor)
+//			if cursorStr == nextStr {
+//				break
+//			}
+//
+//			cursorStr = nextStr
+//			query = query.Start(nextCursor)
+//			//cursorStr = nextCursor
+//			//break
+//		}
+//
+//		if len(apps) >= maxLen {
+//			break
+//		}
+//	}
+//
+//	return apps, nil
+//}
+//
 func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) {
-	var apps []WorkflowApp
-	query := datastore.NewQuery("workflowapp").Order("-edited").Limit(20)
-	//query := datastore.NewQuery("workflowapp").Order("-edited").Limit(40)
+	var allApps []WorkflowApp
+
+	wrapper := []WorkflowApp{}
+	cacheKey := fmt.Sprintf("workflowapps-sorted-%d", maxLen)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &wrapper)
+			if err == nil {
+				return wrapper, nil
+			}
+		} else {
+			//log.Printf("[INFO] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
+		}
+	}
 
 	cursorStr := ""
+	query := datastore.NewQuery("workflowapp").Order("-edited").Limit(10)
+	//query := datastore.NewQuery("workflowapp").Order("-edited").Limit(40)
 
 	// NOT BEING UPDATED
 	// FIXME: Update the app with the correct actions. HOW DOES THIS WORK??
 	// Seems like only actions are wrong. Could get the app individually.
 	// Guessing it's a memory issue.
-	//Actions        []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
-	//errors.New(nil)
+	//var err error
 	for {
 		it := project.Dbclient.Run(ctx, query)
-		//_, err = it.Next(&app)
+		//innerApp := WorkflowApp{}
+		//data, err := it.Next(&innerApp)
+		//log.Printf("DATA: %#v, err: %s", data, err)
+
 		for {
-			var app WorkflowApp
-			_, err := it.Next(&app)
+			innerApp := WorkflowApp{}
+			_, err := it.Next(&innerApp)
 			if err != nil {
+				//log.Printf("No more apps? Breaking: %s.", err)
 				break
+			}
+
+			if innerApp.Name == "Shuffle Subflow" {
+				continue
+			}
+
+			if !innerApp.IsValid {
+				continue
 			}
 
 			found := false
 			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
-			for _, innerapp := range apps {
-				if innerapp.Name == app.Name {
+			for _, loopedApp := range allApps {
+				if loopedApp.Name == innerApp.Name {
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				apps = append(apps, app)
+				allApps = append(allApps, innerApp)
 			}
+		}
+
+		if err != iterator.Done {
+			//log.Printf("[INFO] Failed fetching results: %v", err)
+			//break
 		}
 
 		// Get the cursor for the next page of results.
@@ -743,12 +887,44 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 			//break
 		}
 
-		if len(apps) >= maxLen {
+		if len(allApps) > maxLen {
 			break
 		}
 	}
 
-	return apps, nil
+	log.Printf("FOUND %d apps", len(allApps))
+	if project.CacheDb {
+		log.Printf("[INFO] Setting %d apps in cache", len(allApps))
+
+		//requestCache.Set(cacheKey, &apps, cache.DefaultExpiration)
+		data, err := json.Marshal(allApps)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating cache for execution: %s", err)
+			}
+		} else {
+			log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		}
+	}
+
+	//var allworkflowapps []WorkflowApp
+	//_, err := dbclient.GetAll(ctx, query, &allworkflowapps)
+	//if err != nil {
+	//	if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+	//		//datastore.NewQuery("workflowapp").Limit(30).Order("-edited")
+	//		query = datastore.NewQuery("workflowapp").Order("-edited").Limit(25)
+	//		//q := q.Limit(25)
+	//		_, err := dbclient.GetAll(ctx, query, &allworkflowapps)
+	//		if err != nil {
+	//			return []WorkflowApp{}, err
+	//		}
+	//	} else {
+	//		return []WorkflowApp{}, err
+	//	}
+	//}
+
+	return allApps, nil
 }
 
 func SetWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWrapper, id string) error {
@@ -774,7 +950,12 @@ func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, 
 	return workflows, nil
 }
 
-func SetWorkflow(ctx context.Context, workflow Workflow, id string) error {
+func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
+	workflow.Edited = int64(time.Now().Unix())
+	if len(optionalEditedSecondsOffset) > 0 {
+		workflow.Edited += int64(optionalEditedSecondsOffset[0])
+	}
+
 	key := datastore.NameKey("workflow", id, nil)
 
 	// New struct, to not add body, author etc
@@ -832,14 +1013,6 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		log.Printf("Error getting apikeys: %s", err)
 		return User{}, err
 	}
-
-	//log.Printf("Users: %d", len(users))
-	//for _, item := range users {
-	//	if len(item.ApiKey) > 0 {
-	//		log.Printf(item.ApiKey)
-	//		break
-	//	}
-	//}
 
 	if len(users) == 0 {
 		log.Printf("No users found for apikey %s", apikey)

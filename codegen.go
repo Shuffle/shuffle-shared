@@ -286,9 +286,14 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				queryString += ", "
 			}
 
+			/*
+							queryData += fmt.Sprintf(`
+				        if %s:
+				            url += f"&%s={%s}"`, query, query, query)
+			*/
 			queryData += fmt.Sprintf(`
         if %s:
-            url += f"&%s={%s}"`, query, query, query)
+            params["%s"] = %s`, query, query, query)
 		}
 	} else {
 		//log.Printf("No optional queries?")
@@ -410,6 +415,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
 	data := fmt.Sprintf(`    async def %s(self%s%s%s%s%s%s%s):
+        params={}
         %s
         url=f"%s%s"
         %s
@@ -418,7 +424,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         %s
         %s
         %s
-        return requests.%s(url, headers=headers%s%s%s%s).text
+        ret = requests.%s(url, headers=headers, params=params%s%s%s%s)
+        try:
+          return ret.json()
+        except json.decoder.JSONDecodeError:
+          return ret.text
 		`,
 		functionname,
 		authenticationParameter,
@@ -444,13 +454,14 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		fileBalance,
 	)
 
-	if strings.Contains(functionname, "filescan") {
+	// Use lowercase when checking
+
+	if strings.Contains(functionname, "attachment") {
 		//log.Printf("FUNCTION: %s", data)
-		log.Println(data)
-		log.Printf("Queries: %s", queryString)
+		//log.Println(data)
+		//log.Printf("Queries: %s", queryString)
 	}
 
-	//log.Printf(data)
 	return functionname, data
 }
 
@@ -876,7 +887,27 @@ func DumpApi(basePath string, api WorkflowApp) error {
 	return nil
 }
 
-func GetRunner(classname string) string {
+func GetRunnerOnprem(classname string) string {
+	return fmt.Sprintf(`
+# Run the actual thing after we've checked params
+def run(request):
+    print("Started execution!")
+    action = request.get_json() 
+    print(action)
+    print(type(action))
+    authorization_key = action.get("authorization")
+    current_execution_id = action.get("execution_id")
+	
+    if action and "name" in action and "app_name" in action:
+        asyncio.run(%s.run(action), debug=True)
+        return f'Attempting to execute function {action["name"]} in app {action["app_name"]}' 
+    else:
+        return f'Invalid action'
+
+	`, classname)
+}
+
+func GetRunnerGCP(classname string) string {
 	return fmt.Sprintf(`
 # Run the actual thing after we've checked params
 def run(request):
@@ -903,7 +934,7 @@ def run(request):
 	`, classname)
 }
 
-func DeployAppToDatastore(ctx context.Context, workflowapp WorkflowApp, bucketName string) error {
+func DeployAppToDatastore(ctx context.Context, workflowapp WorkflowApp) error {
 	err := SetWorkflowAppDatastore(ctx, workflowapp, workflowapp.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflowapp: %s", err)

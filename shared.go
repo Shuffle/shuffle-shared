@@ -19,7 +19,9 @@ import (
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
+	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
+	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/appengine"
 	"google.golang.org/appengine/memcache"
 )
@@ -281,170 +283,6 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": false, "reason": "Successfully logged out"}`))
-}
-
-func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("Error with body read: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	var workflow Workflow
-	err = json.Unmarshal(body, &workflow)
-	if err != nil {
-		log.Printf("Failed unmarshaling: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	workflow.ID = uuid.NewV4().String()
-	workflow.Owner = user.Id
-	workflow.Sharing = "private"
-	workflow.ExecutingOrg = user.ActiveOrg
-	workflow.OrgId = user.ActiveOrg.Id
-
-	ctx := getContext(request)
-	log.Printf("[INFO] Saved new workflow %s with name %s", workflow.ID, workflow.Name)
-
-	if len(workflow.Actions) == 0 {
-		workflow.Actions = []Action{}
-	}
-	if len(workflow.Branches) == 0 {
-		workflow.Branches = []Branch{}
-	}
-	if len(workflow.Triggers) == 0 {
-		workflow.Triggers = []Trigger{}
-	}
-	if len(workflow.Errors) == 0 {
-		workflow.Errors = []string{}
-	}
-
-	newActions := []Action{}
-	for _, action := range workflow.Actions {
-		if action.Environment == "" {
-			//action.Environment = baseEnvironment
-			action.IsValid = true
-		}
-
-		newActions = append(newActions, action)
-	}
-
-	// Initialized without functions = adding a hello world node.
-	if len(newActions) == 0 {
-		log.Printf("[INFO] APPENDING NEW APP FOR NEW WORKFLOW. PS: This is disabled.")
-
-		// Adds the Testing app if it's a new workflow
-		/*
-			workflowapps, err := GetAllWorkflowApps(ctx, 100)
-			if err == nil {
-				// FIXME: Add real env
-				envName := "Shuffle"
-				environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
-				if err == nil {
-					for _, env := range environments {
-						if env.Default {
-							envName = env.Name
-							break
-						}
-					}
-				}
-
-				for _, item := range workflowapps {
-					if item.Name == "Testing" && item.AppVersion == "1.0.0" {
-						nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
-						workflow.Start = nodeId
-						newActions = append(newActions, Action{
-							Label:       "Start node",
-							Name:        "hello_world",
-							Environment: envName,
-							Parameters:  []WorkflowAppActionParameter{},
-							Position: struct {
-								X float64 "json:\"x\" datastore:\"x\""
-								Y float64 "json:\"y\" datastore:\"y\""
-							}{X: 449.5, Y: 446},
-							Priority:    0,
-							Errors:      []string{},
-							ID:          nodeId,
-							IsValid:     true,
-							IsStartNode: true,
-							Sharing:     true,
-							PrivateID:   "",
-							SmallImage:  "",
-							AppName:     item.Name,
-							AppVersion:  item.AppVersion,
-							AppID:       item.ID,
-							LargeImage:  item.LargeImage,
-						})
-						break
-					}
-				}
-			}
-		*/
-	} else {
-		log.Printf("Has %d actions already", len(newActions))
-	}
-
-	for _, item := range workflow.Actions {
-		item.ID = uuid.NewV4().String()
-		newActions = append(newActions, item)
-	}
-
-	newTriggers := []Trigger{}
-	for _, item := range workflow.Triggers {
-		item.Status = "uninitialized"
-		item.ID = uuid.NewV4().String()
-		newTriggers = append(newTriggers, item)
-	}
-
-	newSchedules := []Schedule{}
-	for _, item := range workflow.Schedules {
-		item.Id = uuid.NewV4().String()
-		newSchedules = append(newSchedules, item)
-	}
-
-	workflow.Actions = newActions
-	workflow.Triggers = newTriggers
-	workflow.Schedules = newSchedules
-	workflow.IsValid = true
-	workflow.Configuration.ExitOnError = false
-
-	workflowjson, err := json.Marshal(workflow)
-	if err != nil {
-		log.Printf("Failed workflow json setting marshalling: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	err = SetWorkflow(ctx, workflow, workflow.ID)
-	if err != nil {
-		log.Printf("Failed setting workflow: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-
-	resp.WriteHeader(200)
-	resp.Write(workflowjson)
 }
 
 // Basically a search for apps that aren't activated yet
@@ -922,6 +760,9 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	apikey := request.Header.Get("Authorization")
+
+	user := &User{}
+
 	if len(apikey) > 0 {
 		if !strings.HasPrefix(apikey, "Bearer ") {
 			log.Printf("Apikey doesn't start with bearer")
@@ -943,23 +784,16 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		ctx := appengine.NewContext(request)
-		if item, err := memcache.Get(ctx, newApikey); err == memcache.ErrCacheMiss {
-			// Not in cache
-		} else if err != nil {
-			// Error with cache
-			log.Printf("Error getting item: %v", err)
-		} else {
-			var Userdata User
-			err = json.Unmarshal(item.Value, &Userdata)
-
+		ctx := getContext(request)
+		cache, err := GetCache(ctx, newApikey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &user)
 			if err == nil {
-				if len(Userdata.Username) > 0 {
-					return Userdata, nil
-				} else {
-					return Userdata, errors.New("Error: User doesn't have a username")
-				}
+				return *user, nil
 			}
+		} else {
+			log.Printf("[WARNING] Error getting authentication cache for %s: %v", newApikey, err)
 		}
 
 		// Make specific check for just service user?
@@ -978,31 +812,14 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
-		// Add to cache if it doesn't exist
-		item := &memcache.Item{
-			Key:        newApikey,
-			Value:      b,
-			Expiration: time.Minute * 60,
-		}
-
-		if err := memcache.Add(ctx, item); err == memcache.ErrNotStored {
-			if err := memcache.Set(ctx, item); err != nil {
-				log.Printf("Error setting item: %v", err)
-			}
-		} else if err != nil {
-			log.Printf("error adding item: %v", err)
-		} else {
-			log.Printf("Set cache for %s", item.Key)
-		}
-
-		if len(Userdata.Username) > 0 {
-			return Userdata, nil
-		} else {
-			return Userdata, errors.New("Error: User is invalid - no username found")
+		err = SetCache(ctx, newApikey, b)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
 	}
 
 	// One time API keys
+	//
 	authorizationArr, ok := request.URL.Query()["authorization"]
 	ctx := appengine.NewContext(request)
 	if ok {
@@ -1010,43 +827,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if len(authorizationArr) > 0 {
 			authorization = authorizationArr[0]
 		}
-
-		if item, err := memcache.Get(ctx, authorization); err == memcache.ErrCacheMiss {
-			// Doesn't exist :(
-			log.Printf("Couldn't find %s in cache!", authorization)
-			return User{}, err
-		} else if err != nil {
-			log.Printf("Error getting item: %v", err)
-			return User{}, err
-		} else {
-			log.Printf("%#v", item.Value)
-			var Userdata User
-
-			log.Printf("Deleting key %s", authorization)
-			memcache.Delete(ctx, authorization)
-			err = json.Unmarshal(item.Value, &Userdata)
-			if err == nil {
-				return Userdata, nil
-			}
-
-			return User{}, err
-		}
+		_ = authorization
+		log.Printf("[ERROR] WHAT ARE ONE TIME KEYS USED FOR?")
 	}
 
 	c, err := request.Cookie("session_token")
 	if err == nil {
-		if item, err := memcache.Get(ctx, c.Value); err == memcache.ErrCacheMiss {
-			// Not in cache
-		} else if err != nil {
-			log.Printf("Error getting item: %v", err)
-		} else {
-			var Userdata User
-			err = json.Unmarshal(item.Value, &Userdata)
-			if err == nil {
-				return Userdata, nil
-			}
-		}
-
 		sessionToken := c.Value
 		session, err := GetSession(ctx, sessionToken)
 		if err != nil {
@@ -1054,11 +840,16 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
+		parsedName := strings.ToLower(session.Username)
+		if project.Environment != "cloud" {
+			parsedName = session.Id
+		}
+
 		// Get session first
 		// Should basically never happen
-		Userdata, err := GetUser(ctx, session.Username)
+		Userdata, err := GetUser(ctx, parsedName)
 		if err != nil {
-			log.Printf("Username %s doesn't exist: %s", session.Username, err)
+			log.Printf("[INFO] User with Identifier %s doesn't exist: %s", parsedName, err)
 			return User{}, err
 		}
 
@@ -1082,6 +873,8 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		Environment:   environment,
 		CacheDb:       cacheDb,
 	}
+
+	requestCache = cache.New(5*time.Minute, 10*time.Minute)
 
 	return project
 }
@@ -1370,65 +1163,6 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	// save the openapi ID
 	resp.WriteHeader(422)
 	resp.Write([]byte(`{"success": false}`))
-}
-
-func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if user.Role != "admin" {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
-		return
-	}
-
-	// FIXME: Check by org.
-	ctx := getContext(request)
-	org, err := GetOrg(ctx, user.ActiveOrg.Id)
-	if err != nil {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting org users"}`))
-		return
-	}
-
-	newUsers := []User{}
-	for _, item := range org.Users {
-		if len(item.Username) == 0 {
-			continue
-		}
-
-		//for _, tmpUser := range newUsers {
-		//	if tmpUser.Name
-		//}
-
-		item.Password = ""
-		item.Session = ""
-		item.VerificationToken = ""
-		item.Orgs = []string{}
-
-		newUsers = append(newUsers, item)
-	}
-
-	newjson, err := json.Marshal(newUsers)
-	if err != nil {
-		log.Printf("Failed unmarshal: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(newjson)
 }
 
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
@@ -1962,6 +1696,9 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 
+				cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+				DeleteCache(ctx, cacheKey)
+
 				workflowCnt += 1
 			}
 		}
@@ -2161,4 +1898,1730 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
+	// Generate UUID
+	// Set uuid to apikey in backend (update)
+	apikey := uuid.NewV4()
+	userInfo.ApiKey = apikey.String()
+
+	err := SetApikey(ctx, userInfo)
+	if err != nil {
+		log.Printf("Failed updating apikey: %s", err)
+		return userInfo, err
+	}
+
+	// Updating user
+	err = SetUser(ctx, &userInfo)
+	if err != nil {
+		log.Printf("Failed updating user: %s", err)
+		return userInfo, err
+	}
+
+	return userInfo, nil
+}
+
+// FIXME - add to actual database etc
+func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var workflow Workflow
+	err = json.Unmarshal(body, &workflow)
+	if err != nil {
+		log.Printf("Failed unmarshaling: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	workflow.ID = uuid.NewV4().String()
+	workflow.Owner = user.Id
+	workflow.Sharing = "private"
+	user.ActiveOrg.Users = []User{}
+	workflow.ExecutingOrg = user.ActiveOrg
+	workflow.OrgId = user.ActiveOrg.Id
+	//log.Printf("TRIGGERS: %d", len(workflow.Triggers))
+
+	ctx := context.Background()
+	//err = increaseStatisticsField(ctx, "total_workflows", workflow.ID, 1, workflow.OrgId)
+	//if err != nil {
+	//	log.Printf("Failed to increase total workflows stats: %s", err)
+	//}
+
+	if len(workflow.Actions) == 0 {
+		workflow.Actions = []Action{}
+	}
+	if len(workflow.Branches) == 0 {
+		workflow.Branches = []Branch{}
+	}
+	if len(workflow.Triggers) == 0 {
+		workflow.Triggers = []Trigger{}
+	}
+	if len(workflow.Errors) == 0 {
+		workflow.Errors = []string{}
+	}
+
+	newActions := []Action{}
+	for _, action := range workflow.Actions {
+		if action.Environment == "" {
+			//action.Environment = baseEnvironment
+			action.IsValid = true
+		}
+
+		//action.LargeImage = ""
+		newActions = append(newActions, action)
+	}
+
+	// Initialized without functions = adding a hello world node.
+	if len(newActions) == 0 {
+		//log.Printf("APPENDING NEW APP FOR NEW WORKFLOW")
+
+		// Adds the Testing app if it's a new workflow
+		workflowapps, err := GetAllWorkflowApps(ctx, 500)
+		if err == nil {
+			// FIXME: Add real env
+			envName := "Shuffle"
+			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+			if err == nil {
+				for _, env := range environments {
+					if env.Default {
+						envName = env.Name
+						break
+					}
+				}
+			}
+
+			for _, item := range workflowapps {
+				if item.Name == "Testing" && item.AppVersion == "1.0.0" {
+					nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
+					workflow.Start = nodeId
+					newActions = append(newActions, Action{
+						Label:       "Start node",
+						Name:        "hello_world",
+						Environment: envName,
+						Parameters:  []WorkflowAppActionParameter{},
+						Position: struct {
+							X float64 "json:\"x,omitempty\" datastore:\"x\""
+							Y float64 "json:\"y,omitempty\" datastore:\"y\""
+						}{X: 449.5, Y: 446},
+						Priority:    0,
+						Errors:      []string{},
+						ID:          nodeId,
+						IsValid:     true,
+						IsStartNode: true,
+						Sharing:     true,
+						PrivateID:   "",
+						SmallImage:  "",
+						AppName:     item.Name,
+						AppVersion:  item.AppVersion,
+						AppID:       item.ID,
+						LargeImage:  item.LargeImage,
+					})
+					break
+				}
+			}
+		}
+	} else {
+		log.Printf("[INFO] Has %d actions already", len(newActions))
+		// FIXME: Check if they require authentication and if they exist locally
+		//log.Printf("\n\nSHOULD VALIDATE AUTHENTICATION")
+		//AuthenticationId string `json:"authentication_id,omitempty" datastore:"authentication_id"`
+		//allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		//if err == nil {
+		//	log.Printf("AUTH: %#v", allAuths)
+		//	for _, action := range newActions {
+		//		log.Printf("ACTION: %#v", action)
+		//	}
+		//}
+	}
+
+	workflow.Actions = []Action{}
+	for _, item := range workflow.Actions {
+		oldId := item.ID
+		sourceIndexes := []int{}
+		destinationIndexes := []int{}
+		for branchIndex, branch := range workflow.Branches {
+			if branch.SourceID == oldId {
+				sourceIndexes = append(sourceIndexes, branchIndex)
+			}
+
+			if branch.DestinationID == oldId {
+				destinationIndexes = append(destinationIndexes, branchIndex)
+			}
+		}
+
+		item.ID = uuid.NewV4().String()
+		for _, index := range sourceIndexes {
+			workflow.Branches[index].SourceID = item.ID
+		}
+
+		for _, index := range destinationIndexes {
+			workflow.Branches[index].DestinationID = item.ID
+		}
+
+		newActions = append(newActions, item)
+	}
+
+	newTriggers := []Trigger{}
+	for _, item := range workflow.Triggers {
+		oldId := item.ID
+		sourceIndexes := []int{}
+		destinationIndexes := []int{}
+		for branchIndex, branch := range workflow.Branches {
+			if branch.SourceID == oldId {
+				sourceIndexes = append(sourceIndexes, branchIndex)
+			}
+
+			if branch.DestinationID == oldId {
+				destinationIndexes = append(destinationIndexes, branchIndex)
+			}
+		}
+
+		item.ID = uuid.NewV4().String()
+		for _, index := range sourceIndexes {
+			workflow.Branches[index].SourceID = item.ID
+		}
+
+		for _, index := range destinationIndexes {
+			workflow.Branches[index].DestinationID = item.ID
+		}
+
+		item.Status = "uninitialized"
+		newTriggers = append(newTriggers, item)
+	}
+
+	newSchedules := []Schedule{}
+	for _, item := range workflow.Schedules {
+		item.Id = uuid.NewV4().String()
+		newSchedules = append(newSchedules, item)
+	}
+
+	timeNow := int64(time.Now().Unix())
+	workflow.Actions = newActions
+	workflow.Triggers = newTriggers
+	workflow.Schedules = newSchedules
+	workflow.IsValid = true
+	workflow.Configuration.ExitOnError = false
+	workflow.Created = timeNow
+
+	workflowjson, err := json.Marshal(workflow)
+	if err != nil {
+		log.Printf("Failed workflow json setting marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	err = SetWorkflow(ctx, workflow, workflow.ID)
+	if err != nil {
+		log.Printf("Failed setting workflow: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+	DeleteCache(ctx, cacheKey)
+
+	log.Printf("[INFO] Saved new workflow %s with name %s", workflow.ID, workflow.Name)
+	//memcacheName := fmt.Sprintf("%s_workflows", user.Username)
+	//memcache.Delete(ctx, memcacheName)
+
+	resp.WriteHeader(200)
+	//log.Println(string(workflowjson))
+	resp.Write(workflowjson)
+}
+
+// Saves a workflow to an ID
+func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	//log.Println("Start")
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("Api authentication failed in edit workflow: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//log.Println("PostUser")
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 {
+		log.Printf(`ID %s is not valid`, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID to save is not valid"}`))
+		return
+	}
+
+	// Here to check access rights
+	ctx := context.Background()
+	tmpworkflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("Failed getting the workflow locally (save workflow): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// FIXME - have a check for org etc too..
+	if user.Id != tmpworkflow.Owner && user.Role != "admin" {
+		log.Printf("Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//log.Printf("PRE BODY")
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Failed hook unmarshaling: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var workflow Workflow
+	err = json.Unmarshal([]byte(body), &workflow)
+	//log.Printf(string(body))
+	if err != nil {
+		log.Printf(string(body))
+		log.Printf("[ERROR] Failed workflow unmarshaling: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	//log.Printf("SAVED: %#v", workflow.PreviouslySaved)
+
+	// FIXME - auth and check if they should have access
+	if fileId != workflow.ID {
+		log.Printf("Path and request ID are not matching: %s:%s.", fileId, workflow.ID)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Fixing wrong owners when importing
+	if workflow.Owner == "" {
+		workflow.Owner = user.Id
+	}
+
+	if len(workflow.ExecutingOrg.Id) == 0 {
+		log.Printf("[INFO] Setting executing org for workflow")
+		user.ActiveOrg.Users = []User{}
+		workflow.ExecutingOrg = user.ActiveOrg
+	}
+
+	// FIXME - this shouldn't be necessary with proper API checks
+	newActions := []Action{}
+	allNodes := []string{}
+	workflow.Categories = Categories{}
+
+	//log.Printf("PRE APPS")
+	workflowapps, apperr := GetAllWorkflowApps(ctx, 500)
+
+	//log.Printf("Action: %#v", action.Authentication)
+	for _, action := range workflow.Actions {
+		allNodes = append(allNodes, action.ID)
+
+		if len(action.Errors) > 0 || !action.IsValid {
+			action.IsValid = true
+			action.Errors = []string{}
+		}
+
+		if action.Environment == "" {
+			if workflow.PreviouslySaved {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "An environment for %s is required"}`, action.Label)))
+				return
+			}
+			action.IsValid = true
+		}
+
+		// FIXME: Have a good way of tracking errors. ID's or similar.
+		if !action.IsValid && len(action.Errors) > 0 {
+			log.Printf("Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
+
+			if workflow.PreviouslySaved {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Node %s is invalid and needs to be remade."}`, action.Label)))
+				return
+			}
+			action.IsValid = true
+			action.Errors = []string{}
+		}
+
+		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
+		newActions = append(newActions, action)
+	}
+
+	newTriggers := []Trigger{}
+	for _, trigger := range workflow.Triggers {
+		log.Printf("[INFO] Trigger %s: %s", trigger.TriggerType, trigger.Status)
+
+		// Check if it's actually running
+		// FIXME: Do this for other triggers too
+		if trigger.TriggerType == "SCHEDULE" && trigger.Status != "uninitialized" {
+			schedule, err := GetSchedule(ctx, trigger.ID)
+			if err != nil {
+				trigger.Status = "stopped"
+			} else if schedule.Id == "" {
+				trigger.Status = "stopped"
+			}
+		} else if trigger.TriggerType == "SUBFLOW" {
+			for index, param := range trigger.Parameters {
+				if len(param.Value) == 0 && param.Name != "argument" {
+					//log.Printf("Param: %#v", param)
+					if param.Name == "user_apikey" {
+						apikey := ""
+						if len(user.ApiKey) > 0 {
+							apikey = user.ApiKey
+						} else {
+							user, err = GenerateApikey(ctx, user)
+							if err != nil {
+								workflow.IsValid = false
+								workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
+
+								log.Printf("No type specified for user input node")
+
+								if workflow.PreviouslySaved {
+									resp.WriteHeader(401)
+									resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
+									return
+								}
+							}
+
+							apikey = user.ApiKey
+						}
+
+						log.Printf("[INFO] Set apikey in subflow trigger for user during save")
+						trigger.Parameters[index].Value = apikey
+					} else {
+
+						workflow.IsValid = false
+						workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
+
+						log.Printf("No type specified for user input node")
+						if workflow.PreviouslySaved {
+							resp.WriteHeader(401)
+							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
+							return
+						}
+					}
+				}
+			}
+		} else if trigger.TriggerType == "WEBHOOK" && trigger.Status != "uninitialized" {
+			hook, err := GetHook(ctx, trigger.ID)
+			if err != nil {
+				log.Printf("Failed getting webhook")
+				trigger.Status = "stopped"
+			} else if hook.Id == "" {
+				trigger.Status = "stopped"
+			}
+		} else if trigger.TriggerType == "USERINPUT" {
+			// E.g. check email
+			sms := ""
+			email := ""
+			triggerType := ""
+			triggerInformation := ""
+			for _, item := range trigger.Parameters {
+				if item.Name == "alertinfo" {
+					triggerInformation = item.Value
+				} else if item.Name == "type" {
+					triggerType = item.Value
+				} else if item.Name == "email" {
+					email = item.Value
+				} else if item.Name == "sms" {
+					sms = item.Value
+				}
+			}
+
+			if len(triggerType) == 0 {
+				log.Printf("No type specified for user input node")
+				if workflow.PreviouslySaved {
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No contact option specified in user input"}`)))
+					return
+				}
+			}
+
+			// FIXME: This is not the right time to send them, BUT it's well served for testing. Save -> send email / sms
+			_ = triggerInformation
+			if strings.Contains(triggerType, "email") {
+				if email == "test@test.com" {
+					log.Printf("Email isn't specified during save.")
+					if workflow.PreviouslySaved {
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Email field in user input can't be empty"}`)))
+						return
+					}
+				}
+
+				log.Printf("Should send email to %s during execution.", email)
+			}
+			if strings.Contains(triggerType, "sms") {
+				if sms == "0000000" {
+					log.Printf("Email isn't specified during save.")
+					if workflow.PreviouslySaved {
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SMS field in user input can't be empty"}`)))
+						return
+					}
+				}
+
+				log.Printf("Should send SMS to %s during execution.", sms)
+			}
+		}
+
+		//log.Println("TRIGGERS")
+		allNodes = append(allNodes, trigger.ID)
+		newTriggers = append(newTriggers, trigger)
+	}
+
+	workflow.Triggers = newTriggers
+
+	if len(workflow.Actions) == 0 {
+		workflow.Actions = []Action{}
+	}
+	if len(workflow.Branches) == 0 {
+		workflow.Branches = []Branch{}
+	}
+	if len(workflow.Triggers) == 0 {
+		workflow.Triggers = []Trigger{}
+	}
+	if len(workflow.Errors) == 0 {
+		workflow.Errors = []string{}
+	}
+
+	//log.Printf("PRE VARIABLES")
+	for _, variable := range workflow.WorkflowVariables {
+		if len(variable.Value) == 0 {
+			log.Printf("[WARNING] Variable %s is empty!", variable.Name)
+			workflow.Errors = append(workflow.Errors, fmt.Sprintf("Variable %s is empty!", variable.Name))
+			//resp.WriteHeader(401)
+			//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Variable %s can't be empty"}`, variable.Name)))
+			//return
+		}
+	}
+
+	if len(workflow.ExecutionVariables) > 0 {
+		log.Printf("[INFO] Found %d execution variable(s)", len(workflow.ExecutionVariables))
+	}
+
+	if len(workflow.WorkflowVariables) > 0 {
+		log.Printf("[INFO] Found %d workflow variable(s)", len(workflow.WorkflowVariables))
+	}
+
+	// FIXME - do actual checks ROFL
+	// FIXME - minor issues with e.g. hello world and self.console_logger
+	// Nodechecks
+	foundNodes := []string{}
+	for _, node := range allNodes {
+		for _, branch := range workflow.Branches {
+			//log.Println("branch")
+			//log.Println(node)
+			//log.Println(branch.DestinationID)
+			if node == branch.DestinationID || node == branch.SourceID {
+				foundNodes = append(foundNodes, node)
+				break
+			}
+		}
+	}
+
+	// FIXME - append all nodes (actions, triggers etc) to one single array here
+	//log.Printf("PRE VARIABLES")
+	if len(foundNodes) != len(allNodes) || len(workflow.Actions) <= 0 {
+		// This shit takes a few seconds lol
+		if !workflow.IsValid {
+			oldworkflow, err := GetWorkflow(ctx, fileId)
+			if err != nil {
+				log.Printf("Workflow %s doesn't exist - oldworkflow.", fileId)
+				if workflow.PreviouslySaved {
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
+					return
+				}
+			}
+
+			oldworkflow.IsValid = false
+			err = SetWorkflow(ctx, *oldworkflow, fileId)
+			if err != nil {
+				log.Printf("Failed saving workflow to database: %s", err)
+				if workflow.PreviouslySaved {
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+			}
+
+			cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+			DeleteCache(ctx, cacheKey)
+		}
+
+		// FIXME - more checks here - force reload of data or something
+		//if len(allNodes) == 0 {
+		//	resp.WriteHeader(401)
+		//	resp.Write([]byte(`{"success": false, "reason": "Please insert a node"}`))
+		//	return
+		//}
+
+		// Allowed with only a start node
+		//if len(allNodes) != 1 {
+		//	resp.WriteHeader(401)
+		//	resp.Write([]byte(`{"success": false, "reason": "There are nodes with no branches"}`))
+		//	return
+		//}
+	}
+
+	// FIXME - might be a sploit to run someone elses app if getAllWorkflowApps
+	// doesn't check sharing=true
+	// Have to do it like this to add the user's apps
+	//log.Println("Apps set starting")
+	//log.Printf("EXIT ON ERROR: %#v", workflow.Configuration.ExitOnError)
+	//workflowapps, apperr := GetAllWorkflowApps(ctx, 500)
+
+	// Started getting the single apps, but if it's weird, this is faster
+	// 1. Check workflow.Start
+	// 2. Check if any node has "isStartnode"
+	if len(workflow.Actions) > 0 {
+		index := -1
+		for indexFound, action := range workflow.Actions {
+			//log.Println("Apps set done")
+			if workflow.Start == action.ID {
+				index = indexFound
+			}
+		}
+
+		if index >= 0 {
+			workflow.Actions[0].IsStartNode = true
+		} else {
+			if workflow.PreviouslySaved {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to set a startnode."}`)))
+				return
+			}
+		}
+	}
+
+	allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+	if userErr != nil {
+		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		if workflow.PreviouslySaved {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	// Check every app action and param to see whether they exist
+	//log.Printf("PRE ACTIONS 2")
+	allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+	newActions = []Action{}
+	for _, action := range workflow.Actions {
+		reservedApps := []string{
+			"0ca8887e-b4af-4e3e-887c-87e9d3bc3d3e",
+		}
+
+		//log.Printf("%s Action execution var: %s", action.Label, action.ExecutionVariable.Name)
+
+		builtin := false
+		for _, id := range reservedApps {
+			if id == action.AppID {
+				builtin = true
+				break
+			}
+		}
+
+		// Check auth
+		// 1. Find the auth in question
+		// 2. Update the node and workflow info in the auth
+		// 3. Get the values in the auth and add them to the action values
+		if len(action.AuthenticationId) > 0 {
+			authFound := false
+			for _, auth := range allAuths {
+				if auth.Id == action.AuthenticationId {
+					authFound = true
+
+					// Updates the auth item itself IF necessary
+					go UpdateAppAuth(auth, workflow.ID, action.ID, true)
+					break
+				}
+			}
+
+			if !authFound {
+				log.Printf("App auth %s doesn't exist. Setting error", action.AuthenticationId)
+				workflow.Errors = append(workflow.Errors, fmt.Sprintf("App authentication for %s doesn't exist!", action.AppName))
+				workflow.IsValid = false
+
+				action.Errors = append(action.Errors, "App authentication doesn't exist")
+				action.IsValid = false
+				action.AuthenticationId = ""
+				//resp.WriteHeader(401)
+				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App auth %s doesn't exist"}`, action.AuthenticationId)))
+				//return
+			}
+		}
+
+		if builtin {
+			newActions = append(newActions, action)
+		} else {
+			curapp := WorkflowApp{}
+			// FIXME - can this work with ONLY AppID?
+			for _, app := range workflowapps {
+				if app.ID == action.AppID {
+					curapp = app
+					break
+				}
+
+				// Has to NOT be generated
+				if app.Name == action.AppName && app.AppVersion == action.AppVersion {
+					curapp = app
+					break
+				}
+			}
+
+			// Check to see if the whole app is valid
+			if curapp.Name != action.AppName {
+				workflow.Errors = append(workflow.Errors, fmt.Sprintf("App %s doesn't exist", action.AppName))
+				action.Errors = append(action.Errors, "This app doesn't exist.")
+				action.IsValid = false
+				workflow.IsValid = false
+
+				// Append with errors
+				newActions = append(newActions, action)
+				log.Printf("App %s doesn't exist. Adding as error.", action.AppName)
+				//resp.WriteHeader(401)
+				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App %s doesn't exist"}`, action.AppName)))
+				//return
+			} else {
+				// Check tosee if the appaction is valid
+				curappaction := WorkflowAppAction{}
+				for _, curAction := range curapp.Actions {
+					if action.Name == curAction.Name {
+						curappaction = curAction
+						break
+					}
+				}
+
+				// Check to see if the action is valid
+				if curappaction.Name != action.Name {
+					log.Printf("[ERROR] Action %s in app %s doesn't exist.", action.Name, curapp.Name)
+					thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)
+					workflow.Errors = append(workflow.Errors, thisError)
+					workflow.IsValid = false
+					action.Errors = append(action.Errors, thisError)
+					action.IsValid = false
+					//if workflow.PreviouslySaved {
+					//	resp.WriteHeader(401)
+					//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Action %s in app %s doesn't exist"}`, action.Name, curapp.Name)))
+					//	return
+					//}
+				}
+
+				// FIXME - check all parameters to see if they're valid
+				// Includes checking required fields
+
+				selectedAuth := AppAuthenticationStorage{}
+				if len(action.AuthenticationId) > 0 && autherr == nil {
+					for _, auth := range allAuths {
+						if auth.Id == action.AuthenticationId {
+							selectedAuth = auth
+							break
+						}
+					}
+				}
+
+				newParams := []WorkflowAppActionParameter{}
+				for _, param := range curappaction.Parameters {
+					paramFound := false
+
+					// Handles check for parameter exists + value not empty in used fields
+					for _, actionParam := range action.Parameters {
+						if actionParam.Name == param.Name {
+							paramFound = true
+
+							if actionParam.Value == "" && actionParam.Variant == "STATIC_VALUE" && actionParam.Required == true {
+								// Validating if the field is an authentication field
+								if len(selectedAuth.Id) > 0 {
+									authFound := false
+									for _, field := range selectedAuth.Fields {
+										if field.Key == actionParam.Name {
+											authFound = true
+											//log.Printf("FOUND REQUIRED KEY %s IN AUTH", field.Key)
+											break
+										}
+									}
+
+									if authFound {
+										newParams = append(newParams, actionParam)
+										continue
+									}
+								}
+
+								log.Printf("[WARNING] Appaction %s with required param '%s' is empty. Can't save.", action.Name, param.Name)
+								thisError := fmt.Sprintf("%s is missing reqired parameter %s", action.Label, param.Name)
+								action.Errors = append(action.Errors, thisError)
+								workflow.Errors = append(workflow.Errors, thisError)
+								action.IsValid = false
+							}
+
+							if actionParam.Variant == "" {
+								actionParam.Variant = "STATIC_VALUE"
+							}
+
+							newParams = append(newParams, actionParam)
+							break
+						}
+					}
+
+					// Handles check for required params
+					if !paramFound && param.Required {
+						log.Printf("Appaction %s with required param %s doesn't exist.", action.Name, param.Name)
+						thisError := fmt.Sprintf("Parameter %s is required", param.Name)
+						action.Errors = append(action.Errors, thisError)
+
+						workflow.Errors = append(workflow.Errors, thisError)
+						action.IsValid = false
+						//newActions = append(newActions, action)
+						//resp.WriteHeader(401)
+						//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Appaction %s with required param '%s' is empty."}`, action.Name, param.Name)))
+						//return
+					}
+
+				}
+
+				action.Parameters = newParams
+				newActions = append(newActions, action)
+			}
+		}
+	}
+
+	if !workflow.PreviouslySaved {
+		log.Printf("[WORKFLOW INIT] NOT PREVIOUSLY SAVED - SET ACTION AUTH!")
+
+		if autherr == nil && len(workflowapps) > 0 && apperr == nil {
+			//log.Printf("Setting actions")
+			actionFixing := []Action{}
+			appsAdded := []string{}
+			for _, action := range newActions {
+				setAuthentication := false
+				if len(action.AuthenticationId) > 0 {
+					//found := false
+					authenticationFound := false
+					for _, auth := range allAuths {
+						if auth.Id == action.AuthenticationId {
+							authenticationFound = true
+							break
+						}
+					}
+
+					if !authenticationFound {
+						setAuthentication = true
+					}
+				} else {
+					// FIXME: 1. Validate if the app needs auth
+					// 1. Validate if auth for the app exists
+					// var appAuth AppAuthenticationStorage
+					setAuthentication = true
+
+					//App           WorkflowApp           `json:"app" datastore:"app,noindex"`
+				}
+
+				if setAuthentication {
+					authSet := false
+					for _, auth := range allAuths {
+						if !auth.Active {
+							continue
+						}
+
+						if !auth.Defined {
+							continue
+						}
+
+						if auth.App.Name == action.AppName {
+							//log.Printf("FOUND AUTH FOR APP %s: %s", auth.App.Name, auth.Id)
+							action.AuthenticationId = auth.Id
+							authSet = true
+							break
+						}
+					}
+
+					// FIXME: Only o this IF there isn't another one for the app already
+					if !authSet {
+						//log.Printf("Validate if the app NEEDS auth or not")
+						outerapp := WorkflowApp{}
+						for _, app := range workflowapps {
+							if app.Name == action.AppName {
+								outerapp = app
+								break
+							}
+						}
+
+						if len(outerapp.ID) > 0 && outerapp.Authentication.Required {
+							found := false
+							for _, auth := range allAuths {
+								if auth.App.ID == outerapp.ID {
+									found = true
+									break
+								}
+							}
+
+							for _, added := range appsAdded {
+								if outerapp.ID == added {
+									found = true
+								}
+							}
+
+							// FIXME: Add app auth
+							if !found {
+								timeNow := int64(time.Now().Unix())
+								authFields := []AuthenticationStore{}
+								for _, param := range outerapp.Authentication.Parameters {
+									authFields = append(authFields, AuthenticationStore{
+										Key:   param.Name,
+										Value: "",
+									})
+								}
+
+								appAuth := AppAuthenticationStorage{
+									Active:        true,
+									Label:         fmt.Sprintf("default_%s", outerapp.Name),
+									Id:            uuid.NewV4().String(),
+									App:           outerapp,
+									Fields:        authFields,
+									Usage:         []AuthenticationUsage{},
+									WorkflowCount: 0,
+									NodeCount:     0,
+									OrgId:         user.ActiveOrg.Id,
+									Created:       timeNow,
+									Edited:        timeNow,
+								}
+
+								err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
+								if err != nil {
+									log.Printf("Failed setting appauth for with name %s", appAuth.Label)
+								} else {
+									appsAdded = append(appsAdded, outerapp.ID)
+								}
+							}
+
+							action.Errors = append(action.Errors, "Requires authentication")
+							action.IsValid = false
+							workflow.IsValid = false
+						}
+
+						//outerapp.Authentication.Required
+						// Authentication Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
+						//workflowapps, apperr := GetAllWorkflowApps(ctx, 100)
+					}
+				}
+
+				actionFixing = append(actionFixing, action)
+			}
+
+			newActions = actionFixing
+		} else {
+			log.Printf("FirstSave error: %s - %s", err, apperr)
+			//workflowapps, apperr := GetAllWorkflowApps(ctx, 100)
+			//allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		}
+
+		workflow.PreviouslySaved = true
+	}
+
+	//log.Printf("PRE TRIGGERS")
+	//workflow.Actions = newActions
+
+	workflow.Actions = newActions
+	workflow.IsValid = true
+	log.Printf("[INFO] Tags: %#v", workflow.Tags)
+
+	// FIXME: Is this too drastic? May lead to issues in the future.
+	// Should maybe make a copy for the old org.
+	if workflow.OrgId != user.ActiveOrg.Id {
+		log.Printf("[WARNING] Editing workflow to be owned by %s", user.ActiveOrg.Id)
+		workflow.OrgId = user.ActiveOrg.Id
+		workflow.ExecutingOrg = user.ActiveOrg
+		workflow.Org = append(workflow.Org, user.ActiveOrg)
+	}
+
+	err = SetWorkflow(ctx, workflow, fileId)
+	if err != nil {
+		log.Printf("Failed saving workflow to database: %s", err)
+		if workflow.PreviouslySaved {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+	DeleteCache(ctx, cacheKey)
+
+	//totalOldActions := len(tmpworkflow.Actions)
+	//totalNewActions := len(workflow.Actions)
+	//err = increaseStatisticsField(ctx, "total_workflow_actions", workflow.ID, int64(totalNewActions-totalOldActions), workflow.OrgId)
+	//if err != nil {
+	//	log.Printf("Failed to change total actions data: %s", err)
+	//}
+
+	type returnData struct {
+		Success bool     `json:"success"`
+		Errors  []string `json:"errors"`
+	}
+
+	returndata := returnData{
+		Success: true,
+		Errors:  workflow.Errors,
+	}
+
+	// Really don't know why this was happening
+	//cacheKey := fmt.Sprintf("workflowapps-sorted-100")
+	//requestCache.Delete(cacheKey)
+	//cacheKey = fmt.Sprintf("workflowapps-sorted-500")
+	//requestCache.Delete(cacheKey)
+
+	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s", workflow.Name, fileId, workflow.OrgId)
+	resp.WriteHeader(200)
+	newBody, err := json.Marshal(returndata)
+	if err != nil {
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
+	resp.Write(newBody)
+}
+
+func HandleCategoryIncrease(categories Categories, action Action, workflowapps []WorkflowApp) Categories {
+	if action.Category == "" {
+		appName := action.AppName
+		for _, app := range workflowapps {
+			if appName != strings.ToLower(app.Name) {
+				continue
+			}
+
+			if len(app.Categories) > 0 {
+				log.Printf("[INFO] Setting category for %s: %s", app.Name, app.Categories)
+				action.Category = app.Categories[0]
+				break
+			}
+		}
+
+		//log.Printf("Should find app's categories as it's empty during save")
+		return categories
+	}
+
+	//log.Printf("Action: %s, category: %s", action.AppName, action.Category)
+	// FIXME: Make this an "autodiscover" that's controlled by the category itself
+	// Should just be a list that's looped against :)
+	newCategory := strings.ToLower(action.Category)
+	if strings.Contains(newCategory, "case") || strings.Contains(newCategory, "ticket") || strings.Contains(newCategory, "alert") || strings.Contains(newCategory, "mssp") {
+		categories.Cases.Count += 1
+	} else if strings.Contains(newCategory, "siem") || strings.Contains(newCategory, "event") || strings.Contains(newCategory, "log") || strings.Contains(newCategory, "search") {
+		categories.SIEM.Count += 1
+	} else if strings.Contains(newCategory, "sms") || strings.Contains(newCategory, "comm") || strings.Contains(newCategory, "phone") || strings.Contains(newCategory, "call") || strings.Contains(newCategory, "chat") || strings.Contains(newCategory, "mail") || strings.Contains(newCategory, "phish") {
+		categories.Communication.Count += 1
+	} else if strings.Contains(newCategory, "intel") || strings.Contains(newCategory, "crim") || strings.Contains(newCategory, "ti") {
+		categories.Intel.Count += 1
+	} else if strings.Contains(newCategory, "sand") || strings.Contains(newCategory, "virus") || strings.Contains(newCategory, "malware") || strings.Contains(newCategory, "scan") || strings.Contains(newCategory, "edr") || strings.Contains(newCategory, "endpoint detection") {
+		// Sandbox lol
+		categories.EDR.Count += 1
+	} else if strings.Contains(newCategory, "vuln") || strings.Contains(newCategory, "fim") || strings.Contains(newCategory, "fim") || strings.Contains(newCategory, "integrity") {
+		categories.Assets.Count += 1
+	} else if strings.Contains(newCategory, "network") || strings.Contains(newCategory, "firewall") || strings.Contains(newCategory, "waf") || strings.Contains(newCategory, "switch") {
+		categories.Network.Count += 1
+	} else {
+		categories.Other.Count += 1
+	}
+
+	return categories
+}
+
+// Adds app auth tracking
+func UpdateAppAuth(auth AppAuthenticationStorage, workflowId, nodeId string, add bool) error {
+	workflowFound := false
+	workflowIndex := 0
+	nodeFound := false
+	for index, workflow := range auth.Usage {
+		if workflow.WorkflowId == workflowId {
+			// Check if node exists
+			workflowFound = true
+			workflowIndex = index
+			for _, actionId := range workflow.Nodes {
+				if actionId == nodeId {
+					nodeFound = true
+					break
+				}
+			}
+
+			break
+		}
+	}
+
+	// FIXME: Add a way to use !add to remove
+	updateAuth := false
+	if !workflowFound && add {
+		log.Printf("[INFO] Adding workflow things to auth!")
+		usageItem := AuthenticationUsage{
+			WorkflowId: workflowId,
+			Nodes:      []string{nodeId},
+		}
+
+		auth.Usage = append(auth.Usage, usageItem)
+		auth.WorkflowCount += 1
+		auth.NodeCount += 1
+		updateAuth = true
+	} else if !nodeFound && add {
+		log.Printf("[INFO] Adding node things to auth!")
+		auth.Usage[workflowIndex].Nodes = append(auth.Usage[workflowIndex].Nodes, nodeId)
+		auth.NodeCount += 1
+		updateAuth = true
+	}
+
+	if updateAuth {
+		log.Printf("[INFO] Updating auth!")
+		ctx := context.Background()
+		err := SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
+		if err != nil {
+			log.Printf("Failed setting up app auth %s: %s", auth.Id, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	userInfo, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in apigen: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := context.Background()
+	if request.Method == "GET" {
+		newUserInfo, err := GenerateApikey(ctx, userInfo)
+		if err != nil {
+			log.Printf("Failed to generate apikey for user %s: %s", userInfo.Username, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": ""}`))
+			return
+		}
+		userInfo = newUserInfo
+		log.Printf("Updated apikey for user %s", userInfo.Username)
+	} else if request.Method == "POST" {
+		log.Printf("Handling post!")
+		body, err := ioutil.ReadAll(request.Body)
+		if err != nil {
+			log.Println("Failed reading body")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Missing field: user_id"}`)))
+			return
+		}
+
+		type userId struct {
+			UserId string `json:"user_id"`
+		}
+
+		var t userId
+		err = json.Unmarshal(body, &t)
+		if err != nil {
+			log.Printf("Failed unmarshaling userId: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Missing field: user_id"}`)))
+			return
+		}
+
+		if userInfo.Role != "admin" {
+			log.Printf("%s tried and failed to change apikey for %s", userInfo.Username, t.UserId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change others' apikey"}`)))
+			return
+		}
+
+		foundUser, err := GetUser(ctx, t.UserId)
+		if err != nil {
+			log.Printf("Can't find user %s (apikey gen): %s", t.UserId, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+			return
+		}
+
+		newUserInfo, err := GenerateApikey(ctx, *foundUser)
+		if err != nil {
+			log.Printf("Failed to generate apikey for user %s: %s", foundUser.Username, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+		foundUser = &newUserInfo
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, foundUser.Username, foundUser.Verified, foundUser.ApiKey)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, userInfo.Username, userInfo.Verified, userInfo.ApiKey)))
+}
+
+func HandleSettings(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	userInfo, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in settings: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, userInfo.Username, userInfo.Verified, userInfo.ApiKey)))
+}
+
+func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+		return
+	}
+
+	// FIXME: Check by org.
+	ctx := context.Background()
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org users"}`))
+		return
+	}
+
+	newUsers := []User{}
+	for _, item := range org.Users {
+		if len(item.Username) == 0 {
+			continue
+		}
+
+		//for _, tmpUser := range newUsers {
+		//	if tmpUser.Name
+		//}
+
+		item.Password = ""
+		item.Session = ""
+		item.VerificationToken = ""
+		item.Orgs = []string{}
+
+		newUsers = append(newUsers, item)
+	}
+
+	newjson, err := json.Marshal(newUsers)
+	if err != nil {
+		log.Printf("Failed unmarshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	log.Println("Handling password change")
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Println("Failed reading body")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	// Get the current user - check if they're admin or the "username" user.
+	var t PasswordChange
+	err = json.Unmarshal(body, &t)
+	if err != nil {
+		log.Println("Failed unmarshaling")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	userInfo, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	curUserFound := false
+	if t.Username != userInfo.Username && userInfo.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Admin required to change others' passwords"}`))
+		return
+	} else if t.Username == userInfo.Username {
+		curUserFound = true
+	}
+
+	if userInfo.Role != "admin" {
+		if t.Newpassword != t.Newpassword2 {
+			err := "Passwords don't match"
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		if len(t.Newpassword) < 10 || len(t.Newpassword2) < 10 {
+			err := "Passwords too short - 2"
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+	} else {
+		// Check ORG HERE?
+	}
+
+	// Current password
+	err = CheckPasswordStrength(t.Newpassword)
+	if err != nil {
+		log.Printf("Bad password strength: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	ctx := context.Background()
+	foundUser := User{}
+	if !curUserFound {
+		log.Printf("Have to find a different user")
+		q := datastore.NewQuery("Users").Filter("Username =", strings.ToLower(t.Username))
+		var users []User
+		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil {
+			log.Printf("Failed getting user %s", t.Username)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+			return
+		}
+
+		if len(users) != 1 {
+			log.Printf(`Found multiple or no users with the same username: %s: %d`, t.Username, len(users))
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Found %d users with the same username: %s"}`, len(users), t.Username)))
+			return
+		}
+
+		foundUser = users[0]
+		orgFound := false
+		if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
+			orgFound = true
+		} else {
+			log.Printf("FoundUser: %#v", foundUser.Orgs)
+			for _, item := range foundUser.Orgs {
+				if item == userInfo.ActiveOrg.Id {
+					orgFound = true
+					break
+				}
+			}
+		}
+
+		if !orgFound {
+			log.Printf("User %s is admin, but can't change user's passowrd outside their own org.", userInfo.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+			return
+		}
+	} else {
+		// Admins can re-generate others' passwords as well.
+		if userInfo.Role != "admin" {
+			err = bcrypt.CompareHashAndPassword([]byte(userInfo.Password), []byte(t.Newpassword))
+			if err != nil {
+				log.Printf("Bad password for %s: %s", userInfo.Username, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+				return
+			}
+		}
+	}
+
+	if len(foundUser.Id) == 0 {
+		log.Printf("Something went wrong in password reset: couldn't find user.")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(t.Newpassword), 8)
+	if err != nil {
+		log.Printf("New password failure for %s: %s", userInfo.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		return
+	}
+
+	userInfo.Password = string(hashedPassword)
+	err = SetUser(ctx, &foundUser)
+	if err != nil {
+		log.Printf("Error fixing password for user %s: %s", userInfo.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		return
+	}
+
+	//memcache.Delete(ctx, sessionToken)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+// Can check against HIBP etc?
+// Removed for localhost
+func CheckPasswordStrength(password string) error {
+	// Check password strength here
+	if len(password) < 4 {
+		return errors.New("Minimum password length is 4.")
+	}
+
+	//if len(password) > 128 {
+	//	return errors.New("Maximum password length is 128.")
+	//}
+
+	//re := regexp.MustCompile("[0-9]+")
+	//if len(re.FindAllString(password, -1)) == 0 {
+	//	return errors.New("Password must contain a number")
+	//}
+
+	//re = regexp.MustCompile("[a-z]+")
+	//if len(re.FindAllString(password, -1)) == 0 {
+	//	return errors.New("Password must contain a lower case char")
+	//}
+
+	//re = regexp.MustCompile("[A-Z]+")
+	//if len(re.FindAllString(password, -1)) == 0 {
+	//	return errors.New("Password must contain an upper case char")
+	//}
+
+	return nil
+}
+
+func SendHookResult(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	_ = user
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var workflowId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		workflowId = location[4]
+	}
+
+	if len(workflowId) != 32 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "message": "ID not valid"}`))
+		return
+	}
+
+	ctx := context.Background()
+	hook, err := GetHook(ctx, workflowId)
+	if err != nil {
+		log.Printf("Failed getting hook %s (send): %s", workflowId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Body data error: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("SET the hook results for %s to %s", workflowId, body)
+	// FIXME - set the hook result in the DB somehow as interface{}
+	// FIXME - should the hook do the transform? Hmm
+
+	b, err := json.Marshal(hook)
+	if err != nil {
+		log.Printf("Failed marshalling: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(b))
+	return
+}
+
+func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var workflowId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		workflowId = location[4]
+	}
+
+	if len(workflowId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "message": "ID not valid"}`))
+		return
+	}
+
+	ctx := context.Background()
+	hook, err := GetHook(ctx, workflowId)
+	if err != nil {
+		log.Printf("Failed getting hook %s (get hook): %s", workflowId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != hook.Owner && user.Role != "admin" && user.Role != "scheduler" {
+		log.Printf("Wrong user (%s) for hook %s", user.Username, hook.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	b, err := json.Marshal(hook)
+	if err != nil {
+		log.Printf("Failed marshalling: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// FIXME - get some real data?
+	resp.WriteHeader(200)
+	resp.Write([]byte(b))
+	return
+}
+
+// FIXME - add to actual database etc
+func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in getting specific workflow: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := context.Background()
+	//memcacheName := fmt.Sprintf("%s_%s", user.Username, fileId)
+	//if item, err := memcache.Get(ctx, memcacheName); err == memcache.ErrCacheMiss {
+	//	// Not in cache
+	//	log.Printf("User %s not in cache.", memcacheName)
+	//} else if err != nil {
+	//	log.Printf("Error getting item: %v", err)
+	//} else {
+	//	log.Printf("Got workflow %s from cache", fileId)
+	//	// FIXME - verify if value is ok? Can unmarshal etc.
+	//	resp.WriteHeader(200)
+	//	resp.Write(item.Value)
+	//	return
+	//}
+
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
+		return
+	}
+
+	// CHECK orgs of user, or if user is owner
+	// FIXME - add org check too, and not just owner
+	// Check workflow.Sharing == private / public / org  too
+	if user.Id != workflow.Owner && user.Role != "admin" {
+		log.Printf("Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(workflow.Actions) == 0 {
+		workflow.Actions = []Action{}
+	}
+	if len(workflow.Branches) == 0 {
+		workflow.Branches = []Branch{}
+	}
+	if len(workflow.Triggers) == 0 {
+		workflow.Triggers = []Trigger{}
+	}
+	if len(workflow.Errors) == 0 {
+		workflow.Errors = []string{}
+	}
+
+	// Only required for individuals I think
+	//newactions := []Action{}
+	//for _, item := range workflow.Actions {
+	//	item.LargeImage = ""
+	//	item.SmallImage = ""
+	//	newactions = append(newactions, item)
+	//}
+	//workflow.Actions = newactions
+
+	//newtriggers := []Trigger{}
+	//for _, item := range workflow.Triggers {
+	//	item.LargeImage = ""
+	//	newtriggers = append(newtriggers, item)
+	//}
+	//workflow.Triggers = newtriggers
+
+	body, err := json.Marshal(workflow)
+	if err != nil {
+		log.Printf("Failed workflow GET marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//item := &memcache.Item{
+	//	Key:        memcacheName,
+	//	Value:      body,
+	//	Expiration: time.Minute * 60,
+	//}
+	//if err := memcache.Add(ctx, item); err == memcache.ErrNotStored {
+	//	if err := memcache.Set(ctx, item); err != nil {
+	//		log.Printf("Error setting item: %v", err)
+	//	}
+	//} else if err != nil {
+	//	log.Printf("error adding item: %v", err)
+	//} else {
+	//	//log.Printf("Set cache for %s", item.Key)
+	//}
+
+	resp.WriteHeader(200)
+	resp.Write(body)
 }
