@@ -623,6 +623,9 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	contents := buf.Bytes()
 	file.FileSize = int64(len(contents))
 	md5 := Md5sum(contents)
+	contentType := http.DetectContentType(contents)
+	log.Printf("CONTENTTYPE: %s", contentType)
+
 	buf.Reset()
 
 	sha256Sum := sha256.Sum256(contents)

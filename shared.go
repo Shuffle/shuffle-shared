@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -48,7 +49,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	}
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
 	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me")
-	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, POST")
+	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, POST, PATCH")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
 	if request.Method == "OPTIONS" {
@@ -89,7 +90,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in set new workflowhandler: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -102,16 +103,10 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	dbclient, err := getDatastoreClient(ctx, project.GceProject)
-	if err != nil {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed setting orgs"}`))
-		return
-	}
 
 	var orgs []Org
 	q := datastore.NewQuery("Organizations")
-	_, err = dbclient.GetAll(ctx, q, &orgs)
+	_, err = project.Dbclient.GetAll(ctx, q, &orgs)
 	if err != nil {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get orgs"}`))
@@ -164,7 +159,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in set new workflowhandler: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -237,7 +232,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in handleLogout: %s", err)
+		log.Printf("[WARNING] Api authentication failed in handleLogout: %s", err)
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": true, "reason": "Not logged in"}`))
 		return
@@ -300,9 +295,9 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 
 	// Just need to be logged in
 	// FIXME - should have some permissions?
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new app: %s", err)
+		log.Printf("[WARNING] Api authentication failed in set new app: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -332,7 +327,7 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 	// FIXME - continue the search here with github repos etc.
 	// Caching might be smart :D
 	ctx := getContext(request)
-	workflowapps, err := GetAllWorkflowApps(ctx, 100)
+	workflowapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("Error: Failed getting workflowapps: %s", err)
 		resp.WriteHeader(401)
@@ -375,7 +370,7 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in get all apps: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -391,7 +386,7 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("Api authentication failed in get all app auth: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get all app auth: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -511,11 +506,43 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	ctx := context.Background()
 	if len(appAuth.Id) == 0 {
 		appAuth.Id = uuid.NewV4().String()
+	} else {
+		auth, err := GetWorkflowAppAuthDatastore(ctx, appAuth.Id)
+		if err == nil {
+			// OrgId         string                `json:"org_id" datastore:"org_id"`
+			if auth.OrgId != user.ActiveOrg.Id {
+				log.Printf("[WARNING] User isn't a part of the right org during auth edit")
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": ":("}`)))
+				return
+			}
+
+			if user.Role != "admin" {
+				log.Printf("[WARNING] User isn't admin during auth edit")
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": ":("}`)))
+				return
+			}
+
+			if !auth.Active {
+				log.Printf("[WARNING] Auth isn't active for edit")
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't update an inactive auth"}`)))
+				return
+			}
+
+			if auth.App.Name != appAuth.App.Name {
+				log.Printf("[WARNING] User tried to modify auth")
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad app configuration: need to specify correct name"}`)))
+				return
+			}
+		}
 	}
 
-	ctx := getContext(request)
 	if len(appAuth.Label) == 0 {
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Label can't be empty"}`)))
@@ -530,12 +557,33 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// FIXME: Doens't validate Org
 	app, err := GetApp(ctx, appAuth.App.ID)
 	if err != nil {
-		log.Printf("Failed finding app %s while setting auth.", appAuth.App.ID)
-		resp.WriteHeader(409)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
-		return
+		log.Printf("[WARNING] Failed finding app %s while setting auth. Finding it by looping apps.", appAuth.App.ID)
+		workflowapps, err := GetPrioritizedApps(ctx, user)
+		if err != nil {
+			resp.WriteHeader(409)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		foundIndex := -1
+		for i, workflowapp := range workflowapps {
+			if workflowapp.Name == appAuth.App.Name {
+				foundIndex = i
+				break
+			}
+		}
+
+		if foundIndex >= 0 {
+			log.Printf("[INFO] Found app %s by looping auth", appAuth.App.ID)
+		} else {
+			log.Printf("[ERROR] Failed finding app %s which has auth after looping", appAuth.App.ID)
+			resp.WriteHeader(409)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
 	}
 
 	// Check if the items are correct
@@ -555,7 +603,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	//appAuth.LargeImage = ""
 	appAuth.OrgId = user.ActiveOrg.Id
+	appAuth.Defined = true
 	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
 	if err != nil {
 		log.Printf("Failed setting up app auth %s: %s", appAuth.Id, err)
@@ -877,94 +927,6 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	requestCache = cache.New(5*time.Minute, 10*time.Minute)
 
 	return project
-}
-
-func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, userErr := HandleApiAuthentication(resp, request)
-	if userErr != nil {
-		log.Printf("Api authentication failed in get all apps: %s", userErr)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	var fileId string
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		fileId = location[4]
-	}
-
-	ctx := getContext(request)
-	app, err := GetApp(ctx, fileId)
-	if err != nil {
-		log.Printf("Error getting app (update app): %s", fileId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if user.Id != app.Owner && user.Role != "admin" {
-		log.Printf("Wrong user (%s) for app %s in update app", user.Username, app.Name)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("Error with body read in update app: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	type updatefields struct {
-		Sharing       bool   `json:"sharing"`
-		SharingConfig string `json:"sharing_config"`
-	}
-
-	var tmpfields updatefields
-	err = json.Unmarshal(body, &tmpfields)
-	if err != nil {
-		log.Printf("Error with unmarshal body in update app: %s\n%s", err, string(body))
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if tmpfields.Sharing != app.Sharing {
-		app.Sharing = tmpfields.Sharing
-	}
-
-	if tmpfields.SharingConfig != app.SharingConfig {
-		app.SharingConfig = tmpfields.SharingConfig
-	}
-
-	err = SetWorkflowAppDatastore(ctx, *app, app.ID)
-	if err != nil {
-		log.Printf("Failed patching workflowapp: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	//cacheKey := fmt.Sprintf("workflowapps-sorted")
-	//requestCache.Delete(cacheKey)
-
-	log.Printf("Changed workflow app %s", app.ID)
-	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }
 
 func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
@@ -1318,11 +1280,15 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME - have a check for org etc too..
-	if user.Id != workflow.Owner && user.Role != "admin" {
-		log.Printf("Wrong user (%s) for workflow %s (get execution)", user.Username, workflow.ID)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	if user.Id != workflow.Owner {
+		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, workflow.ID)
+		} else {
+			log.Printf("[WARNING] Wrong user (%s) for workflow %s (get execution)", user.Username, workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	// Query for the specifci workflowId
@@ -1465,7 +1431,20 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	newjson, err := json.Marshal(workflows)
+	newWorkflows := []Workflow{}
+	for _, workflow := range workflows {
+		newActions := []Action{}
+		for _, action := range workflow.Actions {
+			action.LargeImage = ""
+			action.SmallImage = ""
+			newActions = append(newActions, action)
+		}
+
+		workflow.Actions = newActions
+		newWorkflows = append(newWorkflows, workflow)
+	}
+
+	newjson, err := json.Marshal(newWorkflows)
 	if err != nil {
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflows"}`)))
@@ -1528,10 +1507,14 @@ func DeleteWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME - have a check for org etc too..
 	if user.Id != workflow.Owner {
+		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, workflow.ID)
+		} else {
 		log.Printf("Wrong user (%s) for workflow %s", user.Username, workflow.ID)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+		}
 	}
 
 	// Clean up triggers and executions
@@ -1962,7 +1945,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.OrgId = user.ActiveOrg.Id
 	//log.Printf("TRIGGERS: %d", len(workflow.Triggers))
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	//err = increaseStatisticsField(ctx, "total_workflows", workflow.ID, 1, workflow.OrgId)
 	//if err != nil {
 	//	log.Printf("Failed to increase total workflows stats: %s", err)
@@ -1993,11 +1976,12 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Initialized without functions = adding a hello world node.
+	log.Printf("WHATS TAKING TIME 1")
 	if len(newActions) == 0 {
 		//log.Printf("APPENDING NEW APP FOR NEW WORKFLOW")
 
 		// Adds the Testing app if it's a new workflow
-		workflowapps, err := GetAllWorkflowApps(ctx, 500)
+		workflowapps, err := GetPrioritizedApps(ctx, user)
 		if err == nil {
 			// FIXME: Add real env
 			envName := "Shuffle"
@@ -2055,6 +2039,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//}
 	}
 
+	log.Printf("WHATS TAKING TIME 2")
 	workflow.Actions = []Action{}
 	for _, item := range workflow.Actions {
 		oldId := item.ID
@@ -2124,6 +2109,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.Configuration.ExitOnError = false
 	workflow.Created = timeNow
 
+	log.Printf("WHATS TAKING TIME 3")
 	workflowjson, err := json.Marshal(workflow)
 	if err != nil {
 		log.Printf("Failed workflow json setting marshalling: %s", err)
@@ -2140,6 +2126,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("WHATS TAKING TIME 4")
 	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
 	DeleteCache(ctx, cacheKey)
 
@@ -2190,7 +2177,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Here to check access rights
-	ctx := context.Background()
+	ctx := getContext(request)
+
 	tmpworkflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("Failed getting the workflow locally (save workflow): %s", err)
@@ -2200,11 +2188,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME - have a check for org etc too..
-	if user.Id != tmpworkflow.Owner && user.Role != "admin" {
-		log.Printf("Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	if user.Id != tmpworkflow.Owner {
+		if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, tmpworkflow.ID)
+		} else {
+			log.Printf("Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	//log.Printf("PRE BODY")
@@ -2253,10 +2245,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	allNodes := []string{}
 	workflow.Categories = Categories{}
 
-	//log.Printf("PRE APPS")
-	workflowapps, apperr := GetAllWorkflowApps(ctx, 500)
-
-	//log.Printf("Action: %#v", action.Authentication)
+	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	for _, action := range workflow.Actions {
 		allNodes = append(allNodes, action.ID)
 
@@ -2514,7 +2503,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Have to do it like this to add the user's apps
 	//log.Println("Apps set starting")
 	//log.Printf("EXIT ON ERROR: %#v", workflow.Configuration.ExitOnError)
-	//workflowapps, apperr := GetAllWorkflowApps(ctx, 500)
 
 	// Started getting the single apps, but if it's weird, this is faster
 	// 1. Check workflow.Start
@@ -2579,7 +2567,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					authFound = true
 
 					// Updates the auth item itself IF necessary
-					go UpdateAppAuth(auth, workflow.ID, action.ID, true)
+					go UpdateAppAuth(ctx, auth, workflow.ID, action.ID, true)
 					break
 				}
 			}
@@ -2845,10 +2833,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 							action.IsValid = false
 							workflow.IsValid = false
 						}
-
-						//outerapp.Authentication.Required
-						// Authentication Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
-						//workflowapps, apperr := GetAllWorkflowApps(ctx, 100)
 					}
 				}
 
@@ -2858,7 +2842,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			newActions = actionFixing
 		} else {
 			log.Printf("FirstSave error: %s - %s", err, apperr)
-			//workflowapps, apperr := GetAllWorkflowApps(ctx, 100)
 			//allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 		}
 
@@ -2974,7 +2957,7 @@ func HandleCategoryIncrease(categories Categories, action Action, workflowapps [
 }
 
 // Adds app auth tracking
-func UpdateAppAuth(auth AppAuthenticationStorage, workflowId, nodeId string, add bool) error {
+func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowId, nodeId string, add bool) error {
 	workflowFound := false
 	workflowIndex := 0
 	nodeFound := false
@@ -3016,10 +2999,9 @@ func UpdateAppAuth(auth AppAuthenticationStorage, workflowId, nodeId string, add
 
 	if updateAuth {
 		log.Printf("[INFO] Updating auth!")
-		ctx := context.Background()
 		err := SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
 		if err != nil {
-			log.Printf("Failed setting up app auth %s: %s", auth.Id, err)
+			log.Printf("[WARNING] Failed UPDATING app auth %s: %s", auth.Id, err)
 			return err
 		}
 	}
@@ -3041,19 +3023,20 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	//log.Printf("IN APIKEY GENERATION")
+	ctx := getContext(request)
 	if request.Method == "GET" {
 		newUserInfo, err := GenerateApikey(ctx, userInfo)
 		if err != nil {
-			log.Printf("Failed to generate apikey for user %s: %s", userInfo.Username, err)
+			log.Printf("[WARNING] Failed to generate apikey for user %s: %s", userInfo.Username, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": ""}`))
 			return
 		}
 		userInfo = newUserInfo
-		log.Printf("Updated apikey for user %s", userInfo.Username)
+		log.Printf("[INFO] Updated apikey for user %s", userInfo.Username)
 	} else if request.Method == "POST" {
-		log.Printf("Handling post!")
+		log.Printf("[INFO] Handling post for APIKEY gen of user %s!", userInfo.Username)
 		body, err := ioutil.ReadAll(request.Body)
 		if err != nil {
 			log.Println("Failed reading body")
@@ -3141,13 +3124,14 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Role != "admin" {
+		log.Printf("[INFO] User isn't admin (%s) and can't list users.", user.Role)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
 	}
 
 	// FIXME: Check by org.
-	ctx := context.Background()
+	ctx := getContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -3219,7 +3203,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	curUserFound := false
-	if t.Username != userInfo.Username && userInfo.Role != "admin" {
+	if t.Username != userInfo.Username {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Admin required to change others' passwords"}`))
 		return
@@ -3248,16 +3232,15 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	// Current password
 	err = CheckPasswordStrength(t.Newpassword)
 	if err != nil {
-		log.Printf("Bad password strength: %s", err)
+		log.Printf("[INFO] Bad password strength: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	foundUser := User{}
 	if !curUserFound {
-		log.Printf("Have to find a different user")
 		q := datastore.NewQuery("Users").Filter("Username =", strings.ToLower(t.Username))
 		var users []User
 		_, err = project.Dbclient.GetAll(ctx, q, &users)
@@ -3402,7 +3385,7 @@ func SendHookResult(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	hook, err := GetHook(ctx, workflowId)
 	if err != nil {
 		log.Printf("Failed getting hook %s (send): %s", workflowId, err)
@@ -3469,7 +3452,7 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	hook, err := GetHook(ctx, workflowId)
 	if err != nil {
 		log.Printf("Failed getting hook %s (get hook): %s", workflowId, err)
@@ -3478,7 +3461,7 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Id != hook.Owner && user.Role != "admin" && user.Role != "scheduler" {
+	if user.Id != hook.Owner && user.Role != "scheduler" {
 		log.Printf("Wrong user (%s) for hook %s", user.Username, hook.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
@@ -3537,7 +3520,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	//memcacheName := fmt.Sprintf("%s_%s", user.Username, fileId)
 	//if item, err := memcache.Get(ctx, memcacheName); err == memcache.ErrCacheMiss {
 	//	// Not in cache
@@ -3563,11 +3546,15 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// CHECK orgs of user, or if user is owner
 	// FIXME - add org check too, and not just owner
 	// Check workflow.Sharing == private / public / org  too
-	if user.Id != workflow.Owner && user.Role != "admin" {
-		log.Printf("Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	if user.Id != workflow.Owner {
+		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+			log.Printf("[INFO] User %s is accessing workflow %s as admin", user.Username, workflow.ID)
+		} else {
+			log.Printf("Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	if len(workflow.Actions) == 0 {
@@ -3624,4 +3611,670 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(body)
+}
+
+func DeleteUser(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	userInfo, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("Api authentication failed in edit workflow: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if userInfo.Role != "admin" {
+		log.Printf("Wrong user (%s) when deleting - must be admin", userInfo.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Must be admin"}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var userId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		userId = location[4]
+	}
+
+	ctx := getContext(request)
+	userId, err = url.QueryUnescape(userId)
+	if err != nil {
+		log.Printf("[WARNING] Failed decoding user %s: %s", userId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	foundUser, err := GetUser(ctx, userId)
+	if err != nil {
+		log.Printf("[WARNING] Can't find user %s (delete user): %s", userId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	orgFound := false
+	if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
+		orgFound = true
+	} else {
+		log.Printf("FoundUser: %#v", foundUser.Orgs)
+		for _, item := range foundUser.Orgs {
+			if item == userInfo.ActiveOrg.Id {
+				orgFound = true
+				break
+			}
+		}
+	}
+
+	if !orgFound {
+		log.Printf("User %s is admin, but can't delete users outside their own org.", userInfo.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+		return
+	}
+
+	// Invert. No user deletion.
+	if foundUser.Active {
+
+		foundUser.Active = false
+	} else {
+		foundUser.Active = true
+	}
+
+	err = SetUser(ctx, foundUser)
+	if err != nil {
+		log.Printf("Failed swapping active for user %s (%s)", foundUser.Username, foundUser.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	log.Printf("[INFO] Successfully inverted activation for %s", foundUser.Username)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
+func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	ctx := getContext(request)
+	app, err := GetApp(ctx, fileId)
+	if err != nil {
+		log.Printf("Error getting app (update app): %s", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != app.Owner {
+		log.Printf("Wrong user (%s) for app %s in update app", user.Username, app.Name)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read in update app: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Public means it's literally public to anyone right away.
+	type updatefields struct {
+		Sharing       bool   `json:"sharing"`
+		SharingConfig string `json:"sharing_config"`
+		Public        bool   `json:"public"`
+	}
+
+	var tmpfields updatefields
+	err = json.Unmarshal(body, &tmpfields)
+	if err != nil {
+		log.Printf("[WARNING] Error with unmarshal body in update app: %s\n%s", err, string(body))
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if tmpfields.Sharing != app.Sharing {
+		log.Printf("[INFO] Changing app sharing for %s to %#v", app.ID, tmpfields.Sharing)
+		app.Sharing = tmpfields.Sharing
+
+		if project.Environment != "cloud" {
+			log.Printf("[INFO] Set app %s to share everywhere (PUBLIC=true/false), because running onprem", app.Name, app.ID)
+			app.Public = app.Sharing
+		}
+	}
+
+	if tmpfields.SharingConfig != app.SharingConfig {
+		log.Printf("[INFO] Changing app sharing CONFIG for %s to %s", app.ID, tmpfields.SharingConfig)
+		app.SharingConfig = tmpfields.SharingConfig
+	}
+
+	if tmpfields.Public != app.Public {
+		log.Printf("[INFO] Changing app %s to PUBLIC (THIS IS DEACTIVATED!)", app.ID)
+		//app.Public = tmpfields.Public
+	}
+
+	err = SetWorkflowAppDatastore(ctx, *app, app.ID)
+	if err != nil {
+		log.Printf("Failed patching workflowapp: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	changed := false
+	for index, privateApp := range user.PrivateApps {
+		if privateApp.ID == app.ID {
+			user.PrivateApps[index] = *app
+			changed = true
+			break
+		}
+	}
+
+	if changed {
+		err = SetUser(ctx, &user)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating privateapp %s for user %s: %s", app.ID, user.Username, err)
+		}
+	}
+
+	cacheKey := fmt.Sprintf("workflowapps-sorted-100")
+	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("workflowapps-sorted-500")
+	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+
+	log.Printf("[INFO] Changed App configuration for %s (%s)", app.Name, app.ID)
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in edit workflow: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	log.Printf("%#v", location)
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	ctx := appengine.NewContext(request)
+	log.Printf("ID: %s", fileId)
+	app, err := GetApp(ctx, fileId)
+	if err != nil {
+		log.Printf("Error getting app %s: %s", app.Name, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != app.Owner {
+		log.Printf("Wrong user (%s) for app %s when DELETING app", user.Username, app.Name)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Not really deleting it, just removing from user cache
+	var privateApps []WorkflowApp
+	for _, item := range user.PrivateApps {
+		log.Println(item.ID, fileId)
+		if item.ID == fileId {
+			continue
+		}
+
+		privateApps = append(privateApps, item)
+	}
+
+	user.PrivateApps = privateApps
+	err = SetUser(ctx, &user)
+	if err != nil {
+		log.Printf("Failed removing %s app for user %s: %s", app.Name, user.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true"}`)))
+		return
+	}
+
+	// Delete memcache for user
+	// Check cookie
+	c, err := request.Cookie("session_token")
+	if err != nil {
+		log.Printf("User doesn't have sessiontoken on pw change: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You're not logged in."}`)))
+		return
+	}
+
+	sessionToken := c.Value
+	session, err := GetSession(ctx, sessionToken)
+	if err != nil {
+		log.Printf("[INFO] Session %s doesn't exist: %s", sessionToken, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "You're not logged in"}`))
+		return
+	}
+
+	_ = session
+	err = memcache.Delete(request.Context(), sessionToken)
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
+func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	// Append: Checks if the value should be appended
+	// WorkflowCheck: Checks if the value should only check for workflow in org, or entire org
+	// Authorization: the Authorization to use
+	// ExecutionRef: Ref for the execution
+	// Values: The values to use
+	type DataValues struct {
+		App             string
+		Actions         string
+		ParameterNames  []string
+		ParameterValues []string
+	}
+
+	type ReturnData struct {
+		Append        bool         `json:"append"`
+		WorkflowCheck bool         `json:"workflow_check"`
+		Authorization string       `json:"authorization"`
+		ExecutionRef  string       `json:"execution_ref"`
+		OrgId         string       `json:"org_id"`
+		Values        []DataValues `json:"values"`
+	}
+
+	//for key, value := range data.Apps {
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	var tmpData ReturnData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("Failed unmarshalling test: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if tmpData.OrgId != fileId {
+		log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "Organization ID's don't match"}`))
+		return
+	}
+
+	ctx := context.Background()
+
+	org, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionRef)
+	if err != nil {
+		log.Printf("[INFO] User can't edit the org")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "No permission to get execution"}`))
+		return
+	}
+
+	if workflowExecution.Authorization != tmpData.Authorization {
+		log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "Auth doesn't match"}`))
+		return
+	}
+
+	if workflowExecution.Status != "EXECUTING" {
+		log.Printf("[INFO] Workflow isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "Workflow isn't executing"}`))
+		return
+	}
+
+	if workflowExecution.ExecutionOrg != org.Id {
+		log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "Bad organization specified"}`))
+		return
+	}
+
+	// Prepared for the future~
+	if len(tmpData.Values) != 1 {
+		log.Printf("[INFO] Filter data can only hande 1 value right now, not %d", len(tmpData.Values))
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "Can't handle multiple apps yet, just one"}`))
+		return
+	}
+
+	value := tmpData.Values[0]
+
+	// FIXME: Alphabetically sort the parameternames
+	// FIXME: Add organization wide search, not just workflow based
+
+	found := []string{}
+	notFound := []string{}
+
+	dbKey := fmt.Sprintf("app_execution_values")
+	parameterNames := fmt.Sprintf("%s_%s", value.App, strings.Join(value.ParameterNames, "_"))
+	log.Printf("[INFO] PARAMNAME: %s", parameterNames)
+	if tmpData.WorkflowCheck {
+		//for _, item := range tmpData.Values {
+		//	log.Printf("[INFO] Should validate if values %#v in app parameter %#v exists WITH WORKFLOW %s", item.ParameterValues, item.ParameterNames, workflowExecution.Workflow.ID)
+
+		// FIXME: Make this alphabetical
+
+		for _, value := range value.ParameterValues {
+			if len(value) == 0 {
+				log.Printf("Shouldn't have value of length 0!")
+				continue
+			}
+
+			log.Printf("[INFO] Looking for value %s in Workflow %s of ORG %s", value, workflowExecution.Workflow.ID, org.Id)
+
+			q := datastore.NewQuery(dbKey).Filter("org_id =", org.Id).Filter("workflow_id =", workflowExecution.Workflow.ID).Filter("parameter_name =", parameterNames).Filter("value =", value)
+			foundCount, err := project.Dbclient.Count(ctx, q)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting key %s: %s", dbKey, err)
+				notFound = append(notFound, value)
+				//found = append(found, value)
+				continue
+			}
+
+			if foundCount > 0 {
+				found = append(found, value)
+			} else {
+				log.Printf("[INFO] Found for %s: %d", dbKey, foundCount)
+				notFound = append(notFound, value)
+			}
+		}
+	} else {
+		//log.Printf("[INFO] Should validate if value %s in app %s exists WITH ORG %s", workflowExecution.Workflow.ID)
+
+		for _, value := range value.ParameterValues {
+			if len(value) == 0 {
+				log.Printf("Shouldn't have value of length 0!")
+				continue
+			}
+
+			log.Printf("[INFO] Looking for value %s in ORG %s", value, org.Id)
+
+			q := datastore.NewQuery(dbKey).Filter("org_id =", org.Id).Filter("workflow_id =", "").Filter("parameter_name =", parameterNames).Filter("value =", value)
+			foundCount, err := project.Dbclient.Count(ctx, q)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting key %s: %s", dbKey, err)
+				notFound = append(notFound, value)
+				//found = append(found, value)
+				continue
+			}
+
+			if foundCount > 0 {
+				found = append(found, value)
+			} else {
+				log.Printf("[INFO] Found for %s: %d", dbKey, foundCount)
+				notFound = append(notFound, value)
+			}
+		}
+	}
+
+	//App             string
+	//Actions         string
+	//ParameterNames  string
+	//ParamererValues []string
+
+	appended := 0
+	if tmpData.Append {
+		log.Printf("[INFO] Should append %d values!", len(notFound))
+		dbKey := fmt.Sprintf("app_execution_values")
+
+		//q := datastore.NewQuery(dbKey).Filter("org_id =", org.Id).Filter("workflow_id", workflowExecution.Workflow.ID).Filter("app_name =", parameterNames).Filter("value =", value)
+		key := datastore.NameKey(dbKey, "", nil)
+		type NewValue struct {
+			OrgId               string `json:"org_id" datastore:"org_id"`
+			WorkflowId          string `json:"workflow_id" datastore:"workflow_id"`
+			WorkflowExecutionId string `json:"workflow_execution_id" datastore:"workflow_execution_id"`
+			ParameterName       string `json:"parameter_name" datastore:"parameter_name"`
+			Value               string `json:"value" datastore:"value"`
+		}
+
+		//parameterNames := strings.Join(value.ParameterNames, "_")
+		for _, notFoundValue := range notFound {
+			newRequest := NewValue{
+				OrgId:               org.Id,
+				WorkflowExecutionId: workflowExecution.ExecutionId,
+				ParameterName:       parameterNames,
+				Value:               notFoundValue,
+			}
+
+			if tmpData.WorkflowCheck {
+				newRequest.WorkflowId = workflowExecution.Workflow.ID
+			}
+
+			if _, err := project.Dbclient.Put(ctx, key, &newRequest); err != nil {
+				log.Printf("Error adding %s to appvalue: %s", notFoundValue, err)
+				continue
+			}
+
+			appended += 1
+			log.Printf("[INFO] Added %s as new appvalue to datastore", notFoundValue)
+		}
+	}
+
+	type returnStruct struct {
+		Success  bool     `json:"success"`
+		Appended int      `json:"appended"`
+		Found    []string `json:"found"`
+	}
+
+	returnData := returnStruct{
+		Success:  true,
+		Appended: appended,
+		Found:    found,
+	}
+
+	b, _ := json.Marshal(returnData)
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
+func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in cloud setup: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("Not admin.")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	type ReturnData struct {
+		Image       string   `json:"image" datastore:"image"`
+		Name        string   `json:"name" datastore:"name"`
+		Description string   `json:"description" datastore:"description"`
+		OrgId       string   `json:"org_id" datastore:"org_id"`
+		Defaults    Defaults `json:"defaults" datastore:"defaults"`
+	}
+
+	var tmpData ReturnData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("Failed unmarshalling test: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
+		log.Printf("User can't edit the org")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
+		return
+	}
+
+	ctx := context.Background()
+	org, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("Organization doesn't exist: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	admin := false
+	userFound := false
+	for _, inneruser := range org.Users {
+		if inneruser.Id == user.Id {
+			userFound = true
+			if inneruser.Role == "admin" {
+				admin = true
+			}
+
+			break
+		}
+	}
+
+	if !userFound {
+		log.Printf("User %s doesn't exist in organization for edit %s", user.Id, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if !admin {
+		log.Printf("User %s doesn't have edit rights to %s", user.Id, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	org.Image = tmpData.Image
+	org.Name = tmpData.Name
+	org.Description = tmpData.Description
+	org.Defaults = tmpData.Defaults
+
+	//log.Printf("Org: %#v", org)
+	err = SetOrg(ctx, *org, org.Id)
+	if err != nil {
+		log.Printf("User %s doesn't have edit rights to %s", user.Id, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("SUCCESSFULLY UPDATED ORG")
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
+
 }

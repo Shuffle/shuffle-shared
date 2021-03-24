@@ -107,7 +107,7 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 
 	// New struct, to not add body, author etc
 	if _, err := project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
-		log.Printf("Error adding workflow app: %s", err)
+		log.Printf("[WARNING] Error adding workflow app: %s", err)
 		return err
 	}
 
@@ -406,6 +406,16 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		return &Org{}, err
 	}
 
+	for _, user := range curOrg.Users {
+		user.Password = ""
+		user.Session = ""
+		user.ResetReference = ""
+		user.PrivateApps = []WorkflowApp{}
+		user.VerificationToken = ""
+		user.ApiKey = ""
+		user.Executions = ExecutionInfo{}
+	}
+
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
@@ -464,7 +474,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 			return session, nil
 		}
 	} else {
-		log.Printf("[WARNING] Error getting session cache for %s: %v", thissession, err)
+		//log.Printf("[WARNING] Error getting session cache for %s: %v", thissession, err)
 	}
 
 	key := datastore.NameKey("sessions", thissession, nil)
@@ -553,7 +563,7 @@ func SetSession(ctx context.Context, user User, value string) error {
 
 	// New struct, to not add body, author etc
 	if _, err := project.Dbclient.Put(ctx, key1, &user); err != nil {
-		log.Printf("rror adding Usersession: %s", err)
+		log.Printf("[WARNING] Error adding Usersession: %s", err)
 		return err
 	}
 
@@ -615,7 +625,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 }
 
 func SetUser(ctx context.Context, user *User) error {
-	log.Printf("[INFO] Role: %s", user.Role)
+	log.Printf("[INFO] Updating a user that has the role %s with %d apps", user.Role, len(user.PrivateApps))
 	user = fixUserOrg(ctx, user)
 
 	// clear session_token and API_token for user
@@ -626,12 +636,15 @@ func SetUser(ctx context.Context, user *User) error {
 
 	k := datastore.NameKey("Users", parsedKey, nil)
 	if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
-		log.Println(err)
+		log.Printf("[WARNING] Error updating user: %s", err)
 		return err
 	}
 
+	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.Session)
+
 	if project.CacheDb {
-		cacheKey := fmt.Sprintf("user_%s", strings.ToLower(user.Username))
+		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 		data, err := json.Marshal(user)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling user: %s", err)
@@ -672,6 +685,13 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		user.Orgs = append(user.Orgs, user.ActiveOrg.Id)
 	}
 
+	innerUser := *user
+	innerUser.PrivateApps = []WorkflowApp{}
+	innerUser.Executions = ExecutionInfo{}
+	innerUser.Limits = UserLimits{}
+	innerUser.Authentication = []UserAuth{}
+	innerUser.Password = ""
+
 	// Might be vulnerable to timing attacks.
 	for _, orgId := range user.Orgs {
 		if len(orgId) == 0 {
@@ -695,14 +715,9 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 		}
 
 		if userFound {
-			user.PrivateApps = []WorkflowApp{}
-			user.Executions = ExecutionInfo{}
-			user.Limits = UserLimits{}
-			user.Authentication = []UserAuth{}
-
-			org.Users[orgIndex] = *user
+			org.Users[orgIndex] = innerUser
 		} else {
-			org.Users = append(org.Users, *user)
+			org.Users = append(org.Users, innerUser)
 		}
 
 		err = SetOrg(ctx, *org, orgId)
@@ -738,69 +753,169 @@ func GetEnvironments(ctx context.Context, OrgId string) ([]Environment, error) {
 	return environments, nil
 }
 
-//func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) {
-//	var apps []WorkflowApp
-//	query := datastore.NewQuery("workflowapp").Order("-edited").Limit(20)
-//	//query := datastore.NewQuery("workflowapp").Order("-edited").Limit(40)
-//
-//	cursorStr := ""
-//
-//	// NOT BEING UPDATED
-//	// FIXME: Update the app with the correct actions. HOW DOES THIS WORK??
-//	// Seems like only actions are wrong. Could get the app individually.
-//	// Guessing it's a memory issue.
-//	//Actions        []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
-//	//errors.New(nil)
-//	for {
-//		it := project.Dbclient.Run(ctx, query)
-//		//_, err = it.Next(&app)
-//		for {
-//			var app WorkflowApp
-//			_, err := it.Next(&app)
-//			if err != nil {
-//				break
-//			}
-//
-//			found := false
-//			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
-//			for _, innerapp := range apps {
-//				if innerapp.Name == app.Name {
-//					found = true
-//					break
-//				}
-//			}
-//
-//			if !found {
-//				apps = append(apps, app)
-//			}
-//		}
-//
-//		// Get the cursor for the next page of results.
-//		nextCursor, err := it.Cursor()
-//		if err != nil {
-//			log.Printf("Cursorerror: %s", err)
-//			break
-//		} else {
-//			//log.Printf("NEXTCURSOR: %s", nextCursor)
-//			nextStr := fmt.Sprintf("%s", nextCursor)
-//			if cursorStr == nextStr {
-//				break
-//			}
-//
-//			cursorStr = nextStr
-//			query = query.Start(nextCursor)
-//			//cursorStr = nextCursor
-//			//break
-//		}
-//
-//		if len(apps) >= maxLen {
-//			break
-//		}
-//	}
-//
-//	return apps, nil
-//}
-//
+// Gets apps based on a new schema instead of looping everything
+// Primarily made for cloud. Load in this order:
+// 1. Get ORGs' private apps
+// 2. Get USERs' private apps
+// 3. Get PUBLIC apps
+func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
+	allApps := []WorkflowApp{}
+	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
+
+	cacheKey := fmt.Sprintf("apps_%s", user.Id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &allApps)
+			if err == nil {
+				return allApps, nil
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
+		}
+	}
+
+	maxLen := 100
+	cursorStr := ""
+	limit := 100
+	allApps = user.PrivateApps
+	query := datastore.NewQuery("workflowapp").Filter("reference_org =", user.ActiveOrg.Id).Limit(limit)
+	for {
+		it := project.Dbclient.Run(ctx, query)
+
+		for {
+			innerApp := WorkflowApp{}
+			_, err := it.Next(&innerApp)
+			if err != nil {
+				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					log.Printf("[WARNING] Error in reference_org load: %s.", err)
+					continue
+				}
+
+				log.Printf("[WARNING] No more apps? Breaking: %s.", err)
+				break
+			}
+
+			found := false
+			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
+			for _, loopedApp := range allApps {
+				if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				allApps = append(allApps, innerApp)
+			}
+		}
+
+		if err != iterator.Done {
+			//log.Printf("[INFO] Failed fetching results: %v", err)
+			//break
+		}
+
+		// Get the cursor for the next page of results.
+		nextCursor, err := it.Cursor()
+		if err != nil {
+			log.Printf("Cursorerror: %s", err)
+			break
+		} else {
+			//log.Printf("NEXTCURSOR: %s", nextCursor)
+			nextStr := fmt.Sprintf("%s", nextCursor)
+			if cursorStr == nextStr {
+				break
+			}
+
+			cursorStr = nextStr
+			query = query.Start(nextCursor)
+			//cursorStr = nextCursor
+			//break
+		}
+
+		if len(allApps) > maxLen {
+			break
+		}
+	}
+
+	query = datastore.NewQuery("workflowapp").Filter("public =", true).Limit(limit)
+	for {
+		it := project.Dbclient.Run(ctx, query)
+
+		for {
+			innerApp := WorkflowApp{}
+			_, err := it.Next(&innerApp)
+			if err != nil {
+				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					log.Printf("[WARNING] Error in public load: %s.", err)
+					continue
+				}
+
+				log.Printf("[WARNING] No more apps? Breaking: %s.", err)
+				break
+			}
+
+			log.Printf("APP: %s", innerApp.Name)
+			found := false
+			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
+			for _, loopedApp := range allApps {
+				if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				allApps = append(allApps, innerApp)
+			}
+		}
+
+		if err != iterator.Done {
+			//log.Printf("[INFO] Failed fetching results: %v", err)
+			//break
+		}
+
+		// Get the cursor for the next page of results.
+		nextCursor, err := it.Cursor()
+		if err != nil {
+			log.Printf("Cursorerror: %s", err)
+			break
+		} else {
+			//log.Printf("NEXTCURSOR: %s", nextCursor)
+			nextStr := fmt.Sprintf("%s", nextCursor)
+			if cursorStr == nextStr {
+				break
+			}
+
+			cursorStr = nextStr
+			query = query.Start(nextCursor)
+			//cursorStr = nextCursor
+			//break
+		}
+
+		if len(allApps) > maxLen {
+			break
+		}
+	}
+
+	if len(allApps) > 0 {
+		newbody, err := json.Marshal(allApps)
+		if err != nil {
+			return allApps, nil
+		}
+
+		err = SetCache(ctx, cacheKey, newbody)
+		if err != nil {
+			log.Printf("[INFO] Error setting app cache item for %s: %v", cacheKey, err)
+		} else {
+			log.Printf("[INFO] Set app cache for %s", cacheKey)
+		}
+	}
+
+	return allApps, nil
+}
+
 func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) {
 	var allApps []WorkflowApp
 
@@ -892,9 +1007,9 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 	}
 
-	log.Printf("FOUND %d apps", len(allApps))
+	//log.Printf("FOUND %d apps", len(allApps))
 	if project.CacheDb {
-		log.Printf("[INFO] Setting %d apps in cache", len(allApps))
+		log.Printf("[INFO] Setting %d apps in cache for 10 minutes for %s", len(allApps), cacheKey)
 
 		//requestCache.Set(cacheKey, &apps, cache.DefaultExpiration)
 		data, err := json.Marshal(allApps)
@@ -972,7 +1087,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 
 	// New struct, to not add body, author etc
 	if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
-		log.Printf("Error adding workflow app: %s", err)
+		log.Printf("[WARNING] Error adding workflow app AUTH: %s", err)
 		return err
 	}
 
@@ -1080,6 +1195,8 @@ func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
 			if err != nil {
 				return []File{}, err
 			}
+		} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+			log.Printf("[INFO] Failed loading SOME files - skipping: %s", err)
 		} else {
 			return []File{}, err
 		}

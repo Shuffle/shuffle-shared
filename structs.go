@@ -50,7 +50,6 @@ type WorkflowApp struct {
 	Invalid       bool   `json:"invalid" yaml:"invalid" required:false datastore:"invalid"`
 	Activated     bool   `json:"activated" yaml:"activated" required:false datastore:"activated"`
 	Tested        bool   `json:"tested" yaml:"tested" required:false datastore:"tested"`
-	Owner         string `json:"owner" datastore:"owner" yaml:"owner"`
 	Hash          string `json:"hash" datastore:"hash" yaml:"hash"` // api.yaml+dockerfile+src/app.py for apps
 	PrivateID     string `json:"private_id" yaml:"private_id" required:false datastore:"private_id"`
 	Description   string `json:"description" datastore:"description,noindex" required:false yaml:"description"`
@@ -77,6 +76,9 @@ type WorkflowApp struct {
 	Created        int64               `json:"created" datastore:"created"`
 	Edited         int64               `json:"edited" datastore:"edited"`
 	LastRuntime    int64               `json:"last_runtime" datastore:"last_runtime"`
+	Owner          string              `json:"owner" datastore:"owner" yaml:"owner"`
+	Public         bool                `json:"public" datastore:"public"`
+	ReferenceOrg   string              `json:"reference_org" datastore:"reference_org"`
 }
 
 type WorkflowAppActionParameter struct {
@@ -752,6 +754,10 @@ type File struct {
 	Duplicate    bool     `json:"duplicate" datastore:"duplicate"`
 	Subflows     []string `json:"subflows" datastore:"subflows"`
 	StorageArea  string   `json:"storage_area" datastore:"storage_area"`
+	Etag         int      `json:"etag" datastore:"etag"`
+	ContentType  string   `json:"content_type" datastore:"content_type"`
+	UpdatedBy    string   `json:"updated_by" datastore:"updated_by"`
+	CreatedBy    string   `json:"created_by" datastore:"created_by"`
 }
 
 type AppAuthenticationStorage struct {
