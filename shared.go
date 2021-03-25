@@ -507,7 +507,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME: Doens't validate Org
-	app, err := GetApp(ctx, appAuth.App.ID)
+	app, err := GetApp(ctx, appAuth.App.ID, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed finding app %s while setting auth. Finding it by looping apps.", appAuth.App.ID)
 		workflowapps, err := GetPrioritizedApps(ctx, user)
@@ -3689,7 +3689,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	app, err := GetApp(ctx, fileId)
+	app, err := GetApp(ctx, fileId, user)
 	if err != nil {
 		log.Printf("Error getting app (update app): %s", fileId)
 		resp.WriteHeader(401)
@@ -3812,7 +3812,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := appengine.NewContext(request)
 	log.Printf("ID: %s", fileId)
-	app, err := GetApp(ctx, fileId)
+	app, err := GetApp(ctx, fileId, user)
 	if err != nil {
 		log.Printf("Error getting app %s: %s", app.Name, err)
 		resp.WriteHeader(401)

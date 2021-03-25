@@ -350,11 +350,16 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	return workflowExecution, nil
 }
 
-func GetApp(ctx context.Context, id string) (*WorkflowApp, error) {
-
+func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 	key := datastore.NameKey("workflowapp", strings.ToLower(id), nil)
 	workflowApp := &WorkflowApp{}
 	if err := project.Dbclient.Get(ctx, key, workflowApp); err != nil {
+		for _, app := range user.PrivateApps {
+			if app.ID == id {
+				return &app, nil
+			}
+		}
+
 		return &WorkflowApp{}, err
 	}
 
@@ -856,7 +861,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				break
 			}
 
-			log.Printf("APP: %s", innerApp.Name)
+			//log.Printf("APP: %s", innerApp.Name)
 			found := false
 			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
 			for _, loopedApp := range allApps {

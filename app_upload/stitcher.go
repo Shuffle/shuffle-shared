@@ -37,7 +37,7 @@ var appSearchIndex = "appsearch"
 // ALSO REQUIRES ACCESS TO UPLOAD TO CLOUD
 var appbasefile = "/home/frikky/git/shuffle/backend/app_sdk/app_base.py"
 var appfolder = "/home/frikky/git/shuffle-apps"
-var baseUrl = "http://localhost:5002"
+var baseUrl = ""
 var apikey = ""
 
 // Allows for overwriting if the user has access
@@ -373,6 +373,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 	}
 
 	// ProjectsLocationsListCall
+	appname = strings.ToLower(appname)
 	projectsLocationsFunctionsService := cloudfunctions.NewProjectsLocationsFunctionsService(service)
 	location := fmt.Sprintf("projects/%s/locations/%s", gceProject, localization)
 	functionName := fmt.Sprintf("%s/functions/%s", location, appname)
@@ -384,7 +385,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 		HttpsTrigger:         &cloudfunctions.HttpsTrigger{},
 		MaxInstances:         0,
 		Name:                 functionName,
-		Runtime:              "python37",
+		Runtime:              "python38",
 		SourceArchiveUrl:     applocation,
 		ServiceAccountEmail:  "shuffle-apps@shuffler.iam.gserviceaccount.com",
 	}
@@ -737,11 +738,20 @@ func deployAll() {
 }
 
 func main() {
-	//deployAll()
-	//return
+	if len(os.Args) < 3 {
+		log.Printf("Missing arguments. Required: go run stitcher.go APIKEY URL")
+		return
+	}
+
+	baseUrl = os.Args[2]
+	apikey = os.Args[1]
+	log.Printf("\n\nRunning with: \nUrl: %s\nApikey: %s\n\n", baseUrl, apikey)
 
 	appname := "Microsoft-Teams"
 	appversion := "1.0.0"
+
+	deployAll()
+	return
 
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
