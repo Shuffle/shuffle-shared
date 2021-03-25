@@ -793,7 +793,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					continue
 				}
 
-				log.Printf("[WARNING] No more apps? Breaking: %s.", err)
+				log.Printf("[WARNING] No more apps (org)? Breaking: %s.", err)
 				break
 			}
 
@@ -848,11 +848,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			_, err := it.Next(&innerApp)
 			if err != nil {
 				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					log.Printf("[WARNING] Error in public load: %s.", err)
+					log.Printf("[WARNING] Error in public app load: %s.", err)
 					continue
 				}
 
-				log.Printf("[WARNING] No more apps? Breaking: %s.", err)
+				log.Printf("[WARNING] No more apps (public)? Breaking: %s.", err)
 				break
 			}
 
@@ -1119,18 +1119,17 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
-	// Query for the specifci workflowId
-	//q := datastore.NewQuery("Users")
+	// Query for the specific API-key in users
 	q := datastore.NewQuery("Users").Filter("apikey =", apikey)
 	var users []User
 	_, err = project.Dbclient.GetAll(ctx, q, &users)
 	if err != nil {
-		log.Printf("Error getting apikeys: %s", err)
+		log.Printf("[WARNING] Error getting apikey: %s", err)
 		return User{}, err
 	}
 
 	if len(users) == 0 {
-		log.Printf("No users found for apikey %s", apikey)
+		log.Printf("[WARNING] No users found for apikey %s", apikey)
 		return User{}, err
 	}
 

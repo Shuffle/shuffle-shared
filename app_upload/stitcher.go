@@ -7,14 +7,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"image"
-	"image/jpeg"
-	"image/png"
 	"io"
 	"io/ioutil"
 	"log"
@@ -22,12 +18,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"archive/tar"
 	//"cloud.google.com/go/iam"
 	"cloud.google.com/go/storage"
-	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"google.golang.org/api/cloudfunctions/v1"
@@ -40,6 +34,7 @@ var publicBucket = "shuffle_public"
 var appSearchIndex = "appsearch"
 
 // CONFIGURE APP LOCATIONS TO USE
+// ALSO REQUIRES ACCESS TO UPLOAD TO CLOUD
 var appbasefile = "/home/frikky/git/shuffle/backend/app_sdk/app_base.py"
 var appfolder = "/home/frikky/git/shuffle-apps"
 var baseUrl = "http://localhost:5002"
@@ -60,92 +55,7 @@ type AlgoliaSearchApp struct {
 	TimeEdited   int64    `json:"time_edited"`
 	Generated    bool     `json:"generated"`
 	Invalid      bool     `json:"invalid"`
-}
-
-type WorkflowAppActionParameter struct {
-	Description string `json:"description" datastore:"description"`
-	ID          string `json:"id" datastore:"id"`
-	Name        string `json:"name" datastore:"name"`
-	Example     string `json:"example" datastore:"example"`
-	Value       string `json:"value" datastore:"value"`
-	Multiline   bool   `json:"multiline" datastore:"multiline"`
-	ActionField string `json:"action_field" datastore:"action_field"`
-	Variant     string `json:"variant", datastore:"variant"`
-	Required    bool   `json:"required" datastore:"required"`
-	Schema      struct {
-		Type string `json:"type" datastore:"type"`
-	} `json:"schema"`
-}
-
-type Authentication struct {
-	Required   bool                   `json:"required" datastore:"required" yaml:"required" `
-	Parameters []AuthenticationParams `json:"parameters" datastore:"parameters" yaml:"parameters"`
-}
-
-type AuthenticationParams struct {
-	Description string `json:"description" datastore:"description" yaml:"description"`
-	ID          string `json:"id" datastore:"id" yaml:"id"`
-	Name        string `json:"name" datastore:"name" yaml:"name"`
-	Example     string `json:"example" datastore:"example" yaml:"example"`
-	Value       string `json:"value" datastore:"value" yaml:"value"`
-	Multiline   bool   `json:"multiline" datastore:"multiline" yaml:"multiline"`
-	Required    bool   `json:"required" datastore:"required" yaml:"required"`
-}
-
-type WorkflowApp struct {
-	Name          string `json:"name" yaml:"name" required:true datastore:"name"`
-	IsValid       bool   `json:"is_valid" yaml:"is_valid" required:true datastore:"is_valid"`
-	ID            string `json:"id" yaml:"id,omitempty" required:false datastore:"id"`
-	Link          string `json:"link" yaml:"link" required:false datastore:"link,noindex"`
-	AppVersion    string `json:"app_version" yaml:"app_version" required:true datastore:"app_version"`
-	SharingConfig string `json:"sharing_config" yaml:"sharing_config" datastore:"sharing_config"`
-	Generated     bool   `json:"generated" yaml:"generated" required:false datastore:"generated"`
-	Downloaded    bool   `json:"downloaded" yaml:"downloaded" required:false datastore:"downloaded"`
-	Sharing       bool   `json:"sharing" yaml:"sharing" required:false datastore:"sharing"`
-	Verified      bool   `json:"verified" yaml:"verified" required:false datastore:"verified"`
-	Invalid       bool   `json:"invalid" yaml:"invalid" required:false datastore:"invalid"`
-	Activated     bool   `json:"activated" yaml:"activated" required:false datastore:"activated"`
-	Tested        bool   `json:"tested" yaml:"tested" required:false datastore:"tested"`
-	Owner         string `json:"owner" datastore:"owner" yaml:"owner"`
-	Hash          string `json:"hash" datastore:"hash" yaml:"hash"` // api.yaml+dockerfile+src/app.py for apps
-	PrivateID     string `json:"private_id" yaml:"private_id" required:false datastore:"private_id"`
-	Description   string `json:"description" datastore:"description,noindex" required:false yaml:"description"`
-	Environment   string `json:"environment" datastore:"environment" required:true yaml:"environment"`
-	SmallImage    string `json:"small_image" datastore:"small_image,noindex" required:false yaml:"small_image"`
-	LargeImage    string `json:"large_image" datastore:"large_image,noindex" yaml:"large_image" required:false`
-	ContactInfo   struct {
-		Name string `json:"name" datastore:"name" yaml:"name"`
-		Url  string `json:"url" datastore:"url" yaml:"url"`
-	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
-	Actions        []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
-	Authentication Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
-	Tags           []string            `json:"tags" yaml:"tags" required:false datastore:"activated"`
-	Categories     []string            `json:"categories" yaml:"categories" required:false datastore:"categories"`
-	Created        int64               `json:"created" datastore:"created"`
-	Edited         int64               `json:"edited" datastore:"edited"`
-	LastRuntime    int64               `json:"last_runtime" datastore:"last_runtime"`
-}
-
-type AuthenticationStore struct {
-	Key   string `json:"key" datastore:"key"`
-	Value string `json:"value" datastore:"value"`
-}
-
-type WorkflowAppAction struct {
-	Description    string                       `json:"description" datastore:"description"`
-	ID             string                       `json:"id" datastore:"id"`
-	Name           string                       `json:"name" datastore:"name"`
-	NodeType       string                       `json:"node_type" datastore:"node_type"`
-	Environment    string                       `json:"environment" datastore:"environment"`
-	Parameters     []WorkflowAppActionParameter `json:"parameters" datastore: "parameters"`
-	Authentication []AuthenticationStore        `json:"authentication" datastore:"authentication"`
-	Returns        struct {
-		Description string `json:"description" datastore:"returns"`
-		ID          string `json:"id" datastore:"id"`
-		Schema      struct {
-			Type string `json:"type" datastore:"type"`
-		} `json:"schema" datastore:"schema"`
-	} `json:"returns" datastore:"returns"`
+	Creator      string   `json:"creator"`
 }
 
 func getRunner(classname string) string {
@@ -550,131 +460,27 @@ func loadYaml(fileLocation string) (shuffle.WorkflowApp, error) {
 	return action, nil
 }
 
-func handleAlgoliaUpload(ctx context.Context, api shuffle.WorkflowApp) {
-	log.Printf("[INFO] Should try to parse base64 to img and upload")
-	if len(api.LargeImage) > 100000 {
-		log.Printf("[WARNING] Too large image (>100kb): %d", len(api.LargeImage))
-		return
-	}
-
-	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
-	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
-	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
-		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
-		return
-	}
-
-	datasplit := strings.Split(api.LargeImage, ",")
-	log.Printf("LEN: %d", len(datasplit))
-	if len(datasplit) <= 1 {
-		log.Printf("[WARNING] No imagedata to handle")
-		return
-	}
-
-	data := strings.Join(datasplit[1:], ",")
-	reader := base64.NewDecoder(base64.StdEncoding, strings.NewReader(data))
-	m, _, err := image.Decode(reader)
-	if err != nil {
-		log.Printf("[WARNING] Image DecodeError: %s", err)
-		return
-	}
-
-	client, err := storage.NewClient(ctx)
-	if err != nil {
-		log.Printf("[WARNING] Failed to create client (storage - algolia img): %s", err)
-		return
-	}
-
-	newName := strings.Replace(api.Name, " ", "_", -1)
-
-	filename := fmt.Sprintf("app_images/%s_%s.%s", newName, api.ID, "png")
-	if strings.Contains(api.LargeImage, "png") {
-		filename = fmt.Sprintf("app_images/%s_%s.%s", newName, api.ID, "png")
-	} else if strings.Contains(api.LargeImage, "jpg") || strings.Contains(api.LargeImage, "jpeg") {
-		filename = fmt.Sprintf("app_images/%s_%s.%s", newName, api.ID, "png")
-	} else {
-		log.Printf("[WARNING] Can only handle base64 type jpg and png")
-		return
-	}
-
-	bucket := client.Bucket(publicBucket)
-	obj := bucket.Object(filename)
-	w := obj.NewWriter(ctx)
-
-	if strings.Contains(api.LargeImage, "png") {
-		err = png.Encode(w, m)
-		if err != nil {
-			log.Printf("[WARNING] PNG encode write error: %s", err)
-			return
-		}
-	} else if strings.Contains(api.LargeImage, "jpg") || strings.Contains(api.LargeImage, "jpeg") {
-		jpegOptions := jpeg.Options{}
-		err = jpeg.Encode(w, m, &jpegOptions)
-		if err != nil {
-			log.Printf("[WARNING] JPG encode write error: %s", err)
-			return
-		}
-	}
-
-	if err := w.Close(); err != nil {
-		log.Printf("[WARNING] Image close error: %s", err)
-		return
-	}
-
-	publicUrl := fmt.Sprintf("https://storage.googleapis.com/%s/%s", publicBucket, filename)
-	log.Printf("PUBLIC URL: %s", publicUrl)
-
-	algClient := search.NewClient(algoliaClient, algoliaSecret)
-	timeNow := int64(time.Now().Unix())
-	records := []AlgoliaSearchApp{
-		AlgoliaSearchApp{
-			Name:         api.Name,
-			Description:  api.Description,
-			ImageUrl:     publicUrl,
-			Actions:      len(api.Actions),
-			Tags:         api.Tags,
-			Categories:   api.Categories,
-			AccessibleBy: []string{},
-			ObjectID:     api.ID,
-			TimeEdited:   timeNow,
-			Generated:    api.Generated,
-			Invalid:      api.Invalid,
-		},
-	}
-
-	algoliaIndex := algClient.InitIndex(appSearchIndex)
-	_, err = algoliaIndex.SaveObjects(records)
-	if err != nil {
-		log.Printf("[WARNING] Algolia Object put err: %s", err)
-		return
-	}
-
-	log.Printf("[INFO] SUCCESSFULLY UPLOADED %s_%s TO ALGOLIA!", newName, api.ID)
-}
-
 // FIXME - deploy to backend (YAML config)
 func deployConfigToBackend(basefolder, appname, appversion string) error {
 	// FIXME - no static path pls
-	action, err := loadYaml(fmt.Sprintf("%s/%s/%s/api.yaml", basefolder, appname, appversion))
+	location := fmt.Sprintf("%s/%s/%s/api.yaml", basefolder, appname, appversion)
+	log.Printf("FILE LOCATION: %s", location)
+	action, err := loadYaml(location)
 	if err != nil {
 		log.Println(err)
 		return err
 	}
 
 	action.Sharing = true
+	action.Public = true
 
 	data, err := json.Marshal(action)
 	if err != nil {
 		return err
 	}
 
-	if len(action.LargeImage) > 0 {
-		//ctx := context.Background()
-		//handleAlgoliaUpload(ctx, action)
-	}
-
 	log.Printf("Starting file upload to backend")
-	url := fmt.Sprintf("%s/api/v1/workflows/apps?overwrite=%s", baseUrl, overwriteExistingApps)
+	url := fmt.Sprintf("%s/api/v1/workflows/apps?overwrite=%s&sharing=true", baseUrl, overwriteExistingApps)
 	client := &http.Client{}
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(data))
 	if err != nil {
@@ -690,6 +496,17 @@ func deployConfigToBackend(basefolder, appname, appversion string) error {
 
 	log.Printf("Status: %s", ret.Status)
 	body, err := ioutil.ReadAll(ret.Body)
+	if err != nil {
+		return err
+	}
+
+	type datastruct struct {
+		Success bool   `json:"success"`
+		ID      string `json:"ID"`
+	}
+
+	datareturn := datastruct{}
+	err = json.Unmarshal(body, &datareturn)
 	if err != nil {
 		return err
 	}
@@ -899,7 +716,7 @@ func main() {
 	appname := "testing"
 	appversion := "1.0.0"
 
-	err := deployConfigToBackend("apps", appname, appversion)
+	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("Failed uploading config: %s", err)
 		os.Exit(1)

@@ -422,57 +422,6 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(data))
 
-	/*
-		data := `{
-			"success": true,
-			"data": [
-				{
-					"app": {
-						"name": "thehive",
-						"description": "what",
-						"app_version": "1.0.0",
-						"id": "4f97da9d-1caf-41cc-aa13-67104d8d825c",
-						"large_image": "asd"
-					},
-					"fields": {
-						"apikey": "hello",
-						"url": "url"
-					},
-					"usage": [{
-						"workflow_id": "asd",
-						"nodes": [{
-							"node_id": ""
-						}]
-					}],
-					"label": "Original",
-					"id": "4f97da9d-1caf-41cc-aa13-67104d8d825d",
-					"active": true
-				},
-				{
-					"app": {
-						"name": "thehive",
-						"description": "what",
-						"app_version": "1.0.0",
-						"id": "4f97da9d-1caf-41cc-aa13-67104d8d825c",
-						"large_image": "asd"
-					},
-					"fields": {
-						"apikey": "hello",
-						"url": "url"
-					},
-					"usage": [{
-						"workflow_id": "asd",
-						"nodes": [{
-							"node_id": ""
-						}]
-					}],
-					"label": "Number 2",
-					"id": "4f97da9d-1caf-41cc-aa13-67104d8d825d",
-					"active": true
-				}
-			]
-		}`
-	*/
 }
 
 func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
@@ -506,7 +455,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	if len(appAuth.Id) == 0 {
 		appAuth.Id = uuid.NewV4().String()
 	} else {
@@ -815,13 +764,13 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 	if len(apikey) > 0 {
 		if !strings.HasPrefix(apikey, "Bearer ") {
-			log.Printf("Apikey doesn't start with bearer")
+			log.Printf("[WARNING] Apikey doesn't start with bearer")
 			return User{}, errors.New("No bearer token for authorization header")
 		}
 
 		apikeyCheck := strings.Split(apikey, " ")
 		if len(apikeyCheck) != 2 {
-			log.Printf("Invalid format for apikey.")
+			log.Printf("[WARNING] Invalid format for apikey.")
 			return User{}, errors.New("Invalid format for apikey")
 		}
 
@@ -843,7 +792,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return *user, nil
 			}
 		} else {
-			log.Printf("[WARNING] Error getting authentication cache for %s: %v", newApikey, err)
+			//log.Printf("[WARNING] Error getting authentication cache for %s: %v", newApikey, err)
 		}
 
 		// Make specific check for just service user?
@@ -851,14 +800,14 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		//log.Println(apikeyCheck[1])
 		Userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
-			log.Printf("Apikey %s doesn't exist: %s", apikey, err)
+			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
 			return User{}, err
 		}
 
 		// Caching both bad and good apikeys :)
 		b, err := json.Marshal(Userdata)
 		if err != nil {
-			log.Printf("Failed marshalling: %s", err)
+			log.Printf("[WARNING] Failed marshalling: %s", err)
 			return User{}, err
 		}
 
@@ -866,10 +815,11 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
+
+		return Userdata, nil
 	}
 
 	// One time API keys
-	//
 	authorizationArr, ok := request.URL.Query()["authorization"]
 	ctx := appengine.NewContext(request)
 	if ok {
@@ -1441,6 +1391,13 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		workflow.Actions = newActions
+
+		// Skipping these as they're related to onprem workflows in cloud
+		//log.Printf("ENVIRONMENT: %s", workflow.ExecutionEnvironment)
+		if project.Environment == "cloud" && workflow.ExecutionEnvironment == "onprem" {
+			continue
+		}
+
 		newWorkflows = append(newWorkflows, workflow)
 	}
 
@@ -3981,7 +3938,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
@@ -4223,7 +4180,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	ctx := getContext(request)
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("Organization doesn't exist: %s", err)
@@ -4277,4 +4234,25 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
+}
+
+func CheckWorkflowApp(workflowApp WorkflowApp) error {
+	// Validate fields
+	if workflowApp.Name == "" {
+		return errors.New("App field name doesn't exist")
+	}
+
+	if workflowApp.Description == "" {
+		return errors.New("App field description doesn't exist")
+	}
+
+	if workflowApp.AppVersion == "" {
+		return errors.New("App field app_version doesn't exist")
+	}
+
+	if workflowApp.ContactInfo.Name == "" {
+		return errors.New("App field contact_info.name doesn't exist")
+	}
+
+	return nil
 }

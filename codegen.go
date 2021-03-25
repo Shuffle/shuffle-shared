@@ -92,7 +92,7 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
-	log.Printf("Upload project: %s", project.Environment)
+	log.Printf("[INFO] Upload project: %s", project.Environment)
 	if project.Environment == "cloud" {
 		client, err := storage.NewClient(ctx)
 		if err != nil {
@@ -1078,6 +1078,10 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 		Multiline:   false,
 		Required:    false,
 		Example:     "True",
+		Options: []string{
+			"True",
+			"False",
+		},
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1213,6 +1217,10 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		Multiline:   false,
 		Required:    false,
 		Example:     "False - default=True",
+		Options: []string{
+			"True",
+			"False",
+		},
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1348,6 +1356,10 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		Multiline:   false,
 		Required:    false,
 		Example:     "True",
+		Options: []string{
+			"True",
+			"False",
+		},
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1481,6 +1493,10 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 		Multiline:   false,
 		Required:    false,
 		Example:     "True",
+		Options: []string{
+			"True",
+			"False",
+		},
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1614,6 +1630,10 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		Multiline:   false,
 		Required:    false,
 		Example:     "True",
+		Options: []string{
+			"True",
+			"False",
+		},
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1786,6 +1806,10 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 		Multiline:   false,
 		Required:    false,
 		Example:     "True",
+		Options: []string{
+			"True",
+			"False",
+		},
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1919,6 +1943,10 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		Multiline:   false,
 		Required:    false,
 		Example:     "True",
+		Options: []string{
+			"True",
+			"False",
+		},
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
