@@ -18,6 +18,10 @@ import (
 var err error
 var requestCache *cache.Cache
 
+var maxCacheSize = 1020000
+
+//var maxCacheSize = 2000000
+
 // Cache handlers
 func DeleteCache(ctx context.Context, name string) error {
 	if project.Environment == "cloud" {
@@ -29,7 +33,7 @@ func DeleteCache(ctx context.Context, name string) error {
 		return errors.New(fmt.Sprintf("No cache handler for environment %s yet WHILE DELETING", project.Environment))
 	}
 
-	return errors.New(fmt.Sprintf("No cache found for %s", name))
+	return errors.New(fmt.Sprintf("No cache found for %s when DELETING cache", name))
 }
 
 // Cache handlers
@@ -39,7 +43,32 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		} else if err != nil {
 			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", name, err))
 		} else {
-			return item.Value, nil
+			// Loops if cachesize is more than max allowed in memcache (multikey)
+			if len(item.Value) == maxCacheSize {
+				totalData := item.Value
+				keyCount := 1
+				keyname := fmt.Sprintf("%s_%d", name, keyCount)
+				for {
+					if item, err := memcache.Get(ctx, keyname); err == memcache.ErrCacheMiss {
+						break
+					} else {
+						totalData = append(totalData, item.Value...)
+
+						//log.Printf("%d - %d = ", len(item.Value), maxCacheSize)
+						if len(item.Value) != maxCacheSize {
+							break
+						}
+					}
+
+					keyCount += 1
+					keyname = fmt.Sprintf("%s_%d", name, keyCount)
+				}
+
+				log.Printf("[INFO] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
+				return totalData, nil
+			} else {
+				return item.Value, nil
+			}
 		}
 	} else if project.Environment == "onprem" {
 		//log.Printf("[INFO] GETTING CACHE FOR %s ONPREM", name)
@@ -60,23 +89,66 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 	// Maxsize ish~
 
 	if project.Environment == "cloud" {
-		maxSize := 1020000
+		if len(data) > maxCacheSize*10 {
+			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*10))
+		}
 		loop := false
-		if len(data) > maxSize {
+		if len(data) > maxCacheSize {
 			loop = true
 			//log.Printf("Should make multiple cache items for %s", name)
-			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxSize))
-		}
-		_ = loop
-
-		item := &memcache.Item{
-			Key:        name,
-			Value:      data,
-			Expiration: time.Minute * 30,
 		}
 
-		if err := memcache.Set(ctx, item); err != nil {
-			log.Printf("[WARNING] Failed setting cache for %s: %s", name, err)
+		// Custom for larger sizes. Max is maxSize*10 when being set
+		if loop {
+			currentChunk := 0
+			keyAmount := 0
+			totalAdded := 0
+			chunkSize := maxCacheSize
+			nextStep := chunkSize
+			keyname := name
+
+			for {
+				if len(data) < nextStep {
+					nextStep = len(data)
+				}
+
+				//log.Printf("%d - %d = ", currentChunk, nextStep)
+				parsedData := data[currentChunk:nextStep]
+				item := &memcache.Item{
+					Key:        keyname,
+					Value:      parsedData,
+					Expiration: time.Minute * 30,
+				}
+
+				if err := memcache.Set(ctx, item); err != nil {
+					log.Printf("[WARNING] Failed setting cache for %s: %s", keyname, err)
+					break
+				} else {
+					totalAdded += chunkSize
+					currentChunk = nextStep
+					nextStep += chunkSize
+
+					keyAmount += 1
+					//log.Printf("%s: %d: %d", keyname, totalAdded, len(data))
+
+					keyname = fmt.Sprintf("%s_%d", name, keyAmount)
+					if totalAdded > len(data) {
+						break
+					}
+				}
+			}
+
+			log.Printf("[INFO] Set app cache with length %d and %d keys", len(data), keyAmount)
+		} else {
+			item := &memcache.Item{
+				Key:        name,
+				Value:      data,
+				Expiration: time.Minute * 30,
+			}
+
+			if err := memcache.Set(ctx, item); err != nil {
+				log.Printf("[WARNING] Failed setting cache for %s: %s", name, err)
+			}
 		}
 
 		return nil
@@ -117,21 +189,21 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
 	//log.Printf("\n\n\nRESULT: %s\n\n\n", workflowExecution.Status)
 	if len(workflowExecution.ExecutionId) == 0 {
-		log.Printf("Workflowexeciton executionId can't be empty.")
+		log.Printf("[WARNING] Workflowexeciton executionId can't be empty.")
 		return errors.New("ExecutionId can't be empty.")
 	}
 
 	cacheKey := fmt.Sprintf("workflowexecution-%s", workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err != nil {
-		log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		log.Printf("[WARNING] Failed marshalling execution for cache: %s", err)
 
 		err = SetCache(ctx, cacheKey, executionData)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating execution: %s", err)
+			log.Printf("[WARNING] Failed updating execution cache: %s", err)
 		}
 	} else {
-		log.Printf("[WARNING] Failed to set execution cache for workflow.")
+		log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
 	}
 
 	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
@@ -238,13 +310,13 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 		if sourceFound {
 			parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
 		} else {
-			log.Printf("ID %s was not found in actions! Skipping parent. (TRIGGER?)", branch.SourceID)
+			log.Printf("[INFO] ID %s was not found in actions! Skipping parent. (TRIGGER?)", branch.SourceID)
 		}
 
 		if destinationFound {
 			children[branch.SourceID] = append(children[branch.SourceID], branch.DestinationID)
 		} else {
-			log.Printf("ID %s was not found in actions! Skipping child. (TRIGGER?)", branch.SourceID)
+			log.Printf("[INFO] ID %s was not found in actions! Skipping child. (TRIGGER?)", branch.SourceID)
 		}
 	}
 
@@ -775,6 +847,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			err = json.Unmarshal(cacheData, &allApps)
 			if err == nil {
 				return allApps, nil
+			} else {
+				log.Println(string(cacheData))
+				log.Printf("Failed unmarshaling apps: %s", err)
+				log.Printf("DATALEN: %d", len(cacheData))
 			}
 		} else {
 			log.Printf("[INFO] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
@@ -798,7 +874,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					continue
 				}
 
-				log.Printf("[WARNING] No more apps (org)? Breaking: %s.", err)
+				log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
 				break
 			}
 

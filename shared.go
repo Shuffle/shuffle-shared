@@ -836,7 +836,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		sessionToken := c.Value
 		session, err := GetSession(ctx, sessionToken)
 		if err != nil {
-			log.Printf("Session %s doesn't exist: %s", session.Session, err)
+			log.Printf("[INFO] Session %s doesn't exist: %s", session.Session, err)
 			return User{}, err
 		}
 
@@ -1258,6 +1258,8 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
+			//log.Printf("[INFO] Failed precondition in workflowexecs: %s", err)
+
 			q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Limit(25)
 			_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
 			if err != nil {
@@ -1309,20 +1311,18 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	var workflows []Workflow
 
 	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-	if project.CacheDb {
-		cache, err := GetCache(ctx, cacheKey)
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %#v", cacheData)
+		err = json.Unmarshal(cacheData, &workflows)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
-			err = json.Unmarshal(cacheData, &workflows)
-			if err == nil {
-				resp.WriteHeader(200)
-				resp.Write(cacheData)
-				return
-			}
-		} else {
-			log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
+			resp.WriteHeader(200)
+			resp.Write(cacheData)
+			return
 		}
+	} else {
+		//log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
 	}
 
 	// With user, do a search for workflows with user or user's org attached
@@ -1411,7 +1411,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	if project.CacheDb {
 		err = SetCache(ctx, cacheKey, newjson)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating workflows: %s", err)
+			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
 		}
 	}
 
@@ -1933,15 +1933,17 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Initialized without functions = adding a hello world node.
-	log.Printf("WHATS TAKING TIME 1")
 	if len(newActions) == 0 {
 		//log.Printf("APPENDING NEW APP FOR NEW WORKFLOW")
 
 		// Adds the Testing app if it's a new workflow
 		workflowapps, err := GetPrioritizedApps(ctx, user)
 		if err == nil {
-			// FIXME: Add real env
 			envName := "Shuffle"
+			if project.Environment == "cloud" {
+				envName = "cloud"
+			}
+
 			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 			if err == nil {
 				for _, env := range environments {
@@ -1996,7 +1998,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//}
 	}
 
-	log.Printf("WHATS TAKING TIME 2")
 	workflow.Actions = []Action{}
 	for _, item := range workflow.Actions {
 		oldId := item.ID
@@ -2066,7 +2067,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.Configuration.ExitOnError = false
 	workflow.Created = timeNow
 
-	log.Printf("WHATS TAKING TIME 3")
 	workflowjson, err := json.Marshal(workflow)
 	if err != nil {
 		log.Printf("Failed workflow json setting marshalling: %s", err)
@@ -2083,7 +2083,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("WHATS TAKING TIME 4")
 	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
 	DeleteCache(ctx, cacheKey)
 
@@ -2302,6 +2301,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		} else if trigger.TriggerType == "USERINPUT" {
 			// E.g. check email
+			log.Printf("Validating USERINPUT")
 			sms := ""
 			email := ""
 			triggerType := ""
@@ -2439,20 +2439,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			cacheKey := fmt.Sprintf("%s_workflows", user.Id)
 			DeleteCache(ctx, cacheKey)
 		}
-
-		// FIXME - more checks here - force reload of data or something
-		//if len(allNodes) == 0 {
-		//	resp.WriteHeader(401)
-		//	resp.Write([]byte(`{"success": false, "reason": "Please insert a node"}`))
-		//	return
-		//}
-
-		// Allowed with only a start node
-		//if len(allNodes) != 1 {
-		//	resp.WriteHeader(401)
-		//	resp.Write([]byte(`{"success": false, "reason": "There are nodes with no branches"}`))
-		//	return
-		//}
 	}
 
 	// FIXME - might be a sploit to run someone elses app if getAllWorkflowApps
@@ -2484,15 +2470,17 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
-	if userErr != nil {
-		log.Printf("Api authentication failed in get all apps: %s", userErr)
-		if workflow.PreviouslySaved {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+	/*
+		allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		if userErr != nil {
+			log.Printf("Api authentication failed in get all apps: %s", userErr)
+			if workflow.PreviouslySaved {
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 		}
-	}
+	*/
 
 	// Check every app action and param to see whether they exist
 	//log.Printf("PRE ACTIONS 2")
@@ -2810,7 +2798,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	workflow.Actions = newActions
 	workflow.IsValid = true
-	log.Printf("[INFO] Tags: %#v", workflow.Tags)
+	//log.Printf("[INFO] Tags: %#v", workflow.Tags)
 
 	// FIXME: Is this too drastic? May lead to issues in the future.
 	// Should maybe make a copy for the old org.
