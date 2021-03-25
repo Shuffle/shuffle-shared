@@ -269,24 +269,51 @@ func stitcher(appname string, appversion string) string {
 	}
 
 	stitched := []byte(string(baseline) + strings.Join(appBase, "\n") + string(appfile) + string(runner))
-	err = ioutil.WriteFile(fmt.Sprintf("%s/main.py", foldername), stitched, os.ModePerm)
-	if err != nil {
-		log.Println("Failed writing to stitched: %s", err)
-		return ""
-	}
-
 	err = Copy(fmt.Sprintf("%s/%s/%s/requirements.txt", appfolder, appname, appversion), fmt.Sprintf("%s/requirements.txt", foldername))
 	if err != nil {
 		log.Println("Failed writing to requirement: %s", err)
 		return ""
 	}
 
-	log.Printf("Successfully stitched files in %s/main.py", foldername)
-	// Zip the folder
-	files := []string{
-		fmt.Sprintf("%s/main.py", foldername),
-		fmt.Sprintf("%s/requirements.txt", foldername),
+	err = ioutil.WriteFile(fmt.Sprintf("%s/main.py", foldername), stitched, os.ModePerm)
+	if err != nil {
+		log.Println("Failed writing to stitched: %s", err)
+		return ""
 	}
+
+	files := []string{
+		fmt.Sprintf("%s/requirements.txt", foldername),
+		fmt.Sprintf("%s/main.py", foldername),
+	}
+
+	folderPath := fmt.Sprintf("%s/%s/%s/src", appfolder, appname, appversion)
+	log.Printf("CHECKING FOLDER %s", folderPath)
+	allFiles, err := ioutil.ReadDir(folderPath)
+	if err != nil {
+		log.Printf("Failed getting src files")
+		return ""
+	}
+
+	for _, f := range allFiles {
+		if f.IsDir() {
+			continue
+		}
+
+		if f.Name() == "app.py" {
+			continue
+		}
+
+		err = Copy(fmt.Sprintf("%s/%s/%s/src/%s", appfolder, appname, appversion, f.Name()), fmt.Sprintf("%s/%s", foldername, f.Name()))
+		if err != nil {
+			log.Println("Failed writing to %s: %s", f.Name(), err)
+			continue
+		}
+
+		files = append(files, fmt.Sprintf("%s/%s", foldername, f.Name()))
+	}
+
+	//os.Exit(3)
+	log.Printf("Successfully stitched files in %s/main.py", foldername)
 	outputfile := fmt.Sprintf("%s.zip", foldername)
 
 	err = ZipFiles(outputfile, files)
@@ -710,10 +737,10 @@ func deployAll() {
 }
 
 func main() {
-	deployAll()
-	return
+	//deployAll()
+	//return
 
-	appname := "testing"
+	appname := "Microsoft-Teams"
 	appversion := "1.0.0"
 
 	err := deployConfigToBackend(appfolder, appname, appversion)
@@ -722,5 +749,6 @@ func main() {
 		os.Exit(1)
 	}
 
+	log.Printf("Starting cloud function deploy")
 	deployAppCloudFunc(appname, appversion)
 }

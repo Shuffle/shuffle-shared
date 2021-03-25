@@ -169,36 +169,25 @@ func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName strin
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
 	basePath := "generated_apps/baseline"
-	static, err := client.Bucket(bucketName).Object(fmt.Sprintf("%s/static_baseline.py", basePath)).NewReader(ctx)
-	if err != nil {
-		return []byte{}, []byte{}, err
-	}
-
 	appbase, err := client.Bucket(bucketName).Object(fmt.Sprintf("%s/app_base.py", basePath)).NewReader(ctx)
 	if err != nil {
 		return []byte{}, []byte{}, err
 	}
 
-	defer static.Close()
 	defer appbase.Close()
-
-	staticData, err := ioutil.ReadAll(static)
-	if err != nil {
-		return []byte{}, []byte{}, err
-	}
-	staticData = []byte{}
 
 	appbaseData, err := ioutil.ReadAll(appbase)
 	if err != nil {
 		return []byte{}, []byte{}, err
 	}
 
-	return appbaseData, staticData, nil
+	return appbaseData, []byte{}, nil
 }
 
 func FixAppbase(appbase []byte) []string {
 	record := true
 	validLines := []string{}
+	// Used to use static_baseline + app_base. Now it's only appbase :O
 	for _, line := range strings.Split(string(appbase), "\n") {
 		//if strings.Contains(line, "#STOPCOPY") {
 		//	//log.Println("Stopping copy")
