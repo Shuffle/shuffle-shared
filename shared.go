@@ -2123,6 +2123,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		fileId = location[4]
+		if strings.Contains(fileId, "?") {
+			fileId = strings.Split(fileId, "?")[0]
+		}
 	}
 
 	if len(fileId) != 36 {
@@ -2790,18 +2793,22 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 		}
 
-		workflow.PreviouslySaved = true
+		skipSave, skipSaveOk := request.URL.Query()["skip_save"]
+		if skipSaveOk && len(skipSave) > 0 {
+			//log.Printf("INSIDE SKIPSAVE: %s", skipSave[0])
+			if strings.ToLower(skipSave[0]) != "true" {
+				workflow.PreviouslySaved = true
+			}
+		} else {
+			workflow.PreviouslySaved = true
+		}
 	}
-
-	//log.Printf("PRE TRIGGERS")
-	//workflow.Actions = newActions
+	//log.Printf("SAVED: %#v", workflow.PreviouslySaved)
 
 	workflow.Actions = newActions
 	workflow.IsValid = true
-	//log.Printf("[INFO] Tags: %#v", workflow.Tags)
 
 	// FIXME: Is this too drastic? May lead to issues in the future.
-	// Should maybe make a copy for the old org.
 	if workflow.OrgId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] Editing workflow to be owned by %s", user.ActiveOrg.Id)
 		workflow.OrgId = user.ActiveOrg.Id

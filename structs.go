@@ -698,6 +698,7 @@ type Workflow struct {
 	PreviouslySaved      bool       `json:"previously_saved" datastore:"first_save"`
 	Categories           Categories `json:"categories" datastore:"categories"`
 	ExampleArgument      string     `json:"example_argument" datastore:"example_argument,noindex"`
+	Public               bool       `json:"public" datastore:"public"`
 }
 
 type Category struct {
