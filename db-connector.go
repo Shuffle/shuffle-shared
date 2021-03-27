@@ -193,7 +193,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("ExecutionId can't be empty.")
 	}
 
-	cacheKey := fmt.Sprintf("workflowexecution-%s", workflowExecution.ExecutionId)
+	nameKey := "workflowexecution"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err != nil {
 		log.Printf("[WARNING] Failed marshalling execution for cache: %s", err)
@@ -213,7 +214,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// New struct, to not add body, author etc
-	key := datastore.NameKey("workflowexecution", workflowExecution.ExecutionId, nil)
+	key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
 	if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
 		log.Printf("Error adding workflow_execution: %s", err)
 		return err
@@ -310,13 +311,13 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 		if sourceFound {
 			parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
 		} else {
-			log.Printf("[INFO] ID %s was not found in actions! Skipping parent. (TRIGGER?)", branch.SourceID)
+			log.Printf("[INFO] Action ID %s was not found in actions! Skipping parent. (TRIGGER?)", branch.SourceID)
 		}
 
 		if destinationFound {
 			children[branch.SourceID] = append(children[branch.SourceID], branch.DestinationID)
 		} else {
-			log.Printf("[INFO] ID %s was not found in actions! Skipping child. (TRIGGER?)", branch.SourceID)
+			log.Printf("[INFO] Action ID %s was not found in actions! Skipping child. (TRIGGER?)", branch.SourceID)
 		}
 	}
 
@@ -385,7 +386,8 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 }
 
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
-	cacheKey := fmt.Sprintf("workflowexecution-%s", id)
+	nameKey := "workflowexecution"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	workflowExecution := &WorkflowExecution{}
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -401,7 +403,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	key := datastore.NameKey("workflowexecution", strings.ToLower(id), nil)
+	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 	if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
 		return &WorkflowExecution{}, err
 	}
@@ -439,11 +441,40 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 }
 
 func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
-
-	key := datastore.NameKey("workflow", strings.ToLower(id), nil)
 	workflow := &Workflow{}
+	nameKey := "workflow"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &workflow)
+			if err == nil {
+				return workflow, nil
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache for workflow: %s", err)
+		}
+	}
+
+	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 	if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
 		return &Workflow{}, err
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(workflow)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
+			return workflow, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+		}
 	}
 
 	return workflow, nil
@@ -483,6 +514,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		return &Org{}, err
 	}
 
+	newUsers := []User{}
 	for _, user := range curOrg.Users {
 		user.Password = ""
 		user.Session = ""
@@ -491,8 +523,10 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		user.VerificationToken = ""
 		user.ApiKey = ""
 		user.Executions = ExecutionInfo{}
+		newUsers = append(newUsers, user)
 	}
 
+	curOrg.Users = newUsers
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
@@ -525,15 +559,29 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	if project.CacheDb {
+		newUsers := []User{}
+		for _, user := range data.Users {
+			user.Password = ""
+			user.Session = ""
+			user.ResetReference = ""
+			user.PrivateApps = []WorkflowApp{}
+			user.VerificationToken = ""
+			user.ApiKey = ""
+			user.Executions = ExecutionInfo{}
+			newUsers = append(newUsers, user)
+		}
+
+		data.Users = newUsers
+
 		neworg, err := json.Marshal(data)
 		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setorg: %s", err)
 			return nil
 		}
 
 		err = SetCache(ctx, id, neworg)
 		if err != nil {
-			log.Printf("Failed setting cache: %s", err)
-			//DeleteCache(neworg)
+			log.Printf("[WARNING] Failed setting cache for org: %s", err)
 		}
 	}
 
@@ -578,6 +626,8 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 // Index = Username
 func DeleteKey(ctx context.Context, entity string, value string) error {
 	// Non indexed User data
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
+
 	key1 := datastore.NameKey(entity, value, nil)
 
 	err = project.Dbclient.Delete(ctx, key1)
@@ -806,9 +856,10 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 	return user
 }
 
-func GetAllWorkflowAppAuth(ctx context.Context, OrgId string) ([]AppAuthenticationStorage, error) {
+func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticationStorage, error) {
+	//log.Printf("\n\nGetting ALL workflow app auth for org %s", orgId)
 	var allworkflowapps []AppAuthenticationStorage
-	q := datastore.NewQuery("workflowappauth").Filter("org_id = ", OrgId)
+	q := datastore.NewQuery("workflowappauth").Filter("org_id = ", orgId)
 
 	_, err = project.Dbclient.GetAll(ctx, q, &allworkflowapps)
 	if err != nil {
@@ -818,9 +869,9 @@ func GetAllWorkflowAppAuth(ctx context.Context, OrgId string) ([]AppAuthenticati
 	return allworkflowapps, nil
 }
 
-func GetEnvironments(ctx context.Context, OrgId string) ([]Environment, error) {
+func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	var environments []Environment
-	q := datastore.NewQuery("Environments").Filter("org_id =", OrgId)
+	q := datastore.NewQuery("Environments").Filter("org_id =", orgId)
 
 	_, err = project.Dbclient.GetAll(ctx, q, &environments)
 	if err != nil {
@@ -1147,17 +1198,31 @@ func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, 
 }
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
+	nameKey := "workflow"
+	key := datastore.NameKey(nameKey, id, nil)
 	workflow.Edited = int64(time.Now().Unix())
 	if len(optionalEditedSecondsOffset) > 0 {
 		workflow.Edited += int64(optionalEditedSecondsOffset[0])
 	}
 
-	key := datastore.NameKey("workflow", id, nil)
-
 	// New struct, to not add body, author etc
 	if _, err := project.Dbclient.Put(ctx, key, &workflow); err != nil {
 		log.Printf("Error adding workflow: %s", err)
 		return err
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(workflow)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
+			return nil
+		}
+
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+		}
 	}
 
 	return nil
@@ -1218,22 +1283,67 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 }
 
 func GetHook(ctx context.Context, hookId string) (*Hook, error) {
-	key := datastore.NameKey("hooks", strings.ToLower(hookId), nil)
+	nameKey := "hooks"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, hookId)
+
 	hook := &Hook{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &hook)
+			if err == nil {
+				return hook, nil
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache for hook: %s", err)
+		}
+	}
+
+	key := datastore.NameKey(nameKey, strings.ToLower(hookId), nil)
 	if err := project.Dbclient.Get(ctx, key, hook); err != nil {
 		return &Hook{}, err
+	}
+
+	if project.CacheDb {
+		hookData, err := json.Marshal(hook)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in gethook: %s", err)
+			return hook, nil
+		}
+
+		err = SetCache(ctx, cacheKey, hookData)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for gethook: %s", err)
+		}
 	}
 
 	return hook, nil
 }
 
 func SetHook(ctx context.Context, hook Hook) error {
-	key1 := datastore.NameKey("hooks", strings.ToLower(hook.Id), nil)
+	nameKey := "hooks"
+	key1 := datastore.NameKey(nameKey, strings.ToLower(hook.Id), nil)
 
 	// New struct, to not add body, author etc
 	if _, err := project.Dbclient.Put(ctx, key1, &hook); err != nil {
 		log.Printf("Error adding hook: %s", err)
 		return err
+	}
+
+	if project.CacheDb {
+		hookData, err := json.Marshal(hook)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setHook: %s", err)
+			return nil
+		}
+
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, hook.Id)
+		err = SetCache(ctx, cacheKey, hookData)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for hook: %s", err)
+		}
 	}
 
 	return nil

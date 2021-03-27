@@ -699,6 +699,11 @@ type Workflow struct {
 	Categories           Categories `json:"categories" datastore:"categories"`
 	ExampleArgument      string     `json:"example_argument" datastore:"example_argument,noindex"`
 	Public               bool       `json:"public" datastore:"public"`
+	ContactInfo          struct {
+		Name string `json:"name" datastore:"name" yaml:"name"`
+		Url  string `json:"url" datastore:"url" yaml:"url"`
+	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
+	PublishedId string `json:"published_id" yaml:"published_id"`
 }
 
 type Category struct {
@@ -781,4 +786,20 @@ type PasswordChange struct {
 	Newpassword     string `json:"newpassword"`
 	Newpassword2    string `json:"newpassword2"`
 	Currentpassword string `json:"currentpassword"`
+}
+
+// Primary = usually an outer ID, e.g. workflow ID
+// Secondary = something to specify what inside workflow to execute
+// Third = Some data to add to it
+type CloudSyncJob struct {
+	Id            string `json:"id" datastore:"id"`
+	Type          string `json:"type" datastore:"type"`
+	Action        string `json:"action" datastore:"action"`
+	OrgId         string `json:"org_id" datastore:"org_id"`
+	PrimaryItemId string `json:"primary_item_id" datastore:"primary_item_id"`
+	SecondaryItem string `json:"secondary_item" datastore:"secondary_item"`
+	ThirdItem     string `json:"third_item" datastore:"third_item"`
+	FourthItem    string `json:"fourth_item" datastore:"fourth_item"`
+	FifthItem     string `json:"fifth_item" datastore:"fifth_item"`
+	Created       string `json:"created" datastore:"created"`
 }

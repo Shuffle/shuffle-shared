@@ -761,7 +761,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	apikey := request.Header.Get("Authorization")
 
 	user := &User{}
-
 	if len(apikey) > 0 {
 		if !strings.HasPrefix(apikey, "Bearer ") {
 			log.Printf("[WARNING] Apikey doesn't start with bearer")
@@ -789,6 +788,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil {
+				//log.Printf("[WARNING] Got user from cache: %s", err)
+
+				if len(user.Id) == 0 && len(user.Username) == 0 {
+					return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
+				}
+
 				return *user, nil
 			}
 		} else {
@@ -798,14 +803,21 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		// Make specific check for just service user?
 		// Get the user based on APIkey here
 		//log.Println(apikeyCheck[1])
-		Userdata, err := GetApikey(ctx, apikeyCheck[1])
+		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
 			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
 			return User{}, err
 		}
 
+		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
+			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
+			return User{}, errors.New("Couldn't find the user")
+		}
+
+		log.Printf("USER: %#v", userdata)
+
 		// Caching both bad and good apikeys :)
-		b, err := json.Marshal(Userdata)
+		b, err := json.Marshal(userdata)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling: %s", err)
 			return User{}, err
@@ -816,7 +828,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
 
-		return Userdata, nil
+		return userdata, nil
 	}
 
 	// One time API keys
@@ -853,8 +865,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
+		if len(user.Id) == 0 && len(user.Username) == 0 {
+			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
+		}
+
 		if Userdata.Session != sessionToken {
-			return User{}, errors.New("Wrong session token")
+			return User{}, errors.New("[WARNING] Wrong session token")
 		}
 
 		// Means session exists, but
@@ -1230,7 +1246,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME - have a check for org etc too..
-	if user.Id != workflow.Owner {
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, workflow.ID)
 		} else {
@@ -1301,7 +1317,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in getworkflows: %s", err)
+		log.Printf("[WARNING] Api authentication failed in getworkflows: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1463,7 +1479,7 @@ func DeleteWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME - have a check for org etc too..
-	if user.Id != workflow.Owner {
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, workflow.ID)
 		} else {
@@ -1938,12 +1954,13 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		// Adds the Testing app if it's a new workflow
 		workflowapps, err := GetPrioritizedApps(ctx, user)
-		if err == nil {
-			envName := "Shuffle"
-			if project.Environment == "cloud" {
-				envName = "cloud"
-			}
+		envName := "cloud"
+		if project.Environment != "cloud" {
+			workflowapps, err = GetAllWorkflowApps(ctx, 500)
+			envName = "Shuffle"
+		}
 
+		if err == nil {
 			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 			if err == nil {
 				for _, env := range environments {
@@ -2178,7 +2195,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("SAVED: %#v", workflow.PreviouslySaved)
+	if workflow.Public {
+		log.Printf("[WARNING] Rolling back public as the user set it to true themselves")
+		workflow.Public = false
+	}
+
+	if len(workflow.PublishedId) > 0 {
+		log.Printf("[INFO] Workflow %s has the published ID %s", workflow.ID, workflow.PublishedId)
+		//PubishedId string `json:"published_id" yaml:"published_id"`
+	}
 
 	// FIXME - auth and check if they should have access
 	if fileId != workflow.ID {
@@ -2297,7 +2322,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else if trigger.TriggerType == "WEBHOOK" && trigger.Status != "uninitialized" {
 			hook, err := GetHook(ctx, trigger.ID)
 			if err != nil {
-				log.Printf("Failed getting webhook")
+				log.Printf("[WARNING] Failed getting webhook")
 				trigger.Status = "stopped"
 			} else if hook.Id == "" {
 				trigger.Status = "stopped"
@@ -3434,7 +3459,6 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 	return
 }
 
-// FIXME - add to actual database etc
 func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -3473,20 +3497,6 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	//memcacheName := fmt.Sprintf("%s_%s", user.Username, fileId)
-	//if item, err := memcache.Get(ctx, memcacheName); err == memcache.ErrCacheMiss {
-	//	// Not in cache
-	//	log.Printf("User %s not in cache.", memcacheName)
-	//} else if err != nil {
-	//	log.Printf("Error getting item: %v", err)
-	//} else {
-	//	log.Printf("Got workflow %s from cache", fileId)
-	//	// FIXME - verify if value is ok? Can unmarshal etc.
-	//	resp.WriteHeader(200)
-	//	resp.Write(item.Value)
-	//	return
-	//}
-
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("Workflow %s doesn't exist.", fileId)
@@ -3498,7 +3508,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// CHECK orgs of user, or if user is owner
 	// FIXME - add org check too, and not just owner
 	// Check workflow.Sharing == private / public / org  too
-	if user.Id != workflow.Owner {
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 			log.Printf("[INFO] User %s is accessing workflow %s as admin", user.Username, workflow.ID)
 		} else {
@@ -3522,22 +3532,6 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.Errors = []string{}
 	}
 
-	// Only required for individuals I think
-	//newactions := []Action{}
-	//for _, item := range workflow.Actions {
-	//	item.LargeImage = ""
-	//	item.SmallImage = ""
-	//	newactions = append(newactions, item)
-	//}
-	//workflow.Actions = newactions
-
-	//newtriggers := []Trigger{}
-	//for _, item := range workflow.Triggers {
-	//	item.LargeImage = ""
-	//	newtriggers = append(newtriggers, item)
-	//}
-	//workflow.Triggers = newtriggers
-
 	body, err := json.Marshal(workflow)
 	if err != nil {
 		log.Printf("Failed workflow GET marshalling: %s", err)
@@ -3545,21 +3539,6 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-
-	//item := &memcache.Item{
-	//	Key:        memcacheName,
-	//	Value:      body,
-	//	Expiration: time.Minute * 60,
-	//}
-	//if err := memcache.Add(ctx, item); err == memcache.ErrNotStored {
-	//	if err := memcache.Set(ctx, item); err != nil {
-	//		log.Printf("Error setting item: %v", err)
-	//	}
-	//} else if err != nil {
-	//	log.Printf("error adding item: %v", err)
-	//} else {
-	//	//log.Printf("Set cache for %s", item.Key)
-	//}
 
 	resp.WriteHeader(200)
 	resp.Write(body)
@@ -4250,4 +4229,491 @@ func CheckWorkflowApp(workflowApp WorkflowApp) error {
 	}
 
 	return nil
+}
+
+func AbortExecution(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	//log.Printf("\n\nINSIDE ABORT\n\n")
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID to abort is not valid"}`))
+		return
+	}
+
+	executionId := location[6]
+	if len(executionId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "ExecutionID not valid"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	workflowExecution, err := GetWorkflowExecution(ctx, executionId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting execution (abort) %s: %s", executionId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting execution ID %s because it doesn't exist (abort)."}`, executionId)))
+		return
+	}
+
+	apikey := request.Header.Get("Authorization")
+	parsedKey := ""
+	if strings.HasPrefix(apikey, "Bearer ") {
+		apikeyCheck := strings.Split(apikey, " ")
+		if len(apikeyCheck) == 2 {
+			parsedKey = apikeyCheck[1]
+		}
+	}
+
+	if workflowExecution.Authorization != parsedKey {
+		// FIXME: Check the execution if this fails.
+		user, err := HandleApiAuthentication(resp, request)
+		if err != nil {
+			log.Printf("Api authentication failed in abort workflow: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// FIXME - have a check for org etc too..
+		if user.Id != workflowExecution.Workflow.Owner {
+			log.Printf("[INFO] Wrong user (%s) for workflowexecution workflow %s", user.Username, workflowExecution.Workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+		//log.Printf("[INFO] API key to abort/finish execution %s is correct.", executionId)
+	}
+
+	if workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE" || workflowExecution.Status == "FINISHED" {
+		log.Printf("[INFO] Stopped execution of %s with status %s", executionId, workflowExecution.Status)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Status for %s is %s, which can't be aborted."}`, executionId, workflowExecution.Status)))
+		return
+	}
+
+	topic := "workflowexecution"
+
+	workflowExecution.CompletedAt = int64(time.Now().Unix())
+	workflowExecution.Status = "ABORTED"
+	log.Printf("[INFO] Running shutdown of %s", workflowExecution.ExecutionId)
+
+	lastResult := ""
+	newResults := []ActionResult{}
+	// type ActionResult struct {
+	for _, result := range workflowExecution.Results {
+		if result.Status == "EXECUTING" {
+			result.Status = "ABORTED"
+			result.Result = "Aborted because of error in another node (1)"
+		}
+
+		if len(result.Result) > 0 {
+			lastResult = result.Result
+		}
+
+		newResults = append(newResults, result)
+	}
+
+	workflowExecution.Results = newResults
+	if len(workflowExecution.Result) == 0 {
+		workflowExecution.Result = lastResult
+	}
+
+	addResult := true
+	for _, result := range workflowExecution.Results {
+		if result.Status != "SKIPPED" {
+			addResult = false
+		}
+	}
+
+	extra := 0
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		//log.Printf("Appname trigger (0): %s", trigger.AppName)
+		if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+			extra += 1
+		}
+	}
+
+	parsedReason := "An error occurred during execution of this node"
+	reason, reasonok := request.URL.Query()["reason"]
+	if reasonok {
+		parsedReason = reason[0]
+	}
+
+	if len(workflowExecution.Results) == 0 || addResult {
+		newaction := Action{
+			ID: workflowExecution.Start,
+		}
+
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.ID == workflowExecution.Start {
+				newaction = action
+				break
+			}
+		}
+
+		workflowExecution.Results = append(workflowExecution.Results, ActionResult{
+			Action:        newaction,
+			ExecutionId:   workflowExecution.ExecutionId,
+			Authorization: workflowExecution.Authorization,
+			Result:        parsedReason,
+			StartedAt:     workflowExecution.StartedAt,
+			CompletedAt:   workflowExecution.StartedAt,
+			Status:        "FAILURE",
+		})
+	} else if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
+		log.Printf("[INFO] DONE - Nothing to add during abort!")
+	} else {
+		//log.Printf("VALIDATING INPUT!")
+		node, nodeok := request.URL.Query()["node"]
+		if nodeok {
+			nodeId := node[0]
+			log.Printf("[INFO] Found abort node %s", nodeId)
+			newaction := Action{
+				ID: nodeId,
+			}
+
+			for _, action := range workflowExecution.Workflow.Actions {
+				if action.ID == nodeId {
+					newaction = action
+					break
+				}
+			}
+
+			workflowExecution.Results = append(workflowExecution.Results, ActionResult{
+				Action:        newaction,
+				ExecutionId:   workflowExecution.ExecutionId,
+				Authorization: workflowExecution.Authorization,
+				Result:        parsedReason,
+				StartedAt:     workflowExecution.StartedAt,
+				CompletedAt:   workflowExecution.StartedAt,
+				Status:        "FAILURE",
+			})
+		}
+	}
+
+	err = SetWorkflowExecution(ctx, *workflowExecution, true)
+	if err != nil {
+		log.Printf("Error saving workflow execution for updates when aborting %s: %s", topic, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting workflowexecution status to abort"}`)))
+		return
+	}
+
+	//err = increaseStatisticsField(ctx, "workflow_executions_aborted", workflowExecution.Workflow.ID, 1, workflowExecution.ExecutionOrg)
+	//if err != nil {
+	//	log.Printf("Failed to increase aborted execution stats: %s", err)
+	//}
+
+	// FIXME - allowed to edit it? idk
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+
+	// Not sure what's up here
+	//if workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE" {
+	//	log.Printf("Workflowexecution is already aborted. No further action can be taken")
+	//	resp.WriteHeader(401)
+	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Workflowexecution is aborted because of %s with result %s and status %s"}`, workflowExecution.LastNode, workflowExecution.Result, workflowExecution.Status)))
+	//	return
+	//}
+}
+
+func SanitizeWorkflow(workflow Workflow) Workflow {
+	log.Printf("[INFO] Sanitizing workflow %s", workflow.ID)
+
+	workflow.Owner = ""
+	for _, trigger := range workflow.Triggers {
+		_ = trigger
+	}
+
+	for _, action := range workflow.Actions {
+		_ = action
+	}
+
+	for _, variable := range workflow.WorkflowVariables {
+		_ = variable
+	}
+
+	workflow.Org = []Org{}
+	workflow.OrgId = ""
+	workflow.ExecutingOrg = Org{}
+	workflow.PreviouslySaved = false
+
+	// Add Gitguardian or similar secrets discovery
+	return workflow
+}
+
+// Starts a new webhook
+func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in set new hook: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type requestData struct {
+		Type        string `json:"type"`
+		Description string `json:"description"`
+		Id          string `json:"id"`
+		Name        string `json:"name"`
+		Workflow    string `json:"workflow"`
+		Start       string `json:"start"`
+		Environment string `json:"environment"`
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Body data error in webhook set: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := getContext(request)
+	var requestdata requestData
+	err = yaml.Unmarshal([]byte(body), &requestdata)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling inputdata for webhook: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// CBA making a real thing. Already had some code lol
+	newId := requestdata.Id
+	if len(newId) != 36 {
+		log.Printf("[WARNING] Bad webhook ID")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid ID"}`))
+		return
+	}
+
+	if requestdata.Id == "" || requestdata.Name == "" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Requires fields id and name can't be empty"}`))
+		return
+
+	}
+
+	validTypes := []string{
+		"webhook",
+	}
+
+	isTypeValid := false
+	for _, thistype := range validTypes {
+		if requestdata.Type == thistype {
+			isTypeValid = true
+			break
+		}
+	}
+
+	if !(isTypeValid) {
+		log.Printf("Type %s is not valid. Try any of these: %s", requestdata.Type, strings.Join(validTypes, ", "))
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Let remote endpoint handle access checks (shuffler.io)
+	currentUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", newId)
+	startNode := requestdata.Start
+	if requestdata.Environment == "cloud" && project.Environment != "cloud" {
+		// https://shuffler.io/v1/hooks/webhook_80184973-3e82-4852-842e-0290f7f34d7c
+		log.Printf("[INFO] Should START a cloud webhook for url %s for startnode %s", currentUrl, startNode)
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("Failed finding org %s: %s", org.Id, err)
+			return
+		}
+
+		action := CloudSyncJob{
+			Type:          "webhook",
+			Action:        "start",
+			OrgId:         org.Id,
+			PrimaryItemId: newId,
+			SecondaryItem: startNode,
+			ThirdItem:     requestdata.Workflow,
+		}
+
+		err = executeCloudAction(action, org.SyncConfig.Apikey)
+		if err != nil {
+			log.Printf("Failed cloud action START execution: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		} else {
+			log.Printf("[INFO] Successfully set up cloud action schedule")
+		}
+	}
+
+	hook := Hook{
+		Id:        newId,
+		Start:     startNode,
+		Workflows: []string{requestdata.Workflow},
+		Info: Info{
+			Name:        requestdata.Name,
+			Description: requestdata.Description,
+			Url:         fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", newId),
+		},
+		Type:   "webhook",
+		Owner:  user.Username,
+		Status: "uninitialized",
+		Actions: []HookAction{
+			HookAction{
+				Type:  "workflow",
+				Name:  requestdata.Name,
+				Id:    requestdata.Workflow,
+				Field: "",
+			},
+		},
+		Running:     false,
+		OrgId:       user.ActiveOrg.Id,
+		Environment: requestdata.Environment,
+	}
+
+	hook.Status = "running"
+	hook.Running = true
+	err = SetHook(ctx, hook)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting hook: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[INFO] Set up a new hook with ID %s and environment %s", newId, hook.Environment)
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
+func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in delete hook: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when deleting hook is not valid"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	hook, err := GetHook(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting hook %s (delete): %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != hook.Owner && user.ActiveOrg.Id != hook.OrgId {
+		log.Printf("[WARNING] Wrong user (%s) for workflow %s", user.Username, hook.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(hook.Workflows) > 0 {
+		//err = increaseStatisticsField(ctx, "total_workflow_triggers", hook.Workflows[0], -1, user.ActiveOrg.Id)
+		//if err != nil {
+		//	log.Printf("Failed to increase total workflows: %s", err)
+		//}
+	}
+
+	hook.Status = "stopped"
+	err = SetHook(ctx, *hook)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting hook: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if hook.Environment == "cloud" && project.Environment != "cloud" {
+		log.Printf("[INFO] Should STOP cloud webhook https://shuffler.io/api/v1/hooks/webhook_%s", hook.Id)
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("Failed finding org %s: %s", org.Id, err)
+			return
+		}
+
+		action := CloudSyncJob{
+			Type:          "webhook",
+			Action:        "stop",
+			OrgId:         org.Id,
+			PrimaryItemId: hook.Id,
+		}
+
+		if len(hook.Workflows) > 0 {
+			action.SecondaryItem = hook.Workflows[0]
+		}
+
+		err = executeCloudAction(action, org.SyncConfig.Apikey)
+		if err != nil {
+			log.Printf("Failed cloud action STOP execution: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+		// https://shuffler.io/v1/hooks/webhook_80184973-3e82-4852-842e-0290f7f34d7c
+	}
+
+	err = DeleteKey(ctx, "hooks", fileId)
+	if err != nil {
+		log.Printf("[WARNING] Error deleting hook %s for %s: %s", fileId, user.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed deleting the hook."}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully deleted webhook %s", fileId)
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "reason": "Stopped webhook"}`))
 }
