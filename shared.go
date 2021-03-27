@@ -857,9 +857,10 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			parsedName = session.Id
 		}
 
+		//log.Printf("Session: %s", session.Username)
 		// Get session first
 		// Should basically never happen
-		Userdata, err := GetUser(ctx, parsedName)
+		user, err := GetUser(ctx, parsedName)
 		if err != nil {
 			log.Printf("[INFO] User with Identifier %s doesn't exist: %s", parsedName, err)
 			return User{}, err
@@ -869,12 +870,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 		}
 
-		if Userdata.Session != sessionToken {
+		if user.Session != sessionToken {
 			return User{}, errors.New("[WARNING] Wrong session token")
 		}
 
 		// Means session exists, but
-		return *Userdata, nil
+		return *user, nil
 	}
 
 	// Key = apikey
