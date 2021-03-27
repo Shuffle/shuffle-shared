@@ -890,6 +890,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	allApps := []WorkflowApp{}
 	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
+	// 1. Caching apps locally
 	cacheKey := fmt.Sprintf("apps_%s", user.Id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -971,65 +972,100 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	query = datastore.NewQuery("workflowapp").Filter("public =", true).Limit(limit)
-	for {
-		it := project.Dbclient.Run(ctx, query)
-
-		for {
-			innerApp := WorkflowApp{}
-			_, err := it.Next(&innerApp)
-			if err != nil {
-				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					log.Printf("[WARNING] Error in public app load: %s.", err)
-					continue
-				}
-
-				log.Printf("[WARNING] No more apps (public)? Breaking: %s.", err)
-				break
+	// Find public apps
+	publicApps := []WorkflowApp{}
+	publicAppsKey := fmt.Sprintf("public_apps")
+	if project.CacheDb {
+		cache, err := GetCache(ctx, publicAppsKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &publicApps)
+			if err == nil {
+				return allApps, nil
+			} else {
+				log.Printf("Failed unmarshaling PUBLIC apps: %s", err)
+				log.Printf("DATALEN: %d", len(cacheData))
 			}
-
-			//log.Printf("APP: %s", innerApp.Name)
-			found := false
-			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
-			for _, loopedApp := range allApps {
-				if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				allApps = append(allApps, innerApp)
-			}
-		}
-
-		if err != iterator.Done {
-			//log.Printf("[INFO] Failed fetching results: %v", err)
-			//break
-		}
-
-		// Get the cursor for the next page of results.
-		nextCursor, err := it.Cursor()
-		if err != nil {
-			log.Printf("Cursorerror: %s", err)
-			break
 		} else {
-			//log.Printf("NEXTCURSOR: %s", nextCursor)
-			nextStr := fmt.Sprintf("%s", nextCursor)
-			if cursorStr == nextStr {
-				break
-			}
-
-			cursorStr = nextStr
-			query = query.Start(nextCursor)
-			//cursorStr = nextCursor
-			//break
-		}
-
-		if len(allApps) > maxLen {
-			break
+			log.Printf("[INFO] Failed getting cache for PUBLIC apps: %s", err)
 		}
 	}
+
+	if len(publicApps) == 0 {
+		query = datastore.NewQuery("workflowapp").Filter("public =", true).Limit(limit)
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerApp := WorkflowApp{}
+				_, err := it.Next(&innerApp)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						log.Printf("[WARNING] Error in public app load: %s.", err)
+						continue
+					}
+
+					log.Printf("[WARNING] No more apps (public)? Breaking: %s.", err)
+					break
+				}
+
+				//log.Printf("APP: %s", innerApp.Name)
+				found := false
+				//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
+				for _, loopedApp := range allApps {
+					if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					publicApps = append(publicApps, innerApp)
+				}
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
+			}
+
+			if len(allApps) > maxLen {
+				break
+			}
+		}
+
+		newbody, err := json.Marshal(publicApps)
+		if err != nil {
+			return allApps, nil
+		}
+
+		err = SetCache(ctx, publicAppsKey, newbody)
+		if err != nil {
+			log.Printf("[INFO] Error setting app cache item for %s: %v", publicAppsKey, err)
+		} else {
+			log.Printf("[INFO] Set app cache for %s", publicAppsKey)
+		}
+	}
+
+	allApps = append(allApps, publicApps...)
 
 	if len(allApps) > 0 {
 		newbody, err := json.Marshal(allApps)

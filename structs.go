@@ -478,6 +478,7 @@ type Defaults struct {
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
+	Source   string `json:"source" datastore:"source"`
 }
 
 type PaymentSubscription struct {
