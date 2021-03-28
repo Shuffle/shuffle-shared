@@ -1235,7 +1235,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
-		log.Printf("Failed getting the workflow %s locally (get executions): %s", fileId, err)
+		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2164,7 +2164,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, tmpworkflow.ID)
 		} else if tmpworkflow.Public {
-			log.Printf("\n\nSHOULD CREATE A NEW WORKFLOW FOR THE USER :O\n\n")
+			//log.Printf("\n\nSHOULD CREATE A NEW WORKFLOW FOR THE USER :O\n\n")
 
 			workflow = *tmpworkflow
 			workflow.ID = uuid.NewV4().String()

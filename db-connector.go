@@ -1329,24 +1329,23 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			cacheData := []byte(cache.([]uint8))
 			//log.Printf("CACHEDATA: %#v", cacheData)
 			err = json.Unmarshal(cacheData, &hook)
-			if err == nil {
+			if err == nil && len(hook.Id) > 0 {
 				return hook, nil
+			} else {
+				return hook, errors.New(fmt.Sprintf("Bad cache for %s", hookId))
 			}
 		} else {
 			log.Printf("[INFO] Failed getting cache for hook: %s", err)
 		}
 	}
 
-	key := datastore.NameKey(nameKey, strings.ToLower(hookId), nil)
-	if err := project.Dbclient.Get(ctx, key, hook); err != nil {
-		return &Hook{}, err
-	}
-
+	key := datastore.NameKey(nameKey, hookId, nil)
+	dbErr := project.Dbclient.Get(ctx, key, hook)
 	if project.CacheDb {
 		hookData, err := json.Marshal(hook)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in gethook: %s", err)
-			return hook, nil
+			return hook, dbErr
 		}
 
 		err = SetCache(ctx, cacheKey, hookData)
@@ -1355,7 +1354,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 		}
 	}
 
-	return hook, nil
+	return hook, dbErr
 }
 
 func SetHook(ctx context.Context, hook Hook) error {
