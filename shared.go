@@ -1938,7 +1938,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	for _, action := range workflow.Actions {
 		if action.Environment == "" {
 			//action.Environment = baseEnvironment
-			if project.IsCloud {
+			if project.Environment == "cloud" {
 				action.Environment = "cloud"
 			}
 
