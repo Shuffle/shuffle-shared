@@ -90,7 +90,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get orgs: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -159,7 +159,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -570,7 +570,7 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("Api authentication failed in edit workflow: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in delete app auth: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -722,7 +722,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get environments: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1207,7 +1207,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in getting specific workflow: %s", err)
+		log.Printf("[WARNING] Api authentication failed in getting workflow executions: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1349,7 +1349,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	_, err = project.Dbclient.GetAll(ctx, q, &workflows)
 	if err != nil {
 		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-			q = q.Limit(35)
+			q = q.Limit(36)
 			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
 			if err != nil {
 				log.Printf("Failed getting workflows for user %s: %s (0)", user.Username, err)
@@ -1397,6 +1397,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	for _, workflow := range workflows {
 		newActions := []Action{}
 		for _, action := range workflow.Actions {
+			//log.Printf("Image: %s", action.LargeImage)
 			// Removed because of exports. These are needed there.
 			//action.LargeImage = ""
 			//action.SmallImage = ""
@@ -1691,7 +1692,7 @@ func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get schedules: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1884,7 +1885,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in set new workflow: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2123,7 +2124,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	//log.Println("Start")
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("Api authentication failed in edit workflow: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in save workflow: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3022,7 +3023,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in apigen: %s", err)
+		log.Printf("[WARNING] Api authentication failed in apigen: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3104,7 +3105,7 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in settings: %s", err)
+		log.Printf("[WARNING] Api authentication failed in settings: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3122,7 +3123,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get users: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3201,7 +3202,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in password change: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3364,7 +3365,7 @@ func SendHookResult(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in send hook results: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3432,7 +3433,7 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in set new workflowhandler: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get hook: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3495,10 +3496,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in getting specific workflow: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		log.Printf("[WARNING] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
 	}
 
 	location := strings.Split(request.URL.String(), "/")
@@ -3533,7 +3534,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("%#v", workflow)
+	//log.Printf("\n\nGetting workflow %s. Data: %#v\nPublic: %#v\n", fileId, workflow, workflow.Public)
 
 	// CHECK orgs of user, or if user is owner
 	// FIXME - add org check too, and not just owner
@@ -3584,7 +3585,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("Api authentication failed in edit workflow: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in delete user: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3797,7 +3798,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in edit workflow: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in delete app: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
