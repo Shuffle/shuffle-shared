@@ -1397,8 +1397,9 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	for _, workflow := range workflows {
 		newActions := []Action{}
 		for _, action := range workflow.Actions {
-			action.LargeImage = ""
-			action.SmallImage = ""
+			// Removed because of exports. These are needed there.
+			//action.LargeImage = ""
+			//action.SmallImage = ""
 			newActions = append(newActions, action)
 		}
 
@@ -1937,6 +1938,10 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	for _, action := range workflow.Actions {
 		if action.Environment == "" {
 			//action.Environment = baseEnvironment
+			if project.IsCloud {
+				action.Environment = "cloud"
+			}
+
 			action.IsValid = true
 		}
 
@@ -2256,17 +2261,21 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if action.Environment == "" {
-			if workflow.PreviouslySaved {
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "An environment for %s is required"}`, action.Label)))
-				return
+			if project.Environment == "cloud" {
+				action.Environment = "cloud"
+			} else {
+				if workflow.PreviouslySaved {
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "An environment for %s is required"}`, action.Label)))
+					return
+				}
+				action.IsValid = true
 			}
-			action.IsValid = true
 		}
 
 		// FIXME: Have a good way of tracking errors. ID's or similar.
 		if !action.IsValid && len(action.Errors) > 0 {
-			log.Printf("Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
+			log.Printf("[INFO] Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
 
 			if workflow.PreviouslySaved {
 				resp.WriteHeader(401)
@@ -2327,7 +2336,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						workflow.IsValid = false
 						workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
 
-						log.Printf("No type specified for user input node")
+						log.Printf("[WARNING] No type specified for user input node")
 						if workflow.PreviouslySaved {
 							resp.WriteHeader(401)
 							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
@@ -2563,7 +2572,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !authFound {
-				log.Printf("App auth %s doesn't exist. Setting error", action.AuthenticationId)
+				log.Printf("[WARNING] App auth %s doesn't exist. Setting error", action.AuthenticationId)
 				workflow.Errors = append(workflow.Errors, fmt.Sprintf("App authentication for %s doesn't exist!", action.AppName))
 				workflow.IsValid = false
 
@@ -2581,6 +2590,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			curapp := WorkflowApp{}
 			// FIXME - can this work with ONLY AppID?
+			// ^ Doubtful.
 			for _, app := range workflowapps {
 				if app.ID == action.AppID {
 					curapp = app
@@ -2595,6 +2605,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			// Check to see if the whole app is valid
+			//log.Printf("NAME: %s vs %s", curapp.Name, action.AppName)
 			if curapp.Name != action.AppName {
 				workflow.Errors = append(workflow.Errors, fmt.Sprintf("App %s doesn't exist", action.AppName))
 				action.Errors = append(action.Errors, "This app doesn't exist.")

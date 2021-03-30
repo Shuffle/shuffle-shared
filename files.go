@@ -623,8 +623,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	contents := buf.Bytes()
 	file.FileSize = int64(len(contents))
 	md5 := Md5sum(contents)
-	contentType := http.DetectContentType(contents)
-	log.Printf("CONTENTTYPE: %s", contentType)
+	file.ContentType = http.DetectContentType(contents)
 
 	buf.Reset()
 
@@ -673,7 +672,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	file.Status = "active"
 	file.Md5sum = md5
 	file.Sha256sum = fmt.Sprintf("%x", sha256Sum)
-	log.Printf("[INFO] MD5 for file %s (%s) is %s and SHA256 is %s", file.Filename, file.Id, file.Md5sum, file.Sha256sum)
+	log.Printf("[INFO] MD5 for file %s (%s) is %s and SHA256 is %s. Type: %s", file.Filename, file.Id, file.Md5sum, file.Sha256sum, file.ContentType)
 
 	err = SetFile(ctx, *file)
 	if err != nil {

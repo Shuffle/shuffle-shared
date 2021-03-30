@@ -1641,7 +1641,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 						newName := string(fmt.Sprintf("%s", string(fieldname)))
 						if newName[0] == 0x22 && newName[len(newName)-1] == 0x22 {
 							parsedName := newName[1 : len(newName)-1]
-							log.Printf("Parse name: %s", parsedName)
+							//log.Printf("Parse name: %s", parsedName)
 							fileField = parsedName
 
 							curParam := WorkflowAppActionParameter{

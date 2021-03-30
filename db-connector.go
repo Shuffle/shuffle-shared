@@ -887,6 +887,10 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 // 2. Get USERs' private apps
 // 3. Get PUBLIC apps
 func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
+	if project.Environment != "cloud" {
+		return GetAllWorkflowApps(ctx, 500)
+	}
+
 	allApps := []WorkflowApp{}
 	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
@@ -1410,7 +1414,7 @@ func SetFile(ctx context.Context, file File) error {
 
 func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
 	var files []File
-	q := datastore.NewQuery("Files").Filter("org_id =", orgId).Limit(100)
+	q := datastore.NewQuery("Files").Filter("org_id =", orgId).Order("-updated_at").Limit(100)
 
 	_, err := project.Dbclient.GetAll(ctx, q, &files)
 	if err != nil {
