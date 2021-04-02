@@ -637,10 +637,9 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	var environments []Environment
-	q := datastore.NewQuery("Environments").Filter("org_id =", user.ActiveOrg.Id)
-	_, err = project.Dbclient.GetAll(ctx, q, &environments)
+	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
+		log.Println("[WARNING] Failed getting environments")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get environments when setting"}`))
 		return
@@ -648,7 +647,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("Failed reading body")
+		log.Println("[WARNING] Failed reading environment body: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to read data"}`)))
 		return
@@ -670,14 +669,11 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Clear old data? Removed for archiving purpose. No straight deletion
-	//for _, item := range environments {
-	//	err = DeleteKey(ctx, "Environments", item.Name)
-	//	if err != nil {
-	//		resp.WriteHeader(401)
-	//		resp.Write([]byte(`{"success": false, "reason": "Error cleaning up environment"}`))
-	//		return
-	//	}
-	//}
+	nameKey := "Environments"
+	for _, item := range environments {
+		DeleteKey(ctx, nameKey, item.Id)
+		DeleteKey(ctx, nameKey, item.Name)
+	}
 
 	openEnvironments := 0
 	for _, item := range newEnvironments {
@@ -697,18 +693,17 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			item.OrgId = user.ActiveOrg.Id
 		}
 
-		err = SetEnvironment(ctx, &item)
-		if err != nil {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed setting environment variable"}`))
-			return
+		if len(item.Id) == 0 {
+			item.Id = uuid.NewV4().String()
 		}
-	}
 
-	//DeleteKey(ctx, entity string, value string) error {
-	// FIXME - check which are in use
-	//log.Printf("FIXME: Set new environments: %#v", newEnvironments)
-	//log.Printf("DONT DELETE ONES THAT ARE IN USE")
+		//err = SetEnvironment(ctx, &item)
+		//if err != nil {
+		//	resp.WriteHeader(401)
+		//	resp.Write([]byte(`{"success": false, "reason": "Failed setting environment variable"}`))
+		//	return
+		//}
+	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -729,16 +724,27 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	var environments []Environment
-	q := datastore.NewQuery("Environments").Filter("org_id =", user.ActiveOrg.Id)
-	_, err = project.Dbclient.GetAll(ctx, q, &environments)
+	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
+		log.Printf("[WARNING] Failed getting environments")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get environments"}`))
 		return
 	}
 
-	newjson, err := json.Marshal(environments)
+	newEnvironments := []Environment{}
+	for _, environment := range environments {
+		if len(environment.Id) == 0 {
+			environment.Id = uuid.NewV4().String()
+		}
+
+		newEnvironments = append(newEnvironments, environment)
+		//if environment.Default {
+		//	break
+		//}
+	}
+
+	newjson, err := json.Marshal(newEnvironments)
 	if err != nil {
 		log.Printf("Failed unmarshal: %s", err)
 		resp.WriteHeader(401)
@@ -2252,6 +2258,28 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	allNodes := []string{}
 	workflow.Categories = Categories{}
 
+	environments := []Environment{
+		Environment{
+			Name:       "Cloud",
+			Type:       "cloud",
+			Archived:   false,
+			Registered: true,
+			Default:    false,
+			OrgId:      user.ActiveOrg.Id,
+			Id:         uuid.NewV4().String(),
+		},
+	}
+
+	if project.Environment != "cloud" {
+		environments, err = GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting environments for org %s", user.ActiveOrg.Id)
+			environments = []Environment{}
+		}
+	}
+
+	//log.Printf("ENVIRONMENTS: %#v", environments)
+
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	for _, action := range workflow.Actions {
 		allNodes = append(allNodes, action.ID)
@@ -2265,11 +2293,20 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if project.Environment == "cloud" {
 				action.Environment = "cloud"
 			} else {
-				if workflow.PreviouslySaved {
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "An environment for %s is required"}`, action.Label)))
-					return
+				if len(environments) > 0 {
+					for _, env := range environments {
+						if !env.Archived && env.Default {
+							//log.Printf("FOUND ENV %#v", env)
+							action.Environment = env.Name
+							break
+						}
+					}
 				}
+
+				if action.Environment == "" {
+					action.Environment = "Shuffle"
+				}
+
 				action.IsValid = true
 			}
 		}
@@ -2288,8 +2325,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
+		//log.Printf("ENVIRONMENT: %s", action.Environment)
 		newActions = append(newActions, action)
 	}
+
+	workflow.Actions = newActions
 
 	newTriggers := []Trigger{}
 	for _, trigger := range workflow.Triggers {
@@ -3564,6 +3604,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if len(workflow.Errors) == 0 {
 		workflow.Errors = []string{}
 	}
+
+	//for _, action := range workflow.Actions {
+	//	log.Printf("Environment: %s", action.Environment)
+	//}
 
 	body, err := json.Marshal(workflow)
 	if err != nil {

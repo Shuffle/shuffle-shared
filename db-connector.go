@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/patrickmn/go-cache"
+	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
 	"google.golang.org/appengine/memcache"
 )
@@ -870,12 +871,41 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 }
 
 func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
-	var environments []Environment
-	q := datastore.NewQuery("Environments").Filter("org_id =", orgId)
+	nameKey := "Environments"
 
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+	environments := []Environment{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &environments)
+			if err == nil {
+				return environments, nil
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache for environments: %s", err)
+		}
+	}
+
+	q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
 	_, err = project.Dbclient.GetAll(ctx, q, &environments)
 	if err != nil {
 		return []Environment{}, err
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(environments)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling environment cache: %s", err)
+			return environments, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating environment cache: %s", err)
+		}
 	}
 
 	return environments, nil
@@ -1282,14 +1312,22 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 
 func SetEnvironment(ctx context.Context, data *Environment) error {
 	// clear session_token and API_token for user
-	k := datastore.NameKey("Environments", strings.ToLower(data.Name), nil)
+	nameKey := "Environments"
+
+	if data.Id == "" {
+		data.Id = uuid.NewV4().String()
+	}
 
 	// New struct, to not add body, author etc
-
+	log.Printf("SETTING ENVIRONMENT %s", data.Id)
+	k := datastore.NameKey(nameKey, data.Id, nil)
 	if _, err := project.Dbclient.Put(ctx, k, data); err != nil {
 		log.Println(err)
 		return err
 	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, data.OrgId)
+	DeleteCache(ctx, cacheKey)
 
 	return nil
 }
