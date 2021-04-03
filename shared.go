@@ -811,7 +811,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
-			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
+			log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
 			return User{}, errors.New("Couldn't find the user")
 		}
 

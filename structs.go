@@ -119,13 +119,8 @@ type WorkflowAppAction struct {
 	Authentication    []AuthenticationStore        `json:"authentication" datastore:"authentication,noindex" yaml:"authentication,omitempty"`
 	Tested            bool                         `json:"tested" datastore:"tested" yaml:"tested"`
 	Parameters        []WorkflowAppActionParameter `json:"parameters" datastore: "parameters"`
-	ExecutionVariable struct {
-		Description string `json:"description" datastore:"description,noindex"`
-		ID          string `json:"id" datastore:"id"`
-		Name        string `json:"name" datastore:"name"`
-		Value       string `json:"value" datastore:"value,noindex"`
-	} `json:"execution_variable" datastore:"execution_variables"`
-	Returns struct {
+	ExecutionVariable ExecutionVariable            `json:"execution_variable" datastore:"execution_variables"`
+	Returns           struct {
 		Description string           `json:"description" datastore:"returns" yaml:"description,omitempty"`
 		Example     string           `json:"example" datastore:"example,noindex" yaml:"example"`
 		ID          string           `json:"id" datastore:"id" yaml:"id,omitempty"`
@@ -561,32 +556,34 @@ type SyncData struct {
 	DataCollection int64  `json:"data_collection,omitempty" datastore:"data_collection"`
 }
 
+type ExecutionVariable struct {
+	Description string `json:"description" datastore:"description,noindex"`
+	ID          string `json:"id" datastore:"id"`
+	Name        string `json:"name" datastore:"name"`
+	Value       string `json:"value" datastore:"value,noindex"`
+}
+
 type WorkflowExecution struct {
-	Type               string         `json:"type" datastore:"type"`
-	Status             string         `json:"status" datastore:"status"`
-	Start              string         `json:"start" datastore:"start"`
-	ExecutionArgument  string         `json:"execution_argument" datastore:"execution_argument,noindex"`
-	ExecutionId        string         `json:"execution_id" datastore:"execution_id"`
-	ExecutionSource    string         `json:"execution_source" datastore:"execution_source"`
-	ExecutionParent    string         `json:"execution_parent" datastore:"execution_parent"`
-	ExecutionOrg       string         `json:"execution_org" datastore:"execution_org"`
-	WorkflowId         string         `json:"workflow_id" datastore:"workflow_id"`
-	LastNode           string         `json:"last_node" datastore:"last_node"`
-	Authorization      string         `json:"authorization" datastore:"authorization"`
-	Result             string         `json:"result" datastore:"result,noindex"`
-	StartedAt          int64          `json:"started_at" datastore:"started_at"`
-	CompletedAt        int64          `json:"completed_at" datastore:"completed_at"`
-	ProjectId          string         `json:"project_id" datastore:"project_id"`
-	Locations          []string       `json:"locations" datastore:"locations"`
-	Workflow           Workflow       `json:"workflow" datastore:"workflow,noindex"`
-	Results            []ActionResult `json:"results" datastore:"results,noindex"`
-	ExecutionVariables []struct {
-		Description string `json:"description" datastore:"description,noindex"`
-		ID          string `json:"id" datastore:"id"`
-		Name        string `json:"name" datastore:"name"`
-		Value       string `json:"value" datastore:"value,noindex"`
-	} `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
-	OrgId string `json:"org_id" datastore:"org_id"`
+	Type               string              `json:"type" datastore:"type"`
+	Status             string              `json:"status" datastore:"status"`
+	Start              string              `json:"start" datastore:"start"`
+	ExecutionArgument  string              `json:"execution_argument" datastore:"execution_argument,noindex"`
+	ExecutionId        string              `json:"execution_id" datastore:"execution_id"`
+	ExecutionSource    string              `json:"execution_source" datastore:"execution_source"`
+	ExecutionParent    string              `json:"execution_parent" datastore:"execution_parent"`
+	ExecutionOrg       string              `json:"execution_org" datastore:"execution_org"`
+	WorkflowId         string              `json:"workflow_id" datastore:"workflow_id"`
+	LastNode           string              `json:"last_node" datastore:"last_node"`
+	Authorization      string              `json:"authorization" datastore:"authorization"`
+	Result             string              `json:"result" datastore:"result,noindex"`
+	StartedAt          int64               `json:"started_at" datastore:"started_at"`
+	CompletedAt        int64               `json:"completed_at" datastore:"completed_at"`
+	ProjectId          string              `json:"project_id" datastore:"project_id"`
+	Locations          []string            `json:"locations" datastore:"locations"`
+	Workflow           Workflow            `json:"workflow" datastore:"workflow,noindex"`
+	Results            []ActionResult      `json:"results" datastore:"results,noindex"`
+	ExecutionVariables []ExecutionVariable `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
+	OrgId              string              `json:"org_id" datastore:"org_id"`
 }
 
 // This is for the nodes in a workflow, NOT the app action itself.
@@ -606,13 +603,8 @@ type Action struct {
 	Environment       string                       `json:"environment,omitempty" datastore:"environment"`
 	Name              string                       `json:"name" datastore:"name"`
 	Parameters        []WorkflowAppActionParameter `json:"parameters" datastore: "parameters,noindex"`
-	ExecutionVariable struct {
-		Description string `json:"description,omitempty" datastore:"description,noindex"`
-		ID          string `json:"id,omitempty" datastore:"id"`
-		Name        string `json:"name,omitempty" datastore:"name"`
-		Value       string `json:"value,omitempty" datastore:"value,noindex"`
-	} `json:"execution_variable,omitempty" datastore:"execution_variable,omitempty"`
-	Position struct {
+	ExecutionVariable ExecutionVariable            `json:"execution_variable,omitempty" datastore:"execution_variable,omitempty"`
+	Position          struct {
 		X float64 `json:"x,omitempty" datastore:"x"`
 		Y float64 `json:"y,omitempty" datastore:"y"`
 	} `json:"position,omitempty"`
@@ -704,17 +696,12 @@ type Workflow struct {
 		Name        string `json:"name" datastore:"name"`
 		Value       string `json:"value" datastore:"value,noindex"`
 	} `json:"workflow_variables" datastore:"workflow_variables"`
-	ExecutionVariables []struct {
-		Description string `json:"description" datastore:"description,noindex"`
-		ID          string `json:"id" datastore:"id"`
-		Name        string `json:"name" datastore:"name"`
-		Value       string `json:"value" datastore:"value,noindex"`
-	} `json:"execution_variables,omitempty" datastore:"execution_variables"`
-	ExecutionEnvironment string     `json:"execution_environment" datastore:"execution_environment"`
-	PreviouslySaved      bool       `json:"previously_saved" datastore:"first_save"`
-	Categories           Categories `json:"categories" datastore:"categories"`
-	ExampleArgument      string     `json:"example_argument" datastore:"example_argument,noindex"`
-	Public               bool       `json:"public" datastore:"public"`
+	ExecutionVariables   []ExecutionVariable `json:"execution_variables,omitempty" datastore:"execution_variables"`
+	ExecutionEnvironment string              `json:"execution_environment" datastore:"execution_environment"`
+	PreviouslySaved      bool                `json:"previously_saved" datastore:"first_save"`
+	Categories           Categories          `json:"categories" datastore:"categories"`
+	ExampleArgument      string              `json:"example_argument" datastore:"example_argument,noindex"`
+	Public               bool                `json:"public" datastore:"public"`
 	ContactInfo          struct {
 		Name string `json:"name" datastore:"name" yaml:"name"`
 		Url  string `json:"url" datastore:"url" yaml:"url"`
