@@ -232,6 +232,13 @@ type UserAuthField struct {
 	Value string `json:"value" datastore:"value"`
 }
 
+// Used to contain users in miniOrg
+type UserMini struct {
+	Username string `datastore:"Username" json:"username"`
+	Id       string `datastore:"id" json:"id"`
+	Role     string `datastore:"role" json:"role"`
+}
+
 type User struct {
 	Username          string        `datastore:"Username" json:"username"`
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -250,7 +257,7 @@ type User struct {
 	Id                string        `datastore:"id" json:"id"`
 	Orgs              []string      `datastore:"orgs" json:"orgs"`
 	CreationTime      int64         `datastore:"creation_time" json:"creation_time"`
-	ActiveOrg         Org           `json:"active_org" datastore:"active_org"`
+	ActiveOrg         OrgMini       `json:"active_org" datastore:"active_org"`
 	Active            bool          `datastore:"active" json:"active"`
 }
 
@@ -446,6 +453,14 @@ type Hook struct {
 	Running     bool         `json:"running" datastore:"running"`
 	OrgId       string       `json:"org_id" datastore:"org_id"`
 	Environment string       `json:"environment" datastore:"environment"`
+}
+
+// Used within a user
+type OrgMini struct {
+	Name  string     `json:"name" datastore:"name"`
+	Id    string     `json:"id" datastore:"id"`
+	Users []UserMini `json:"users" datastore:"users"`
+	Role  string     `json:"role" datastore:"role"`
 }
 
 type Org struct {
@@ -668,21 +683,21 @@ type Workflow struct {
 		ExitOnError  bool `json:"exit_on_error" datastore:"exit_on_error"`
 		StartFromTop bool `json:"start_from_top" datastore:"start_from_top"`
 	} `json:"configuration,omitempty" datastore:"configuration"`
-	Created           int64    `json:"created" datastore:"created"`
-	Edited            int64    `json:"edited" datastore:"edited"`
-	LastRuntime       int64    `json:"last_runtime" datastore:"last_runtime"`
-	Errors            []string `json:"errors,omitempty" datastore:"errors"`
-	Tags              []string `json:"tags,omitempty" datastore:"tags"`
-	ID                string   `json:"id" datastore:"id"`
-	IsValid           bool     `json:"is_valid" datastore:"is_valid"`
-	Name              string   `json:"name" datastore:"name"`
-	Description       string   `json:"description" datastore:"description,noindex"`
-	Start             string   `json:"start" datastore:"start"`
-	Owner             string   `json:"owner" datastore:"owner"`
-	Sharing           string   `json:"sharing" datastore:"sharing"`
-	Org               []Org    `json:"org,omitempty" datastore:"org"`
-	ExecutingOrg      Org      `json:"execution_org,omitempty" datastore:"execution_org"`
-	OrgId             string   `json:"org_id,omitempty" datastore:"org_id"`
+	Created           int64     `json:"created" datastore:"created"`
+	Edited            int64     `json:"edited" datastore:"edited"`
+	LastRuntime       int64     `json:"last_runtime" datastore:"last_runtime"`
+	Errors            []string  `json:"errors,omitempty" datastore:"errors"`
+	Tags              []string  `json:"tags,omitempty" datastore:"tags"`
+	ID                string    `json:"id" datastore:"id"`
+	IsValid           bool      `json:"is_valid" datastore:"is_valid"`
+	Name              string    `json:"name" datastore:"name"`
+	Description       string    `json:"description" datastore:"description,noindex"`
+	Start             string    `json:"start" datastore:"start"`
+	Owner             string    `json:"owner" datastore:"owner"`
+	Sharing           string    `json:"sharing" datastore:"sharing"`
+	Org               []OrgMini `json:"org,omitempty" datastore:"org"`
+	ExecutingOrg      OrgMini   `json:"execution_org,omitempty" datastore:"execution_org"`
+	OrgId             string    `json:"org_id,omitempty" datastore:"org_id"`
 	WorkflowVariables []struct {
 		Description string `json:"description" datastore:"description,noindex"`
 		ID          string `json:"id" datastore:"id"`

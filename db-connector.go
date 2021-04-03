@@ -462,7 +462,13 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 	if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
-		return &Workflow{}, err
+
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
+			err = nil
+		} else {
+			return &Workflow{}, err
+		}
 	}
 
 	if project.CacheDb {
@@ -495,9 +501,12 @@ func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 
 // ListBooks returns a list of books, ordered by title.
 func GetOrg(ctx context.Context, id string) (*Org, error) {
+	nameKey := "Organizations"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+
 	curOrg := &Org{}
 	if project.CacheDb {
-		cache, err := GetCache(ctx, id)
+		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			//log.Printf("CACHEDATA: %#v", cacheData)
@@ -510,9 +519,28 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 	}
 
-	key := datastore.NameKey("Organizations", id, nil)
+	key := datastore.NameKey(nameKey, id, nil)
 	if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-		return &Org{}, err
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler.")
+			err = nil
+
+			//for _, user := range curOrg.Users {
+			//	log.Printf("USER: %#v", user)
+			//}
+			//SetOrg(ctx, *curOrg, curOrg.Id)
+
+			//curUser.ActiveOrg = OrgMini{
+			//	Name: curUser.ActiveOrg.Name,
+			//	Id:   curUser.ActiveOrg.Id,
+			//	Role: "user",
+			//}
+
+			// Updating the user and their org
+			//SetUser(ctx, curUser)
+		} else {
+			return &Org{}, err
+		}
 	}
 
 	newUsers := []User{}
@@ -535,7 +563,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			return curOrg, nil
 		}
 
-		err = SetCache(ctx, id, neworg)
+		err = SetCache(ctx, cacheKey, neworg)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache: %s", err)
 		}
@@ -545,6 +573,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func SetOrg(ctx context.Context, data Org, id string) error {
+	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
 	if data.Created == 0 {
 		data.Created = timeNow
@@ -553,13 +582,14 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	data.Edited = timeNow
 
 	// clear session_token and API_token for user
-	k := datastore.NameKey("Organizations", id, nil)
+	k := datastore.NameKey(nameKey, id, nil)
 	if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
 		log.Println(err)
 		return err
 	}
 
 	if project.CacheDb {
+
 		newUsers := []User{}
 		for _, user := range data.Users {
 			user.Password = ""
@@ -580,7 +610,8 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			return nil
 		}
 
-		err = SetCache(ctx, id, neworg)
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		err = SetCache(ctx, cacheKey, neworg)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org: %s", err)
 		}
@@ -733,7 +764,21 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 
 	key := datastore.NameKey("Users", parsedKey, nil)
 	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
-		return &User{}, err
+		// Handles migration of the user
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[INFO] Error in user. Migrating to new org and user handler.")
+			curUser.ActiveOrg = OrgMini{
+				Name: curUser.ActiveOrg.Name,
+				Id:   curUser.ActiveOrg.Id,
+				Role: "user",
+			}
+
+			// Updating the user and their org
+			SetUser(ctx, curUser)
+		} else {
+			log.Printf("[WARNING] Error in Get User: %s", err)
+			return &User{}, err
+		}
 	}
 
 	if project.CacheDb {
@@ -828,7 +873,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 
 		org, err := GetOrg(ctx, orgId)
 		if err != nil {
-			log.Printf("Error getting org %s", orgId)
+			log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
 			continue
 		}
 

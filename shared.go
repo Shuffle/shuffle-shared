@@ -313,7 +313,7 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 	var tmpBody tmpStruct
 	err = json.Unmarshal(body, &tmpBody)
 	if err != nil {
-		log.Printf("Error with unmarshal tmpBody: %s", err)
+		log.Printf("[WARNING] Error with unmarshal tmpBody specific apps: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -324,7 +324,7 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	workflowapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
-		log.Printf("Error: Failed getting workflowapps: %s", err)
+		log.Printf("[WARNING] Error: Failed getting workflowapps: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -815,8 +815,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, errors.New("Couldn't find the user")
 		}
 
-		log.Printf("USER: %#v", userdata)
-
 		// Caching both bad and good apikeys :)
 		b, err := json.Marshal(userdata)
 		if err != nil {
@@ -1265,11 +1263,11 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
 	var workflowExecutions []WorkflowExecution
 	_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-	if err != nil {
+	if err != nil && len(workflowExecutions) == 0 {
 		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 			q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(15)
 			_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-			if err != nil {
+			if err != nil && len(workflowExecutions) == 0 {
 				log.Printf("[WARNING] Error getting workflowexec (2): %s", err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
@@ -1280,14 +1278,14 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 
 			q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Limit(25)
 			_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-			if err != nil {
+			if err != nil && len(workflowExecutions) == 0 {
 				log.Printf("[WARNING] Error getting workflowexec (3): %s", err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
 				return
 			}
 		} else {
-			log.Printf("[WARNING] Error getting workflowexec: %s", err)
+			log.Printf("[WARNING] Error getting workflowexec (4): %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
 			return
@@ -1353,12 +1351,12 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	q = q.Order("-edited")
 
 	_, err = project.Dbclient.GetAll(ctx, q, &workflows)
-	if err != nil {
+	if err != nil && len(workflows) == 0 {
 		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 			q = q.Limit(36)
 			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
-			if err != nil {
-				log.Printf("Failed getting workflows for user %s: %s (0)", user.Username, err)
+			if err != nil && len(workflows) == 0 {
+				log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
@@ -1373,15 +1371,15 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 			q.Limit(30)
 			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
-			if err != nil {
-				log.Printf("Failed getting workflows for user %s: %s (0)", user.Username, err)
+			if err != nil && len(workflows) == 0 {
+				log.Printf("[WARNING] Failed getting workflows for user %s (2): %s", user.Username, err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
 			}
 
 		} else {
-			log.Printf("Failed getting workflows for user %s: %s (1)", user.Username, err)
+			log.Printf("[WARNING] Failed getting workflows for user %s (1): %s ", user.Username, err)
 			//DeleteKey(ctx, "workflow", "5694357e-8063-4580-8529-301cc72df951")
 
 			//log.Printf("Workflows: %#v", workflows)
@@ -1917,7 +1915,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.ID = uuid.NewV4().String()
 	workflow.Owner = user.Id
 	workflow.Sharing = "private"
-	user.ActiveOrg.Users = []User{}
+	user.ActiveOrg.Users = []UserMini{}
 	workflow.ExecutingOrg = user.ActiveOrg
 	workflow.OrgId = user.ActiveOrg.Id
 	//log.Printf("TRIGGERS: %d", len(workflow.Triggers))
@@ -2164,7 +2162,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	tmpworkflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
-		log.Printf("Failed getting the workflow locally (save workflow): %s", err)
+		log.Printf("[WARNING] Failed getting the workflow locally (save workflow): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2182,7 +2180,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			workflow.ID = uuid.NewV4().String()
 			workflow.Public = false
 			workflow.Owner = user.Id
-			workflow.Org = []Org{
+			workflow.Org = []OrgMini{
 				user.ActiveOrg,
 			}
 			workflow.ExecutingOrg = user.ActiveOrg
@@ -2249,7 +2247,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if len(workflow.ExecutingOrg.Id) == 0 {
 		log.Printf("[INFO] Setting executing org for workflow")
-		user.ActiveOrg.Users = []User{}
+		user.ActiveOrg.Users = []UserMini{}
 		workflow.ExecutingOrg = user.ActiveOrg
 	}
 
@@ -3180,6 +3178,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
+		log.Printf("[WARNING] Failed getting org in get users: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed getting org users"}`))
 		return
@@ -4529,9 +4528,9 @@ func SanitizeWorkflow(workflow Workflow) Workflow {
 	}
 
 	workflow.Owner = ""
-	workflow.Org = []Org{}
+	workflow.Org = []OrgMini{}
 	workflow.OrgId = ""
-	workflow.ExecutingOrg = Org{}
+	workflow.ExecutingOrg = OrgMini{}
 	workflow.PreviouslySaved = false
 
 	// Add Gitguardian or similar secrets discovery
