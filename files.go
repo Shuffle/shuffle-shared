@@ -15,6 +15,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -104,12 +105,16 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := getContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id)
-	if err != nil {
+	if err != nil && len(files) == 0 {
 		log.Printf("[ERROR] Failed to get files: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error getting files."}`)))
 		return
 	}
+
+	sort.Slice(files[:], func(i, j int) bool {
+		return files[i].UpdatedAt > files[j].UpdatedAt
+	})
 
 	log.Printf("[INFO] Got %d files for org %s", len(files), user.ActiveOrg.Id)
 	newBody, err := json.Marshal(files)

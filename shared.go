@@ -24,7 +24,6 @@ import (
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/appengine"
-	"google.golang.org/appengine/memcache"
 )
 
 var project ShuffleStorage
@@ -107,7 +106,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 	var orgs []Org
 	q := datastore.NewQuery("Organizations")
 	_, err = project.Dbclient.GetAll(ctx, q, &orgs)
-	if err != nil {
+	if err != nil && len(orgs) == 0 {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get orgs"}`))
 		return
@@ -263,7 +262,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, userInfo.Session)
 
 	userInfo.Session = ""
-	err = SetUser(ctx, &userInfo)
+	err = SetUser(ctx, &userInfo, true)
 	if err != nil {
 		log.Printf("Failed updating user: %s", err)
 		resp.WriteHeader(401)
@@ -501,7 +500,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME: Doens't validate Org
+	// FIXME: Doesn't validate Org
 	app, err := GetApp(ctx, appAuth.App.ID, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed finding app %s while setting auth. Finding it by looping apps.", appAuth.App.ID)
@@ -577,7 +576,7 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Role != "admin" {
-		log.Printf("Need to be admin to delete appauth")
+		log.Printf("[WARNING] Need to be admin to delete appauth")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -596,20 +595,38 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[5]
 	}
 
+	ctx := getContext(request)
+	auth, err := GetWorkflowAppAuthDatastore(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Authget error (DELETE): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": ":("}`))
+		return
+	}
+
+	if auth.OrgId != user.ActiveOrg.Id {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User can't edit this org"}`))
+		return
+	}
+
 	// FIXME: Set affected workflows to have errors
 	// 1. Get the auth
 	// 2. Loop the workflows (.Usage) and set them to have errors
 	// 3. Loop the nodes in workflows and do the same
 
 	log.Printf("ID: %s", fileId)
-	ctx := getContext(request)
-	err := DeleteKey(ctx, "workflowappauth", fileId)
+	nameKey := "workflowappauth"
+	err = DeleteKey(ctx, nameKey, fileId)
 	if err != nil {
 		log.Printf("Failed deleting workflowapp")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed deleting workflow app"}`)))
 		return
 	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, user.ActiveOrg.Id)
+	DeleteCache(ctx, cacheKey)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -1011,8 +1028,8 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
 
-		memcache.Delete(ctx, "all_apps")
-		memcache.Delete(ctx, fmt.Sprintf("apps_%s", user.Id))
+		DeleteCache(ctx, "all_apps")
+		DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 		return
 	} else { //strings.HasPrefix(version.Swagger, "2.") || strings.HasPrefix(version.OpenAPI, "2.") {
 		// Convert
@@ -1075,8 +1092,8 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
 
-		memcache.Delete(ctx, "all_apps")
-		memcache.Delete(ctx, fmt.Sprintf("apps_%s", user.Id))
+		DeleteCache(ctx, "all_apps")
+		DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 		return
 	}
 	/*
@@ -1613,7 +1630,7 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 
 		var workflows []Workflow
 		_, err = project.Dbclient.GetAll(ctx, q, &workflows)
-		if err != nil {
+		if err != nil && len(workflows) == 0 {
 			log.Printf("Getall error in auth update: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed getting workflows to update"}`))
@@ -1655,6 +1672,7 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+
 				DeleteCache(ctx, cacheKey)
 
 				workflowCnt += 1
@@ -1711,7 +1729,7 @@ func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("Failed getting schedules: %s", err)
+		log.Printf("[WARNING] Failed getting schedules: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Couldn't get schedules"}`))
 		return
@@ -1823,7 +1841,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		q := datastore.NewQuery("Users").Filter("username =", t.Username)
 		var users []User
 		_, err = project.Dbclient.GetAll(ctx, q, &users)
-		if err != nil {
+		if err != nil && len(users) == 0 {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed getting users when updating user"}`))
 			return
@@ -1846,7 +1864,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		foundUser.Username = t.Username
 	}
 
-	err = SetUser(ctx, foundUser)
+	err = SetUser(ctx, foundUser, true)
 	if err != nil {
 		log.Printf("Error patching user %s: %s", foundUser.Username, err)
 		resp.WriteHeader(401)
@@ -1871,7 +1889,7 @@ func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	}
 
 	// Updating user
-	err = SetUser(ctx, &userInfo)
+	err = SetUser(ctx, &userInfo, true)
 	if err != nil {
 		log.Printf("Failed updating user: %s", err)
 		return userInfo, err
@@ -2110,8 +2128,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, cacheKey)
 
 	log.Printf("[INFO] Saved new workflow %s with name %s", workflow.ID, workflow.Name)
-	//memcacheName := fmt.Sprintf("%s_workflows", user.Username)
-	//memcache.Delete(ctx, memcacheName)
 
 	resp.WriteHeader(200)
 	//log.Println(string(workflowjson))
@@ -2152,7 +2168,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(fileId) != 36 {
-		log.Printf(`ID %s is not valid`, fileId)
+		log.Printf(`[WARNING] Workflow ID %s is not valid`, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID to save is not valid"}`))
 		return
@@ -2172,7 +2188,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow := Workflow{}
 	if user.Id != tmpworkflow.Owner {
 		if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, tmpworkflow.ID)
+			log.Printf("[INFO] User %s is accessing workflow %s as admin", user.Username, tmpworkflow.ID)
+			workflow.ID = tmpworkflow.ID
 		} else if tmpworkflow.Public {
 			//log.Printf("\n\nSHOULD CREATE A NEW WORKFLOW FOR THE USER :O\n\n")
 
@@ -2232,9 +2249,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// FIXME - auth and check if they should have access
 	if fileId != workflow.ID {
-		log.Printf("Path and request ID are not matching: %s:%s.", fileId, workflow.ID)
+		log.Printf("[WARNING] Path and request ID are not matching in workflow save: %s != %s.", fileId, workflow.ID)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2394,7 +2410,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		} else if trigger.TriggerType == "USERINPUT" {
 			// E.g. check email
-			log.Printf("Validating USERINPUT")
+			log.Printf("[INFO] Validating USERINPUT during execution")
 			sms := ""
 			email := ""
 			triggerType := ""
@@ -2628,8 +2644,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			newActions = append(newActions, action)
 		} else {
 			curapp := WorkflowApp{}
-			// FIXME - can this work with ONLY AppID?
-			// ^ Doubtful.
 			for _, app := range workflowapps {
 				if app.ID == action.AppID {
 					curapp = app
@@ -2637,23 +2651,43 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				// Has to NOT be generated
-				if app.Name == action.AppName && app.AppVersion == action.AppVersion {
-					curapp = app
-					break
+				if app.Name == action.AppName {
+					if app.AppVersion == action.AppVersion {
+						curapp = app
+						break
+					} else if ArrayContains(app.LoopVersions, action.AppVersion) {
+						// Get the real app
+						for _, item := range app.Versions {
+							if item.Version == action.AppVersion {
+								log.Printf("Should get app %s - %s", item.Version, item.ID)
+
+								tmpApp, err := GetApp(ctx, item.ID, user)
+								if err != nil && tmpApp.ID == "" {
+									log.Printf("[WARNING] Failed getting app %s (%s): %s", app.Name, item.ID, err)
+								}
+
+								curapp = *tmpApp
+								break
+							}
+						}
+
+						//curapp = app
+						break
+					}
 				}
 			}
 
-			// Check to see if the whole app is valid
-			//log.Printf("NAME: %s vs %s", curapp.Name, action.AppName)
+			//log.Printf("CURAPP: %#v:%s", curapp.Name, curapp.AppVersion)
+
 			if curapp.Name != action.AppName {
-				workflow.Errors = append(workflow.Errors, fmt.Sprintf("App %s doesn't exist", action.AppName))
+				workflow.Errors = append(workflow.Errors, fmt.Sprintf("App %s:%s doesn't exist", action.AppName, action.AppVersion))
 				action.Errors = append(action.Errors, "This app doesn't exist.")
 				action.IsValid = false
 				workflow.IsValid = false
 
 				// Append with errors
 				newActions = append(newActions, action)
-				log.Printf("App %s doesn't exist. Adding as error.", action.AppName)
+				log.Printf("App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
 				//resp.WriteHeader(401)
 				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App %s doesn't exist"}`, action.AppName)))
 				//return
@@ -2722,7 +2756,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 									}
 								}
 
-								log.Printf("[WARNING] Appaction %s with required param '%s' is empty. Can't save.", action.Name, param.Name)
+								//log.Printf("[WARNING] Appaction %s with required param '%s' is empty. Can't save.", action.Name, param.Name)
 								thisError := fmt.Sprintf("%s is missing reqired parameter %s", action.Label, param.Name)
 								action.Errors = append(action.Errors, thisError)
 								workflow.Errors = append(workflow.Errors, thisError)
@@ -2740,7 +2774,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					// Handles check for required params
 					if !paramFound && param.Required {
-						log.Printf("Appaction %s with required param %s doesn't exist.", action.Name, param.Name)
+						//log.Printf("Appaction %s with required param %s doesn't exist.", action.Name, param.Name)
 						thisError := fmt.Sprintf("Parameter %s is required", param.Name)
 						action.Errors = append(action.Errors, thisError)
 
@@ -3220,10 +3254,9 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Println("Handling password change")
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("Failed reading body")
+		log.Println("[WARNING] Failed reading body")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
@@ -3239,6 +3272,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("[INFO] Handling password change for %s", t.Username)
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in password change: %s", err)
@@ -3249,9 +3283,13 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	curUserFound := false
 	if t.Username != userInfo.Username {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Admin required to change others' passwords"}`))
-		return
+		log.Printf("[WARNING] Bad username during password change for %s.", t.Username)
+
+		if project.Environment == "cloud" {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Not allowed to change others' passwords in cloud"}`))
+			return
+		}
 	} else if t.Username == userInfo.Username {
 		curUserFound = true
 	}
@@ -3289,8 +3327,8 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		q := datastore.NewQuery("Users").Filter("Username =", strings.ToLower(t.Username))
 		var users []User
 		_, err = project.Dbclient.GetAll(ctx, q, &users)
-		if err != nil {
-			log.Printf("Failed getting user %s", t.Username)
+		if err != nil && len(users) == 0 {
+			log.Printf("[WARNING] Failed getting user %s: %s", t.Username, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 			return
@@ -3352,15 +3390,13 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	userInfo.Password = string(hashedPassword)
-	err = SetUser(ctx, &foundUser)
+	err = SetUser(ctx, &foundUser, true)
 	if err != nil {
 		log.Printf("Error fixing password for user %s: %s", userInfo.Username, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 		return
 	}
-
-	//memcache.Delete(ctx, sessionToken)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
@@ -3698,7 +3734,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		foundUser.Active = true
 	}
 
-	err = SetUser(ctx, foundUser)
+	err = SetUser(ctx, foundUser, true)
 	if err != nil {
 		log.Printf("Failed swapping active for user %s (%s)", foundUser.Username, foundUser.Id)
 		resp.WriteHeader(401)
@@ -3748,7 +3784,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Id != app.Owner {
-		log.Printf("Wrong user (%s) for app %s in update app", user.Username, app.Name)
+		log.Printf("[WARNING] Wrong user (%s) for app %s in update app", user.Username, app.Name)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3816,7 +3852,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if changed {
-		err = SetUser(ctx, &user)
+		err = SetUser(ctx, &user, true)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating privateapp %s for user %s: %s", app.ID, user.Username, err)
 		}
@@ -3848,7 +3884,6 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	location := strings.Split(request.URL.String(), "/")
-	log.Printf("%#v", location)
 	var fileId string
 	if location[1] == "api" {
 		if len(location) <= 4 {
@@ -3861,7 +3896,6 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := appengine.NewContext(request)
-	log.Printf("ID: %s", fileId)
 	app, err := GetApp(ctx, fileId, user)
 	if err != nil {
 		log.Printf("Error getting app %s: %s", app.Name, err)
@@ -3871,16 +3905,19 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Id != app.Owner {
-		log.Printf("Wrong user (%s) for app %s when DELETING app", user.Username, app.Name)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		if user.Role == "admin" && app.Owner == "" {
+			log.Printf("[INFO] Anyone can edit %s (%s), since it doesn't have an owner (DELETE).", app.Name, app.ID)
+		} else {
+			log.Printf("[WARNING] Wrong user (%s) for app %s (%s) when DELETING app", user.Username, app.Name, app.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	// Not really deleting it, just removing from user cache
 	var privateApps []WorkflowApp
 	for _, item := range user.PrivateApps {
-		log.Println(item.ID, fileId)
 		if item.ID == fileId {
 			continue
 		}
@@ -3889,36 +3926,29 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	user.PrivateApps = privateApps
-	err = SetUser(ctx, &user)
+	err = DeleteKey(ctx, "workflowapp", app.ID)
 	if err != nil {
-		log.Printf("Failed removing %s app for user %s: %s", app.Name, user.Username, err)
+		log.Printf("[WARNING] Failed deleting %s (%s) for by %s: %s", app.Name, app.ID, user.Username, err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": true"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false"}`)))
 		return
 	}
 
-	// Delete memcache for user
-	// Check cookie
-	c, err := request.Cookie("session_token")
+	err = SetUser(ctx, &user, true)
 	if err != nil {
-		log.Printf("User doesn't have sessiontoken on pw change: %s", err)
+		log.Printf("[WARNING] Failed removing %s app for user %s: %s", app.Name, user.Username, err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You're not logged in."}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false"}`)))
 		return
 	}
 
-	sessionToken := c.Value
-	session, err := GetSession(ctx, sessionToken)
-	if err != nil {
-		log.Printf("[INFO] Session %s doesn't exist: %s", sessionToken, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "You're not logged in"}`))
-		return
-	}
-
-	_ = session
-	err = memcache.Delete(request.Context(), sessionToken)
+	// This is getting stupid :)
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+	DeleteCache(ctx, "all_apps")
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -4792,4 +4822,176 @@ func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully deleted webhook %s", fileId)
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true, "reason": "Stopped webhook"}`))
+}
+
+func ParseVersions(versions []string) []string {
+	log.Printf("Versions: %#v", versions)
+
+	//versions = sort.Sort(semver.Collection(versions))
+	return versions
+}
+
+func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := getContext(request)
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	app, err := GetApp(ctx, fileId, User{})
+	if err != nil {
+		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+		return
+	}
+
+	//if IsValid       bool   `json:"is_valid" yaml:"is_valid" required:true datastore:"is_valid"`
+	// Sharing       bool   `json:"sharing" yaml:"sharing" required:false datastore:"sharing"`
+	//log.Printf("Sharing: %s", app.Sharing)
+	//log.Printf("Generated: %s", app.Generated)
+	//log.Printf("Downloaded: %s", app.Downloaded)
+
+	type AppParser struct {
+		Success bool   `json:"success"`
+		OpenAPI []byte `json:"openapi"`
+		App     []byte `json:"app"`
+	}
+
+	data, err := json.Marshal(app)
+	if err != nil {
+		resp.WriteHeader(422)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling new parsed APP: %s"}`, err)))
+		return
+	}
+
+	appReturn := AppParser{
+		Success: true,
+		App:     data,
+	}
+
+	appdata, err := json.Marshal(appReturn)
+	if err != nil {
+		log.Printf("[WARNING] Error parsing appReturn for app (INIT): %s", err)
+		resp.WriteHeader(422)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling: %s"}`, err)))
+		return
+	}
+
+	openapi, openapiok := request.URL.Query()["openapi"]
+	if app.Sharing || app.Public {
+		if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
+			//log.Printf("Should return WITHOUT openapi")
+		} else {
+			log.Printf("CAN SHARE APP!")
+			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
+			if err != nil {
+				log.Printf("[WARNING] OpenApi doesn't exist for (0): %s - err: %s. Returning basic app", fileId, err)
+				resp.WriteHeader(200)
+				resp.Write(appdata)
+				return
+			}
+
+			if len(parsedApi.ID) > 0 {
+				parsedApi.Success = true
+			} else {
+				parsedApi.Success = false
+			}
+
+			//log.Printf("PARSEDAPI: %#v", parsedApi)
+			openapidata, err := json.Marshal(parsedApi)
+			if err != nil {
+				log.Printf("[WARNING] Error parsing api json: %s", err)
+				resp.WriteHeader(422)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling new parsed swagger: %s"}`, err)))
+				return
+			}
+
+			appReturn.OpenAPI = openapidata
+		}
+
+		appdata, err = json.Marshal(appReturn)
+		if err != nil {
+			log.Printf("[WARNING] Error parsing appReturn for app: %s", err)
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling: %s"}`, err)))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write(appdata)
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in get app: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != app.Owner {
+		if user.Role == "admin" && app.Owner == "" {
+			log.Printf("[INFO] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
+		} else {
+			log.Printf("[WARNING] Wrong user (%s) for app %s", user.Username, app.Name)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
+		//log.Printf("Should return WITHOUT openapi")
+	} else {
+		log.Printf("[INFO] Getting app %s (OpenAPI)", fileId)
+		parsedApi, err := GetOpenApiDatastore(ctx, fileId)
+		if err != nil {
+			log.Printf("[INFO] OpenApi doesn't exist for (1): %s - err: %s. Returning basic app.", fileId, err)
+			resp.WriteHeader(200)
+			resp.Write(appdata)
+			return
+		}
+
+		//log.Printf("Parsed API: %#v", parsedApi)
+		if len(parsedApi.ID) > 0 {
+			parsedApi.Success = true
+		} else {
+			parsedApi.Success = false
+		}
+
+		openapidata, err := json.Marshal(parsedApi)
+		if err != nil {
+			resp.WriteHeader(422)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling new parsed swagger: %s"}`, err)))
+			return
+		}
+
+		appReturn.OpenAPI = openapidata
+	}
+
+	appdata, err = json.Marshal(appReturn)
+	if err != nil {
+		log.Printf("[WARNING] Error parsing appReturn for app: %s", err)
+		resp.WriteHeader(422)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling: %s"}`, err)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(appdata)
 }

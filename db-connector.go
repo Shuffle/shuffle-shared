@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
@@ -426,16 +427,50 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 }
 
 func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
-	key := datastore.NameKey("workflowapp", strings.ToLower(id), nil)
+	nameKey := "workflowapp"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+
 	workflowApp := &WorkflowApp{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &workflowApp)
+			if err == nil {
+				return workflowApp, nil
+			}
+		} else {
+			//log.Printf("[INFO] Failed getting cache for org: %s", err)
+		}
+	}
+
+	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 	if err := project.Dbclient.Get(ctx, key, workflowApp); err != nil {
 		for _, app := range user.PrivateApps {
 			if app.ID == id {
-				return &app, nil
+				workflowApp = &app
+				break
 			}
 		}
 
+	}
+
+	if workflowApp.ID == "" {
 		return &WorkflowApp{}, err
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(workflowApp)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getapp: %s", err)
+			return workflowApp, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getapp: %s", err)
+		}
 	}
 
 	return workflowApp, nil
@@ -462,7 +497,6 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 	if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
-
 		if strings.Contains(err.Error(), `cannot load field`) {
 			log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
 			err = nil
@@ -492,7 +526,7 @@ func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId)
 
 	_, err := project.Dbclient.GetAll(ctx, q, &allworkflows)
-	if err != nil {
+	if err != nil && len(allworkflows) == 0 {
 		return []Workflow{}, err
 	}
 
@@ -500,6 +534,7 @@ func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 }
 
 // ListBooks returns a list of books, ordered by title.
+// Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
 	nameKey := "Organizations"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
@@ -519,25 +554,36 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 	}
 
+	setOrg := false
 	key := datastore.NameKey(nameKey, id, nil)
 	if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-		if strings.Contains(err.Error(), `cannot load field`) {
-			log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler.")
+		if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
+			//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
+			log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler: %s", err)
 			err = nil
 
-			//for _, user := range curOrg.Users {
-			//	log.Printf("USER: %#v", user)
-			//}
-			//SetOrg(ctx, *curOrg, curOrg.Id)
+			users := []User{}
+			q := datastore.NewQuery("Users").Filter("orgs =", id)
+			_, usererr := project.Dbclient.GetAll(ctx, q, &users)
 
-			//curUser.ActiveOrg = OrgMini{
-			//	Name: curUser.ActiveOrg.Name,
-			//	Id:   curUser.ActiveOrg.Id,
-			//	Role: "user",
-			//}
+			if usererr != nil {
+				log.Printf("[WARNING] Failed handling users in org fixer: %s", usererr)
+				for index, user := range users {
+					users[index].ActiveOrg = OrgMini{
+						Name: curOrg.Name,
+						Id:   curOrg.Id,
+						Role: user.Role,
+					}
 
-			// Updating the user and their org
-			//SetUser(ctx, curUser)
+					//log.Printf("Should update user %s because there's an error with it", users[index].Id)
+					SetUser(ctx, &users[index], false)
+				}
+			}
+
+			if len(users) > 0 {
+				curOrg.Users = users
+				setOrg = true
+			}
 		} else {
 			return &Org{}, err
 		}
@@ -559,13 +605,18 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
-			log.Printf("[WARNING] Failed marshalling org: %s", err)
+			log.Printf("[WARNING] Failed marshalling org for cache: %s", err)
 			return curOrg, nil
 		}
 
 		err = SetCache(ctx, cacheKey, neworg)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating cache: %s", err)
+			log.Printf("[WARNING] Failed updating org cache: %s", err)
+		}
+
+		if setOrg {
+			log.Printf("[INFO] UPDATING ORG %s!!", curOrg.Id)
+			SetOrg(ctx, *curOrg, curOrg.Id)
 		}
 	}
 
@@ -774,7 +825,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			}
 
 			// Updating the user and their org
-			SetUser(ctx, curUser)
+			SetUser(ctx, curUser, false)
 		} else {
 			log.Printf("[WARNING] Error in Get User: %s", err)
 			return &User{}, err
@@ -797,9 +848,11 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	return curUser, nil
 }
 
-func SetUser(ctx context.Context, user *User) error {
+func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	log.Printf("[INFO] Updating a user that has the role %s with %d apps", user.Role, len(user.PrivateApps))
-	user = fixUserOrg(ctx, user)
+	if updateOrg {
+		user = fixUserOrg(ctx, user)
+	}
 
 	// clear session_token and API_token for user
 	parsedKey := strings.ToLower(user.Username)
@@ -903,16 +956,44 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 }
 
 func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticationStorage, error) {
-	//log.Printf("\n\nGetting ALL workflow app auth for org %s", orgId)
-	var allworkflowapps []AppAuthenticationStorage
-	q := datastore.NewQuery("workflowappauth").Filter("org_id = ", orgId)
+	var allworkflowappAuths []AppAuthenticationStorage
+	nameKey := "workflowappauth"
 
-	_, err = project.Dbclient.GetAll(ctx, q, &allworkflowapps)
-	if err != nil {
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &allworkflowappAuths)
+			if err == nil {
+				return allworkflowappAuths, nil
+			}
+		} else {
+			log.Printf("[INFO] Failed getting cache app auth: %s", err)
+		}
+	}
+
+	q := datastore.NewQuery(nameKey).Filter("org_id = ", orgId)
+	_, err = project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
+	if err != nil && len(allworkflowappAuths) == 0 {
 		return []AppAuthenticationStorage{}, err
 	}
 
-	return allworkflowapps, nil
+	if project.CacheDb {
+		data, err := json.Marshal(allworkflowappAuths)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling get app auth: %s", err)
+			return allworkflowappAuths, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating get app auth cache: %s", err)
+		}
+	}
+
+	return allworkflowappAuths, nil
 }
 
 func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
@@ -930,13 +1011,13 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 				return environments, nil
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for environments: %s", err)
+			log.Printf("[INFO] Failed getting cache in GET environments: %s", err)
 		}
 	}
 
 	q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
 	_, err = project.Dbclient.GetAll(ctx, q, &environments)
-	if err != nil {
+	if err != nil && len(environments) == 0 {
 		return []Environment{}, err
 	}
 
@@ -1010,17 +1091,59 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 
 			found := false
-			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
-			for _, loopedApp := range allApps {
-				if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
-					found = true
+			newIndex := -1
+			newApp := WorkflowApp{}
+			for appIndex, loopedApp := range allApps {
+				if loopedApp.Name == innerApp.Name {
+					if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
+						found = true
+					} else {
+						//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
+
+						v2, err := semver.NewVersion(innerApp.AppVersion)
+						if err != nil {
+							log.Printf("Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+						}
+
+						appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
+						c, err := semver.NewConstraint(appConstraint)
+						if err != nil {
+							log.Printf("Failed preparing constraint: %s", err)
+						}
+
+						if c.Check(v2) {
+							//log.Printf("New IS larger - changing app on index %d from %s to %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion)
+
+							newApp = innerApp
+							newApp.Versions = loopedApp.Versions
+							newApp.LoopVersions = loopedApp.LoopVersions
+						} else {
+							//log.Printf("New is NOT larger - just appending")
+							newApp = loopedApp
+						}
+
+						newApp.Versions = append(newApp.Versions, AppVersion{
+							Version: innerApp.AppVersion,
+							ID:      innerApp.ID,
+						})
+
+						newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+						newIndex = appIndex
+					}
+
 					break
 				}
 			}
 
-			if !found {
-				allApps = append(allApps, innerApp)
+			if newIndex >= 0 && newApp.ID != "" {
+				//log.Printf("Should update app on index %d", newIndex)
+				allApps[newIndex] = newApp
+			} else {
+				if !found {
+					allApps = append(allApps, innerApp)
+				}
 			}
+
 		}
 
 		if err != iterator.Done {
@@ -1089,17 +1212,71 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				//log.Printf("APP: %s", innerApp.Name)
+				//found := false
+				////log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
+				//for _, loopedApp := range allApps {
+				//	if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
+				//		found = true
+				//		break
+				//	}
+				//}
+
+				//if !found {
+				//	publicApps = append(publicApps, innerApp)
+				//}
+
 				found := false
-				//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
-				for _, loopedApp := range allApps {
-					if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
-						found = true
+				newIndex := -1
+				newApp := WorkflowApp{}
+				for appIndex, loopedApp := range publicApps {
+					if loopedApp.Name == innerApp.Name {
+						if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
+							found = true
+						} else {
+							//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
+
+							v2, err := semver.NewVersion(innerApp.AppVersion)
+							if err != nil {
+								log.Printf("Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+							}
+
+							appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
+							c, err := semver.NewConstraint(appConstraint)
+							if err != nil {
+								log.Printf("Failed preparing constraint: %s", err)
+							}
+
+							if c.Check(v2) {
+								//log.Printf("New IS larger - changing app on index %d from %s to %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion)
+
+								newApp = innerApp
+								newApp.Versions = loopedApp.Versions
+								newApp.LoopVersions = loopedApp.LoopVersions
+							} else {
+								//log.Printf("New is NOT larger - just appending")
+								newApp = loopedApp
+							}
+
+							newApp.Versions = append(newApp.Versions, AppVersion{
+								Version: innerApp.AppVersion,
+								ID:      innerApp.ID,
+							})
+
+							newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+							newIndex = appIndex
+						}
+
 						break
 					}
 				}
 
-				if !found {
-					publicApps = append(publicApps, innerApp)
+				if newIndex >= 0 && newApp.ID != "" {
+					//log.Printf("Should update app on index %d", newIndex)
+					publicApps[newIndex] = newApp
+				} else {
+					if !found {
+						publicApps = append(publicApps, innerApp)
+					}
 				}
 			}
 
@@ -1213,16 +1390,57 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 			}
 
 			found := false
-			//log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
-			for _, loopedApp := range allApps {
+			newIndex := -1
+			newApp := WorkflowApp{}
+			for appIndex, loopedApp := range allApps {
 				if loopedApp.Name == innerApp.Name {
-					found = true
+					if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
+						found = true
+					} else {
+						//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
+
+						v2, err := semver.NewVersion(innerApp.AppVersion)
+						if err != nil {
+							log.Printf("Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+						}
+
+						appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
+						c, err := semver.NewConstraint(appConstraint)
+						if err != nil {
+							log.Printf("Failed preparing constraint: %s", err)
+						}
+
+						if c.Check(v2) {
+							//log.Printf("New IS larger - changing app on index %d from %s to %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion)
+
+							newApp = innerApp
+							newApp.Versions = loopedApp.Versions
+							newApp.LoopVersions = loopedApp.LoopVersions
+						} else {
+							//log.Printf("New is NOT larger - just appending")
+							newApp = loopedApp
+						}
+
+						newApp.Versions = append(newApp.Versions, AppVersion{
+							Version: innerApp.AppVersion,
+							ID:      innerApp.ID,
+						})
+
+						newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+						newIndex = appIndex
+					}
+
 					break
 				}
 			}
 
-			if !found {
-				allApps = append(allApps, innerApp)
+			if newIndex >= 0 && newApp.ID != "" {
+				//log.Printf("Should update app on index %d", newIndex)
+				allApps[newIndex] = newApp
+			} else {
+				if !found {
+					allApps = append(allApps, innerApp)
+				}
 			}
 		}
 
@@ -1344,13 +1562,17 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 }
 
 func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthenticationStorage, id string) error {
-	key := datastore.NameKey("workflowappauth", id, nil)
+	nameKey := "workflowappauth"
+	key := datastore.NameKey(nameKey, id, nil)
 
 	// New struct, to not add body, author etc
 	if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
 		log.Printf("[WARNING] Error adding workflow app AUTH: %s", err)
 		return err
 	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowappauth.OrgId)
+	DeleteCache(ctx, cacheKey)
 
 	return nil
 }
@@ -1392,7 +1614,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	q := datastore.NewQuery("Users").Filter("apikey =", apikey)
 	var users []User
 	_, err = project.Dbclient.GetAll(ctx, q, &users)
-	if err != nil {
+	if err != nil && len(users) == 0 {
 		log.Printf("[WARNING] Error getting apikey: %s", err)
 		return User{}, err
 	}
@@ -1497,14 +1719,14 @@ func SetFile(ctx context.Context, file File) error {
 
 func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
 	var files []File
-	q := datastore.NewQuery("Files").Filter("org_id =", orgId).Order("-updated_at").Limit(100)
+	q := datastore.NewQuery("Files").Filter("org_id =", orgId).Limit(100)
 
 	_, err := project.Dbclient.GetAll(ctx, q, &files)
-	if err != nil {
+	if err != nil && len(files) == 0 {
 		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 			q = q.Limit(50)
 			_, err := project.Dbclient.GetAll(ctx, q, &files)
-			if err != nil {
+			if err != nil && len(files) == 0 {
 				return []File{}, err
 			}
 		} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
@@ -1518,12 +1740,41 @@ func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
 }
 
 func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthenticationStorage, error) {
+	nameKey := "workflowappauth"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
-	key := datastore.NameKey("workflowappauth", id, nil)
 	appAuth := &AppAuthenticationStorage{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &appAuth)
+			if err == nil {
+				return appAuth, nil
+			}
+		} else {
+			//log.Printf("[INFO] Failed getting cache for org: %s", err)
+		}
+	}
+
 	// New struct, to not add body, author etc
+	key := datastore.NameKey(nameKey, id, nil)
 	if err := project.Dbclient.Get(ctx, key, appAuth); err != nil {
 		return &AppAuthenticationStorage{}, err
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(appAuth)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling app auth cache: %s", err)
+			return appAuth, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating app auth cache: %s", err)
+		}
 	}
 
 	return appAuth, nil
@@ -1533,13 +1784,12 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 	var schedules []ScheduleOld
 
 	q := datastore.NewQuery("schedules").Filter("org = ", orgId)
-	//CreatedAt    int64    `json:"created_at" datastore:"created_at"`
-	if orgId == "ALL" {
+	if orgId == "ALL" && project.Environment != "cloud" {
 		q = datastore.NewQuery("schedules")
 	}
 
 	_, err := project.Dbclient.GetAll(ctx, q, &schedules)
-	if err != nil {
+	if err != nil && len(schedules) == 0 {
 		return []ScheduleOld{}, err
 	}
 
