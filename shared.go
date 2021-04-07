@@ -1315,6 +1315,27 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	for index, execution := range workflowExecutions {
+		newResults := []ActionResult{}
+		for _, result := range execution.Results {
+			newParams := []WorkflowAppActionParameter{}
+			for _, param := range result.Action.Parameters {
+				//log.Printf("PARAM: %#v", param)
+				if param.Configuration || strings.Contains(strings.ToLower(param.Name), "user") || strings.Contains(strings.ToLower(param.Name), "key") || strings.Contains(strings.ToLower(param.Name), "pass") {
+					param.Value = ""
+					//log.Printf("FOUND CONFIG: %s!!", param.Name)
+				}
+
+				newParams = append(newParams, param)
+			}
+
+			result.Action.Parameters = newParams
+			newResults = append(newResults, result)
+		}
+
+		workflowExecutions[index].Results = newResults
+	}
+
 	newjson, err := json.Marshal(workflowExecutions)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -4896,7 +4917,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
 			//log.Printf("Should return WITHOUT openapi")
 		} else {
-			log.Printf("CAN SHARE APP!")
+			//log.Printf("CAN SHARE APP!")
 			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
 			if err != nil {
 				log.Printf("[WARNING] OpenApi doesn't exist for (0): %s - err: %s. Returning basic app", fileId, err)

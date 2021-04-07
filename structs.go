@@ -121,6 +121,7 @@ type WorkflowAppAction struct {
 	Environment       string                       `json:"environment" datastore:"environment"`
 	Sharing           bool                         `json:"sharing" datastore:"sharing"`
 	PrivateID         string                       `json:"private_id" datastore:"private_id"`
+	PublicID          string                       `json:"public_id" datastore:"public_id"`
 	AppID             string                       `json:"app_id" datastore:"app_id"`
 	Tags              []string                     `json:"tags" datastore:"tags" yaml:"tags"`
 	Authentication    []AuthenticationStore        `json:"authentication" datastore:"authentication,noindex" yaml:"authentication,omitempty"`
@@ -606,6 +607,8 @@ type Action struct {
 	PrivateID         string                       `json:"private_id,omitempty" datastore:"private_id"`
 	Label             string                       `json:"label,omitempty" datastore:"label"`
 	SmallImage        string                       `json:"small_image,omitempty" datastore:"small_image,noindex" required:false yaml:"small_image"`
+	Public            bool                         `json:"public" datastore:"public"`
+	Generated         bool                         `json:"generated" yaml:"generated" required:false datastore:"generated"`
 	LargeImage        string                       `json:"large_image,omitempty" datastore:"large_image,noindex" yaml:"large_image" required:false`
 	Environment       string                       `json:"environment,omitempty" datastore:"environment"`
 	Name              string                       `json:"name" datastore:"name"`
