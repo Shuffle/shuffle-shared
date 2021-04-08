@@ -267,6 +267,7 @@ type User struct {
 type Session struct {
 	Username string `datastore:"Username,noindex"`
 	Id       string `datastore:"Id,noindex"`
+	UserId   string `datastore:"user_id,noindex"`
 	Session  string `datastore:"session,noindex"`
 }
 

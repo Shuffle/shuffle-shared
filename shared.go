@@ -868,17 +868,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
-		parsedName := strings.ToLower(session.Username)
-		if project.Environment != "cloud" {
-			parsedName = session.Id
-		}
-
-		//log.Printf("Session: %s", session.Username)
-		// Get session first
-		// Should basically never happen
-		user, err := GetUser(ctx, parsedName)
+		user, err := GetUser(ctx, session.UserId)
 		if err != nil {
-			log.Printf("[INFO] User with Identifier %s doesn't exist: %s", parsedName, err)
+			log.Printf("[INFO] User with Identifier %s doesn't exist: %s", session.UserId, err)
 			return User{}, err
 		}
 
@@ -3345,9 +3337,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	foundUser := User{}
 	if !curUserFound {
-		q := datastore.NewQuery("Users").Filter("Username =", strings.ToLower(t.Username))
-		var users []User
-		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		users, err := FindUser(ctx, strings.ToLower(strings.TrimSpace(t.Username)))
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Failed getting user %s: %s", t.Username, err)
 			resp.WriteHeader(401)

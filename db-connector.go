@@ -728,7 +728,7 @@ func SetApikey(ctx context.Context, Userdata User) error {
 	// Non indexed User data
 	newapiUser := new(Userapi)
 	newapiUser.ApiKey = Userdata.ApiKey
-	newapiUser.Username = Userdata.Username
+	newapiUser.Username = strings.ToLower(Userdata.Username)
 	key1 := datastore.NameKey("apikey", newapiUser.ApiKey, nil)
 
 	// New struct, to not add body, author etc
@@ -762,10 +762,10 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 
 // Index = Username
 func SetSession(ctx context.Context, user User, value string) error {
-	parsedKey := strings.ToLower(user.Username)
-	if project.Environment != "cloud" {
-		parsedKey = user.Id
-	}
+	//parsedKey := strings.ToLower(user.Username)
+	//if project.Environment != "cloud" {
+	//}
+	parsedKey := user.Id
 
 	// Non indexed User data
 	user.Session = value
@@ -780,7 +780,8 @@ func SetSession(ctx context.Context, user User, value string) error {
 	if len(user.Session) > 0 {
 		// Indexed session data
 		sessiondata := new(Session)
-		sessiondata.Username = user.Username
+		sessiondata.UserId = strings.ToLower(user.Id)
+		sessiondata.Username = strings.ToLower(user.Username)
 		sessiondata.Session = user.Session
 		sessiondata.Id = user.Id
 		key2 := datastore.NameKey("sessions", sessiondata.Session, nil)
@@ -792,6 +793,20 @@ func SetSession(ctx context.Context, user User, value string) error {
 	}
 
 	return nil
+}
+
+func FindUser(ctx context.Context, username string) ([]User, error) {
+	q := datastore.NewQuery("Users").Filter("Username =", username)
+	var users []User
+	_, err = project.Dbclient.GetAll(ctx, q, &users)
+	if err != nil && len(users) == 0 {
+		log.Printf("[WARNING] Failed getting users for username: %s", username)
+		return users, err
+	}
+
+	log.Printf("[INFO] Found %d user(s) for email %s in db-connector", len(users), username)
+
+	return users, nil
 }
 
 // ListBooks returns a list of books, ordered by title.
@@ -849,16 +864,16 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
-	log.Printf("[INFO] Updating a user that has the role %s with %d apps", user.Role, len(user.PrivateApps))
+	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps", user.Username, user.Role, len(user.PrivateApps))
+	parsedKey := user.Id
 	if updateOrg {
 		user = fixUserOrg(ctx, user)
 	}
 
 	// clear session_token and API_token for user
-	parsedKey := strings.ToLower(user.Username)
-	if project.Environment != "cloud" {
-		parsedKey = user.Id
-	}
+	//parsedKey := strings.ToLower(user.Username)
+	//if project.Environment != "cloud" {
+	//}
 
 	k := datastore.NameKey("Users", parsedKey, nil)
 	if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
@@ -917,6 +932,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 	innerUser.Limits = UserLimits{}
 	innerUser.Authentication = []UserAuth{}
 	innerUser.Password = ""
+	innerUser.Session = ""
 
 	// Might be vulnerable to timing attacks.
 	for _, orgId := range user.Orgs {
