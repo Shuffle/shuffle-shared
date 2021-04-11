@@ -849,7 +849,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 	// One time API keys
 	authorizationArr, ok := request.URL.Query()["authorization"]
-	ctx := appengine.NewContext(request)
+	ctx := getContext(request)
 	if ok {
 		authorization := ""
 		if len(authorizationArr) > 0 {
@@ -989,7 +989,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		hasher.Write(body)
 		idstring := hex.EncodeToString(hasher.Sum(nil))
 
-		log.Printf("Swagger v3 validation success with ID %s and %d paths!", idstring, len(swagger.Paths))
+		log.Printf("[INFO] Swagger v3 validation success with ID %s and %d paths!", idstring, len(swagger.Paths))
 
 		if !isJson {
 			log.Printf("[INFO] NEED TO TRANSFORM FROM YAML TO JSON for %s", idstring)
@@ -1501,7 +1501,7 @@ func DeleteWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := appengine.NewContext(request)
+	ctx := getContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("Failed getting the workflow locally: %s", err)
@@ -2197,8 +2197,24 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME - have a check for org etc too..
 	workflow := Workflow{}
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed workflow body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	err = json.Unmarshal([]byte(body), &workflow)
+	if err != nil {
+		log.Printf(string(body))
+		log.Printf("[ERROR] Failed workflow unmarshaling: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
 	if user.Id != tmpworkflow.Owner {
 		if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 			log.Printf("[INFO] User %s is accessing workflow %s as admin", user.Username, tmpworkflow.ID)
@@ -2235,22 +2251,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	} else {
-		body, err := ioutil.ReadAll(request.Body)
-		if err != nil {
-			log.Printf("Failed hook unmarshaling: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		err = json.Unmarshal([]byte(body), &workflow)
-		if err != nil {
-			log.Printf(string(body))
-			log.Printf("[ERROR] Failed workflow unmarshaling: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
-			return
-		}
 
 		if workflow.Public {
 			log.Printf("[WARNING] Rolling back public as the user set it to true themselves")
@@ -2269,18 +2269,27 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Fixing wrong owners when importing
-	if workflow.Owner == "" {
-		workflow.Owner = user.Id
+	if len(workflow.Name) == 0 {
+		log.Printf("[WARNING] Can't save workflow without a name.")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow needs a name"}`))
+		return
 	}
 
+	if len(workflow.Name) == 0 {
+		log.Printf("[WARNING] Can't save workflow without a single action.")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow needs at least one action"}`))
+		return
+	}
+
+	log.Printf("[INFO] Saving workflow %s with %d actions and %d triggers", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
 	if len(workflow.ExecutingOrg.Id) == 0 {
 		log.Printf("[INFO] Setting executing org for workflow")
 		user.ActiveOrg.Users = []UserMini{}
 		workflow.ExecutingOrg = user.ActiveOrg
 	}
 
-	// FIXME - this shouldn't be necessary with proper API checks
 	newActions := []Action{}
 	allNodes := []string{}
 	workflow.Categories = Categories{}
@@ -2307,9 +2316,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	//log.Printf("ENVIRONMENTS: %#v", environments)
 
+	startnodeFound := false
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	for _, action := range workflow.Actions {
 		allNodes = append(allNodes, action.ID)
+		if workflow.Start == action.ID {
+			//log.Printf("[INFO] FOUND STARTNODE %d", workflow.Start)
+			startnodeFound = true
+			action.IsStartNode = true
+		}
 
 		if len(action.Errors) > 0 || !action.IsValid {
 			action.IsValid = true
@@ -2338,7 +2353,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// FIXME: Have a good way of tracking errors. ID's or similar.
 		if !action.IsValid && len(action.Errors) > 0 {
 			log.Printf("[INFO] Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
 
@@ -2354,6 +2368,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
 		//log.Printf("ENVIRONMENT: %s", action.Environment)
 		newActions = append(newActions, action)
+	}
+
+	if !startnodeFound {
+		log.Printf("No startnode found during save!!")
 	}
 
 	workflow.Actions = newActions
@@ -2413,17 +2431,36 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			}
-		} else if trigger.TriggerType == "WEBHOOK" && trigger.Status != "uninitialized" {
-			hook, err := GetHook(ctx, trigger.ID)
-			if err != nil {
-				log.Printf("[WARNING] Failed getting webhook")
-				trigger.Status = "stopped"
-			} else if hook.Id == "" {
-				trigger.Status = "stopped"
+		} else if trigger.TriggerType == "WEBHOOK" {
+			if trigger.Status != "uninitialized" {
+				hook, err := GetHook(ctx, trigger.ID)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting webhook")
+					trigger.Status = "stopped"
+				} else if hook.Id == "" {
+					trigger.Status = "stopped"
+				}
+			}
+
+			//log.Printf("WEBHOOK: %d", len(trigger.Parameters))
+			if len(trigger.Parameters) != 2 {
+				log.Printf("[WARNING] Issue with parameters in webhook %s!!", trigger.ID)
+			} else {
+				if !strings.Contains(trigger.Parameters[0].Value, trigger.ID) {
+					log.Printf("[INFO] Fixing webhook URL for %s", trigger.ID)
+					baseUrl := "https://shuffler.io"
+					if project.Environment != "cloud" {
+						baseUrl = "http://localhost:3001"
+					}
+
+					newTriggerName := fmt.Sprintf("webhook_%s", trigger.ID)
+					trigger.Parameters[0].Value = fmt.Sprintf("%s/api/v1/hooks/%s", baseUrl, newTriggerName)
+					trigger.Parameters[1].Value = newTriggerName
+				}
 			}
 		} else if trigger.TriggerType == "USERINPUT" {
 			// E.g. check email
-			log.Printf("[INFO] Validating USERINPUT during execution")
+			log.Printf("[INFO] Validating USERINPUT during SAVING")
 			sms := ""
 			email := ""
 			triggerType := ""
@@ -2572,25 +2609,26 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Started getting the single apps, but if it's weird, this is faster
 	// 1. Check workflow.Start
 	// 2. Check if any node has "isStartnode"
-	if len(workflow.Actions) > 0 {
-		index := -1
-		for indexFound, action := range workflow.Actions {
-			//log.Println("Apps set done")
-			if workflow.Start == action.ID {
-				index = indexFound
-			}
-		}
+	//if len(workflow.Actions) > 0 {
+	//	index := -1
+	//	for indexFound, action := range workflow.Actions {
+	//		//log.Println("Apps set done")
+	//		if workflow.Start == action.ID {
+	//			index = indexFound
+	//		}
+	//	}
 
-		if index >= 0 {
-			workflow.Actions[0].IsStartNode = true
-		} else {
-			if workflow.PreviouslySaved {
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to set a startnode."}`)))
-				return
-			}
-		}
-	}
+	//	if index >= 0 {
+	//		workflow.Actions[0].IsStartNode = true
+	//	} else {
+	//		log.Printf("[WARNING] Couldn't find startnode %s!", workflow.Start)
+	//		if workflow.PreviouslySaved {
+	//			resp.WriteHeader(401)
+	//			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to set a startnode."}`)))
+	//			return
+	//		}
+	//	}
+	//}
 
 	/*
 		allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
@@ -2700,7 +2738,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				// Append with errors
 				newActions = append(newActions, action)
-				log.Printf("App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
+				log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
 				//resp.WriteHeader(401)
 				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App %s doesn't exist"}`, action.AppName)))
 				//return
@@ -2947,9 +2985,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.Actions = newActions
 	workflow.IsValid = true
 
-	// FIXME: Is this too drastic? May lead to issues in the future.
+	// TBD: Is this too drastic? May lead to issues in the future.
 	if workflow.OrgId != user.ActiveOrg.Id {
-		log.Printf("[WARNING] Editing workflow to be owned by %s", user.ActiveOrg.Id)
+		log.Printf("[WARNING] Editing workflow to be owned by org %s", user.ActiveOrg.Id)
 		workflow.OrgId = user.ActiveOrg.Id
 		workflow.ExecutingOrg = user.ActiveOrg
 		workflow.Org = append(workflow.Org, user.ActiveOrg)
@@ -3906,7 +3944,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	ctx := appengine.NewContext(request)
+	ctx := getContext(request)
 	app, err := GetApp(ctx, fileId, user)
 	if err != nil {
 		log.Printf("Error getting app %s: %s", app.Name, err)
@@ -3924,6 +3962,13 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+	}
+
+	if app.Public || app.Sharing {
+		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed.")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Stop sharing it first, then delete it."}`))
+		return
 	}
 
 	// Not really deleting it, just removing from user cache

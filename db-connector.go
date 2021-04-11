@@ -870,11 +870,6 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		user = fixUserOrg(ctx, user)
 	}
 
-	// clear session_token and API_token for user
-	//parsedKey := strings.ToLower(user.Username)
-	//if project.Environment != "cloud" {
-	//}
-
 	k := datastore.NameKey("Users", parsedKey, nil)
 	if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
 		log.Printf("[WARNING] Error updating user: %s", err)
