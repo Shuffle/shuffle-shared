@@ -3964,8 +3964,8 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if app.Public || app.Sharing {
-		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed.")
+	if (app.Public || app.Sharing) && project.Environment == "cloud" {
+		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed. Public: %#v, Sharing: %#v", app.Name, app.Public, app.Sharing)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Stop sharing it first, then delete it."}`))
 		return
@@ -5050,4 +5050,677 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(appdata)
+}
+
+func HandleLogin(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Gets a struct of Username, password
+	data, err := parseLoginParameters(resp, request)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	log.Printf("[INFO] Handling login of %s", data.Username)
+
+	data.Username = strings.ToLower(data.Username)
+	err = checkUsername(data.Username)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	ctx := getContext(request)
+	users, err := FindUser(ctx, data.Username)
+	if err != nil && len(users) == 0 {
+		log.Printf("[WARNING] Failed getting user %s during login", data.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		return
+	}
+
+	userdata := User{}
+	for _, user := range users {
+		if user.ActiveOrg.Id != "" {
+			userdata = user
+			break
+		}
+	}
+
+	if userdata.Id == "" {
+		log.Printf(`[WARNING] Username %s isn't valid. Amount of users checked: %d`, data.Username, len(users))
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error: Couldn't find a user for username %s"}`, data.Username)))
+		return
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(userdata.Password), []byte(data.Password))
+	if err != nil {
+		log.Printf("[WARNING] Password for %s is incorrect: %s", data.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		return
+	}
+
+	/*
+		// FIXME: Reenable activation?
+			if !userdata.Active {
+				log.Printf("%s is not active, but tried to login. Error: %v", data.Username, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "This user is deactivated"}`))
+				return
+			}
+	*/
+
+	loginData := `{"success": true}`
+	if len(userdata.Session) != 0 {
+		log.Println("[INFO] User session exists - resetting session")
+		expiration := time.Now().Add(3600 * time.Second)
+
+		http.SetCookie(resp, &http.Cookie{
+			Name:    "session_token",
+			Value:   userdata.Session,
+			Expires: expiration,
+		})
+
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, userdata.Session, expiration.Unix())
+		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
+
+		err = SetSession(ctx, userdata, userdata.Session)
+		if err != nil {
+			log.Printf("Error adding session to database: %s", err)
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(loginData))
+
+		GetPrioritizedApps(ctx, userdata)
+		return
+	} else {
+		log.Printf("[INFO] User session is empty - create one!")
+
+		sessionToken := uuid.NewV4().String()
+		expiration := time.Now().Add(3600 * time.Second)
+		http.SetCookie(resp, &http.Cookie{
+			Name:    "session_token",
+			Value:   sessionToken,
+			Expires: expiration,
+		})
+
+		// ADD TO DATABASE
+		err = SetSession(ctx, userdata, sessionToken)
+		if err != nil {
+			log.Printf("Error adding session to database: %s", err)
+		}
+
+		userdata.Session = sessionToken
+		err = SetUser(ctx, &userdata, true)
+		if err != nil {
+			log.Printf("Failed updating user when setting session: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
+	}
+
+	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(loginData))
+}
+
+func parseLoginParameters(resp http.ResponseWriter, request *http.Request) (loginStruct, error) {
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		return loginStruct{}, err
+	}
+
+	var t loginStruct
+
+	err = json.Unmarshal(body, &t)
+	if err != nil {
+		return loginStruct{}, err
+	}
+
+	return t, nil
+}
+
+func checkUsername(Username string) error {
+	// Stupid first check of email loool
+	//if !strings.Contains(Username, "@") || !strings.Contains(Username, ".") {
+	//	return errors.New("Invalid Username")
+	//}
+
+	if len(Username) < 3 {
+		return errors.New("Minimum Username length is 3")
+	}
+
+	return nil
+}
+
+func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
+
+	if actionResult.Action.ID == "" {
+		log.Printf("[ERROR] Failed handling EMPTY action %#v", actionResult)
+		return &workflowExecution, true, err
+	}
+
+	//log.Printf("ACTIONRESULT: %#v", actionResult)
+
+	dbSave := false
+	_, _, _, _, visited, executed, nextActions, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
+
+	if len(actionResult.Action.ExecutionVariable.Name) > 0 {
+		actionResult.Action.ExecutionVariable.Value = actionResult.Result
+
+		foundIndex := -1
+		for i, executionVariable := range workflowExecution.ExecutionVariables {
+			if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+				foundIndex = i
+				break
+			}
+		}
+
+		if foundIndex >= 0 {
+			workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+		} else {
+			workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+		}
+	}
+
+	actionResult.Action = Action{
+		AppName:           actionResult.Action.AppName,
+		AppVersion:        actionResult.Action.AppVersion,
+		Label:             actionResult.Action.Label,
+		Name:              actionResult.Action.Name,
+		ID:                actionResult.Action.ID,
+		Parameters:        actionResult.Action.Parameters,
+		ExecutionVariable: actionResult.Action.ExecutionVariable,
+	}
+
+	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
+		newResults := []ActionResult{}
+		childNodes := []string{}
+		if workflowExecution.Workflow.Configuration.ExitOnError {
+			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Should set workflowExecution and exit all running functions", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
+			workflowExecution.Status = actionResult.Status
+			workflowExecution.LastNode = actionResult.Action.ID
+			// Find underlying nodes and add them
+		} else {
+			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
+			// Finds ALL childnodes to set them to SKIPPED
+			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID)
+			// Remove duplicates
+			//log.Printf("CHILD NODES: %d", len(childNodes))
+			for _, nodeId := range childNodes {
+				if nodeId == actionResult.Action.ID {
+					continue
+				}
+
+				// 1. Find the action itself
+				// 2. Create an actionresult
+				curAction := Action{ID: ""}
+				for _, action := range workflowExecution.Workflow.Actions {
+					if action.ID == nodeId {
+						curAction = action
+						break
+					}
+				}
+
+				if len(curAction.ID) == 0 {
+					log.Printf("Couldn't find subnode %s", nodeId)
+					continue
+				}
+
+				resultExists := false
+				for _, result := range workflowExecution.Results {
+					if result.Action.ID == curAction.ID {
+						resultExists = true
+						break
+					}
+				}
+
+				if !resultExists {
+					// Check parents are done here. Only add it IF all parents are skipped
+					skipNodeAdd := false
+					for _, branch := range workflowExecution.Workflow.Branches {
+						if branch.DestinationID == nodeId {
+							// If the branch's source node is NOT in childNodes, it's not a skipped parent
+							sourceNodeFound := false
+							for _, item := range childNodes {
+								if item == branch.SourceID {
+									sourceNodeFound = true
+									break
+								}
+							}
+
+							if !sourceNodeFound {
+								// FIXME: Shouldn't add skip for child nodes of these nodes. Check if this node is parent of upcoming nodes.
+								log.Printf("\n\n NOT setting node %s to SKIPPED", nodeId)
+								skipNodeAdd = true
+
+								if !ArrayContains(visited, nodeId) && !ArrayContains(executed, nodeId) {
+									nextActions = append(nextActions, nodeId)
+									log.Printf("[INFO] SHOULD EXECUTE NODE %s. Next actions: %s", nodeId, nextActions)
+								}
+								break
+							}
+						}
+					}
+
+					if !skipNodeAdd {
+						newResult := ActionResult{
+							Action:        curAction,
+							ExecutionId:   actionResult.ExecutionId,
+							Authorization: actionResult.Authorization,
+							Result:        "Skipped because of previous node",
+							StartedAt:     0,
+							CompletedAt:   0,
+							Status:        "SKIPPED",
+						}
+
+						newResults = append(newResults, newResult)
+					} else {
+						//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
+						//var visited []string
+						//var executed []string
+						//var nextActions []string
+					}
+				}
+			}
+		}
+
+		// Cleans up aborted, and always gives a result
+		lastResult := ""
+		// type ActionResult struct {
+		for _, result := range workflowExecution.Results {
+			if actionResult.Action.ID == result.Action.ID {
+				continue
+			}
+
+			if result.Status == "EXECUTING" {
+				result.Status = actionResult.Status
+				result.Result = "Aborted because of error in another node (2)"
+			}
+
+			if len(result.Result) > 0 {
+				lastResult = result.Result
+			}
+
+			newResults = append(newResults, result)
+		}
+
+		workflowExecution.Result = lastResult
+		workflowExecution.Results = newResults
+	}
+
+	// FIXME rebuild to be like this or something
+	// workflowExecution/ExecutionId/Nodes/NodeId
+	// Find the appropriate action
+	if len(workflowExecution.Results) > 0 {
+		// FIXME
+		skip := false
+		found := false
+		outerindex := 0
+		for index, item := range workflowExecution.Results {
+			if item.Action.ID == actionResult.Action.ID {
+				found = true
+				if item.Status == actionResult.Status {
+					skip = true
+				}
+
+				outerindex = index
+				break
+			}
+		}
+
+		if skip {
+			//log.Printf("Both are %s. Skipping this node", item.Status)
+		} else if found {
+			// If result exists and execution variable exists, update execution value
+			//log.Printf("Exec var backend: %s", workflowExecution.Results[outerindex].Action.ExecutionVariable.Name)
+			actionVarName := workflowExecution.Results[outerindex].Action.ExecutionVariable.Name
+			// Finds potential execution arguments
+			if len(actionVarName) > 0 {
+				log.Printf("EXECUTION VARIABLE LOCAL: %s", actionVarName)
+				for index, execvar := range workflowExecution.ExecutionVariables {
+					if execvar.Name == actionVarName {
+						// Sets the value for the variable
+						workflowExecution.ExecutionVariables[index].Value = actionResult.Result
+						break
+					}
+				}
+			}
+
+			log.Printf("[INFO] Updating %s in workflow %s from %s to %s", actionResult.Action.ID, workflowExecution.ExecutionId, workflowExecution.Results[outerindex].Status, actionResult.Status)
+			workflowExecution.Results[outerindex] = actionResult
+		} else {
+			log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		}
+	} else {
+		log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
+		workflowExecution.Results = append(workflowExecution.Results, actionResult)
+	}
+
+	// FIXME: Have a check for skippednodes and their parents
+	/*
+		for resultIndex, result := range workflowExecution.Results {
+			if result.Status != "SKIPPED" {
+				continue
+			}
+
+			// Checks if all parents are skipped or failed. Otherwise removes them from the results
+			for _, branch := range workflowExecution.Workflow.Branches {
+				if branch.DestinationID == result.Action.ID {
+					for _, subresult := range workflowExecution.Results {
+						if subresult.Action.ID == branch.SourceID {
+							if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
+								log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
+								log.Printf("Should remove resultIndex: %d", resultIndex)
+
+								workflowExecution.Results = append(workflowExecution.Results[:resultIndex], workflowExecution.Results[resultIndex+1:]...)
+
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	*/
+
+	extraInputs := 0
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.Name == "User Input" && trigger.AppName == "User Input" {
+			extraInputs += 1
+		} else if trigger.Name == "Shuffle Workflow" && trigger.AppName == "Shuffle Workflow" {
+			extraInputs += 1
+		}
+	}
+
+	//log.Printf("EXTRA: %d", extraInputs)
+	//log.Printf("LENGTH: %d - %d", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
+
+	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
+		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
+		finished := true
+		lastResult := ""
+
+		// Doesn't have to be SUCCESS and FINISHED everywhere anymore.
+		skippedNodes := false
+		for _, result := range workflowExecution.Results {
+			if result.Status == "EXECUTING" {
+				finished = false
+				break
+			}
+
+			// FIXME: Check if ALL parents are skipped or if its just one. Otherwise execute it
+			if result.Status == "SKIPPED" {
+				skippedNodes = true
+
+				// Checks if all parents are skipped or failed. Otherwise removes them from the results
+				for _, branch := range workflowExecution.Workflow.Branches {
+					if branch.DestinationID == result.Action.ID {
+						for _, subresult := range workflowExecution.Results {
+							if subresult.Action.ID == branch.SourceID {
+								if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
+									//log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
+									//log.Printf("Should remove resultIndex: %d", resultIndex)
+									finished = false
+									break
+								}
+							}
+						}
+					}
+
+					if !finished {
+						break
+					}
+				}
+			}
+
+			lastResult = result.Result
+		}
+
+		// FIXME: Handle skip nodes - change status?
+		_ = skippedNodes
+
+		if finished {
+			dbSave = true
+			log.Printf("[INFO] Execution of %s finished.", workflowExecution.ExecutionId)
+			//log.Println("Might be finished based on length of results and everything being SUCCESS or FINISHED - VERIFY THIS. Setting status to finished.")
+
+			workflowExecution.Result = lastResult
+			workflowExecution.Status = "FINISHED"
+			workflowExecution.CompletedAt = int64(time.Now().Unix())
+			if workflowExecution.LastNode == "" {
+				workflowExecution.LastNode = actionResult.Action.ID
+			}
+
+		}
+	}
+
+	if actionResult.Status == "SKIPPED" {
+		//unfinishedNodes := []string{}
+		childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
+		//log.Printf("childnodes: %d", len(childNodes)
+
+		appendBadResults := true
+		appendResults := []ActionResult{}
+		for _, nodeId := range childNodes {
+			if nodeId == actionResult.Action.ID {
+				continue
+			}
+
+			curAction := Action{ID: ""}
+			for _, action := range workflowExecution.Workflow.Actions {
+				if action.ID == nodeId {
+					curAction = action
+					break
+				}
+			}
+
+			if len(curAction.ID) == 0 {
+				log.Printf("Couldn't find subnode (0) %s as action. Checking triggers.", nodeId)
+				for _, trigger := range workflowExecution.Workflow.Triggers {
+					//if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+					if trigger.ID == nodeId {
+						curAction = Action{
+							ID:      trigger.ID,
+							AppName: trigger.AppName,
+							Name:    trigger.AppName,
+							Label:   trigger.Label,
+						}
+
+						if trigger.AppName == "Shuffle Workflow" {
+							curAction.AppName = "shuffle-subflow"
+						}
+						break
+					}
+				}
+
+				if len(curAction.ID) == 0 {
+					log.Printf("Couldn't find subnode (1) %s", nodeId)
+					continue
+				}
+			}
+
+			resultExists := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.ID == curAction.ID {
+					resultExists = true
+					break
+				}
+			}
+
+			if !resultExists {
+				// Check parents are done here. Only add it IF all parents are skipped
+				skipNodeAdd := false
+				for _, branch := range workflowExecution.Workflow.Branches {
+					if branch.SourceID == actionResult.Action.ID {
+						// Check if the node has more destinations
+						ids := []string{}
+						for _, innerbranch := range workflowExecution.Workflow.Branches {
+							if innerbranch.DestinationID == branch.DestinationID {
+								ids = append(ids, innerbranch.SourceID)
+							}
+						}
+
+						foundIds := []string{actionResult.Action.ID}
+						foundSuccess := []string{}
+						foundSkipped := []string{actionResult.Action.ID}
+						if len(ids) > 1 {
+							for _, thisId := range ids {
+								if thisId == actionResult.Action.ID {
+									continue
+								}
+
+								for _, result := range workflowExecution.Results {
+									if result.Action.ID == thisId {
+										log.Printf("Found result for %s (%s): %s", result.Action.Label, thisId, result.Status)
+
+										foundIds = append(foundIds, thisId)
+										if result.Status == "SUCCESS" {
+											foundSuccess = append(foundSuccess, thisId)
+										} else {
+											foundSkipped = append(foundSkipped, thisId)
+										}
+									}
+								}
+							}
+						}
+
+						//log.Printf("Base length: %d, other length: %d, skipped: %d, success: %d", len(ids), len(foundIds), len(foundSkipped), len(foundSuccess))
+						// Appending skipped IF:
+						// 1. All sources have results
+						if (len(foundSkipped) == len(foundIds)) && len(foundSkipped) == len(ids) {
+							appendBadResults = true
+						} else {
+							appendBadResults = false
+						}
+
+						//if len(foundIds) == len(ids) {
+						//	// Means you can continue
+						//	appendBadResults = false
+						//	break
+						//}
+					}
+				}
+
+				if !appendBadResults {
+					break
+				}
+
+				if !skipNodeAdd {
+					newResult := ActionResult{
+						Action:        curAction,
+						ExecutionId:   actionResult.ExecutionId,
+						Authorization: actionResult.Authorization,
+						Result:        "Skipped because of previous node",
+						StartedAt:     0,
+						CompletedAt:   0,
+						Status:        "SKIPPED",
+					}
+
+					appendResults = append(appendResults, newResult)
+				} else {
+					//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
+					//var visited []string
+					//var executed []string
+					//var nextActions []string
+				}
+			}
+		}
+
+		//log.Printf("Append skipped results: %#v", appendBadResults)
+		if appendBadResults {
+			for _, res := range appendResults {
+				workflowExecution.Results = append(workflowExecution.Results, res)
+			}
+		}
+	}
+
+	//GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
+	tmpJson, err := json.Marshal(workflowExecution)
+	if err == nil {
+		if len(tmpJson) >= 1048487 {
+			dbSave = true
+			log.Printf("[ERROR] Result length is too long! Need to reduce result size")
+
+			// Result        string `json:"result" datastore:"result,noindex"`
+			// Arbitrary reduction size
+			maxSize := 500000
+			newResults := []ActionResult{}
+			for _, item := range workflowExecution.Results {
+				if len(item.Result) > maxSize {
+					item.Result = "[ERROR] Result too large to handle (https://github.com/frikky/shuffle/issues/171)"
+				}
+
+				newResults = append(newResults, item)
+			}
+
+			workflowExecution.Results = newResults
+		}
+	}
+
+	return &workflowExecution, dbSave, err
+}
+
+// Finds the child nodes of a node in execution and returns them
+// Used if e.g. a node in a branch is exited, and all children have to be stopped
+func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string {
+	//log.Printf("\nNODE TO FIX: %s\n\n", nodeId)
+	allChildren := []string{nodeId}
+
+	// 1. Find children of this specific node
+	// 2. Find the children of those nodes etc.
+	for _, branch := range workflowExecution.Workflow.Branches {
+		if branch.SourceID == nodeId {
+			//log.Printf("Children: %s", branch.DestinationID)
+			allChildren = append(allChildren, branch.DestinationID)
+
+			childNodes := FindChildNodes(workflowExecution, branch.DestinationID)
+			for _, bottomChild := range childNodes {
+				found := false
+				for _, topChild := range allChildren {
+					if topChild == bottomChild {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					allChildren = append(allChildren, bottomChild)
+				}
+			}
+		}
+	}
+
+	// Remove potential duplicates
+	newNodes := []string{}
+	for _, tmpnode := range allChildren {
+		found := false
+		for _, newnode := range newNodes {
+			if newnode == tmpnode {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			newNodes = append(newNodes, tmpnode)
+		}
+	}
+
+	return newNodes
 }

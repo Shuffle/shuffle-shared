@@ -812,3 +812,19 @@ type CloudSyncJob struct {
 	FifthItem     string `json:"fifth_item" datastore:"fifth_item"`
 	Created       string `json:"created" datastore:"created"`
 }
+
+type loginStruct struct {
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+type ExecutionVariableWrapper struct {
+	StartNode    string              `json:"startnode"`
+	Children     map[string][]string `json:"children"`
+	Parents      map[string][]string `json:"parents""`
+	Visited      []string            `json:"visited"`
+	Executed     []string            `json:"executed"`
+	NextActions  []string            `json:"nextActions"`
+	Environments []string            `json:"environments"`
+	Extra        int                 `json:"extra"`
+}

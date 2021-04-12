@@ -206,7 +206,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			log.Printf("[WARNING] Failed updating execution cache: %s", err)
 		}
 	} else {
-		log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
+		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
 	}
 
 	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
@@ -223,17 +223,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	return nil
-}
-
-type ExecutionVariableWrapper struct {
-	StartNode    string              `json:"startnode"`
-	Children     map[string][]string `json:"children"`
-	Parents      map[string][]string `json:"parents""`
-	Visited      []string            `json:"visited"`
-	Executed     []string            `json:"executed"`
-	NextActions  []string            `json:"nextActions"`
-	Environments []string            `json:"environments"`
-	Extra        int                 `json:"extra"`
 }
 
 // Initializes an execution's extra variables
