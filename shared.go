@@ -3188,7 +3188,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if userInfo.Role != "admin" {
-			log.Printf("%s tried and failed to change apikey for %s", userInfo.Username, t.UserId)
+			log.Printf("[INFO] %s tried and failed to change apikey for %s", userInfo.Username, t.UserId)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change others' apikey"}`)))
 			return
@@ -3196,7 +3196,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 
 		foundUser, err := GetUser(ctx, t.UserId)
 		if err != nil {
-			log.Printf("Can't find user %s (apikey gen): %s", t.UserId, err)
+			log.Printf("[INFO] Can't find user %s (apikey gen): %s", t.UserId, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 			return
