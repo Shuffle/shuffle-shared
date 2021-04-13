@@ -5363,153 +5363,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		workflowExecution.Results = newResults
 	}
 
-	// FIXME rebuild to be like this or something
-	// workflowExecution/ExecutionId/Nodes/NodeId
-	// Find the appropriate action
-	if len(workflowExecution.Results) > 0 {
-		// FIXME
-		skip := false
-		found := false
-		outerindex := 0
-		for index, item := range workflowExecution.Results {
-			if item.Action.ID == actionResult.Action.ID {
-				found = true
-				if item.Status == actionResult.Status {
-					skip = true
-				}
-
-				outerindex = index
-				break
-			}
-		}
-
-		if skip {
-			//log.Printf("Both are %s. Skipping this node", item.Status)
-		} else if found {
-			// If result exists and execution variable exists, update execution value
-			//log.Printf("Exec var backend: %s", workflowExecution.Results[outerindex].Action.ExecutionVariable.Name)
-			actionVarName := workflowExecution.Results[outerindex].Action.ExecutionVariable.Name
-			// Finds potential execution arguments
-			if len(actionVarName) > 0 {
-				log.Printf("EXECUTION VARIABLE LOCAL: %s", actionVarName)
-				for index, execvar := range workflowExecution.ExecutionVariables {
-					if execvar.Name == actionVarName {
-						// Sets the value for the variable
-						workflowExecution.ExecutionVariables[index].Value = actionResult.Result
-						break
-					}
-				}
-			}
-
-			log.Printf("[INFO] Updating %s in workflow %s from %s to %s", actionResult.Action.ID, workflowExecution.ExecutionId, workflowExecution.Results[outerindex].Status, actionResult.Status)
-			workflowExecution.Results[outerindex] = actionResult
-		} else {
-			log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
-			workflowExecution.Results = append(workflowExecution.Results, actionResult)
-		}
-	} else {
-		log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
-		workflowExecution.Results = append(workflowExecution.Results, actionResult)
-	}
-
-	// FIXME: Have a check for skippednodes and their parents
-	/*
-		for resultIndex, result := range workflowExecution.Results {
-			if result.Status != "SKIPPED" {
-				continue
-			}
-
-			// Checks if all parents are skipped or failed. Otherwise removes them from the results
-			for _, branch := range workflowExecution.Workflow.Branches {
-				if branch.DestinationID == result.Action.ID {
-					for _, subresult := range workflowExecution.Results {
-						if subresult.Action.ID == branch.SourceID {
-							if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
-								log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
-								log.Printf("Should remove resultIndex: %d", resultIndex)
-
-								workflowExecution.Results = append(workflowExecution.Results[:resultIndex], workflowExecution.Results[resultIndex+1:]...)
-
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-	*/
-
-	extraInputs := 0
-	for _, trigger := range workflowExecution.Workflow.Triggers {
-		if trigger.Name == "User Input" && trigger.AppName == "User Input" {
-			extraInputs += 1
-		} else if trigger.Name == "Shuffle Workflow" && trigger.AppName == "Shuffle Workflow" {
-			extraInputs += 1
-		}
-	}
-
-	//log.Printf("EXTRA: %d", extraInputs)
-	//log.Printf("LENGTH: %d - %d", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
-
-	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
-		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
-		finished := true
-		lastResult := ""
-
-		// Doesn't have to be SUCCESS and FINISHED everywhere anymore.
-		skippedNodes := false
-		for _, result := range workflowExecution.Results {
-			if result.Status == "EXECUTING" {
-				finished = false
-				break
-			}
-
-			// FIXME: Check if ALL parents are skipped or if its just one. Otherwise execute it
-			if result.Status == "SKIPPED" {
-				skippedNodes = true
-
-				// Checks if all parents are skipped or failed. Otherwise removes them from the results
-				for _, branch := range workflowExecution.Workflow.Branches {
-					if branch.DestinationID == result.Action.ID {
-						for _, subresult := range workflowExecution.Results {
-							if subresult.Action.ID == branch.SourceID {
-								if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
-									//log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
-									//log.Printf("Should remove resultIndex: %d", resultIndex)
-									finished = false
-									break
-								}
-							}
-						}
-					}
-
-					if !finished {
-						break
-					}
-				}
-			}
-
-			lastResult = result.Result
-		}
-
-		// FIXME: Handle skip nodes - change status?
-		_ = skippedNodes
-
-		if finished {
-			dbSave = true
-			log.Printf("[INFO] Execution of %s finished.", workflowExecution.ExecutionId)
-			//log.Println("Might be finished based on length of results and everything being SUCCESS or FINISHED - VERIFY THIS. Setting status to finished.")
-
-			workflowExecution.Result = lastResult
-			workflowExecution.Status = "FINISHED"
-			workflowExecution.CompletedAt = int64(time.Now().Unix())
-			if workflowExecution.LastNode == "" {
-				workflowExecution.LastNode = actionResult.Action.ID
-			}
-
-		}
-	}
-
 	if actionResult.Status == "SKIPPED" {
 		//unfinishedNodes := []string{}
 		childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
@@ -5644,9 +5497,154 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		//log.Printf("Append skipped results: %#v", appendBadResults)
 		if appendBadResults {
+			dbSave = true
 			for _, res := range appendResults {
 				workflowExecution.Results = append(workflowExecution.Results, res)
 			}
+		}
+	}
+
+	// FIXME rebuild to be like this or something
+	// workflowExecution/ExecutionId/Nodes/NodeId
+	// Find the appropriate action
+	if len(workflowExecution.Results) > 0 {
+		// FIXME
+		skip := false
+		found := false
+		outerindex := 0
+		for index, item := range workflowExecution.Results {
+			if item.Action.ID == actionResult.Action.ID {
+				found = true
+				if item.Status == actionResult.Status {
+					skip = true
+				}
+
+				outerindex = index
+				break
+			}
+		}
+
+		if skip {
+			//log.Printf("Both are %s. Skipping this node", item.Status)
+		} else if found {
+			// If result exists and execution variable exists, update execution value
+			//log.Printf("Exec var backend: %s", workflowExecution.Results[outerindex].Action.ExecutionVariable.Name)
+			actionVarName := workflowExecution.Results[outerindex].Action.ExecutionVariable.Name
+			// Finds potential execution arguments
+			if len(actionVarName) > 0 {
+				log.Printf("EXECUTION VARIABLE LOCAL: %s", actionVarName)
+				for index, execvar := range workflowExecution.ExecutionVariables {
+					if execvar.Name == actionVarName {
+						// Sets the value for the variable
+						workflowExecution.ExecutionVariables[index].Value = actionResult.Result
+						break
+					}
+				}
+			}
+
+			log.Printf("[INFO] Updating %s in workflow %s from %s to %s", actionResult.Action.ID, workflowExecution.ExecutionId, workflowExecution.Results[outerindex].Status, actionResult.Status)
+			workflowExecution.Results[outerindex] = actionResult
+		} else {
+			log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		}
+	} else {
+		log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
+		workflowExecution.Results = append(workflowExecution.Results, actionResult)
+	}
+
+	// FIXME: Have a check for skippednodes and their parents
+	/*
+		for resultIndex, result := range workflowExecution.Results {
+			if result.Status != "SKIPPED" {
+				continue
+			}
+
+			// Checks if all parents are skipped or failed. Otherwise removes them from the results
+			for _, branch := range workflowExecution.Workflow.Branches {
+				if branch.DestinationID == result.Action.ID {
+					for _, subresult := range workflowExecution.Results {
+						if subresult.Action.ID == branch.SourceID {
+							if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
+								log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
+								log.Printf("Should remove resultIndex: %d", resultIndex)
+
+								workflowExecution.Results = append(workflowExecution.Results[:resultIndex], workflowExecution.Results[resultIndex+1:]...)
+
+								break
+							}
+						}
+					}
+				}
+			}
+		}
+	*/
+
+	extraInputs := 0
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.Name == "User Input" && trigger.AppName == "User Input" {
+			extraInputs += 1
+		} else if trigger.Name == "Shuffle Workflow" && trigger.AppName == "Shuffle Workflow" {
+			extraInputs += 1
+		}
+	}
+
+	//log.Printf("EXTRA: %d", extraInputs)
+	//log.Printf("LENGTH: %d - %d", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
+	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
+		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
+		finished := true
+		lastResult := ""
+
+		// Doesn't have to be SUCCESS and FINISHED everywhere anymore.
+		//skippedNodes := false
+		for _, result := range workflowExecution.Results {
+			if result.Status == "EXECUTING" {
+				finished = false
+				break
+			}
+
+			// FIXME: Check if ALL parents are skipped or if its just one. Otherwise execute it
+			//if result.Status == "SKIPPED" {
+			//	skippedNodes = true
+
+			//	// Checks if all parents are skipped or failed. Otherwise removes them from the results
+			//	for _, branch := range workflowExecution.Workflow.Branches {
+			//		if branch.DestinationID == result.Action.ID {
+			//			for _, subresult := range workflowExecution.Results {
+			//				if subresult.Action.ID == branch.SourceID {
+			//					if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
+			//						//log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
+			//						//log.Printf("Should remove resultIndex: %d", resultIndex)
+			//						finished = false
+			//						break
+			//					}
+			//				}
+			//			}
+			//		}
+
+			//		if !finished {
+			//			break
+			//		}
+			//	}
+			//}
+
+			lastResult = result.Result
+		}
+
+		log.Printf("Finished? %#v", finished)
+		if finished {
+			dbSave = true
+			log.Printf("[INFO] Execution of %s finished.", workflowExecution.ExecutionId)
+			//log.Println("Might be finished based on length of results and everything being SUCCESS or FINISHED - VERIFY THIS. Setting status to finished.")
+
+			workflowExecution.Result = lastResult
+			workflowExecution.Status = "FINISHED"
+			workflowExecution.CompletedAt = int64(time.Now().Unix())
+			if workflowExecution.LastNode == "" {
+				workflowExecution.LastNode = actionResult.Action.ID
+			}
+
 		}
 	}
 

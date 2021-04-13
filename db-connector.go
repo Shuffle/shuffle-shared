@@ -165,7 +165,6 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 }
 
 func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
-	// FIXME - this doesn't work
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
 	client, err := datastore.NewClient(ctx, projectID)
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile("test"))
@@ -198,20 +197,24 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
-	if err != nil {
-		log.Printf("[WARNING] Failed marshalling execution for cache: %s", err)
+	if err == nil {
 
 		err = SetCache(ctx, cacheKey, executionData)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating execution cache: %s", err)
+			log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
+			dbSave = true
+		} else {
+			//log.Printf("\n\n\n[INFO] Set cache for %s with length %d", cacheKey, len(executionData))
+
 		}
 	} else {
+		log.Printf("[WARNING] Failed marshalling execution for cache: %s", err)
 		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
 	}
 
 	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
-		//log.Printf("[WARNING] SHOULD skip DB saving for execution")
+		log.Printf("[WARNING] SHOULD skip DB saving for execution")
 		return nil
 	}
 
@@ -388,9 +391,11 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				return workflowExecution, nil
+			} else {
+				log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
 			}
 		} else {
-			//log.Printf("[INFO] Failed getting cache for workflow execution: %s", err)
+			log.Printf("[INFO] Failed getting cache for workflow execution: %s", err)
 		}
 	}
 
