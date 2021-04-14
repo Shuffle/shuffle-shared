@@ -967,8 +967,14 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(version.SwaggerVersion) > 0 && len(version.Swagger) == 0 {
+		version.OpenAPI = version.SwaggerVersion
+		if strings.Count(version.OpenAPI, ".") == 1 {
+			version.OpenAPI = fmt.Sprintf("%s.0", version.OpenAPI)
+		}
+
 		version.Swagger = version.SwaggerVersion
 	}
+
 	log.Printf("[INFO] Version: %#v", version)
 	log.Printf("[INFO] OpenAPI: %s", version.OpenAPI)
 
@@ -5139,8 +5145,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		resp.WriteHeader(200)
 		resp.Write([]byte(loginData))
-
-		GetPrioritizedApps(ctx, userdata)
 		return
 	} else {
 		log.Printf("[INFO] User session is empty - create one!")

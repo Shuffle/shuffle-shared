@@ -66,7 +66,10 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 					keyname = fmt.Sprintf("%s_%d", name, keyCount)
 				}
 
-				log.Printf("[INFO] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
+				// Random~ high number
+				if len(totalData) > 10062147 {
+					log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
+				}
 				return totalData, nil
 			} else {
 				return item.Value, nil
@@ -590,7 +593,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		user.ResetReference = ""
 		user.PrivateApps = []WorkflowApp{}
 		user.VerificationToken = ""
-		user.ApiKey = ""
+		//user.ApiKey = ""
 		user.Executions = ExecutionInfo{}
 		newUsers = append(newUsers, user)
 	}

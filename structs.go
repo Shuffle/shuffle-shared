@@ -262,6 +262,7 @@ type User struct {
 	CreationTime      int64         `datastore:"creation_time" json:"creation_time"`
 	ActiveOrg         OrgMini       `json:"active_org" datastore:"active_org"`
 	Active            bool          `datastore:"active" json:"active"`
+	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
 }
 
 type Session struct {
@@ -485,6 +486,7 @@ type Org struct {
 	Created         int64                 `json:"created" datastore:"created"`
 	Edited          int64                 `json:"edited" datastore:"edited"`
 	Defaults        Defaults              `json:"defaults" datastore:"defaults"`
+	Invites         []string              `json:"invites" datastore:"invites"`
 }
 
 type Defaults struct {
