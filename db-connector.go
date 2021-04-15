@@ -645,7 +645,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			user.ResetReference = ""
 			user.PrivateApps = []WorkflowApp{}
 			user.VerificationToken = ""
-			user.ApiKey = ""
 			user.Executions = ExecutionInfo{}
 			newUsers = append(newUsers, user)
 		}
@@ -1190,11 +1189,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &publicApps)
-			if err == nil {
-				return allApps, nil
-			} else {
+			if err != nil {
 				log.Printf("Failed unmarshaling PUBLIC apps: %s", err)
-				log.Printf("DATALEN: %d", len(cacheData))
 			}
 		} else {
 			log.Printf("[INFO] Failed getting cache for PUBLIC apps: %s", err)
@@ -1215,7 +1211,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						continue
 					}
 
-					log.Printf("[WARNING] No more apps (public)? Breaking: %s.", err)
+					log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
 					break
 				}
 
@@ -1541,7 +1537,12 @@ func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 	nameKey := "workflow"
 	key := datastore.NameKey(nameKey, id, nil)
-	workflow.Edited = int64(time.Now().Unix())
+	timeNow := int64(time.Now().Unix())
+	workflow.Edited = timeNow
+	if workflow.Created == 0 {
+		workflow.Created = timeNow
+	}
+
 	if len(optionalEditedSecondsOffset) > 0 {
 		workflow.Edited += int64(optionalEditedSecondsOffset[0])
 	}

@@ -1384,11 +1384,13 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Getting workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
 	}
 
-	q = q.Order("-edited")
+	//q = q.Order("-edited")
 
 	_, err = project.Dbclient.GetAll(ctx, q, &workflows)
 	if err != nil && len(workflows) == 0 {
+		log.Printf("ERR: %s", err)
 		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+
 			q = q.Limit(36)
 			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
 			if err != nil && len(workflows) == 0 {
@@ -1398,7 +1400,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
-			//log.Printf("IN FAILED CONDITION")
+			log.Printf("IN FAILED CONDITION: %s", err)
 			q = datastore.NewQuery("workflow").Filter("owner =", user.Id)
 			if user.Role == "admin" {
 				q = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id)
@@ -1898,26 +1900,24 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
 	// Generate UUID
 	// Set uuid to apikey in backend (update)
-	apikey := uuid.NewV4()
-	userInfo.ApiKey = apikey.String()
-
+	userInfo.ApiKey = uuid.NewV4().String()
 	err := SetApikey(ctx, userInfo)
 	if err != nil {
-		log.Printf("Failed updating apikey: %s", err)
+		log.Printf("[WARNING] Failed updating apikey: %s", err)
 		return userInfo, err
 	}
 
 	// Updating user
+	log.Printf("[INFO] Adding apikey to user %s", userInfo.Username)
 	err = SetUser(ctx, &userInfo, true)
 	if err != nil {
-		log.Printf("Failed updating user: %s", err)
+		log.Printf("[WARNING] Failed updating users' apikey: %s", err)
 		return userInfo, err
 	}
 
 	return userInfo, nil
 }
 
-// FIXME - add to actual database etc
 func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -2143,8 +2143,17 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-	DeleteCache(ctx, cacheKey)
+	// Cleans up cache for the users
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err == nil {
+		for _, loopUser := range org.Users {
+			cacheKey := fmt.Sprintf("%s_workflows", loopUser.Id)
+			DeleteCache(ctx, cacheKey)
+		}
+	} else {
+		cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+		DeleteCache(ctx, cacheKey)
+	}
 
 	log.Printf("[INFO] Saved new workflow %s with name %s", workflow.ID, workflow.Name)
 
@@ -3168,10 +3177,10 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": ""}`))
 			return
 		}
+
 		userInfo = newUserInfo
 		log.Printf("[INFO] Updated apikey for user %s", userInfo.Username)
 	} else if request.Method == "POST" {
-		log.Printf("[INFO] Handling post for APIKEY gen of user %s!", userInfo.Username)
 		body, err := ioutil.ReadAll(request.Body)
 		if err != nil {
 			log.Println("Failed reading body")
@@ -3192,6 +3201,8 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Missing field: user_id"}`)))
 			return
 		}
+
+		log.Printf("[INFO] Handling post for APIKEY gen FROM user %s. Userchange: %s!", userInfo.Username, t.UserId)
 
 		if userInfo.Role != "admin" {
 			log.Printf("[INFO] %s tried and failed to change apikey for %s", userInfo.Username, t.UserId)
@@ -3215,6 +3226,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 			return
 		}
+
 		foundUser = &newUserInfo
 
 		resp.WriteHeader(200)
@@ -3265,7 +3277,6 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME: Check by org.
 	ctx := getContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
