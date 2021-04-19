@@ -527,6 +527,24 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 			return
 		}
+	} else {
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org %s during app auth: %s", user.ActiveOrg.Id, err)
+		} else {
+			if !ArrayContains(org.ActiveApps, app.ID) {
+				org.ActiveApps = append(org.ActiveApps, app.ID)
+				err = SetOrg(ctx, *org, org.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting app %s for org %s during appauth", org.Id)
+				} else {
+					cacheKey := fmt.Sprintf("apps_%s", user.Id)
+					DeleteCache(ctx, cacheKey)
+				}
+			} else {
+				log.Printf("[INFO] Org %s already has app %s active.", user.ActiveOrg.Id, app.ID)
+			}
+		}
 	}
 
 	// Check if the items are correct
@@ -583,7 +601,6 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	location := strings.Split(request.URL.String(), "/")
-	log.Printf("%#v", location)
 	var fileId string
 	if location[1] == "api" {
 		if len(location) <= 5 {
@@ -614,8 +631,6 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	// 1. Get the auth
 	// 2. Loop the workflows (.Usage) and set them to have errors
 	// 3. Loop the nodes in workflows and do the same
-
-	log.Printf("ID: %s", fileId)
 	nameKey := "workflowappauth"
 	err = DeleteKey(ctx, nameKey, fileId)
 	if err != nil {
@@ -1377,55 +1392,12 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
 	}
 
-	// With user, do a search for workflows with user or user's org attached
-	q := datastore.NewQuery("workflow").Filter("owner =", user.Id)
-	if user.Role == "admin" {
-		q = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id)
-		log.Printf("[INFO] Getting workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
-	}
-
-	//q = q.Order("-edited")
-
-	_, err = project.Dbclient.GetAll(ctx, q, &workflows)
-	if err != nil && len(workflows) == 0 {
-		log.Printf("ERR: %s", err)
-		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-
-			q = q.Limit(36)
-			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
-			if err != nil && len(workflows) == 0 {
-				log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-		} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
-			log.Printf("IN FAILED CONDITION: %s", err)
-			q = datastore.NewQuery("workflow").Filter("owner =", user.Id)
-			if user.Role == "admin" {
-				q = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id)
-				log.Printf("[INFO] Getting workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
-			}
-
-			q.Limit(30)
-			_, err = project.Dbclient.GetAll(ctx, q, &workflows)
-			if err != nil && len(workflows) == 0 {
-				log.Printf("[WARNING] Failed getting workflows for user %s (2): %s", user.Username, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-
-		} else {
-			log.Printf("[WARNING] Failed getting workflows for user %s (1): %s ", user.Username, err)
-			//DeleteKey(ctx, "workflow", "5694357e-8063-4580-8529-301cc72df951")
-
-			//log.Printf("Workflows: %#v", workflows)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	} else {
+	workflows, err = GetAllWorkflowsByQuery(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	if len(workflows) == 0 {
@@ -1457,6 +1429,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		newWorkflows = append(newWorkflows, workflow)
 	}
 
+	//log.Printf("[INFO] Returning %d workflows", len(newWorkflows))
 	newjson, err := json.Marshal(newWorkflows)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -2725,7 +2698,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						// Get the real app
 						for _, item := range app.Versions {
 							if item.Version == action.AppVersion {
-								log.Printf("Should get app %s - %s", item.Version, item.ID)
+								//log.Printf("Should get app %s - %s", item.Version, item.ID)
 
 								tmpApp, err := GetApp(ctx, item.ID, user)
 								if err != nil && tmpApp.ID == "" {
@@ -3814,6 +3787,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+// Only used for onprem :/
 func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {

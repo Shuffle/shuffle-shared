@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/bradfitz/slice"
 	"log"
 	"strings"
 	"time"
@@ -179,12 +180,27 @@ func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 }
 
 func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id string) error {
-	key := datastore.NameKey("workflowapp", id, nil)
+	nameKey := "workflowapp"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	key := datastore.NameKey(nameKey, id, nil)
 
 	// New struct, to not add body, author etc
 	if _, err := project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
 		log.Printf("[WARNING] Error adding workflow app: %s", err)
 		return err
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(workflowapp)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setapp: %s", err)
+			return nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for setapp: %s", err)
+		}
 	}
 
 	return nil
@@ -516,6 +532,140 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	}
 
 	return workflow, nil
+}
+
+func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) {
+	var workflows []Workflow
+	limit := 30
+
+	// Appending the users' workflows
+	log.Printf("[INFO] Getting workflows for user %s (%s)", user.Username, user.Role)
+	query := datastore.NewQuery("workflow").Filter("owner =", user.Id).Limit(limit)
+	//if project.Environment != "cloud" {
+	//	query = query.Order("-edited")
+	//}
+
+	cursorStr := ""
+	for {
+		it := project.Dbclient.Run(ctx, query)
+
+		for {
+			innerWorkflow := Workflow{}
+			_, err := it.Next(&innerWorkflow)
+			if err != nil {
+				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					log.Printf("[INFO] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
+					innerWorkflow.Org = []OrgMini{user.ActiveOrg}
+					err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
+					if err != nil {
+						log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
+					}
+				} else {
+					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					break
+				}
+			}
+
+			workflows = append(workflows, innerWorkflow)
+		}
+
+		if err != iterator.Done {
+			//log.Printf("[INFO] Failed fetching results: %v", err)
+			//break
+		}
+
+		// Get the cursor for the next page of results.
+		nextCursor, err := it.Cursor()
+		if err != nil {
+			log.Printf("Cursorerror: %s", err)
+			break
+		} else {
+			//log.Printf("NEXTCURSOR: %s", nextCursor)
+			nextStr := fmt.Sprintf("%s", nextCursor)
+			if cursorStr == nextStr {
+				break
+			}
+
+			cursorStr = nextStr
+			query = query.Start(nextCursor)
+			//cursorStr = nextCursor
+			//break
+		}
+	}
+
+	// q *datastore.Query
+
+	if user.Role == "admin" {
+		log.Printf("[INFO] Appending workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
+		query = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+		//if project.Environment != "cloud" {
+		//	query = query.Order("-edited")
+		//}
+
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := Workflow{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						log.Printf("[INFO] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
+						innerWorkflow.Org = []OrgMini{user.ActiveOrg}
+						err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
+						if err != nil {
+							log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
+						}
+					} else {
+						//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+						break
+					}
+				}
+
+				found := false
+				for _, loopedWorkflow := range workflows {
+					if loopedWorkflow.ID == innerWorkflow.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					workflows = append(workflows, innerWorkflow)
+				}
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
+			}
+		}
+	}
+
+	slice.Sort(workflows[:], func(i, j int) bool {
+		return workflows[i].Edited > workflows[j].Edited
+	})
+
+	return workflows, nil
 }
 
 func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
@@ -1054,6 +1204,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return GetAllWorkflowApps(ctx, 500)
 	}
 
+	log.Printf("[INFO] Getting apps for user %s with active org %s", user.Username, user.ActiveOrg.Id)
 	allApps := []WorkflowApp{}
 	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
@@ -1080,7 +1231,30 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	cursorStr := ""
 	limit := 100
 	allApps = user.PrivateApps
-	query := datastore.NewQuery("workflowapp").Filter("reference_org =", user.ActiveOrg.Id).Limit(limit)
+	org, orgErr := GetOrg(ctx, user.ActiveOrg.Id)
+	if len(user.PrivateApps) > 0 {
+		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
+		if orgErr == nil {
+			orgChanged := false
+			for _, app := range user.PrivateApps {
+				if !ArrayContains(org.ActiveApps, app.ID) {
+					orgChanged = true
+					org.ActiveApps = append(org.ActiveApps, app.ID)
+				}
+			}
+
+			if orgChanged {
+				err = SetOrg(ctx, *org, org.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting org %s with %d apps: %s", org.Id, len(org.ActiveApps), err)
+				}
+			}
+		}
+	}
+
+	nameKey := "workflowapp"
+
+	query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(limit)
 	for {
 		it := project.Dbclient.Run(ctx, query)
 
@@ -1198,7 +1372,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	if len(publicApps) == 0 {
-		query = datastore.NewQuery("workflowapp").Filter("public =", true).Limit(limit)
+		query = datastore.NewQuery(nameKey).Filter("public =", true).Limit(limit)
 		for {
 			it := project.Dbclient.Run(ctx, query)
 
@@ -1326,6 +1500,33 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	allApps = append(allApps, publicApps...)
+
+	if orgErr == nil && len(org.ActiveApps) > 0 {
+		//log.Printf("[INFO] Should append ORG APPS: %#v", org.ActiveApps)
+
+		allKeys := []*datastore.Key{}
+		for _, appId := range org.ActiveApps {
+			found := false
+			for _, app := range allApps {
+				if app.ID == appId {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				allKeys = append(allKeys, datastore.NameKey(nameKey, appId, nil))
+			}
+		}
+
+		var newApps = make([]WorkflowApp, len(allKeys))
+		err = project.Dbclient.GetMulti(ctx, allKeys, newApps)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org apps: %s", err)
+		}
+
+		allApps = append(allApps, newApps...)
+	}
 
 	if len(allApps) > 0 {
 		newbody, err := json.Marshal(allApps)

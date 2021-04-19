@@ -81,6 +81,7 @@ type WorkflowApp struct {
 	Owner          string              `json:"owner" datastore:"owner" yaml:"owner"`
 	Public         bool                `json:"public" datastore:"public"`
 	ReferenceOrg   string              `json:"reference_org" datastore:"reference_org"`
+	ReferenceUrl   string              `json:"reference_url" datastore:"reference_url"`
 }
 
 type AppVersion struct {
@@ -477,6 +478,7 @@ type Org struct {
 	Users           []User                `json:"users" datastore:"users"`
 	Role            string                `json:"role" datastore:"role"`
 	Roles           []string              `json:"roles" datastore:"roles"`
+	ActiveApps      []string              `json:"active_apps" datastore:"active_apps"`
 	CloudSync       bool                  `json:"cloud_sync" datastore:"CloudSync"`
 	CloudSyncActive bool                  `json:"cloud_sync_active" datastore:"CloudSyncActive"`
 	SyncConfig      SyncConfig            `json:"sync_config" datastore:"sync_config"`
