@@ -628,6 +628,7 @@ type Action struct {
 	Example          string `json:"example,omitempty" datastore:"example,noindex"`
 	AuthNotRequired  bool   `json:"auth_not_required,omitempty" datastore:"auth_not_required" yaml:"auth_not_required"`
 	Category         string `json:"category" datastore:"category"`
+	ReferenceUrl     string `json:"reference_url" datastore:"reference_url"`
 }
 
 // Added environment for location to execute
@@ -831,4 +832,39 @@ type ExecutionVariableWrapper struct {
 	NextActions  []string            `json:"nextActions"`
 	Environments []string            `json:"environments"`
 	Extra        int                 `json:"extra"`
+}
+
+type AlgoliaSearchWorkflow struct {
+	Name          string   `json:"name"`
+	ObjectID      string   `json:"objectID"`
+	Description   string   `json:"description"`
+	Variables     int      `json:"variables"`
+	ActionAmount  int      `json:"action_amount"`
+	TriggerAmount int      `json:"trigger_amount"`
+	Triggers      []string `json:"triggers"`
+	Actions       []string `json:"actions"`
+	Tags          []string `json:"tags"`
+	Categories    []string `json:"categories"`
+	AccessibleBy  []string `json:"accessible_by"`
+	ImageUrl      string   `json:"image_url"`
+	TimeEdited    int64    `json:"time_edited"`
+	Invalid       bool     `json:"invalid"`
+	Creator       string   `json:"creator"`
+	Priority      int      `json:"priority"`
+	SourceIP      string   `json:"source_ip`
+}
+
+type AlgoliaSearchApp struct {
+	Name         string   `json:"name"`
+	Description  string   `json:"description"`
+	ObjectID     string   `json:"objectID"`
+	Actions      int      `json:"actions"`
+	Tags         []string `json:"tags"`
+	Categories   []string `json:"categories"`
+	AccessibleBy []string `json:"accessible_by"`
+	ImageUrl     string   `json:"image_url"`
+	TimeEdited   int64    `json:"time_edited"`
+	Generated    bool     `json:"generated"`
+	Invalid      bool     `json:"invalid"`
+	Creator      string   `json:"creator"`
 }

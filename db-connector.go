@@ -1514,7 +1514,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 			}
 
-			if !found {
+			if !found && len(appId) > 0 {
 				allKeys = append(allKeys, datastore.NameKey(nameKey, appId, nil))
 			}
 		}

@@ -2,12 +2,17 @@ package shuffle
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
+	"strings"
+
+	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 )
 
 func executeCloudAction(action CloudSyncJob, apikey string) error {
@@ -53,4 +58,39 @@ func executeCloudAction(action CloudSyncJob, apikey string) error {
 	}
 
 	return nil
+}
+
+func handleAlgoliaAppSearch(ctx context.Context, appname string) (string, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("appsearch")
+	appname = strings.TrimSpace(strings.ToLower(strings.Replace(appname, "_", " ", -1)))
+	res, err := algoliaIndex.Search(appname)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchApp
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia: %s", err)
+		return "", err
+	}
+
+	log.Printf("[INFO] Algolia hits for %s: %d", appname, len(newRecords))
+	for _, newRecord := range newRecords {
+		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
+		if newApp == appname {
+			return newRecord.ObjectID, nil
+		}
+	}
+
+	return "", nil
 }

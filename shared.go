@@ -2306,6 +2306,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	startnodeFound := false
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
+	newOrgApps := []string{}
 	for _, action := range workflow.Actions {
 		allNodes = append(allNodes, action.ID)
 		if workflow.Start == action.ID {
@@ -2341,16 +2342,85 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
+		// Fixing apps with bad IDs. This can happen a lot because of
+		// autogeneration of app IDs, and export/imports of workflows
+		idFound := false
+		nameVersionFound := false
+		nameFound := false
+		for _, innerApp := range workflowapps {
+			if innerApp.ID == action.AppID {
+				//log.Printf("[INFO] ID, Name AND version for %s:%s (%s) was FOUND", action.AppName, action.AppVersion, action.AppID)
+				action.Sharing = innerApp.Sharing
+				action.Public = innerApp.Public
+				action.Generated = innerApp.Generated
+				action.ReferenceUrl = innerApp.ReferenceUrl
+				idFound = true
+				break
+			}
+
+			if innerApp.Name == action.AppName && innerApp.AppVersion == action.AppVersion {
+				//log.Printf("NAME AND VERSION FOUND (overwritten)!")
+				action.AppID = innerApp.ID
+				action.Sharing = innerApp.Sharing
+				action.Public = innerApp.Public
+				action.Generated = innerApp.Generated
+				action.ReferenceUrl = innerApp.ReferenceUrl
+				nameVersionFound = true
+				break
+			}
+
+			if innerApp.Name == action.AppName {
+				action.AppID = innerApp.ID
+				action.Sharing = innerApp.Sharing
+				action.Public = innerApp.Public
+				action.Generated = innerApp.Generated
+				action.ReferenceUrl = innerApp.ReferenceUrl
+
+				nameFound = true
+				break
+			}
+		}
+
+		if !idFound {
+			if nameVersionFound {
+			} else if nameFound {
+			} else {
+				log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
+				handled := false
+				if project.Environment == "cloud" {
+					appid, err := handleAlgoliaAppSearch(ctx, action.AppName)
+					if err == nil && len(appid) > 0 {
+						log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
+						tmpApp, err := GetApp(ctx, appid, user)
+						if err == nil {
+							handled = true
+							action.AppID = tmpApp.ID
+							newOrgApps = append(newOrgApps, action.AppID)
+
+							workflowapps = append(workflowapps, *tmpApp)
+						}
+					} else {
+						log.Printf("[WARNING] Failed finding name %s in Algolia", action.AppName)
+					}
+				}
+
+				if !handled {
+					action.IsValid = false
+					action.Errors = []string{fmt.Sprintf("Couldn't find app %s:%s", action.AppName, action.AppVersion)}
+				}
+			}
+		}
+
 		if !action.IsValid && len(action.Errors) > 0 {
 			log.Printf("[INFO] Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
 
-			if workflow.PreviouslySaved {
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Node %s is invalid and needs to be remade."}`, action.Label)))
-				return
-			}
-			action.IsValid = true
-			action.Errors = []string{}
+			//if workflow.PreviouslySaved {
+			//	resp.WriteHeader(401)
+			//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Node %s is invalid and needs to be remade."}`, action.Label)))
+			//	return
+			//}
+			//action.IsValid = true
+			//action.Errors = []string{}
 		}
 
 		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
@@ -2362,11 +2432,36 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("No startnode found during save!!")
 	}
 
+	// Automatically adding new apps
+	if len(newOrgApps) > 0 {
+		log.Printf("Adding new apps to org: %#v", newOrgApps)
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil {
+			added := false
+			for _, newApp := range newOrgApps {
+				if !ArrayContains(org.ActiveApps, newApp) {
+					org.ActiveApps = append(org.ActiveApps, newApp)
+					added = true
+				}
+			}
+
+			if added {
+				err = SetOrg(ctx, *org, org.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
+				} else {
+					cacheKey := fmt.Sprintf("apps_%s", user.Id)
+					DeleteCache(ctx, cacheKey)
+				}
+			}
+		}
+	}
+
 	workflow.Actions = newActions
 
 	newTriggers := []Trigger{}
 	for _, trigger := range workflow.Triggers {
-		log.Printf("[INFO] Trigger %s: %s", trigger.TriggerType, trigger.Status)
+		log.Printf("[INFO] Workflow: %s, Trigger %s: %s", workflow.ID, trigger.TriggerType, trigger.Status)
 
 		// Check if it's actually running
 		// FIXME: Do this for other triggers too
@@ -2420,10 +2515,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 		} else if trigger.TriggerType == "WEBHOOK" {
-			if trigger.Status != "uninitialized" {
+			if trigger.Status != "uninitialized" && trigger.Status != "stopped" {
 				hook, err := GetHook(ctx, trigger.ID)
 				if err != nil {
-					log.Printf("[WARNING] Failed getting webhook")
+					log.Printf("[WARNING] Failed getting webhook %s (%s)", trigger.ID, trigger.Status)
 					trigger.Status = "stopped"
 				} else if hook.Id == "" {
 					trigger.Status = "stopped"
@@ -3596,7 +3691,6 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME - get some real data?
 	resp.WriteHeader(200)
 	resp.Write([]byte(b))
 	return
@@ -4445,7 +4539,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("User: %s, org: %s vs %s", user.Role, workflowExecution.Workflow.OrgId, user.ActiveOrg.Id)
+		//log.Printf("User: %s, org: %s vs %s", user.Role, workflowExecution.Workflow.OrgId, user.ActiveOrg.Id)
 		if user.Id != workflowExecution.Workflow.Owner {
 			if workflowExecution.Workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 				log.Printf("[INFO] User %s is aborting execution %s as admin", user.Username, workflowExecution.Workflow.ID)
@@ -4574,7 +4668,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting workflowexecution status to abort"}`)))
 		return
 	} else {
-		log.Printf("[INFO]Set workflowexecution %s to aborted.", workflowExecution.ExecutionId)
+		log.Printf("[INFO] Set workflowexecution %s to aborted.", workflowExecution.ExecutionId)
 	}
 
 	resp.WriteHeader(200)
@@ -5613,7 +5707,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			lastResult = result.Result
 		}
 
-		log.Printf("Finished? %#v", finished)
+		//log.Printf("Finished? %#v", finished)
 		if finished {
 			dbSave = true
 			log.Printf("[INFO] Execution of %s finished.", workflowExecution.ExecutionId)
@@ -5702,4 +5796,70 @@ func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string
 	}
 
 	return newNodes
+}
+
+func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get orgs: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := getContext(request)
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	app, err := GetApp(ctx, fileId, user)
+	if err != nil {
+		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+		return
+	}
+
+	if app.Sharing || app.Public {
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil {
+			added := false
+			if !ArrayContains(org.ActiveApps, app.ID) {
+				org.ActiveApps = append(org.ActiveApps, app.ID)
+				added = true
+			}
+
+			if added {
+				err = SetOrg(ctx, *org, org.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
+				} else {
+					log.Printf("[INFO] Added public app %s (%s) to org %s (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					cacheKey := fmt.Sprintf("apps_%s", user.Id)
+					DeleteCache(ctx, cacheKey)
+				}
+			}
+		}
+	} else {
+		log.Printf("[WARNING] User is trying to activate %s which is NOT public", app.Name)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }
