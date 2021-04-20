@@ -4435,8 +4435,8 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Checks the users' role and such if the key fails
 	if workflowExecution.Authorization != parsedKey {
-		// FIXME: Check the execution if this fails.
 		user, err := HandleApiAuthentication(resp, request)
 		if err != nil {
 			log.Printf("Api authentication failed in abort workflow: %s", err)
@@ -4445,12 +4445,16 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// FIXME - have a check for org etc too..
+		log.Printf("User: %s, org: %s vs %s", user.Role, workflowExecution.Workflow.OrgId, user.ActiveOrg.Id)
 		if user.Id != workflowExecution.Workflow.Owner {
-			log.Printf("[INFO] Wrong user (%s) for workflowexecution workflow %s", user.Username, workflowExecution.Workflow.ID)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			if workflowExecution.Workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+				log.Printf("[INFO] User %s is aborting execution %s as admin", user.Username, workflowExecution.Workflow.ID)
+			} else {
+				log.Printf("[INFO] Wrong user (%s) for ABORT of workflowexecution workflow %s", user.Username, workflowExecution.Workflow.ID)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 		}
 	} else {
 		//log.Printf("[INFO] API key to abort/finish execution %s is correct.", executionId)
@@ -4467,7 +4471,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 
 	workflowExecution.CompletedAt = int64(time.Now().Unix())
 	workflowExecution.Status = "ABORTED"
-	log.Printf("[INFO] Running shutdown of %s", workflowExecution.ExecutionId)
+	log.Printf("[INFO] Running shutdown (abort) of execution %s", workflowExecution.ExecutionId)
 
 	lastResult := ""
 	newResults := []ActionResult{}
@@ -4569,24 +4573,12 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting workflowexecution status to abort"}`)))
 		return
+	} else {
+		log.Printf("[INFO]Set workflowexecution %s to aborted.", workflowExecution.ExecutionId)
 	}
 
-	//err = increaseStatisticsField(ctx, "workflow_executions_aborted", workflowExecution.Workflow.ID, 1, workflowExecution.ExecutionOrg)
-	//if err != nil {
-	//	log.Printf("Failed to increase aborted execution stats: %s", err)
-	//}
-
-	// FIXME - allowed to edit it? idk
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
-
-	// Not sure what's up here
-	//if workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE" {
-	//	log.Printf("Workflowexecution is already aborted. No further action can be taken")
-	//	resp.WriteHeader(401)
-	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Workflowexecution is aborted because of %s with result %s and status %s"}`, workflowExecution.LastNode, workflowExecution.Result, workflowExecution.Status)))
-	//	return
-	//}
 }
 
 func SanitizeWorkflow(workflow Workflow) Workflow {
