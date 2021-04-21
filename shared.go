@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -5862,4 +5863,44 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
+}
+
+func GetExecutionbody(body []byte) string {
+	parsedBody := string(body)
+	if strings.Contains(parsedBody, "choice") {
+		if strings.Count(parsedBody, `\\n`) > 2 {
+			parsedBody = strings.Replace(parsedBody, `\\n`, "", -1)
+		}
+		if strings.Count(parsedBody, `\u0022`) > 2 {
+			parsedBody = strings.Replace(parsedBody, `\u0022`, `"`, -1)
+		}
+		if strings.Count(parsedBody, `\\"`) > 2 {
+			parsedBody = strings.Replace(parsedBody, `\\"`, `"`, -1)
+		}
+
+		if strings.Contains(parsedBody, `"extra": "{`) {
+			parsedBody = strings.Replace(parsedBody, `"extra": "{`, `"extra": {`, 1)
+			parsedBody = strings.Replace(parsedBody, `}"}`, `}}`, 1)
+		}
+	}
+
+	// Replaces dots in string. Bad regex :D
+	pattern := regexp.MustCompile(`\"(\w+)\.(\w+)\":`)
+	found := pattern.FindAllString(parsedBody, -1)
+	for _, item := range found {
+		newItem := strings.ReplaceAll(item, ".", "_")
+		parsedBody = strings.ReplaceAll(parsedBody, item, newItem)
+	}
+	//log.Printf("FOUND: %s", found)
+	//s := pattern.ReplaceAllString(parsedBody, `"$0_$1":`)
+	//log.Printf("NEWS: %s", s)
+
+	//parsedBody = strings.Replace(parsedBody, "\"", "\\\"", -1)
+	//if len(parsedBody) > 0 {
+	//	if string(parsedBody[0]) == `"` && string(parsedBody[len(parsedBody)-1]) == "\"" {
+	//		parsedBody = parsedBody[1 : len(parsedBody)-1]
+	//	}
+	//}
+
+	return parsedBody
 }

@@ -868,3 +868,9 @@ type AlgoliaSearchApp struct {
 	Invalid      bool     `json:"invalid"`
 	Creator      string   `json:"creator"`
 }
+
+type ExecutionStruct struct {
+	Start             string `json:"start"`
+	ExecutionSource   string `json:"execution_source"`
+	ExecutionArgument string `json:"execution_argument"`
+}
