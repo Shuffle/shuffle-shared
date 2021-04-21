@@ -5888,8 +5888,8 @@ func GetExecutionbody(body []byte) string {
 	pattern := regexp.MustCompile(`\"(\w+)\.(\w+)\":`)
 	found := pattern.FindAllString(parsedBody, -1)
 	for _, item := range found {
-		newItem := strings.ReplaceAll(item, ".", "_")
-		parsedBody = strings.ReplaceAll(parsedBody, item, newItem)
+		newItem := strings.Replace(item, ".", "_", -1)
+		parsedBody = strings.Replace(parsedBody, item, newItem, -1)
 	}
 	//log.Printf("FOUND: %s", found)
 	//s := pattern.ReplaceAllString(parsedBody, `"$0_$1":`)
