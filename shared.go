@@ -3203,7 +3203,7 @@ func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowI
 		auth.NodeCount += 1
 		updateAuth = true
 	} else if !nodeFound && add {
-		log.Printf("[INFO] Adding node things to auth!")
+		//log.Printf("[INFO] Adding node things to auth!")
 		auth.Usage[workflowIndex].Nodes = append(auth.Usage[workflowIndex].Nodes, nodeId)
 		auth.NodeCount += 1
 		updateAuth = true
