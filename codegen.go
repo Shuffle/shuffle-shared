@@ -296,7 +296,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	if swagger.Components.SecuritySchemes != nil {
 		if swagger.Components.SecuritySchemes["BearerAuth"] != nil {
 			authenticationParameter = ", apikey"
-			authenticationSetup = "if apikey != \" \": headers[\"Authorization\"] = f\"Bearer {apikey}\""
+			authenticationSetup = "if apikey != \" \" and not apikey.startswith(\"Bearer\"): headers[\"Authorization\"] = f\"Bearer {apikey}\""
 		} else if swagger.Components.SecuritySchemes["BasicAuth"] != nil {
 			authenticationParameter = ", username_basic, password_basic"
 			authenticationAddin = ", auth=(username_basic, password_basic)"
@@ -320,13 +320,32 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	//baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	// This is a quickfix for onpremises stuff. Does work, but should really be
 	// part of the authentication scheme from openapi3
-	urlParameter := ""
-	urlInline := ""
+	//urlParameter := ""
+	//urlInline := ""
 	//log.Printf("URL: %s", url)
-	if !strings.HasPrefix(strings.ToLower(url), "http") {
-		urlParameter = ", url"
-		urlInline = "{url}"
+	//if !strings.HasPrefix(strings.ToLower(url), "http") {
+
+	// Modifies url to have the right path and such
+	urlSplit := strings.Split(url, "/")
+	if strings.HasPrefix(url, "http") && len(urlSplit) > 2 {
+		log.Printf("SPLITTING: %s", url)
+		tmpUrl := strings.Join(urlSplit[3:len(urlSplit)], "/")
+		log.Printf("TMP: %s", tmpUrl)
+		if len(tmpUrl) > 0 {
+			url = "/" + tmpUrl
+		} else {
+			if strings.HasSuffix(url, "/") {
+				url = "/"
+			} else {
+				url = ""
+			}
+		}
+	} else {
+		url = ""
 	}
+
+	urlParameter := ", url"
+	urlInline := "{url}"
 
 	// Specific check for SSL verification
 	// This is critical for onprem stuff.
@@ -445,6 +464,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	// Use lowercase when checking
 
+	log.Printf("\n%s", data)
 	if strings.Contains(functionname, "attachment") {
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
@@ -483,6 +503,11 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 	api.Link = swagger.Servers[0].URL // host does not exist lol
 	if strings.HasSuffix(api.Link, "/") {
 		api.Link = api.Link[:len(api.Link)-1]
+	}
+
+	example := "https://api-url/api/v1"
+	if len(api.Link) > 0 {
+		example = api.Link
 	}
 
 	api.AppVersion = "1.0.0"
@@ -658,29 +683,30 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 	}
 
 	// Adds a link parameter if it's not already defined
-	if len(api.Link) == 0 {
-		api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
-			Name:        "url",
-			Description: "The URL of the app",
-			Multiline:   false,
-			Required:    true,
-			Example:     "https://shuffler.io",
-			Schema: SchemaDefinition{
-				Type: "string",
-			},
-		})
+	api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+		Name:        "url",
+		Description: "The URL of the app",
+		Value:       example,
+		Example:     example,
+		Multiline:   false,
+		Required:    true,
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
 
-		extraParameters = append(extraParameters, WorkflowAppActionParameter{
-			Name:          "url",
-			Description:   "The URL of the app",
-			Multiline:     false,
-			Required:      true,
-			Configuration: true,
-			Schema: SchemaDefinition{
-				Type: "string",
-			},
-		})
-	}
+	extraParameters = append(extraParameters, WorkflowAppActionParameter{
+		Name:          "url",
+		Description:   "The URL of the API",
+		Value:         example,
+		Example:       example,
+		Multiline:     false,
+		Required:      true,
+		Configuration: true,
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
 
 	// This is the python code to be generated
 	// Could just as well be go at this point lol
