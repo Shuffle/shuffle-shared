@@ -460,17 +460,17 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 
 	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 	if err := project.Dbclient.Get(ctx, key, workflowApp); err != nil {
+		log.Printf("[WARNING] Failed getting app in GetApp: %s", err)
 		for _, app := range user.PrivateApps {
 			if app.ID == id {
 				workflowApp = &app
 				break
 			}
 		}
-
 	}
 
 	if workflowApp.ID == "" {
-		return &WorkflowApp{}, err
+		return &WorkflowApp{}, errors.New(fmt.Sprintf("Couldn't find app %s", id))
 	}
 
 	if project.CacheDb {
