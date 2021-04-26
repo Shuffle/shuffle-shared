@@ -2892,7 +2892,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								}
 
 								//log.Printf("[WARNING] Appaction %s with required param '%s' is empty. Can't save.", action.Name, param.Name)
-								thisError := fmt.Sprintf("%s is missing reqired parameter %s", action.Label, param.Name)
+								thisError := fmt.Sprintf("%s is missing required parameter %s", action.Label, param.Name)
 								action.Errors = append(action.Errors, thisError)
 								workflow.Errors = append(workflow.Errors, thisError)
 								action.IsValid = false
@@ -3193,7 +3193,7 @@ func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowI
 	// FIXME: Add a way to use !add to remove
 	updateAuth := false
 	if !workflowFound && add {
-		log.Printf("[INFO] Adding workflow things to auth!")
+		//log.Printf("[INFO] Adding workflow things to auth!")
 		usageItem := AuthenticationUsage{
 			WorkflowId: workflowId,
 			Nodes:      []string{nodeId},
@@ -3211,7 +3211,7 @@ func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowI
 	}
 
 	if updateAuth {
-		log.Printf("[INFO] Updating auth!")
+		//log.Printf("[INFO] Updating auth!")
 		err := SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed UPDATING app auth %s: %s", auth.Id, err)
@@ -3912,7 +3912,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	app, err := GetApp(ctx, fileId, user)
 	if err != nil {
-		log.Printf("Error getting app (update app): %s", fileId)
+		log.Printf("[WARNING] Error getting app (update app): %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return

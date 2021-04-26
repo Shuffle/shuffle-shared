@@ -324,13 +324,13 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 		if sourceFound {
 			parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
 		} else {
-			log.Printf("[INFO] Action ID %s was not found in actions! Skipping parent. (TRIGGER?)", branch.SourceID)
+			//log.Printf("[WARNING] Action ID %s was not found in actions! Skipping parent. (TRIGGER?)", branch.SourceID)
 		}
 
 		if destinationFound {
 			children[branch.SourceID] = append(children[branch.SourceID], branch.DestinationID)
 		} else {
-			log.Printf("[INFO] Action ID %s was not found in actions! Skipping child. (TRIGGER?)", branch.SourceID)
+			//log.Printf("[WARNING] Action ID %s was not found in actions! Skipping child. (TRIGGER?)", branch.SourceID)
 		}
 	}
 
