@@ -3,6 +3,7 @@ package shuffle
 import (
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
+	"time"
 )
 
 type ShuffleStorage struct {
@@ -664,6 +665,7 @@ type Branch struct {
 	Label         string      `json:"label" datastore:"label"`
 	HasError      bool        `json:"has_errors" datastore: "has_errors"`
 	Conditions    []Condition `json:"conditions" datastore: "conditions"`
+	Decorator     bool        `json:"decorator" datastore:"decorator"`
 }
 
 // Same format for a lot of stuff
@@ -683,11 +685,12 @@ type Schedule struct {
 }
 
 type Workflow struct {
-	Actions       []Action   `json:"actions" datastore:"actions,noindex"`
-	Branches      []Branch   `json:"branches" datastore:"branches,noindex"`
-	Triggers      []Trigger  `json:"triggers" datastore:"triggers,noindex"`
-	Schedules     []Schedule `json:"schedules" datastore:"schedules,noindex"`
-	Configuration struct {
+	Actions        []Action   `json:"actions" datastore:"actions,noindex"`
+	Branches       []Branch   `json:"branches" datastore:"branches,noindex"`
+	VisualBranches []Branch   `json:"visual_branches" datastore:"visual_branches,noindex"`
+	Triggers       []Trigger  `json:"triggers" datastore:"triggers,noindex"`
+	Schedules      []Schedule `json:"schedules" datastore:"schedules,noindex"`
+	Configuration  struct {
 		ExitOnError  bool `json:"exit_on_error" datastore:"exit_on_error"`
 		StartFromTop bool `json:"start_from_top" datastore:"start_from_top"`
 	} `json:"configuration,omitempty" datastore:"configuration"`
@@ -873,4 +876,173 @@ type ExecutionStruct struct {
 	Start             string `json:"start"`
 	ExecutionSource   string `json:"execution_source"`
 	ExecutionArgument string `json:"execution_argument"`
+}
+
+type OauthToken struct {
+	AccessToken  string    `json:"AccessToken" datastore:"AccessToken,noindex"`
+	TokenType    string    `json:"TokenType" datastore:"TokenType,noindex"`
+	RefreshToken string    `json:"RefreshToken" datastore:"RefreshToken,noindex"`
+	Expiry       time.Time `json:"Expiry" datastore:"Expiry,noindex"`
+}
+
+type TriggerAuth struct {
+	Id             string `json:"id" datastore:"id"`
+	SubscriptionId string `json:"subscriptionId" datastore:"subscriptionId"`
+
+	Username   string     `json:"username" datastore:"username,noindex"`
+	Owner      string     `json:"owner" datastore:"owner"`
+	Type       string     `json:"type" datastore:"type"`
+	Code       string     `json:"code,omitempty" datastore:"code,noindex"`
+	WorkflowId string     `json:"workflow_id" datastore:"workflow_id,noindex"`
+	Start      string     `json:"start" datastore:"start"`
+	OauthToken OauthToken `json:"oauth_token,omitempty" datastore:"oauth_token"`
+}
+
+// This is what the structure should be when it's sent into a workflow
+type ParsedShuffleMail struct {
+	Body struct {
+		URI           []string `json:"uri"`
+		Email         []string `json:"email"`
+		Domain        []string `json:"domain"`
+		ContentHeader struct {
+		} `json:"content_header"`
+		Content     string `json:"content"`
+		ContentType string `json:"content_type"`
+		Hash        string `json:"hash"`
+		RawBody     string `json:"raw_body"`
+	} `json:"body"`
+	Header struct {
+		Subject  string   `json:"subject"`
+		From     string   `json:"from"`
+		To       []string `json:"to"`
+		Date     string   `json:"date"`
+		Received []struct {
+			Src  string   `json:"src"`
+			From []string `json:"from"`
+			By   []string `json:"by"`
+			With string   `json:"with"`
+			Date string   `json:"date"`
+		} `json:"received"`
+		ReceivedDomain []string `json:"received_domain"`
+		ReceivedIP     []string `json:"received_ip"`
+		Header         struct {
+		} `json:"header"`
+	} `json:"header"`
+	MessageID      string   `json:"message_id"`
+	EmailFileid    string   `json:"email_fileid"`
+	AttachmentUids []string `json:"attachment_uids"`
+}
+
+type FullEmail struct {
+	OdataContext               string        `json:"@odata.context"`
+	OdataEtag                  string        `json:"@odata.etag"`
+	ID                         string        `json:"id"`
+	Createddatetime            time.Time     `json:"createdDateTime"`
+	Lastmodifieddatetime       time.Time     `json:"lastModifiedDateTime"`
+	Changekey                  string        `json:"changeKey"`
+	Categories                 []interface{} `json:"categories"`
+	Receiveddatetime           time.Time     `json:"receivedDateTime"`
+	Sentdatetime               time.Time     `json:"sentDateTime"`
+	Hasattachments             bool          `json:"hasAttachments"`
+	Internetmessageid          string        `json:"internetMessageId"`
+	Subject                    string        `json:"subject"`
+	Bodypreview                string        `json:"bodyPreview"`
+	Importance                 string        `json:"importance"`
+	Parentfolderid             string        `json:"parentFolderId"`
+	Conversationid             string        `json:"conversationId"`
+	Conversationindex          string        `json:"conversationIndex"`
+	Isdeliveryreceiptrequested interface{}   `json:"isDeliveryReceiptRequested"`
+	Isreadreceiptrequested     bool          `json:"isReadReceiptRequested"`
+	Isread                     bool          `json:"isRead"`
+	Isdraft                    bool          `json:"isDraft"`
+	Weblink                    string        `json:"webLink"`
+	Inferenceclassification    string        `json:"inferenceClassification"`
+	Body                       struct {
+		Contenttype string `json:"contentType"`
+		Content     string `json:"content"`
+	} `json:"body"`
+	Sender struct {
+		Emailaddress struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+		} `json:"emailAddress"`
+	} `json:"sender"`
+	From struct {
+		Emailaddress struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+		} `json:"emailAddress"`
+	} `json:"from"`
+	Torecipients []struct {
+		Emailaddress struct {
+			Name    string `json:"name"`
+			Address string `json:"address"`
+		} `json:"emailAddress"`
+	} `json:"toRecipients"`
+	Ccrecipients  []interface{} `json:"ccRecipients"`
+	Bccrecipients []interface{} `json:"bccRecipients"`
+	Replyto       []interface{} `json:"replyTo"`
+	Flag          struct {
+		Flagstatus string `json:"flagStatus"`
+	} `json:"flag"`
+	Attachments []struct {
+		OdataType             string      `json:"@odata.type"`
+		OdataMediacontenttype string      `json:"@odata.mediaContentType"`
+		ID                    string      `json:"id"`
+		Lastmodifieddatetime  time.Time   `json:"lastModifiedDateTime"`
+		Name                  string      `json:"name"`
+		Contenttype           string      `json:"contentType"`
+		Size                  int         `json:"size"`
+		Isinline              bool        `json:"isInline"`
+		Contentid             interface{} `json:"contentId"`
+		Contentlocation       interface{} `json:"contentLocation"`
+		Contentbytes          string      `json:"contentBytes"`
+	}
+}
+
+type MailData struct {
+	Value []struct {
+		Subscriptionid                 string `json:"subscriptionId"`
+		Subscriptionexpirationdatetime string `json:"subscriptionExpirationDateTime"`
+		Changetype                     string `json:"changeType"`
+		Resource                       string `json:"resource"`
+		Resourcedata                   struct {
+			OdataType string `json:"@odata.type"`
+			OdataID   string `json:"@odata.id"`
+			OdataEtag string `json:"@odata.etag"`
+			ID        string `json:"id"`
+		} `json:"resourceData"`
+		Clientstate string `json:"clientState"`
+		Tenantid    string `json:"tenantId"`
+	} `json:"value"`
+}
+
+type OutlookProfile struct {
+	OdataContext      string      `json:"@odata.context"`
+	BusinessPhones    []string    `json:"businessPhones"`
+	DisplayName       string      `json:"displayName"`
+	GivenName         string      `json:"givenName"`
+	JobTitle          interface{} `json:"jobTitle"`
+	Mail              string      `json:"mail"`
+	MobilePhone       interface{} `json:"mobilePhone"`
+	OfficeLocation    interface{} `json:"officeLocation"`
+	PreferredLanguage interface{} `json:"preferredLanguage"`
+	Surname           string      `json:"surname"`
+	UserPrincipalName string      `json:"userPrincipalName"`
+	ID                string      `json:"id"`
+}
+
+type OutlookFolder struct {
+	ID               string `json:"id"`
+	DisplayName      string `json:"displayName"`
+	ParentFolderID   string `json:"parentFolderId"`
+	ChildFolderCount int    `json:"childFolderCount"`
+	UnreadItemCount  int    `json:"unreadItemCount"`
+	TotalItemCount   int    `json:"totalItemCount"`
+}
+
+type OutlookFolders struct {
+	OdataContext  string          `json:"@odata.context"`
+	OdataNextLink string          `json:"@odata.nextLink"`
+	Value         []OutlookFolder `json:"value"`
 }

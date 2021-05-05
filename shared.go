@@ -24,6 +24,7 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
 	"google.golang.org/appengine"
 )
 
@@ -717,7 +718,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	if openEnvironments < 1 {
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Can't archived all environments"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Can't archive all environments"}`))
 		return
 	}
 
@@ -1047,12 +1048,12 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		return
 	} else { //strings.HasPrefix(version.Swagger, "2.") || strings.HasPrefix(version.OpenAPI, "2.") {
 		// Convert
-		log.Println("Handling v2 API")
+		log.Println("[INFO] Handling v2 API")
 		var swagger openapi2.Swagger
 		//log.Println(string(body))
 		err = json.Unmarshal(body, &swagger)
 		if err != nil {
-			log.Printf("Json error for v2 - trying yaml: %s", err)
+			log.Printf("[INFO] Json error for v2 - trying yaml: %s", err)
 			err = yaml.Unmarshal([]byte(body), &swagger)
 			if err != nil {
 				log.Printf("Yaml error (4): %s", err)
@@ -2211,6 +2212,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else if tmpworkflow.Public {
 			//log.Printf("\n\nSHOULD CREATE A NEW WORKFLOW FOR THE USER :O\n\n")
 
+			log.Printf("[INFO] User %s is saving the public workflow %s", user.Username, tmpworkflow.ID)
 			workflow = *tmpworkflow
 			workflow.ID = uuid.NewV4().String()
 			workflow.Public = false
@@ -5163,9 +5165,26 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(users) > 1 {
+		log.Printf("[ERROR] Username %s has multiple users!!: %d", data.Username, len(users))
+	}
+
 	userdata := User{}
 	for _, user := range users {
+		if user.Id == "" {
+			log.Printf(`[WARNING] Username %s (%s) isn't valid. Amount of users checked: %d`, user.Username, user.Id, len(users))
+			continue
+		}
+
+		//log.Printf("User: %#v", user)
 		if user.ActiveOrg.Id != "" {
+
+			err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
+			if err != nil {
+				log.Printf("[WARNING] Bad password: %s", err)
+				continue
+			}
+
 			userdata = user
 			break
 		}
@@ -5174,15 +5193,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	if userdata.Id == "" {
 		log.Printf(`[WARNING] Username %s isn't valid. Amount of users checked: %d`, data.Username, len(users))
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error: Couldn't find a user for username %s"}`, data.Username)))
-		return
-	}
-
-	err = bcrypt.CompareHashAndPassword([]byte(userdata.Password), []byte(data.Password))
-	if err != nil {
-		log.Printf("[WARNING] Password for %s is incorrect: %s", data.Username, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Username and/or password is incorrect"}`)))
 		return
 	}
 
@@ -5903,4 +5914,159 @@ func GetExecutionbody(body []byte) string {
 	//}
 
 	return parsedBody
+}
+
+func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Exchange every time hmm
+	// FIXME
+	// Should really just get the code from the trigger that's being used OR the user
+	triggerId := request.URL.Query().Get("trigger_id")
+	if len(triggerId) == 0 {
+		log.Println("No trigger_id supplied")
+		resp.WriteHeader(401)
+		return
+	}
+
+	ctx := getContext(request)
+	trigger, err := GetTriggerAuth(ctx, triggerId)
+	if err != nil {
+		log.Printf("[INFO] Trigger %s doesn't exist - outlook folders.", triggerId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Trigger doesn't exist."}`))
+		return
+	}
+
+	//client, accessToken, err := getOutlookClient(ctx, code, OauthToken{}, url)
+	//if err != nil {
+	//	log.Printf("Oauth client failure - outlook register: %s", err)
+	//	resp.WriteHeader(401)
+	//	return
+	//}
+
+	// FIXME - should be shuffler in literally every case except testing lol
+	//log.Printf("TRIGGER: %#v", trigger)
+	redirectDomain := "localhost:5001"
+	url := fmt.Sprintf("http://%s/api/v1/triggers/outlook/register", redirectDomain)
+	outlookClient, _, err := getOutlookClient(ctx, "", trigger.OauthToken, url)
+	if err != nil {
+		log.Printf("[WARNING] Oauth client failure - outlook folders: %s", err)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating outlook client"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	// This should be possible, and will also give the actual username
+	/*
+		profile, err := getOutlookProfile(outlookClient)
+		if err != nil {
+			log.Printf("Outlook profile failure: %s", err)
+			resp.WriteHeader(401)
+			return
+		}
+		log.Printf("PROFILE: %#v", profile)
+	*/
+
+	folders, err := getOutlookFolders(outlookClient)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting outlook folders: %s", err)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting outlook folders"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	b, err := json.Marshal(folders.Value)
+	if err != nil {
+		log.Println("[INFO] Failed to marshal folderdata")
+		resp.Write([]byte(`{"success": false, "reason": "Failed decoding JSON"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
+func getOutlookClient(ctx context.Context, code string, accessToken OauthToken, redirectUri string) (*http.Client, *oauth2.Token, error) {
+
+	conf := &oauth2.Config{
+		ClientID:     "fd55c175-aa30-4fa6-b303-09a29fb3f750",
+		ClientSecret: "14OBKgUpov.D7fe0~hp0z-cIQdP~SlYm.8",
+		Scopes: []string{
+			"Mail.Read",
+		},
+		RedirectURL: redirectUri,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  "https://login.microsoftonline.com/common/oauth2/authorize",
+			TokenURL: "https://login.microsoftonline.com/common/oauth2/token",
+		},
+	}
+
+	if len(code) > 0 {
+		access_token, err := conf.Exchange(ctx, code)
+		if err != nil {
+			log.Printf("Access_token issue: %s", err)
+			return &http.Client{}, access_token, err
+		}
+
+		client := conf.Client(ctx, access_token)
+		return client, access_token, nil
+	}
+
+	// Manually recreate the oauthtoken
+	access_token := &oauth2.Token{
+		AccessToken:  accessToken.AccessToken,
+		TokenType:    accessToken.TokenType,
+		RefreshToken: accessToken.RefreshToken,
+		Expiry:       accessToken.Expiry,
+	}
+
+	client := conf.Client(ctx, access_token)
+	return client, access_token, nil
+}
+
+func getOutlookFolders(client *http.Client) (OutlookFolders, error) {
+	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/ec03b4f2-fccf-4c35-b0eb-be85a0f5dd43/mailFolders")
+	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/mailFolders")
+
+	ret, err := client.Get(requestUrl)
+	if err != nil {
+		log.Printf("[INFO] FolderErr: %s", err)
+		return OutlookFolders{}, err
+	}
+
+	body, err := ioutil.ReadAll(ret.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed body decoding from mailfolders")
+		return OutlookFolders{}, err
+	}
+
+	//log.Printf("[INFO] Folder Body: %s", string(body))
+	log.Printf("[INFO] Status folders: %d", ret.StatusCode)
+	if ret.StatusCode != 200 {
+		return OutlookFolders{}, err
+	}
+
+	//log.Printf("Body: %s", string(body))
+
+	mailfolders := OutlookFolders{}
+	err = json.Unmarshal(body, &mailfolders)
+	if err != nil {
+		log.Printf("Unmarshal: %s", err)
+		return OutlookFolders{}, err
+	}
+
+	//fmt.Printf("%#v", mailfolders)
+	// FIXME - recursion for subfolders
+	// Recursive struct
+	// folderEndpoint := fmt.Sprintf("%s/%s/childfolders?$top=40", requestUrl, parentId)
+	//for _, folder := range mailfolders.Value {
+	//	log.Println(folder.DisplayName)
+	//}
+
+	return mailfolders, nil
 }

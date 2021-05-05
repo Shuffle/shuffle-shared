@@ -329,8 +329,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	urlSplit := strings.Split(url, "/")
 	if strings.HasPrefix(url, "http") && len(urlSplit) > 2 {
 		//log.Printf("SPLITTING: %s", url)
-		//log.Printf("TMP: %s", tmpUrl)
 		tmpUrl := strings.Join(urlSplit[3:len(urlSplit)], "/")
+		//log.Printf("TMP: %s", tmpUrl)
 		if len(tmpUrl) > 0 {
 			url = "/" + tmpUrl
 		} else {
@@ -340,8 +340,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				url = ""
 			}
 		}
+
 	} else {
-		url = ""
+		if !strings.HasPrefix(url, "/") {
+			url = ""
+		}
 	}
 
 	urlParameter := ", url"
@@ -463,7 +466,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-
 	//log.Printf("\n%s", data)
 	if strings.Contains(functionname, "attachment") {
 		//log.Printf("FUNCTION: %s", data)

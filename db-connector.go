@@ -391,7 +391,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 			}
 		} else {
-			//log.Printf("[INFO] Failed getting cache for execution variables data %s: %s", executionId, err)
+			//log.Printf("[DEBUG] Failed getting cache for execution variables data %s: %s", executionId, err)
 		}
 	}
 
@@ -414,7 +414,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for workflow execution: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for workflow execution: %s", err)
 		}
 	}
 
@@ -454,7 +454,7 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 				return workflowApp, nil
 			}
 		} else {
-			//log.Printf("[INFO] Failed getting cache for org: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	}
 
@@ -504,7 +504,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 				return workflow, nil
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for workflow: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
 		}
 	}
 
@@ -697,7 +697,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				return curOrg, nil
 			}
 		} else {
-			//log.Printf("[INFO] Failed getting cache for org: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	}
 
@@ -861,7 +861,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 
 	err = project.Dbclient.Delete(ctx, key1)
 	if err != nil {
-		log.Printf("Error deleting %s from %s: %s", value, entity, err)
+		log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
 		return err
 	}
 
@@ -970,7 +970,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 				return curUser, nil
 			}
 		} else {
-			//log.Printf("[INFO] Failed getting cache for user: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for user: %s", err)
 		}
 	}
 
@@ -1127,7 +1127,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 				return allworkflowappAuths, nil
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache app auth: %s", err)
+			log.Printf("[DEBUG] Failed getting cache app auth: %s", err)
 		}
 	}
 
@@ -1168,7 +1168,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 				return environments, nil
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache in GET environments: %s", err)
+			log.Printf("[DEBUG] Failed getting cache in GET environments: %s", err)
 		}
 	}
 
@@ -1223,7 +1223,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				log.Printf("DATALEN: %d", len(cacheData))
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
+			log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
 		}
 	}
 
@@ -1367,7 +1367,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				log.Printf("Failed unmarshaling PUBLIC apps: %s", err)
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for PUBLIC apps: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for PUBLIC apps: %s", err)
 		}
 	}
 
@@ -1559,7 +1559,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 				return wrapper, nil
 			}
 		} else {
-			//log.Printf("[INFO] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
+			//log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
 		}
 	}
 
@@ -1854,7 +1854,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 				return hook, errors.New(fmt.Sprintf("Bad cache for %s", hookId))
 			}
 		} else {
-			log.Printf("[INFO] Failed getting cache for hook: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
 		}
 	}
 
@@ -1964,7 +1964,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 				return appAuth, nil
 			}
 		} else {
-			//log.Printf("[INFO] Failed getting cache for org: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	}
 
@@ -2004,4 +2004,26 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 	}
 
 	return schedules, nil
+}
+
+func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
+	key := datastore.NameKey("trigger_auth", strings.ToLower(id), nil)
+	triggerauth := &TriggerAuth{}
+	if err := project.Dbclient.Get(ctx, key, triggerauth); err != nil {
+		return &TriggerAuth{}, err
+	}
+
+	return triggerauth, nil
+}
+
+func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
+	key1 := datastore.NameKey("trigger_auth", strings.ToLower(trigger.Id), nil)
+
+	// New struct, to not add body, author etc
+	if _, err := project.Dbclient.Put(ctx, key1, &trigger); err != nil {
+		log.Printf("Error adding trigger auth: %s", err)
+		return err
+	}
+
+	return nil
 }
