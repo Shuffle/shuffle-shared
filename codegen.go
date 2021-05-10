@@ -92,7 +92,6 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
-	log.Printf("[INFO] Upload project: %s", project.Environment)
 	if project.Environment == "cloud" {
 		client, err := storage.NewClient(ctx)
 		if err != nil {
@@ -141,6 +140,7 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 	//	return "", err
 	//}
 
+	//log.Printf("Finished upload")
 	return filename, nil
 }
 
@@ -208,12 +208,12 @@ func FixAppbase(appbase []byte) []string {
 }
 
 // Builds the structure for the new generated app in storage (copying baseline files)
-func BuildStructureGCP(ctx context.Context, client *storage.Client, swagger *openapi3.Swagger, curHash, bucketName string) (string, error) {
+func BuildStructureGCP(ctx context.Context, client *storage.Client, identifier, bucketName string) (string, error) {
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
 
 	basePath := "generated_apps"
-	identifier := fmt.Sprintf("%s-%s", swagger.Info.Title, curHash)
+	//identifier := fmt.Sprintf("%s-%s", swagger.Info.Title, curHash)
 	appPath := fmt.Sprintf("%s/%s", basePath, identifier)
 	fileNames := []string{"Dockerfile", "requirements.txt"}
 	for _, file := range fileNames {

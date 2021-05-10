@@ -519,6 +519,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	}
 
 	if project.CacheDb {
+		log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
@@ -1127,7 +1128,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 				return allworkflowappAuths, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache app auth: %s", err)
+			log.Printf("[DEBUG] Failed getting cache for app auth: %s", err)
 		}
 	}
 
@@ -1148,6 +1149,8 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		if err != nil {
 			log.Printf("[WARNING] Failed updating get app auth cache: %s", err)
 		}
+
+		log.Printf("[DEBUG] Set cache for app auth %s", cacheKey)
 	}
 
 	return allworkflowappAuths, nil
@@ -1189,6 +1192,8 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		if err != nil {
 			log.Printf("[WARNING] Failed updating environment cache: %s", err)
 		}
+
+		log.Printf("[DEBUG] Set cache for environment %s", cacheKey)
 	}
 
 	return environments, nil
