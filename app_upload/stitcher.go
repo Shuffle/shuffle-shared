@@ -747,11 +747,11 @@ func main() {
 	apikey = os.Args[1]
 	log.Printf("\n\nRunning with: \nUrl: %s\nApikey: %s\n\n", baseUrl, apikey)
 
-	appname := "Microsoft-Teams"
+	appname := "twitter"
 	appversion := "1.0.0"
 
-	deployAll()
-	return
+	//deployAll()
+	//return
 
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {

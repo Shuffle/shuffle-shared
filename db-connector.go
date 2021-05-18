@@ -414,7 +414,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for workflow execution: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow execution: %s", err)
 		}
 	}
 

@@ -881,7 +881,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		sessionToken := c.Value
 		session, err := GetSession(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[INFO] Session %s doesn't exist: %s", session.Session, err)
+			log.Printf("[INFO] Session %#v doesn't exist: %s", sessionToken, err)
 			return User{}, err
 		}
 
@@ -895,9 +895,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 		}
 
-		if user.Session != sessionToken {
-			return User{}, errors.New("[WARNING] Wrong session token")
-		}
+		// We're using the session to find the user anyway, which is NOT user controlled
+		// This means that this is redundant, but MAY allow users
+		// to have access past session timeouts
+		//if user.Session != sessionToken {
+		//	return User{}, errors.New("[WARNING] Wrong session token")
+		//}
 
 		// Means session exists, but
 		return *user, nil
@@ -916,7 +919,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		CacheDb:       cacheDb,
 	}
 
-	requestCache = cache.New(5*time.Minute, 10*time.Minute)
+	requestCache = cache.New(15*time.Minute, 30*time.Minute)
 
 	return project
 }
@@ -3802,6 +3805,38 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }
 
+func deactivateApp(ctx context.Context, user User, app *WorkflowApp) error {
+	//log.Printf("Should deactivate app %#v\n for user %s", app, user)
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[DEBUG] Failed getting org %s: %s", user.ActiveOrg.Id, err)
+		return err
+	}
+
+	if !ArrayContains(org.ActiveApps, app.ID) {
+		log.Printf("[WARNING] App %s isn't active for org %s", app.ID, user.ActiveOrg.Id)
+		return errors.New(fmt.Sprintf("App %s isn't active for this org.", app.ID))
+	}
+
+	newApps := []string{}
+	for _, appId := range org.ActiveApps {
+		if appId == app.ID {
+			continue
+		}
+
+		newApps = append(newApps, appId)
+	}
+
+	org.ActiveApps = newApps
+	err = SetOrg(ctx, *org, org.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating org (deactive app %s) %s: %s", app.ID, org.Id, err)
+		return err
+	}
+
+	return nil
+}
+
 func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -3841,6 +3876,22 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[INFO] Anyone can edit %s (%s), since it doesn't have an owner (DELETE).", app.Name, app.ID)
 		} else {
+			if user.Role == "admin" {
+				err = deactivateApp(ctx, user, app)
+				if err == nil {
+					log.Printf("[INFO] App %s was deactivated for org %s", app.ID, user.ActiveOrg.Id)
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+					DeleteCache(ctx, "all_apps")
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+					resp.WriteHeader(200)
+					resp.Write([]byte(`{"success": true}`))
+					return
+				}
+			}
+
 			log.Printf("[WARNING] Wrong user (%s) for app %s (%s) when DELETING app", user.Username, app.Name, app.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
@@ -3850,6 +3901,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	if (app.Public || app.Sharing) && project.Environment == "cloud" {
 		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed. Public: %#v, Sharing: %#v", app.Name, app.Public, app.Sharing)
+
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Stop sharing it first, then delete it."}`))
 		return
@@ -6072,4 +6124,190 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	// save the openapi ID
 	resp.WriteHeader(422)
 	resp.Write([]byte(`{"success": false}`))
+}
+
+// Recursively finds child nodes inside sub workflows
+func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigger Trigger) ([]Action, []Branch, string) {
+	if execution.ExecutionOrg == "" {
+		execution.ExecutionOrg = execution.Workflow.OrgId
+	}
+
+	selectedWorkflow := ""
+	workflowAction := ""
+	for _, param := range trigger.Parameters {
+		if param.Name == "workflow" {
+			selectedWorkflow = param.Value
+		}
+
+		if param.Name == "startnode" {
+			workflowAction = param.Value
+		}
+	}
+
+	if len(selectedWorkflow) == 0 {
+		return []Action{}, []Branch{}, ""
+	}
+
+	// Authenticating and such
+	workflow, err := GetWorkflow(ctx, selectedWorkflow)
+	if err != nil {
+		return []Action{}, []Branch{}, ""
+	}
+
+	orgFound := false
+	if workflow.ExecutingOrg.Id == execution.ExecutionOrg {
+		orgFound = true
+	} else if workflow.OrgId == execution.ExecutionOrg {
+		orgFound = true
+	} else {
+		for _, org := range workflow.Org {
+			if org.Id == execution.ExecutionOrg {
+				orgFound = true
+				break
+			}
+		}
+	}
+
+	if !orgFound {
+		log.Printf("[WARNING] Auth for subflow is bad. %s (orig) vs %s", execution.ExecutionOrg, workflow.OrgId)
+		return []Action{}, []Branch{}, ""
+	}
+
+	//childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID)
+	log.Printf("FIND CHILDNODES OF %s", workflowAction)
+	workflowExecution := WorkflowExecution{
+		Workflow: *workflow,
+	}
+
+	childNodes := FindChildNodes(workflowExecution, workflowAction)
+	log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
+	newActions := []Action{}
+	branches := []Branch{}
+
+	// FIXME: Bad lastnode check. Need to go to the bottom of workflows and check max steps away from parent
+	lastNode := ""
+	for _, nodeId := range childNodes {
+		for _, action := range workflow.Actions {
+			if nodeId == action.ID {
+				newActions = append(newActions, action)
+				break
+			}
+		}
+
+		for _, branch := range workflow.Branches {
+			if branch.SourceID == nodeId {
+				branches = append(branches, branch)
+			}
+		}
+
+		lastNode = nodeId
+	}
+
+	found := false
+	for actionIndex, action := range newActions {
+		if lastNode == action.ID {
+			//actions[actionIndex].Name = trigger.Name
+			newActions[actionIndex].Label = trigger.Label
+			found = true
+		}
+	}
+
+	if !found {
+		log.Printf("SHOULD CHECK TRIGGERS FOR LASTNODE!")
+	}
+
+	log.Printf("[INFO] Found %d actions and %d branches in subflow", len(newActions), len(branches))
+	if len(newActions) == len(childNodes) {
+		return newActions, branches, lastNode
+	} else {
+		log.Printf("[WARNING] Bad length of actions and nodes in subflow (subsubflow?): %d vs %d", len(newActions), len(childNodes))
+
+		// Adding information about triggers if subflow
+		changed := false
+		for _, nodeId := range childNodes {
+			for triggerIndex, trigger := range workflow.Triggers {
+				if trigger.AppName == "Shuffle Workflow" {
+					if nodeId == trigger.ID {
+						replaceActions := false
+						workflowAction := ""
+						for _, param := range trigger.Parameters {
+							if param.Name == "argument" && !strings.Contains(param.Value, ".#") {
+								replaceActions = true
+							}
+
+							if param.Name == "startnode" {
+								workflowAction = param.Value
+							}
+						}
+
+						if replaceActions {
+							replacementNodes, newBranches, lastnode := GetReplacementNodes(ctx, workflowExecution, trigger)
+							log.Printf("SUB REPLACEMENTS: %d, %d", len(replacementNodes), len(newBranches))
+							if len(replacementNodes) > 0 {
+								//workflowExecution.Workflow.Actions = append(workflowExecution.Workflow.Actions, action)
+
+								//lastnode = replacementNodes[0]
+								// Have to validate in case it's the same workflow and such
+								for _, action := range replacementNodes {
+									found := false
+									for subActionIndex, subaction := range newActions {
+										if subaction.ID == action.ID {
+											found = true
+											//newActions[subActionIndex].Name = action.Name
+											newActions[subActionIndex].Label = action.Label
+											break
+										}
+									}
+
+									if !found {
+										newActions = append(newActions, action)
+									}
+
+									// Check if it's already set to have a value
+									//for resultIndex, result := range defaultResults {
+									//	if result.Action.ID == action.ID {
+									//		defaultResults = append(defaultResults[:resultIndex], defaultResults[resultIndex+1:]...)
+									//		break
+									//	}
+									//}
+								}
+
+								for _, branch := range newBranches {
+									workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, branch)
+								}
+
+								// Append branches:
+								// parent -> new inner node (FIRST one)
+								for branchIndex, branch := range workflowExecution.Workflow.Branches {
+									if branch.DestinationID == trigger.ID {
+										log.Printf("REPLACE DESTINATION WITH %s!!", workflowAction)
+										workflowExecution.Workflow.Branches[branchIndex].DestinationID = workflowAction
+									}
+
+									if branch.SourceID == trigger.ID {
+										log.Printf("REPLACE SOURCE WITH LASTNODE %s!!", lastnode)
+										workflowExecution.Workflow.Branches[branchIndex].SourceID = lastnode
+									}
+								}
+
+								// Remove the trigger
+								workflowExecution.Workflow.Triggers = append(workflowExecution.Workflow.Triggers[:triggerIndex], workflowExecution.Workflow.Triggers[triggerIndex+1:]...)
+								workflow.Triggers = append(workflow.Triggers[:triggerIndex], workflow.Triggers[triggerIndex+1:]...)
+								changed = true
+							}
+
+							log.Printf("NEW ACTION LENGTH %d, Triggers: %d", len(newActions), len(workflowExecution.Workflow.Triggers))
+						}
+					}
+				}
+
+			}
+		}
+
+		if changed {
+			return newActions, branches, lastNode
+		}
+	}
+
+	return []Action{}, []Branch{}, ""
 }
