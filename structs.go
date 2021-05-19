@@ -630,6 +630,7 @@ type Action struct {
 	AuthNotRequired  bool   `json:"auth_not_required,omitempty" datastore:"auth_not_required" yaml:"auth_not_required"`
 	Category         string `json:"category" datastore:"category"`
 	ReferenceUrl     string `json:"reference_url" datastore:"reference_url"`
+	SubAction        bool   `json:"sub_action" datastore:"sub_action"`
 }
 
 // Added environment for location to execute
