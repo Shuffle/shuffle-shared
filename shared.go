@@ -5277,7 +5277,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 							// Have to get from backend IF no environment (worker, onprem)
 							if project.Environment == "" {
-								data, err := json.Marshal(subflowResults)
+								data, err := json.Marshal(subflowResult)
 								if err != nil {
 									log.Printf("[WARNING] Failed init marshal: %s", err)
 									continue
@@ -5361,66 +5361,72 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				count := 0
 				for {
 					time.Sleep(3 * time.Second)
-					workflowExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
-					if err != nil {
-						log.Printf("[WARNING] Error getting subflow data: %s", err)
+
+					if count >= subflowTimeout/3 {
+						break
+					}
+
+					if project.Environment == "" {
+						data, err := json.Marshal(subflowResult)
+						if err != nil {
+							log.Printf("[WARNING] Failed init marshal: %s", err)
+							count += 1
+							continue
+						}
+
+						req, err := http.NewRequest(
+							"POST",
+							fullUrl,
+							bytes.NewBuffer([]byte(data)),
+						)
+
+						newresp, err := topClient.Do(req)
+						if err != nil {
+							log.Printf("[ERROR] Failed making request: %s", err)
+							count += 1
+							continue
+						}
+
+						body, err := ioutil.ReadAll(newresp.Body)
+						if err != nil {
+							log.Printf("[ERROR] Failed reading body: %s", err)
+							count += 1
+							continue
+						}
+
+						if newresp.StatusCode != 200 {
+							log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
+							count += 1
+							continue
+						}
+
+						err = json.Unmarshal(body, &workflowExecution)
+						if err != nil {
+							log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
+							count += 1
+							continue
+						}
+
+						log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+						if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
+							subflowResult.Result = workflowExecution.Result
+							break
+							//subflowResults[subflowIndex].Result = workflowExecution.Result
+							//updated = true
+							//finished += 1
+						}
 					} else {
-
-						if project.Environment == "" {
-							data, err := json.Marshal(subflowResults)
-							if err != nil {
-								log.Printf("[WARNING] Failed init marshal: %s", err)
-								continue
-							}
-
-							req, err := http.NewRequest(
-								"POST",
-								fullUrl,
-								bytes.NewBuffer([]byte(data)),
-							)
-
-							newresp, err := topClient.Do(req)
-							if err != nil {
-								log.Printf("[ERROR] Failed making request: %s", err)
-								continue
-							}
-
-							body, err := ioutil.ReadAll(newresp.Body)
-							if err != nil {
-								log.Printf("[ERROR] Failed reading body: %s", err)
-								continue
-							}
-
-							if newresp.StatusCode != 200 {
-								log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
-								continue
-							}
-
-							err = json.Unmarshal(body, &workflowExecution)
-							if err != nil {
-								log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
-								continue
-							}
-
-							log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
-							if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
-								subflowResult.Result = workflowExecution.Result
-								break
-								//subflowResults[subflowIndex].Result = workflowExecution.Result
-								//updated = true
-								//finished += 1
-							}
+						workflowExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+						if err != nil {
+							log.Printf("[WARNING] Error getting subflow data: %s", err)
 						} else {
 							//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
 							if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
 								subflowResult.Result = workflowExecution.Result
 								break
 							}
-						}
-					}
 
-					if count >= subflowTimeout/3 {
-						break
+						}
 					}
 
 					count += 1
