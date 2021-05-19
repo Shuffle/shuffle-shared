@@ -5314,7 +5314,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 									continue
 								}
 
-								log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+								log.Printf("Results: %d, status: %s, result: %s", len(workflowExecution.Results), workflowExecution.Status, workflowExecution.Result)
 								if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
 									subflowResults[subflowIndex].Result = workflowExecution.Result
 									updated = true
@@ -5409,7 +5409,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							continue
 						}
 
-						log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+						log.Printf("Results: %d, status: %s, result: %s", len(workflowExecution.Results), workflowExecution.Status, workflowExecution.Result)
 						if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
 							subflowResult.Result = workflowExecution.Result
 							break
