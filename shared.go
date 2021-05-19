@@ -1,6 +1,7 @@
 package shuffle
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -5202,7 +5204,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		runCheck := false
 		for _, param := range actionResult.Action.Parameters {
 			if param.Name == "check_result" {
-				log.Printf("RESULT: %#v", param)
+				//log.Printf("RESULT: %#v", param)
 				if param.Value == "true" {
 					runCheck = true
 				}
@@ -5232,13 +5234,37 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			subflowResult := SubflowData{}
 			subflowResults := []SubflowData{}
 			err = json.Unmarshal([]byte(actionResult.Result), &subflowResult)
+
+			// This is just in case it's running in the worker
+			backendUrl := os.Getenv("BASE_URL")
+			fullUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
+			topClient := &http.Client{
+				Transport: &http.Transport{
+					Proxy: nil,
+				},
+			}
+
+			httpProxy := os.Getenv("HTTP_PROXY")
+			httpsProxy := os.Getenv("HTTPS_PROXY")
+			if len(httpProxy) > 0 || len(httpsProxy) > 0 {
+				topClient = &http.Client{}
+			} else {
+				if len(httpProxy) > 0 {
+					log.Printf("Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+				}
+				if len(httpsProxy) > 0 {
+					log.Printf("Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+				}
+			}
+
 			if err != nil {
 				subflowResults = []SubflowData{}
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowResults)
 				if err == nil {
-					log.Printf("Should get data for %d subflow executions", len(subflowResults))
+					//log.Printf("[INFO] Should get data for %d subflow executions", len(subflowResults))
 					count := 0
 					updated := false
+
 					for {
 						time.Sleep(3 * time.Second)
 
@@ -5249,15 +5275,61 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								continue
 							}
 
-							workflowExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
-							if err != nil {
-								log.Printf("[WARNING] Error getting subflow data: %s", err)
-							} else {
-								//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
-								if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
+							// Have to get from backend IF no environment (worker, onprem)
+							if project.Environment == "" {
+								data, err := json.Marshal(subflowResults)
+								if err != nil {
+									log.Printf("[WARNING] Failed init marshal: %s", err)
+									continue
+								}
+
+								req, err := http.NewRequest(
+									"POST",
+									fullUrl,
+									bytes.NewBuffer([]byte(data)),
+								)
+
+								newresp, err := topClient.Do(req)
+								if err != nil {
+									log.Printf("[ERROR] Failed making request: %s", err)
+									continue
+								}
+
+								body, err := ioutil.ReadAll(newresp.Body)
+								if err != nil {
+									log.Printf("[ERROR] Failed reading body: %s", err)
+									continue
+								}
+
+								if newresp.StatusCode != 200 {
+									log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
+									continue
+								}
+
+								err = json.Unmarshal(body, &workflowExecution)
+								if err != nil {
+									log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
+									continue
+								}
+
+								log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+								if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
 									subflowResults[subflowIndex].Result = workflowExecution.Result
 									updated = true
 									finished += 1
+								}
+
+							} else {
+								workflowExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+								if err != nil {
+									log.Printf("[WARNING] Error getting subflow data: %s", err)
+								} else {
+									//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+									if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
+										subflowResults[subflowIndex].Result = workflowExecution.Result
+										updated = true
+										finished += 1
+									}
 								}
 							}
 						}
@@ -5293,10 +5365,57 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					if err != nil {
 						log.Printf("[WARNING] Error getting subflow data: %s", err)
 					} else {
-						//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
-						if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
-							subflowResult.Result = workflowExecution.Result
-							break
+
+						if project.Environment == "" {
+							data, err := json.Marshal(subflowResults)
+							if err != nil {
+								log.Printf("[WARNING] Failed init marshal: %s", err)
+								continue
+							}
+
+							req, err := http.NewRequest(
+								"POST",
+								fullUrl,
+								bytes.NewBuffer([]byte(data)),
+							)
+
+							newresp, err := topClient.Do(req)
+							if err != nil {
+								log.Printf("[ERROR] Failed making request: %s", err)
+								continue
+							}
+
+							body, err := ioutil.ReadAll(newresp.Body)
+							if err != nil {
+								log.Printf("[ERROR] Failed reading body: %s", err)
+								continue
+							}
+
+							if newresp.StatusCode != 200 {
+								log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
+								continue
+							}
+
+							err = json.Unmarshal(body, &workflowExecution)
+							if err != nil {
+								log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
+								continue
+							}
+
+							log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+							if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
+								subflowResult.Result = workflowExecution.Result
+								break
+								//subflowResults[subflowIndex].Result = workflowExecution.Result
+								//updated = true
+								//finished += 1
+							}
+						} else {
+							//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+							if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
+								subflowResult.Result = workflowExecution.Result
+								break
+							}
 						}
 					}
 
