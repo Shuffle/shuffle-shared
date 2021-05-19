@@ -4398,10 +4398,11 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Checks the users' role and such if the key fails
+	//log.Printf("Abort info: %#v vs %#v", workflowExecution.Authorization, parsedKey)
 	if workflowExecution.Authorization != parsedKey {
 		user, err := HandleApiAuthentication(resp, request)
 		if err != nil {
-			log.Printf("Api authentication failed in abort workflow: %s", err)
+			log.Printf("[WARNING] Api authentication failed in abort workflow: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -5237,7 +5238,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			// This is just in case it's running in the worker
 			backendUrl := os.Getenv("BASE_URL")
-			fullUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
+			resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
+			log.Printf("[DEBUG] ResultURL: %s", backendUrl)
 			topClient := &http.Client{
 				Transport: &http.Transport{
 					Proxy: nil,
@@ -5285,7 +5287,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 								req, err := http.NewRequest(
 									"POST",
-									fullUrl,
+									resultUrl,
 									bytes.NewBuffer([]byte(data)),
 								)
 
@@ -5376,7 +5378,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 						req, err := http.NewRequest(
 							"POST",
-							fullUrl,
+							resultUrl,
 							bytes.NewBuffer([]byte(data)),
 						)
 
