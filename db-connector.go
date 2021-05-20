@@ -1,17 +1,20 @@
 package shuffle
 
 import (
+	"bytes"
 	"cloud.google.com/go/datastore"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/bradfitz/slice"
+	"io/ioutil"
 	"log"
 	"strings"
 	"time"
 
 	"github.com/Masterminds/semver"
+	"github.com/elastic/go-elasticsearch/v8/esapi"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
@@ -185,17 +188,21 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 	key := datastore.NameKey(nameKey, id, nil)
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
-		log.Printf("[WARNING] Error adding workflow app: %s", err)
-		return err
+	data, err := json.Marshal(workflowapp)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in setapp: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		return indexEs(ctx, nameKey, workflowapp.ID, data)
+	} else {
+		if _, err := project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
+			log.Printf("[WARNING] Error adding workflow app: %s", err)
+			return err
+		}
 	}
 
 	if project.CacheDb {
-		data, err := json.Marshal(workflowapp)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in setapp: %s", err)
-			return nil
-		}
 
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
@@ -238,10 +245,15 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// New struct, to not add body, author etc
-	key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
-	if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-		log.Printf("Error adding workflow_execution: %s", err)
-		return err
+	if project.DbType == "elasticsearch" {
+		return indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+	} else {
+
+		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
+			log.Printf("Error adding workflow_execution: %s", err)
+			return err
+		}
 	}
 
 	return nil
@@ -418,9 +430,35 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
-	if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
-		return &WorkflowExecution{}, err
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return workflowExecution, err
+		}
+
+		if res.StatusCode == 404 {
+			return workflowExecution, errors.New("User doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflowExecution, err
+		}
+
+		wrapped := ExecWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflowExecution, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
+			return &WorkflowExecution{}, err
+		}
 	}
 
 	if project.CacheDb {
@@ -458,13 +496,39 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 		}
 	}
 
-	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
-	if err := project.Dbclient.Get(ctx, key, workflowApp); err != nil {
-		log.Printf("[WARNING] Failed getting app in GetApp: %s", err)
-		for _, app := range user.PrivateApps {
-			if app.ID == id {
-				workflowApp = &app
-				break
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return workflowApp, err
+		}
+
+		if res.StatusCode == 404 {
+			return workflowApp, errors.New("App doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflowApp, err
+		}
+
+		wrapped := AppWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflowApp, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, workflowApp); err != nil {
+			log.Printf("[WARNING] Failed getting app in GetApp: %s", err)
+			for _, app := range user.PrivateApps {
+				if app.ID == id {
+					workflowApp = &app
+					break
+				}
 			}
 		}
 	}
@@ -508,13 +572,39 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		}
 	}
 
-	key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
-	if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
-		if strings.Contains(err.Error(), `cannot load field`) {
-			log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
-			err = nil
-		} else {
-			return &Workflow{}, err
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return workflow, err
+		}
+
+		if res.StatusCode == 404 {
+			return workflow, errors.New("Workflow doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflow, err
+		}
+
+		wrapped := WorkflowWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflow, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
+				err = nil
+			} else {
+				return &Workflow{}, err
+			}
 		}
 	}
 
@@ -540,69 +630,152 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	limit := 30
 
 	// Appending the users' workflows
+	nameKey := "workflow"
 	log.Printf("[INFO] Getting workflows for user %s (%s)", user.Username, user.Role)
-	query := datastore.NewQuery("workflow").Filter("owner =", user.Id).Limit(limit)
-	//if project.Environment != "cloud" {
-	//	query = query.Order("-edited")
-	//}
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"owner": user.Id,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return workflows, err
+		}
 
-	cursorStr := ""
-	for {
-		it := project.Dbclient.Run(ctx, query)
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(nameKey),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return workflows, err
+		}
 
-		for {
-			innerWorkflow := Workflow{}
-			_, err := it.Next(&innerWorkflow)
+		if res.StatusCode == 404 {
+			return workflows, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return workflows, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return workflows, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflows, err
+		}
+
+		wrapped := WorkflowSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflows, err
+		}
+
+		workflows = []Workflow{}
+		for _, hit := range wrapped.Hits.Hits {
+			workflows = append(workflows, hit.Source)
+		}
+
+		if user.Role == "admin" {
+			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
+			var buf bytes.Buffer
+			query := map[string]interface{}{
+				"query": map[string]interface{}{
+					"match": map[string]interface{}{
+						"org_id": user.ActiveOrg.Id,
+					},
+				},
+			}
+			if err := json.NewEncoder(&buf).Encode(query); err != nil {
+				log.Printf("[WARNING] Error encoding find user query: %s", err)
+				return workflows, err
+			}
+
+			res, err := project.Es.Search(
+				project.Es.Search.WithContext(context.Background()),
+				project.Es.Search.WithIndex(nameKey),
+				project.Es.Search.WithBody(&buf),
+				project.Es.Search.WithTrackTotalHits(true),
+			)
 			if err != nil {
-				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					log.Printf("[INFO] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
-					innerWorkflow.Org = []OrgMini{user.ActiveOrg}
-					err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
-					if err != nil {
-						log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
-					}
+				log.Printf("[WARNING] Error getting response: %s", err)
+				return workflows, err
+			}
+
+			if res.StatusCode == 404 {
+				return workflows, nil
+			}
+
+			defer res.Body.Close()
+			if res.IsError() {
+				var e map[string]interface{}
+				if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+					log.Printf("[WARNING] Error parsing the response body: %s", err)
+					return workflows, err
 				} else {
-					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
-					break
+					// Print the response status and error information.
+					log.Printf("[%s] %s: %s",
+						res.Status(),
+						e["error"].(map[string]interface{})["type"],
+						e["error"].(map[string]interface{})["reason"],
+					)
 				}
 			}
 
-			workflows = append(workflows, innerWorkflow)
-		}
-
-		if err != iterator.Done {
-			//log.Printf("[INFO] Failed fetching results: %v", err)
-			//break
-		}
-
-		// Get the cursor for the next page of results.
-		nextCursor, err := it.Cursor()
-		if err != nil {
-			log.Printf("Cursorerror: %s", err)
-			break
-		} else {
-			//log.Printf("NEXTCURSOR: %s", nextCursor)
-			nextStr := fmt.Sprintf("%s", nextCursor)
-			if cursorStr == nextStr {
-				break
+			if res.StatusCode != 200 && res.StatusCode != 201 {
+				return workflows, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 			}
 
-			cursorStr = nextStr
-			query = query.Start(nextCursor)
-			//cursorStr = nextCursor
-			//break
+			respBody, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				return workflows, err
+			}
+
+			wrapped := WorkflowSearchWrapper{}
+			err = json.Unmarshal(respBody, &wrapped)
+			if err != nil {
+				return workflows, err
+			}
+
+			workflows = []Workflow{}
+			for _, hit := range wrapped.Hits.Hits {
+				found := false
+				for _, workflow := range workflows {
+					if workflow.ID == hit.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					workflows = append(workflows, hit.Source)
+				}
+			}
 		}
-	}
 
-	// q *datastore.Query
-
-	if user.Role == "admin" {
-		log.Printf("[INFO] Appending workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
-		query = datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
-		//if project.Environment != "cloud" {
-		//	query = query.Order("-edited")
-		//}
-
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("owner =", user.Id).Limit(limit)
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)
@@ -624,17 +797,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 					}
 				}
 
-				found := false
-				for _, loopedWorkflow := range workflows {
-					if loopedWorkflow.ID == innerWorkflow.ID {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					workflows = append(workflows, innerWorkflow)
-				}
+				workflows = append(workflows, innerWorkflow)
 			}
 
 			if err != iterator.Done {
@@ -658,6 +821,74 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				query = query.Start(nextCursor)
 				//cursorStr = nextCursor
 				//break
+			}
+		}
+
+		// q *datastore.Query
+
+		if user.Role == "admin" {
+			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
+			query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+			//if project.Environment != "cloud" {
+			//	query = query.Order("-edited")
+			//}
+
+			cursorStr := ""
+			for {
+				it := project.Dbclient.Run(ctx, query)
+
+				for {
+					innerWorkflow := Workflow{}
+					_, err := it.Next(&innerWorkflow)
+					if err != nil {
+						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[INFO] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
+							innerWorkflow.Org = []OrgMini{user.ActiveOrg}
+							err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
+							if err != nil {
+								log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
+							}
+						} else {
+							//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+							break
+						}
+					}
+
+					found := false
+					for _, loopedWorkflow := range workflows {
+						if loopedWorkflow.ID == innerWorkflow.ID {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						workflows = append(workflows, innerWorkflow)
+					}
+				}
+
+				if err != iterator.Done {
+					//log.Printf("[INFO] Failed fetching results: %v", err)
+					//break
+				}
+
+				// Get the cursor for the next page of results.
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("Cursorerror: %s", err)
+					break
+				} else {
+					//log.Printf("NEXTCURSOR: %s", nextCursor)
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if cursorStr == nextStr {
+						break
+					}
+
+					cursorStr = nextStr
+					query = query.Start(nextCursor)
+					//cursorStr = nextCursor
+					//break
+				}
 			}
 		}
 	}
@@ -703,37 +934,63 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	setOrg := false
-	key := datastore.NameKey(nameKey, id, nil)
-	if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-		if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
-			//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
-			log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler: %s", err)
-			err = nil
-
-			users := []User{}
-			q := datastore.NewQuery("Users").Filter("orgs =", id)
-			_, usererr := project.Dbclient.GetAll(ctx, q, &users)
-
-			if usererr != nil {
-				log.Printf("[WARNING] Failed handling users in org fixer: %s", usererr)
-				for index, user := range users {
-					users[index].ActiveOrg = OrgMini{
-						Name: curOrg.Name,
-						Id:   curOrg.Id,
-						Role: user.Role,
-					}
-
-					//log.Printf("Should update user %s because there's an error with it", users[index].Id)
-					SetUser(ctx, &users[index], false)
-				}
-			}
-
-			if len(users) > 0 {
-				curOrg.Users = users
-				setOrg = true
-			}
-		} else {
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
 			return &Org{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return &Org{}, errors.New("Org doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &Org{}, err
+		}
+
+		wrapped := OrgWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &Org{}, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
+				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
+				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler: %s", err)
+				err = nil
+
+				users := []User{}
+				q := datastore.NewQuery("Users").Filter("orgs =", id)
+				_, usererr := project.Dbclient.GetAll(ctx, q, &users)
+
+				if usererr != nil {
+					log.Printf("[WARNING] Failed handling users in org fixer: %s", usererr)
+					for index, user := range users {
+						users[index].ActiveOrg = OrgMini{
+							Name: curOrg.Name,
+							Id:   curOrg.Id,
+							Role: user.Role,
+						}
+
+						//log.Printf("Should update user %s because there's an error with it", users[index].Id)
+						SetUser(ctx, &users[index], false)
+					}
+				}
+
+				if len(users) > 0 {
+					curOrg.Users = users
+					setOrg = true
+				}
+			} else {
+				return &Org{}, err
+			}
 		}
 	}
 
@@ -771,6 +1028,36 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	return curOrg, nil
 }
 
+func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
+	req := esapi.IndexRequest{
+		Index:      strings.ToLower(nameKey),
+		DocumentID: id,
+		Body:       strings.NewReader(string(bytes)),
+		Refresh:    "true",
+		Pretty:     true,
+	}
+
+	res, err := req.Do(ctx, &project.Es)
+	if err != nil {
+		log.Printf("[WARNING] Error getting response: %s", err)
+		return err
+	}
+
+	defer res.Body.Close()
+	//log.Printf("Res: %#v", res.Body)
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		return errors.New(fmt.Sprintf("Bad statuscode from database: %d", res.StatusCode))
+	}
+
+	var r map[string]interface{}
+	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+		log.Printf("[WARNING] Error parsing the response body: %s", err)
+		return err
+	}
+	return nil
+}
+
 func SetOrg(ctx context.Context, data Org, id string) error {
 	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
@@ -781,14 +1068,23 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	data.Edited = timeNow
 
 	// clear session_token and API_token for user
-	k := datastore.NameKey(nameKey, id, nil)
-	if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
-		log.Println(err)
-		return err
+	if project.DbType == "elasticsearch" {
+		b, err := json.Marshal(data)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling %s - %s: %s", id, nameKey, err)
+			return err
+		}
+
+		return indexEs(ctx, nameKey, id, b)
+	} else {
+		k := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
+			log.Println(err)
+			return err
+		}
 	}
 
 	if project.CacheDb {
-
 		newUsers := []User{}
 		for _, user := range data.Users {
 			user.Password = ""
@@ -832,9 +1128,36 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 		//log.Printf("[WARNING] Error getting session cache for %s: %v", thissession, err)
 	}
 
-	key := datastore.NameKey("sessions", thissession, nil)
-	if err := project.Dbclient.Get(ctx, key, session); err != nil {
-		return &Session{}, err
+	nameKey := "sessions"
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), thissession)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return session, err
+		}
+
+		if res.StatusCode == 404 {
+			return session, errors.New("Session doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return session, err
+		}
+
+		wrapped := SessionWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return session, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, thissession, nil)
+		if err := project.Dbclient.Get(ctx, key, session); err != nil {
+			return &Session{}, err
+		}
 	}
 
 	if project.CacheDb {
@@ -876,22 +1199,43 @@ func SetApikey(ctx context.Context, Userdata User) error {
 	newapiUser := new(Userapi)
 	newapiUser.ApiKey = Userdata.ApiKey
 	newapiUser.Username = strings.ToLower(Userdata.Username)
-	key1 := datastore.NameKey("apikey", newapiUser.ApiKey, nil)
+	nameKey := "apikey"
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key1, newapiUser); err != nil {
-		log.Printf("Error adding apikey: %s", err)
-		return err
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(Userdata)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling user in set apikey: %s", err)
+			return err
+		}
+
+		return indexEs(ctx, nameKey, newapiUser.ApiKey, data)
+	} else {
+		key1 := datastore.NameKey(nameKey, newapiUser.ApiKey, nil)
+		if _, err := project.Dbclient.Put(ctx, key1, newapiUser); err != nil {
+			log.Printf("Error adding apikey: %s", err)
+			return err
+		}
 	}
 
 	return nil
 }
 
-func SetOpenApiDatastore(ctx context.Context, id string, data ParsedOpenApi) error {
-	k := datastore.NameKey("openapi3", id, nil)
-	if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
-		log.Println(err)
-		return err
+func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) error {
+	nameKey := "openapi3"
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(openapi)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling user: %s", err)
+			return err
+		}
+		return indexEs(ctx, nameKey, id, data)
+	} else {
+		k := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, k, &openapi); err != nil {
+			log.Println(err)
+			return err
+		}
 	}
 
 	return nil
@@ -912,16 +1256,30 @@ func SetSession(ctx context.Context, user User, value string) error {
 	//parsedKey := strings.ToLower(user.Username)
 	//if project.Environment != "cloud" {
 	//}
-	parsedKey := user.Id
-
 	// Non indexed User data
+	parsedKey := user.Id
 	user.Session = value
-	key1 := datastore.NameKey("Users", parsedKey, nil)
 
-	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key1, &user); err != nil {
-		log.Printf("[WARNING] Error adding Usersession: %s", err)
-		return err
+	nameKey := "Users"
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(user)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling user: %s", err)
+			return err
+		}
+
+		//log.Printf("SESSION RES: %#v", res)
+		err = indexEs(ctx, nameKey, parsedKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating user with session: %s", err)
+			return err
+		}
+	} else {
+		key1 := datastore.NameKey(nameKey, parsedKey, nil)
+		if _, err := project.Dbclient.Put(ctx, key1, &user); err != nil {
+			log.Printf("[WARNING] Error adding Usersession: %s", err)
+			return err
+		}
 	}
 
 	if len(user.Session) > 0 {
@@ -931,11 +1289,22 @@ func SetSession(ctx context.Context, user User, value string) error {
 		sessiondata.Username = strings.ToLower(user.Username)
 		sessiondata.Session = user.Session
 		sessiondata.Id = user.Id
-		key2 := datastore.NameKey("sessions", sessiondata.Session, nil)
+		nameKey = "sessions"
 
-		if _, err := project.Dbclient.Put(ctx, key2, sessiondata); err != nil {
-			log.Printf("Error adding session: %s", err)
-			return err
+		if project.DbType == "elasticsearch" {
+			data, err := json.Marshal(sessiondata)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling session %s", err)
+				return err
+			}
+
+			return indexEs(ctx, nameKey, sessiondata.Session, data)
+		} else {
+			key2 := datastore.NameKey(nameKey, sessiondata.Session, nil)
+			if _, err := project.Dbclient.Put(ctx, key2, sessiondata); err != nil {
+				log.Printf("Error adding session: %s", err)
+				return err
+			}
 		}
 	}
 
@@ -943,12 +1312,78 @@ func SetSession(ctx context.Context, user User, value string) error {
 }
 
 func FindUser(ctx context.Context, username string) ([]User, error) {
-	q := datastore.NewQuery("Users").Filter("Username =", username)
 	var users []User
-	_, err = project.Dbclient.GetAll(ctx, q, &users)
-	if err != nil && len(users) == 0 {
-		log.Printf("[WARNING] Failed getting users for username: %s", username)
-		return users, err
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"username": username,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return []User{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex("users"),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return []User{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return []User{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return []User{}, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []User{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []User{}, err
+		}
+
+		wrapped := UserSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return []User{}, err
+		}
+
+		users = []User{}
+		for _, hit := range wrapped.Hits.Hits {
+			users = append(users, hit.Source)
+		}
+	} else {
+		q := datastore.NewQuery("Users").Filter("Username =", username)
+		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil && len(users) == 0 {
+			log.Printf("[WARNING] Failed getting users for username: %s", username)
+			return users, err
+		}
 	}
 
 	log.Printf("[INFO] Found %d user(s) for email %s in db-connector", len(users), username)
@@ -975,22 +1410,49 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		}
 	}
 
-	key := datastore.NameKey("Users", parsedKey, nil)
-	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
-		// Handles migration of the user
-		if strings.Contains(err.Error(), `cannot load field`) {
-			log.Printf("[INFO] Error in user. Migrating to new org and user handler.")
-			curUser.ActiveOrg = OrgMini{
-				Name: curUser.ActiveOrg.Name,
-				Id:   curUser.ActiveOrg.Id,
-				Role: "user",
-			}
+	nameKey := "Users"
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), parsedKey)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return curUser, err
+		}
 
-			// Updating the user and their org
-			SetUser(ctx, curUser, false)
-		} else {
-			log.Printf("[WARNING] Error in Get User: %s", err)
-			return &User{}, err
+		if res.StatusCode == 404 {
+			return curUser, errors.New("User doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return curUser, err
+		}
+
+		wrapped := UserWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return curUser, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, parsedKey, nil)
+		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
+			// Handles migration of the user
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[INFO] Error in user. Migrating to new org and user handler.")
+				curUser.ActiveOrg = OrgMini{
+					Name: curUser.ActiveOrg.Name,
+					Id:   curUser.ActiveOrg.Id,
+					Role: "user",
+				}
+
+				// Updating the user and their org
+				SetUser(ctx, curUser, false)
+			} else {
+				log.Printf("[WARNING] Error in Get User: %s", err)
+				return &User{}, err
+			}
 		}
 	}
 
@@ -1017,10 +1479,20 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		user = fixUserOrg(ctx, user)
 	}
 
-	k := datastore.NameKey("Users", parsedKey, nil)
-	if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
-		log.Printf("[WARNING] Error updating user: %s", err)
-		return err
+	nameKey := "Users"
+	data, err := json.Marshal(user)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling user: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		return indexEs(ctx, nameKey, parsedKey, data)
+	} else {
+		k := datastore.NameKey(nameKey, parsedKey, nil)
+		if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
+			log.Printf("[WARNING] Error updating user: %s", err)
+			return err
+		}
 	}
 
 	DeleteCache(ctx, user.ApiKey)
@@ -1028,11 +1500,6 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
-		data, err := json.Marshal(user)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling user: %s", err)
-			return nil
-		}
 
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
@@ -1175,10 +1642,77 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 	}
 
-	q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
-	_, err = project.Dbclient.GetAll(ctx, q, &environments)
-	if err != nil && len(environments) == 0 {
-		return []Environment{}, err
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": orgId,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return environments, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(nameKey),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return environments, err
+		}
+
+		if res.StatusCode == 404 {
+			return environments, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return environments, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return environments, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return environments, err
+		}
+
+		wrapped := EnvironmentSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return environments, err
+		}
+
+		environments = []Environment{}
+		for _, hit := range wrapped.Hits.Hits {
+			environments = append(environments, hit.Source)
+		}
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
+		_, err = project.Dbclient.GetAll(ctx, q, &environments)
+		if err != nil && len(environments) == 0 {
+			return []Environment{}, err
+		}
 	}
 
 	if project.CacheDb {
@@ -1568,8 +2102,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 	}
 
-	cursorStr := ""
-	query := datastore.NewQuery("workflowapp").Order("-edited").Limit(10)
 	//query := datastore.NewQuery("workflowapp").Order("-edited").Limit(40)
 
 	// NOT BEING UPDATED
@@ -1577,108 +2109,175 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 	// Seems like only actions are wrong. Could get the app individually.
 	// Guessing it's a memory issue.
 	//var err error
-	for {
-		it := project.Dbclient.Run(ctx, query)
-		//innerApp := WorkflowApp{}
-		//data, err := it.Next(&innerApp)
-		//log.Printf("DATA: %#v, err: %s", data, err)
 
+	nameKey := "workflowapp"
+	if project.DbType == "elasticsearch" {
+		//var buf bytes.Buffer
+		//query := map[string]interface{}{
+		//	"query": map[string]interface{}{
+		//		"match": map[string]interface{}{},
+		//	},
+		//}
+		//if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		//	log.Printf("[WARNING] Error encoding find user query: %s", err)
+		//	return []WorkflowApp{}, err
+		//}
+		//project.Es.Search.WithBody(&buf),
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(nameKey),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return []WorkflowApp{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return []WorkflowApp{}, err
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return []WorkflowApp{}, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []WorkflowApp{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []WorkflowApp{}, err
+		}
+
+		wrapped := AppSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return []WorkflowApp{}, err
+		}
+
+		allApps = []WorkflowApp{}
+		for _, hit := range wrapped.Hits.Hits {
+			allApps = append(allApps, hit.Source)
+		}
+	} else {
+		cursorStr := ""
+		query := datastore.NewQuery(nameKey).Order("-edited").Limit(10)
 		for {
-			innerApp := WorkflowApp{}
-			_, err := it.Next(&innerApp)
-			if err != nil {
-				//log.Printf("No more apps? Breaking: %s.", err)
-				break
-			}
+			it := project.Dbclient.Run(ctx, query)
+			//innerApp := WorkflowApp{}
+			//data, err := it.Next(&innerApp)
+			//log.Printf("DATA: %#v, err: %s", data, err)
 
-			if innerApp.Name == "Shuffle Subflow" {
-				continue
-			}
-
-			if !innerApp.IsValid {
-				continue
-			}
-
-			found := false
-			newIndex := -1
-			newApp := WorkflowApp{}
-			for appIndex, loopedApp := range allApps {
-				if loopedApp.Name == innerApp.Name {
-					if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
-						found = true
-					} else {
-						//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
-
-						v2, err := semver.NewVersion(innerApp.AppVersion)
-						if err != nil {
-							log.Printf("Failed parsing original app version %s: %s", innerApp.AppVersion, err)
-						}
-
-						appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
-						c, err := semver.NewConstraint(appConstraint)
-						if err != nil {
-							log.Printf("Failed preparing constraint: %s", err)
-						}
-
-						if c.Check(v2) {
-							//log.Printf("New IS larger - changing app on index %d from %s to %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion)
-
-							newApp = innerApp
-							newApp.Versions = loopedApp.Versions
-							newApp.LoopVersions = loopedApp.LoopVersions
-						} else {
-							//log.Printf("New is NOT larger - just appending")
-							newApp = loopedApp
-						}
-
-						newApp.Versions = append(newApp.Versions, AppVersion{
-							Version: innerApp.AppVersion,
-							ID:      innerApp.ID,
-						})
-
-						newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
-						newIndex = appIndex
-					}
-
+			for {
+				innerApp := WorkflowApp{}
+				_, err := it.Next(&innerApp)
+				if err != nil {
+					//log.Printf("No more apps? Breaking: %s.", err)
 					break
 				}
-			}
 
-			if newIndex >= 0 && newApp.ID != "" {
-				//log.Printf("Should update app on index %d", newIndex)
-				allApps[newIndex] = newApp
-			} else {
-				if !found {
-					allApps = append(allApps, innerApp)
+				if innerApp.Name == "Shuffle Subflow" {
+					continue
+				}
+
+				if !innerApp.IsValid {
+					continue
+				}
+
+				found := false
+				newIndex := -1
+				newApp := WorkflowApp{}
+				for appIndex, loopedApp := range allApps {
+					if loopedApp.Name == innerApp.Name {
+						if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
+							found = true
+						} else {
+							//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
+
+							v2, err := semver.NewVersion(innerApp.AppVersion)
+							if err != nil {
+								log.Printf("Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+							}
+
+							appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
+							c, err := semver.NewConstraint(appConstraint)
+							if err != nil {
+								log.Printf("Failed preparing constraint: %s", err)
+							}
+
+							if c.Check(v2) {
+								//log.Printf("New IS larger - changing app on index %d from %s to %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion)
+
+								newApp = innerApp
+								newApp.Versions = loopedApp.Versions
+								newApp.LoopVersions = loopedApp.LoopVersions
+							} else {
+								//log.Printf("New is NOT larger - just appending")
+								newApp = loopedApp
+							}
+
+							newApp.Versions = append(newApp.Versions, AppVersion{
+								Version: innerApp.AppVersion,
+								ID:      innerApp.ID,
+							})
+
+							newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+							newIndex = appIndex
+						}
+
+						break
+					}
+				}
+
+				if newIndex >= 0 && newApp.ID != "" {
+					//log.Printf("Should update app on index %d", newIndex)
+					allApps[newIndex] = newApp
+				} else {
+					if !found {
+						allApps = append(allApps, innerApp)
+					}
 				}
 			}
-		}
 
-		if err != iterator.Done {
-			//log.Printf("[INFO] Failed fetching results: %v", err)
-			//break
-		}
-
-		// Get the cursor for the next page of results.
-		nextCursor, err := it.Cursor()
-		if err != nil {
-			log.Printf("Cursorerror: %s", err)
-			break
-		} else {
-			//log.Printf("NEXTCURSOR: %s", nextCursor)
-			nextStr := fmt.Sprintf("%s", nextCursor)
-			if cursorStr == nextStr {
-				break
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
 			}
 
-			cursorStr = nextStr
-			query = query.Start(nextCursor)
-			//cursorStr = nextCursor
-			//break
-		}
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
 
-		if len(allApps) > maxLen {
-			break
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
+			}
+
+			if len(allApps) > maxLen {
+				break
+			}
 		}
 	}
 
@@ -1718,12 +2317,24 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 }
 
 func SetWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWrapper, id string) error {
-	key := datastore.NameKey("workflowqueue", id, nil)
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key, &executionRequests); err != nil {
-		log.Printf("Error adding workflow queue: %s", err)
-		return err
+
+	nameKey := "workflowqueue"
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(executionRequests)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in workflowqueue: %s", err)
+			return err
+		}
+
+		return indexEs(ctx, nameKey, id, data)
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &executionRequests); err != nil {
+			log.Printf("Error adding workflow queue: %s", err)
+			return err
+		}
 	}
 
 	return nil
@@ -1731,18 +2342,46 @@ func SetWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWra
 
 func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, error) {
 
-	key := datastore.NameKey("workflowqueue", id, nil)
-	workflows := ExecutionRequestWrapper{}
-	if err := project.Dbclient.Get(ctx, key, &workflows); err != nil {
-		return ExecutionRequestWrapper{}, err
+	nameKey := "workflowqueue"
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return ExecutionRequestWrapper{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return ExecutionRequestWrapper{}, errors.New("Executionrequest doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return ExecutionRequestWrapper{}, err
+		}
+
+		wrapped := ExecRequestWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return ExecutionRequestWrapper{}, err
+		}
+
+		return wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		workflows := ExecutionRequestWrapper{}
+		if err := project.Dbclient.Get(ctx, key, &workflows); err != nil {
+			return ExecutionRequestWrapper{}, err
+		}
+
+		return workflows, nil
 	}
 
-	return workflows, nil
+	return ExecutionRequestWrapper{}, err
 }
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 	nameKey := "workflow"
-	key := datastore.NameKey(nameKey, id, nil)
 	timeNow := int64(time.Now().Unix())
 	workflow.Edited = timeNow
 	if workflow.Created == 0 {
@@ -1754,17 +2393,22 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key, &workflow); err != nil {
-		log.Printf("Error adding workflow: %s", err)
-		return err
+	data, err := json.Marshal(workflow)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		return indexEs(ctx, nameKey, id, data)
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &workflow); err != nil {
+			log.Printf("Error adding workflow: %s", err)
+			return err
+		}
 	}
 
 	if project.CacheDb {
-		data, err := json.Marshal(workflow)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
-			return nil
-		}
 
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data)
@@ -1778,12 +2422,22 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthenticationStorage, id string) error {
 	nameKey := "workflowappauth"
-	key := datastore.NameKey(nameKey, id, nil)
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
-		log.Printf("[WARNING] Error adding workflow app AUTH: %s", err)
-		return err
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(workflowappauth)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in set app auth: %s", err)
+			return err
+		}
+
+		return indexEs(ctx, nameKey, id, data)
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
+			log.Printf("[WARNING] Error adding workflow app AUTH: %s", err)
+			return err
+		}
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowappauth.OrgId)
@@ -1792,36 +2446,75 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	return nil
 }
 
-func SetEnvironment(ctx context.Context, data *Environment) error {
+func SetEnvironment(ctx context.Context, env *Environment) error {
 	// clear session_token and API_token for user
 	nameKey := "Environments"
 
-	if data.Id == "" {
-		data.Id = uuid.NewV4().String()
+	if env.Id == "" {
+		env.Id = uuid.NewV4().String()
 	}
 
 	// New struct, to not add body, author etc
-	log.Printf("SETTING ENVIRONMENT %s", data.Id)
-	k := datastore.NameKey(nameKey, data.Id, nil)
-	if _, err := project.Dbclient.Put(ctx, k, data); err != nil {
-		log.Println(err)
-		return err
+	log.Printf("SETTING ENVIRONMENT %s", env.Id)
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(env)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in set env: %s", err)
+			return err
+		}
+
+		return indexEs(ctx, nameKey, env.Id, data)
+	} else {
+		k := datastore.NameKey(nameKey, env.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, k, env); err != nil {
+			log.Println(err)
+			return err
+		}
 	}
 
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, data.OrgId)
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, env.OrgId)
 	DeleteCache(ctx, cacheKey)
 
 	return nil
 }
 
 func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error) {
-	key := datastore.NameKey("schedules", strings.ToLower(schedulename), nil)
-	curUser := &ScheduleOld{}
-	if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
-		return &ScheduleOld{}, err
+	nameKey := "schedules"
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), strings.ToLower(schedulename))
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return &ScheduleOld{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return &ScheduleOld{}, errors.New("Schedule doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &ScheduleOld{}, err
+		}
+
+		wrapped := ScheduleWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &ScheduleOld{}, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(schedulename), nil)
+		curUser := &ScheduleOld{}
+		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
+			return &ScheduleOld{}, err
+		}
+
+		return curUser, nil
 	}
 
-	return curUser, nil
+	return &ScheduleOld{}, nil
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
@@ -1863,13 +2556,44 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 		}
 	}
 
-	key := datastore.NameKey(nameKey, hookId, nil)
-	dbErr := project.Dbclient.Get(ctx, key, hook)
+	var err error
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), hookId)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return &Hook{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return &Hook{}, errors.New("Hook doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &Hook{}, err
+		}
+
+		wrapped := HookWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &Hook{}, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, hookId, nil)
+		err = project.Dbclient.Get(ctx, key, hook)
+		if err != nil {
+			return &Hook{}, err
+		}
+	}
+
 	if project.CacheDb {
 		hookData, err := json.Marshal(hook)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in gethook: %s", err)
-			return hook, dbErr
+			return hook, err
 		}
 
 		err = SetCache(ctx, cacheKey, hookData)
@@ -1878,25 +2602,30 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 		}
 	}
 
-	return hook, dbErr
+	return hook, err
 }
 
 func SetHook(ctx context.Context, hook Hook) error {
 	nameKey := "hooks"
-	key1 := datastore.NameKey(nameKey, strings.ToLower(hook.Id), nil)
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key1, &hook); err != nil {
-		log.Printf("Error adding hook: %s", err)
-		return err
+	hookData, err := json.Marshal(hook)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in setHook: %s", err)
+		return nil
+	}
+
+	if project.DbType == "elasticsearch" {
+		return indexEs(ctx, nameKey, strings.ToLower(hook.Id), hookData)
+	} else {
+		key1 := datastore.NameKey(nameKey, strings.ToLower(hook.Id), nil)
+		if _, err := project.Dbclient.Put(ctx, key1, &hook); err != nil {
+			log.Printf("Error adding hook: %s", err)
+			return err
+		}
 	}
 
 	if project.CacheDb {
-		hookData, err := json.Marshal(hook)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in setHook: %s", err)
-			return nil
-		}
 
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, hook.Id)
 		err = SetCache(ctx, cacheKey, hookData)
@@ -1909,24 +2638,64 @@ func SetHook(ctx context.Context, hook Hook) error {
 }
 
 func GetFile(ctx context.Context, id string) (*File, error) {
-	key := datastore.NameKey("Files", id, nil)
-	curFile := &File{}
-	if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
-		return &File{}, err
+	nameKey := "Files"
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return &File{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return &File{}, errors.New("File doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &File{}, err
+		}
+
+		wrapped := FileWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &File{}, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		curFile := &File{}
+		if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
+			return &File{}, err
+		}
+
+		return curFile, nil
 	}
 
-	return curFile, nil
+	return &File{}, nil
 }
 
 func SetFile(ctx context.Context, file File) error {
 	// clear session_token and API_token for user
 	timeNow := time.Now().Unix()
 	file.UpdatedAt = timeNow
+	nameKey := "Files"
 
-	k := datastore.NameKey("Files", file.Id, nil)
-	if _, err := project.Dbclient.Put(ctx, k, &file); err != nil {
-		log.Println(err)
-		return err
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(file)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling set file: %s", err)
+			return err
+		}
+
+		return indexEs(ctx, nameKey, file.Id, data)
+	} else {
+		k := datastore.NameKey(nameKey, file.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, k, &file); err != nil {
+			log.Println(err)
+			return err
+		}
 	}
 
 	return nil
@@ -1974,9 +2743,35 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	}
 
 	// New struct, to not add body, author etc
-	key := datastore.NameKey(nameKey, id, nil)
-	if err := project.Dbclient.Get(ctx, key, appAuth); err != nil {
-		return &AppAuthenticationStorage{}, err
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return appAuth, err
+		}
+
+		if res.StatusCode == 404 {
+			return appAuth, errors.New("App auth doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return appAuth, nil
+		}
+
+		wrapped := AppAuthWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return appAuth, nil
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if err := project.Dbclient.Get(ctx, key, appAuth); err != nil {
+			return &AppAuthenticationStorage{}, err
+		}
 	}
 
 	if project.CacheDb {
@@ -2012,22 +2807,256 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 }
 
 func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
-	key := datastore.NameKey("trigger_auth", strings.ToLower(id), nil)
-	triggerauth := &TriggerAuth{}
-	if err := project.Dbclient.Get(ctx, key, triggerauth); err != nil {
-		return &TriggerAuth{}, err
+	nameKey := "trigger_auth"
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), strings.ToLower(id))
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return &TriggerAuth{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return &TriggerAuth{}, errors.New("Trigger auth doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &TriggerAuth{}, err
+		}
+
+		wrapped := TriggerAuthWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &TriggerAuth{}, err
+		}
+
+		return &wrapped.Source, nil
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		triggerauth := &TriggerAuth{}
+		if err := project.Dbclient.Get(ctx, key, triggerauth); err != nil {
+			return &TriggerAuth{}, err
+		}
+		return triggerauth, nil
 	}
 
-	return triggerauth, nil
+	return &TriggerAuth{}, nil
 }
 
 func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
-	key1 := datastore.NameKey("trigger_auth", strings.ToLower(trigger.Id), nil)
+	nameKey := "trigger_auth"
 
 	// New struct, to not add body, author etc
-	if _, err := project.Dbclient.Put(ctx, key1, &trigger); err != nil {
-		log.Printf("Error adding trigger auth: %s", err)
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(trigger)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in set trigger auth: %s", err)
+			return err
+		}
+
+		return indexEs(ctx, nameKey, strings.ToLower(trigger.Id), data)
+	} else {
+		key1 := datastore.NameKey(nameKey, strings.ToLower(trigger.Id), nil)
+		if _, err := project.Dbclient.Put(ctx, key1, &trigger); err != nil {
+			log.Printf("Error adding trigger auth: %s", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+// Index = Username
+func DeleteKeys(ctx context.Context, entity string, value []string) error {
+	// Non indexed User data
+	keys := []*datastore.Key{}
+	for _, item := range value {
+		keys = append(keys, datastore.NameKey(entity, item, nil))
+	}
+
+	err := project.Dbclient.DeleteMulti(ctx, keys)
+	if err != nil {
+		log.Printf("Error deleting %s from %s: %s", value, entity, err)
 		return err
+	}
+
+	return nil
+}
+
+func GetEnvironmentCount() (int, error) {
+	ctx := context.Background()
+	q := datastore.NewQuery("Environments").Limit(1)
+	count, err := project.Dbclient.Count(ctx, q)
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
+func GetAllUsers(ctx context.Context) ([]User, error) {
+	index := "Users"
+	users := []User{}
+	if project.DbType == "elasticsearch" {
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return []User{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return []User{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return []User{}, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []User{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []User{}, err
+		}
+
+		wrapped := UserSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return []User{}, err
+		}
+
+		users = []User{}
+		for _, hit := range wrapped.Hits.Hits {
+			users = append(users, hit.Source)
+		}
+
+		return users, nil
+	} else {
+		q := datastore.NewQuery(index)
+		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil {
+			return []User{}, err
+		}
+	}
+
+	return users, nil
+}
+
+func GetAllOrgs(ctx context.Context) ([]Org, error) {
+	index := "Organizations"
+	var orgs []Org
+	if project.DbType == "elasticsearch" {
+		//var buf bytes.Buffer
+		//query := map[string]interface{}{
+		//	"query": map[string]interface{}{
+		//		"match": map[string]interface{}{},
+		//	},
+		//}
+		//if err := json.NewEncoder(&buf).Encode(query); err != nil {
+		//	log.Printf("Error encoding query: %s", err)
+		//	return []Org{}, err
+		//}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return []Org{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return []Org{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return []Org{}, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []Org{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []Org{}, err
+		}
+
+		wrapped := OrgSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return []Org{}, err
+		}
+
+		orgs = []Org{}
+		for _, hit := range wrapped.Hits.Hits {
+			orgs = append(orgs, hit.Source)
+		}
+
+		return orgs, nil
+	} else {
+		q := datastore.NewQuery(index)
+		_, err = project.Dbclient.GetAll(ctx, q, &orgs)
+		if err != nil {
+			return []Org{}, err
+		}
+	}
+
+	return orgs, nil
+}
+
+// Index = Username
+func SetSchedule(ctx context.Context, schedule ScheduleOld) error {
+	nameKey := "schedules"
+
+	// New struct, to not add body, author etc
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(schedule)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setschedule: %s", err)
+			return nil
+		}
+		return indexEs(ctx, nameKey, strings.ToLower(schedule.Id), data)
+	} else {
+		key1 := datastore.NameKey(nameKey, strings.ToLower(schedule.Id), nil)
+		if _, err := project.Dbclient.Put(ctx, key1, &schedule); err != nil {
+			log.Printf("Error adding schedule: %s", err)
+			return err
+		}
 	}
 
 	return nil

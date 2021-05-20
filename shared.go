@@ -20,6 +20,7 @@ import (
 
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
+	"github.com/elastic/go-elasticsearch/v8"
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
@@ -912,13 +913,15 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool) ShuffleStorage {
+func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) ShuffleStorage {
 	project = ShuffleStorage{
 		Dbclient:      dbclient,
 		StorageClient: storageClient,
 		GceProject:    gceProject,
 		Environment:   environment,
 		CacheDb:       cacheDb,
+		Es:            es,
+		DbType:        dbType,
 	}
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
@@ -5084,12 +5087,13 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Expires: expiration,
 		})
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, userdata.Session, expiration.Unix())
 		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
-
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, userdata.Session, expiration.Unix())
 		err = SetSession(ctx, userdata, userdata.Session)
 		if err != nil {
-			log.Printf("Error adding session to database: %s", err)
+			log.Printf("[WARNING] Error adding session to database: %s", err)
+		} else {
+			//log.Printf("[DEBUG] Updated session in backend")
 		}
 
 		resp.WriteHeader(200)
@@ -6558,4 +6562,53 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	}
 
 	return []Action{}, []Branch{}, ""
+}
+
+func HandleGetSpecificStats(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	_, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in getting specific workflow: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var statsId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		statsId = location[4]
+	}
+
+	ctx := context.Background()
+	statisticsId := "global_statistics"
+	nameKey := statsId
+	key := datastore.NameKey(statisticsId, nameKey, nil)
+	statisticsItem := StatisticsItem{}
+	if err := project.Dbclient.Get(ctx, key, &statisticsItem); err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	b, err := json.Marshal(statisticsItem)
+	if err != nil {
+		log.Printf("Failed to marshal data: %s", err)
+		resp.WriteHeader(401)
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(b))
 }

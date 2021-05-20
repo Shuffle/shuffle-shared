@@ -3,6 +3,7 @@ package shuffle
 import (
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
+	"github.com/elastic/go-elasticsearch/v8"
 	"time"
 )
 
@@ -12,6 +13,8 @@ type ShuffleStorage struct {
 	StorageClient storage.Client
 	Environment   string
 	CacheDb       bool
+	Es            elasticsearch.Client
+	DbType        string
 }
 
 type ExecutionRequestWrapper struct {
@@ -1046,4 +1049,274 @@ type OutlookFolders struct {
 	OdataContext  string          `json:"@odata.context"`
 	OdataNextLink string          `json:"@odata.nextLink"`
 	Value         []OutlookFolder `json:"value"`
+}
+
+type StatisticsData struct {
+	Timestamp int64  `json:"timestamp" datastore:"timestamp"`
+	Id        string `json:"id" datastore:"id"`
+	Amount    int64  `json:"amount" datastore:"amount"`
+}
+
+type StatisticsItem struct {
+	Total     int64            `json:"total" datastore:"total"`
+	Fieldname string           `json:"field_name" datastore:"field_name"`
+	Data      []StatisticsData `json:"data" datastore:"data"`
+	OrgId     string           `json:"org_id" datastore:"org_id"`
+}
+
+type OrgSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			Type   string  `json:"_type"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source Org     `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type AppSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string      `json:"_index"`
+			Type   string      `json:"_type"`
+			ID     string      `json:"_id"`
+			Score  float64     `json:"_score"`
+			Source WorkflowApp `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type WorkflowSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string   `json:"_index"`
+			Type   string   `json:"_type"`
+			ID     string   `json:"_id"`
+			Score  float64  `json:"_score"`
+			Source Workflow `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type EnvironmentSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string      `json:"_index"`
+			Type   string      `json:"_type"`
+			ID     string      `json:"_id"`
+			Score  float64     `json:"_score"`
+			Source Environment `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type UserSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			Type   string  `json:"_type"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source User    `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type SessionWrapper struct {
+	Index       string  `json:"_index"`
+	Type        string  `json:"_type"`
+	ID          string  `json:"_id"`
+	Version     int     `json:"_version"`
+	SeqNo       int     `json:"_seq_no"`
+	PrimaryTerm int     `json:"_primary_term"`
+	Found       bool    `json:"found"`
+	Source      Session `json:"_source"`
+}
+
+type WorkflowWrapper struct {
+	Index       string   `json:"_index"`
+	Type        string   `json:"_type"`
+	ID          string   `json:"_id"`
+	Version     int      `json:"_version"`
+	SeqNo       int      `json:"_seq_no"`
+	PrimaryTerm int      `json:"_primary_term"`
+	Found       bool     `json:"found"`
+	Source      Workflow `json:"_source"`
+}
+
+type AppWrapper struct {
+	Index       string      `json:"_index"`
+	Type        string      `json:"_type"`
+	ID          string      `json:"_id"`
+	Version     int         `json:"_version"`
+	SeqNo       int         `json:"_seq_no"`
+	PrimaryTerm int         `json:"_primary_term"`
+	Found       bool        `json:"found"`
+	Source      WorkflowApp `json:"_source"`
+}
+
+type ExecWrapper struct {
+	Index       string            `json:"_index"`
+	Type        string            `json:"_type"`
+	ID          string            `json:"_id"`
+	Version     int               `json:"_version"`
+	SeqNo       int               `json:"_seq_no"`
+	PrimaryTerm int               `json:"_primary_term"`
+	Found       bool              `json:"found"`
+	Source      WorkflowExecution `json:"_source"`
+}
+
+type OrgWrapper struct {
+	Index       string `json:"_index"`
+	Type        string `json:"_type"`
+	ID          string `json:"_id"`
+	Version     int    `json:"_version"`
+	SeqNo       int    `json:"_seq_no"`
+	PrimaryTerm int    `json:"_primary_term"`
+	Found       bool   `json:"found"`
+	Source      Org    `json:"_source"`
+}
+
+type TriggerAuthWrapper struct {
+	Index       string      `json:"_index"`
+	Type        string      `json:"_type"`
+	ID          string      `json:"_id"`
+	Version     int         `json:"_version"`
+	SeqNo       int         `json:"_seq_no"`
+	PrimaryTerm int         `json:"_primary_term"`
+	Found       bool        `json:"found"`
+	Source      TriggerAuth `json:"_source"`
+}
+
+type AppAuthWrapper struct {
+	Index       string                   `json:"_index"`
+	Type        string                   `json:"_type"`
+	ID          string                   `json:"_id"`
+	Version     int                      `json:"_version"`
+	SeqNo       int                      `json:"_seq_no"`
+	PrimaryTerm int                      `json:"_primary_term"`
+	Found       bool                     `json:"found"`
+	Source      AppAuthenticationStorage `json:"_source"`
+}
+
+type FileWrapper struct {
+	Index       string `json:"_index"`
+	Type        string `json:"_type"`
+	ID          string `json:"_id"`
+	Version     int    `json:"_version"`
+	SeqNo       int    `json:"_seq_no"`
+	PrimaryTerm int    `json:"_primary_term"`
+	Found       bool   `json:"found"`
+	Source      File   `json:"_source"`
+}
+
+type HookWrapper struct {
+	Index       string `json:"_index"`
+	Type        string `json:"_type"`
+	ID          string `json:"_id"`
+	Version     int    `json:"_version"`
+	SeqNo       int    `json:"_seq_no"`
+	PrimaryTerm int    `json:"_primary_term"`
+	Found       bool   `json:"found"`
+	Source      Hook   `json:"_source"`
+}
+
+type ScheduleWrapper struct {
+	Index       string      `json:"_index"`
+	Type        string      `json:"_type"`
+	ID          string      `json:"_id"`
+	Version     int         `json:"_version"`
+	SeqNo       int         `json:"_seq_no"`
+	PrimaryTerm int         `json:"_primary_term"`
+	Found       bool        `json:"found"`
+	Source      ScheduleOld `json:"_source"`
+}
+
+type ExecRequestWrapper struct {
+	Index       string                  `json:"_index"`
+	Type        string                  `json:"_type"`
+	ID          string                  `json:"_id"`
+	Version     int                     `json:"_version"`
+	SeqNo       int                     `json:"_seq_no"`
+	PrimaryTerm int                     `json:"_primary_term"`
+	Found       bool                    `json:"found"`
+	Source      ExecutionRequestWrapper `json:"_source"`
+}
+
+type UserWrapper struct {
+	Index       string `json:"_index"`
+	Type        string `json:"_type"`
+	ID          string `json:"_id"`
+	Version     int    `json:"_version"`
+	SeqNo       int    `json:"_seq_no"`
+	PrimaryTerm int    `json:"_primary_term"`
+	Found       bool   `json:"found"`
+	Source      User   `json:"_source"`
 }
