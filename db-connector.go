@@ -194,7 +194,10 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 		return nil
 	}
 	if project.DbType == "elasticsearch" {
-		return indexEs(ctx, nameKey, workflowapp.ID, data)
+		err = indexEs(ctx, nameKey, workflowapp.ID, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		if _, err := project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
 			log.Printf("[WARNING] Error adding workflow app: %s", err)
@@ -246,7 +249,10 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
-		return indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+		if err != nil {
+			return err
+		}
 	} else {
 
 		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
@@ -453,7 +459,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, err
 		}
 
-		return &wrapped.Source, nil
+		workflowExecution = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
@@ -519,7 +525,7 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 			return workflowApp, err
 		}
 
-		return &wrapped.Source, nil
+		workflowApp = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowApp); err != nil {
@@ -595,7 +601,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			return workflow, err
 		}
 
-		return &wrapped.Source, nil
+		workflow = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
@@ -635,6 +641,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"owner": user.Id,
@@ -648,7 +656,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(nameKey),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -701,6 +709,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
 			var buf bytes.Buffer
 			query := map[string]interface{}{
+				"from": 0,
+				"size": 1000,
 				"query": map[string]interface{}{
 					"match": map[string]interface{}{
 						"org_id": user.ActiveOrg.Id,
@@ -714,7 +724,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 			res, err := project.Es.Search(
 				project.Es.Search.WithContext(context.Background()),
-				project.Es.Search.WithIndex(nameKey),
+				project.Es.Search.WithIndex(strings.ToLower(nameKey)),
 				project.Es.Search.WithBody(&buf),
 				project.Es.Search.WithTrackTotalHits(true),
 			)
@@ -900,6 +910,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	return workflows, nil
 }
 
+/*
 func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 	var allworkflows []Workflow
 	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId)
@@ -911,6 +922,7 @@ func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 
 	return allworkflows, nil
 }
+*/
 
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
@@ -957,7 +969,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			return &Org{}, err
 		}
 
-		return &wrapped.Source, nil
+		curOrg = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
@@ -1044,7 +1056,6 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	}
 
 	defer res.Body.Close()
-	//log.Printf("Res: %#v", res.Body)
 
 	if res.StatusCode != 200 && res.StatusCode != 201 {
 		return errors.New(fmt.Sprintf("Bad statuscode from database: %d", res.StatusCode))
@@ -1075,7 +1086,10 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			return err
 		}
 
-		return indexEs(ctx, nameKey, id, b)
+		err = indexEs(ctx, nameKey, id, b)
+		if err != nil {
+			return err
+		}
 	} else {
 		k := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
@@ -1152,7 +1166,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 			return session, err
 		}
 
-		return &wrapped.Source, nil
+		session = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, thissession, nil)
 		if err := project.Dbclient.Get(ctx, key, session); err != nil {
@@ -1181,12 +1195,44 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 	// Non indexed User data
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
 
-	key1 := datastore.NameKey(entity, value, nil)
+	if project.DbType == "elasticsearch" {
+		res, err := project.Es.Delete(strings.ToLower(entity), value)
 
-	err = project.Dbclient.Delete(ctx, key1)
-	if err != nil {
-		log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
-		return err
+		if err != nil {
+			log.Printf("[WARNING] Error in DELETE: %s", err)
+			return err
+		}
+
+		if res.StatusCode == 404 {
+			//log.Printf("Couldn't delete %s"
+			return nil
+		}
+
+		defer res.Body.Close()
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body (DELETE): %s", err)
+				return err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		log.Printf("[DEBUG] Deleted %s (%s)", strings.ToLower(entity), value)
+	} else {
+		key1 := datastore.NameKey(entity, value, nil)
+		err = project.Dbclient.Delete(ctx, key1)
+		if err != nil {
+			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
+			return err
+		}
 	}
 
 	return nil
@@ -1209,7 +1255,10 @@ func SetApikey(ctx context.Context, Userdata User) error {
 			return err
 		}
 
-		return indexEs(ctx, nameKey, newapiUser.ApiKey, data)
+		err = indexEs(ctx, nameKey, newapiUser.ApiKey, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		key1 := datastore.NameKey(nameKey, newapiUser.ApiKey, nil)
 		if _, err := project.Dbclient.Put(ctx, key1, newapiUser); err != nil {
@@ -1229,7 +1278,10 @@ func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) 
 			log.Printf("[WARNING] Failed marshalling user: %s", err)
 			return err
 		}
-		return indexEs(ctx, nameKey, id, data)
+		err = indexEs(ctx, nameKey, id, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		k := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, &openapi); err != nil {
@@ -1298,7 +1350,10 @@ func SetSession(ctx context.Context, user User, value string) error {
 				return err
 			}
 
-			return indexEs(ctx, nameKey, sessiondata.Session, data)
+			err = indexEs(ctx, nameKey, sessiondata.Session, data)
+			if err != nil {
+				return err
+			}
 		} else {
 			key2 := datastore.NameKey(nameKey, sessiondata.Session, nil)
 			if _, err := project.Dbclient.Put(ctx, key2, sessiondata); err != nil {
@@ -1313,9 +1368,13 @@ func SetSession(ctx context.Context, user User, value string) error {
 
 func FindUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
+
+	nameKey := "Users"
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"username": username,
@@ -1329,7 +1388,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex("users"),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -1378,7 +1437,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 			users = append(users, hit.Source)
 		}
 	} else {
-		q := datastore.NewQuery("Users").Filter("Username =", username)
+		q := datastore.NewQuery(nameKey).Filter("Username =", username)
 		_, err = project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Failed getting users for username: %s", username)
@@ -1434,7 +1493,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			return curUser, err
 		}
 
-		return &wrapped.Source, nil
+		curUser = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, parsedKey, nil)
 		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
@@ -1486,7 +1545,10 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		return nil
 	}
 	if project.DbType == "elasticsearch" {
-		return indexEs(ctx, nameKey, parsedKey, data)
+		err = indexEs(ctx, nameKey, parsedKey, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		k := datastore.NameKey(nameKey, parsedKey, nil)
 		if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
@@ -1646,6 +1708,8 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		//log.Printf("GETTING ES USER %s",
 		var buf bytes.Buffer
 		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"org_id": orgId,
@@ -1659,7 +1723,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(nameKey),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -1669,6 +1733,21 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 
 		if res.StatusCode == 404 {
+			item := Environment{
+				Name:    "Shuffle",
+				Type:    "onprem",
+				OrgId:   orgId,
+				Default: true,
+				Id:      uuid.NewV4().String(),
+			}
+
+			err = SetEnvironment(ctx, &item)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting up new environment")
+			} else {
+				environments = append(environments, item)
+			}
+
 			return environments, nil
 		}
 
@@ -1712,6 +1791,23 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		_, err = project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
 			return []Environment{}, err
+		}
+	}
+
+	if len(environments) == 0 {
+		item := Environment{
+			Name:    "Shuffle",
+			Type:    "onprem",
+			OrgId:   orgId,
+			Default: true,
+			Id:      uuid.NewV4().String(),
+		}
+
+		err = SetEnvironment(ctx, &item)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting up new environment")
+		} else {
+			environments = append(environments, item)
 		}
 	}
 
@@ -2102,30 +2198,22 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 	}
 
-	//query := datastore.NewQuery("workflowapp").Order("-edited").Limit(40)
-
-	// NOT BEING UPDATED
-	// FIXME: Update the app with the correct actions. HOW DOES THIS WORK??
-	// Seems like only actions are wrong. Could get the app individually.
-	// Guessing it's a memory issue.
-	//var err error
-
 	nameKey := "workflowapp"
 	if project.DbType == "elasticsearch" {
-		//var buf bytes.Buffer
-		//query := map[string]interface{}{
-		//	"query": map[string]interface{}{
-		//		"match": map[string]interface{}{},
-		//	},
-		//}
-		//if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		//	log.Printf("[WARNING] Error encoding find user query: %s", err)
-		//	return []WorkflowApp{}, err
-		//}
-		//project.Es.Search.WithBody(&buf),
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
+			return []WorkflowApp{}, err
+		}
+
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(nameKey),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
@@ -2170,7 +2258,70 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 
 		allApps = []WorkflowApp{}
 		for _, hit := range wrapped.Hits.Hits {
-			allApps = append(allApps, hit.Source)
+			innerApp := hit.Source
+
+			if innerApp.Name == "Shuffle Subflow" {
+				continue
+			}
+
+			if !innerApp.IsValid {
+				continue
+			}
+
+			found := false
+			newIndex := -1
+			newApp := WorkflowApp{}
+			for appIndex, loopedApp := range allApps {
+				if loopedApp.Name == innerApp.Name {
+					if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
+						found = true
+					} else {
+						//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
+
+						v2, err := semver.NewVersion(innerApp.AppVersion)
+						if err != nil {
+							log.Printf("Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+						}
+
+						appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
+						c, err := semver.NewConstraint(appConstraint)
+						if err != nil {
+							log.Printf("Failed preparing constraint: %s", err)
+						}
+
+						if c.Check(v2) {
+							//log.Printf("New IS larger - changing app on index %d from %s to %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion)
+
+							newApp = innerApp
+							newApp.Versions = loopedApp.Versions
+							newApp.LoopVersions = loopedApp.LoopVersions
+						} else {
+							//log.Printf("New is NOT larger - just appending")
+							newApp = loopedApp
+						}
+
+						newApp.Versions = append(newApp.Versions, AppVersion{
+							Version: innerApp.AppVersion,
+							ID:      innerApp.ID,
+						})
+
+						newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+						newIndex = appIndex
+					}
+
+					break
+				}
+			}
+
+			if newIndex >= 0 && newApp.ID != "" {
+				//log.Printf("Should update app on index %d", newIndex)
+				allApps[newIndex] = newApp
+			} else {
+				if !found {
+					allApps = append(allApps, innerApp)
+				}
+			}
+
 		}
 	} else {
 		cursorStr := ""
@@ -2281,7 +2432,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 	}
 
-	//log.Printf("FOUND %d apps", len(allApps))
 	if project.CacheDb {
 		log.Printf("[INFO] Setting %d apps in cache for 10 minutes for %s", len(allApps), cacheKey)
 
@@ -2297,41 +2447,27 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 	}
 
-	//var allworkflowapps []WorkflowApp
-	//_, err := dbclient.GetAll(ctx, query, &allworkflowapps)
-	//if err != nil {
-	//	if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-	//		//datastore.NewQuery("workflowapp").Limit(30).Order("-edited")
-	//		query = datastore.NewQuery("workflowapp").Order("-edited").Limit(25)
-	//		//q := q.Limit(25)
-	//		_, err := dbclient.GetAll(ctx, query, &allworkflowapps)
-	//		if err != nil {
-	//			return []WorkflowApp{}, err
-	//		}
-	//	} else {
-	//		return []WorkflowApp{}, err
-	//	}
-	//}
-
 	return allApps, nil
 }
 
-func SetWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWrapper, id string) error {
+func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, env string) error {
+	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
 	// New struct, to not add body, author etc
-
-	nameKey := "workflowqueue"
 	if project.DbType == "elasticsearch" {
-		data, err := json.Marshal(executionRequests)
+		data, err := json.Marshal(executionRequest)
 		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in workflowqueue: %s", err)
-			return err
+			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
+			return nil
 		}
 
-		return indexEs(ctx, nameKey, id, data)
+		err = indexEs(ctx, nameKey, executionRequest.ExecutionId, data)
+		if err != nil {
+			return err
+		}
 	} else {
-		key := datastore.NameKey(nameKey, id, nil)
-		if _, err := project.Dbclient.Put(ctx, key, &executionRequests); err != nil {
+		key := datastore.NameKey(nameKey, executionRequest.ExecutionId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &executionRequest); err != nil {
 			log.Printf("Error adding workflow queue: %s", err)
 			return err
 		}
@@ -2341,18 +2477,56 @@ func SetWorkflowQueue(ctx context.Context, executionRequests ExecutionRequestWra
 }
 
 func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, error) {
+	nameKey := fmt.Sprintf("workflowqueue-%s", id)
+	q := datastore.NewQuery(nameKey).Limit(10)
+	executions := []ExecutionRequest{}
 
-	nameKey := "workflowqueue"
 	if project.DbType == "elasticsearch" {
-		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 10,
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return ExecutionRequestWrapper{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error getting response: %s", err)
 			return ExecutionRequestWrapper{}, err
 		}
 
 		if res.StatusCode == 404 {
-			return ExecutionRequestWrapper{}, errors.New("Executionrequest doesn't exist")
+			return ExecutionRequestWrapper{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return ExecutionRequestWrapper{}, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return ExecutionRequestWrapper{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
@@ -2360,24 +2534,60 @@ func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, 
 			return ExecutionRequestWrapper{}, err
 		}
 
-		wrapped := ExecRequestWrapper{}
+		wrapped := ExecRequestSearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
 			return ExecutionRequestWrapper{}, err
 		}
 
-		return wrapped.Source, nil
+		executions = []ExecutionRequest{}
+		for _, hit := range wrapped.Hits.Hits {
+			executions = append(executions, hit.Source)
+		}
 	} else {
-		key := datastore.NameKey(nameKey, id, nil)
-		workflows := ExecutionRequestWrapper{}
-		if err := project.Dbclient.Get(ctx, key, &workflows); err != nil {
+		_, err := project.Dbclient.GetAll(ctx, q, &executions)
+		if err != nil {
 			return ExecutionRequestWrapper{}, err
 		}
-
-		return workflows, nil
 	}
 
-	return ExecutionRequestWrapper{}, err
+	return ExecutionRequestWrapper{
+		Data: executions,
+	}, nil
+}
+
+func SetNewValue(ctx context.Context, newvalue NewValue) error {
+	nameKey := fmt.Sprintf("app_execution_values")
+
+	if newvalue.Created == 0 {
+		newvalue.Created = int64(time.Now().Unix())
+	}
+
+	if newvalue.Id == "" {
+		newvalue.Id = uuid.NewV4().String()
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(newvalue)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in newValue: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, newvalue.Id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, newvalue.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &newvalue); err != nil {
+			log.Printf("Error adding newvalue: %s", err)
+			return err
+		}
+
+	}
+
+	return nil
 }
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
@@ -2399,7 +2609,10 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		return nil
 	}
 	if project.DbType == "elasticsearch" {
-		return indexEs(ctx, nameKey, id, data)
+		err = indexEs(ctx, nameKey, id, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflow); err != nil {
@@ -2409,7 +2622,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	}
 
 	if project.CacheDb {
-
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
@@ -2431,7 +2643,10 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 			return err
 		}
 
-		return indexEs(ctx, nameKey, id, data)
+		indexEs(ctx, nameKey, id, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
@@ -2455,7 +2670,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	}
 
 	// New struct, to not add body, author etc
-	log.Printf("SETTING ENVIRONMENT %s", env.Id)
+	log.Printf("[INFO] SETTING ENVIRONMENT %s", env.Id)
 	if project.DbType == "elasticsearch" {
 		data, err := json.Marshal(env)
 		if err != nil {
@@ -2463,7 +2678,10 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 			return err
 		}
 
-		return indexEs(ctx, nameKey, env.Id, data)
+		err = indexEs(ctx, nameKey, env.Id, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		k := datastore.NameKey(nameKey, env.Id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, env); err != nil {
@@ -2480,6 +2698,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 
 func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error) {
 	nameKey := "schedules"
+	curUser := &ScheduleOld{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(nameKey), strings.ToLower(schedulename))
@@ -2503,18 +2722,16 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 			return &ScheduleOld{}, err
 		}
 
-		return &wrapped.Source, nil
+		curUser = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(schedulename), nil)
-		curUser := &ScheduleOld{}
 		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 			return &ScheduleOld{}, err
 		}
 
-		return curUser, nil
 	}
 
-	return &ScheduleOld{}, nil
+	return curUser, nil
 }
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
@@ -2537,6 +2754,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 	nameKey := "hooks"
+	hookId = strings.ToLower(hookId)
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, hookId)
 
 	hook := &Hook{}
@@ -2555,6 +2773,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
 		}
 	}
+	log.Printf("DBTYPE: %#v", project.DbType)
 
 	var err error
 	if project.DbType == "elasticsearch" {
@@ -2580,7 +2799,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			return &Hook{}, err
 		}
 
-		return &wrapped.Source, nil
+		hook = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, hookId, nil)
 		err = project.Dbclient.Get(ctx, key, hook)
@@ -2614,11 +2833,15 @@ func SetHook(ctx context.Context, hook Hook) error {
 		log.Printf("[WARNING] Failed marshalling in setHook: %s", err)
 		return nil
 	}
+	hookId := strings.ToLower(hook.Id)
 
 	if project.DbType == "elasticsearch" {
-		return indexEs(ctx, nameKey, strings.ToLower(hook.Id), hookData)
+		err = indexEs(ctx, nameKey, hookId, hookData)
+		if err != nil {
+			return err
+		}
 	} else {
-		key1 := datastore.NameKey(nameKey, strings.ToLower(hook.Id), nil)
+		key1 := datastore.NameKey(nameKey, hookId, nil)
 		if _, err := project.Dbclient.Put(ctx, key1, &hook); err != nil {
 			log.Printf("Error adding hook: %s", err)
 			return err
@@ -2627,7 +2850,7 @@ func SetHook(ctx context.Context, hook Hook) error {
 
 	if project.CacheDb {
 
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, hook.Id)
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, hookId)
 		err = SetCache(ctx, cacheKey, hookData)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for hook: %s", err)
@@ -2639,6 +2862,7 @@ func SetHook(ctx context.Context, hook Hook) error {
 
 func GetFile(ctx context.Context, id string) (*File, error) {
 	nameKey := "Files"
+	curFile := &File{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(nameKey), id)
@@ -2662,18 +2886,16 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 			return &File{}, err
 		}
 
-		return &wrapped.Source, nil
+		curFile = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-		curFile := &File{}
 		if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
 			return &File{}, err
 		}
 
-		return curFile, nil
 	}
 
-	return &File{}, nil
+	return curFile, nil
 }
 
 func SetFile(ctx context.Context, file File) error {
@@ -2689,7 +2911,10 @@ func SetFile(ctx context.Context, file File) error {
 			return err
 		}
 
-		return indexEs(ctx, nameKey, file.Id, data)
+		err = indexEs(ctx, nameKey, file.Id, data)
+		if err != nil {
+			return err
+		}
 	} else {
 		k := datastore.NameKey(nameKey, file.Id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, &file); err != nil {
@@ -2703,20 +2928,92 @@ func SetFile(ctx context.Context, file File) error {
 
 func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
 	var files []File
-	q := datastore.NewQuery("Files").Filter("org_id =", orgId).Limit(100)
 
-	_, err := project.Dbclient.GetAll(ctx, q, &files)
-	if err != nil && len(files) == 0 {
-		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-			q = q.Limit(50)
-			_, err := project.Dbclient.GetAll(ctx, q, &files)
-			if err != nil && len(files) == 0 {
+	nameKey := "Files"
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": orgId,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return files, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return files, err
+		}
+
+		if res.StatusCode == 404 {
+			return files, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return files, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return files, err
+		}
+
+		wrapped := FileSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return files, err
+		}
+
+		files = []File{}
+		for _, hit := range wrapped.Hits.Hits {
+			files = append(files, hit.Source)
+		}
+
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(100)
+
+		_, err := project.Dbclient.GetAll(ctx, q, &files)
+		if err != nil && len(files) == 0 {
+			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+				q = q.Limit(50)
+				_, err := project.Dbclient.GetAll(ctx, q, &files)
+				if err != nil && len(files) == 0 {
+					return []File{}, err
+				}
+			} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+				log.Printf("[INFO] Failed loading SOME files - skipping: %s", err)
+			} else {
 				return []File{}, err
 			}
-		} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-			log.Printf("[INFO] Failed loading SOME files - skipping: %s", err)
-		} else {
-			return []File{}, err
 		}
 	}
 
@@ -2766,7 +3063,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 			return appAuth, nil
 		}
 
-		return &wrapped.Source, nil
+		appAuth = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, appAuth); err != nil {
@@ -2793,14 +3090,91 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 	var schedules []ScheduleOld
 
-	q := datastore.NewQuery("schedules").Filter("org = ", orgId)
-	if orgId == "ALL" && project.Environment != "cloud" {
-		q = datastore.NewQuery("schedules")
-	}
+	nameKey := "schedules"
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org": orgId,
+				},
+			},
+		}
 
-	_, err := project.Dbclient.GetAll(ctx, q, &schedules)
-	if err != nil && len(schedules) == 0 {
-		return []ScheduleOld{}, err
+		if orgId == "ALL" && project.Environment != "cloud" {
+			query = map[string]interface{}{}
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("Error encoding query: %s", err)
+			return schedules, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return schedules, err
+		}
+
+		if res.StatusCode == 404 {
+			return schedules, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return schedules, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return schedules, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return schedules, err
+		}
+
+		wrapped := ScheduleSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return schedules, err
+		}
+
+		schedules = []ScheduleOld{}
+		for _, hit := range wrapped.Hits.Hits {
+			schedules = append(schedules, hit.Source)
+		}
+
+		return schedules, err
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org = ", orgId)
+		if orgId == "ALL" && project.Environment != "cloud" {
+			q = datastore.NewQuery(nameKey)
+		}
+
+		_, err := project.Dbclient.GetAll(ctx, q, &schedules)
+		if err != nil && len(schedules) == 0 {
+			return schedules, err
+		}
 	}
 
 	return schedules, nil
@@ -2808,6 +3182,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 
 func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 	nameKey := "trigger_auth"
+	triggerauth := &TriggerAuth{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(nameKey), strings.ToLower(id))
@@ -2831,17 +3206,15 @@ func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 			return &TriggerAuth{}, err
 		}
 
-		return &wrapped.Source, nil
+		triggerauth = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
-		triggerauth := &TriggerAuth{}
 		if err := project.Dbclient.Get(ctx, key, triggerauth); err != nil {
 			return &TriggerAuth{}, err
 		}
-		return triggerauth, nil
 	}
 
-	return &TriggerAuth{}, nil
+	return triggerauth, nil
 }
 
 func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
@@ -2855,7 +3228,10 @@ func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
 			return err
 		}
 
-		return indexEs(ctx, nameKey, strings.ToLower(trigger.Id), data)
+		err = indexEs(ctx, nameKey, strings.ToLower(trigger.Id), data)
+		if err != nil {
+			return err
+		}
 	} else {
 		key1 := datastore.NameKey(nameKey, strings.ToLower(trigger.Id), nil)
 		if _, err := project.Dbclient.Put(ctx, key1, &trigger); err != nil {
@@ -2870,15 +3246,21 @@ func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
 // Index = Username
 func DeleteKeys(ctx context.Context, entity string, value []string) error {
 	// Non indexed User data
-	keys := []*datastore.Key{}
-	for _, item := range value {
-		keys = append(keys, datastore.NameKey(entity, item, nil))
-	}
+	if project.DbType == "elasticsearch" {
+		for _, item := range value {
+			DeleteKey(ctx, entity, item)
+		}
+	} else {
+		keys := []*datastore.Key{}
+		for _, item := range value {
+			keys = append(keys, datastore.NameKey(entity, item, nil))
+		}
 
-	err := project.Dbclient.DeleteMulti(ctx, keys)
-	if err != nil {
-		log.Printf("Error deleting %s from %s: %s", value, entity, err)
-		return err
+		err := project.Dbclient.DeleteMulti(ctx, keys)
+		if err != nil {
+			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
+			return err
+		}
 	}
 
 	return nil
@@ -2899,9 +3281,20 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 	index := "Users"
 	users := []User{}
 	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
+			return []User{}, err
+		}
+
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
 			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
@@ -2961,25 +3354,128 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 	return users, nil
 }
 
-func GetAllOrgs(ctx context.Context) ([]Org, error) {
-	index := "Organizations"
-	var orgs []Org
+func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {
+	index := "workflowexecution"
+	var executions []WorkflowExecution
 	if project.DbType == "elasticsearch" {
-		//var buf bytes.Buffer
-		//query := map[string]interface{}{
-		//	"query": map[string]interface{}{
-		//		"match": map[string]interface{}{},
-		//	},
-		//}
-		//if err := json.NewEncoder(&buf).Encode(query); err != nil {
-		//	log.Printf("Error encoding query: %s", err)
-		//	return []Org{}, err
-		//}
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 100,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"workflow_id": workflowId,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("Error encoding query: %s", err)
+			return executions, err
+		}
 
 		// Perform the search request.
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
 			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return executions, err
+		}
+
+		if res.StatusCode == 404 {
+			return executions, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return executions, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return executions, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return executions, err
+		}
+
+		wrapped := ExecutionSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return executions, err
+		}
+
+		executions = []WorkflowExecution{}
+		for _, hit := range wrapped.Hits.Hits {
+			executions = append(executions, hit.Source)
+		}
+
+		return executions, nil
+	} else {
+		q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Order("-started_at").Limit(30)
+		var workflowExecutions []WorkflowExecution
+		_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
+		if err != nil && len(workflowExecutions) == 0 {
+			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+				q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Order("-started_at").Limit(15)
+				_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
+				if err != nil && len(workflowExecutions) == 0 {
+					log.Printf("[WARNING] Error getting workflowexec (2): %s", err)
+					return executions, err
+				}
+			} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
+				//log.Printf("[INFO] Failed precondition in workflowexecs: %s", err)
+
+				q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Limit(25)
+				_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
+				if err != nil && len(workflowExecutions) == 0 {
+					log.Printf("[WARNING] Error getting workflowexec (3): %s", err)
+					return executions, err
+				}
+			} else {
+				log.Printf("[WARNING] Error getting workflowexec (4): %s", err)
+				return executions, err
+			}
+		}
+	}
+
+	return executions, nil
+}
+
+func GetAllOrgs(ctx context.Context) ([]Org, error) {
+	index := "Organizations"
+	var orgs []Org
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
+			return []Org{}, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
@@ -3050,7 +3546,10 @@ func SetSchedule(ctx context.Context, schedule ScheduleOld) error {
 			log.Printf("[WARNING] Failed marshalling in setschedule: %s", err)
 			return nil
 		}
-		return indexEs(ctx, nameKey, strings.ToLower(schedule.Id), data)
+		err = indexEs(ctx, nameKey, strings.ToLower(schedule.Id), data)
+		if err != nil {
+			return err
+		}
 	} else {
 		key1 := datastore.NameKey(nameKey, strings.ToLower(schedule.Id), nil)
 		if _, err := project.Dbclient.Put(ctx, key1, &schedule); err != nil {
@@ -3060,4 +3559,137 @@ func SetSchedule(ctx context.Context, schedule ScheduleOld) error {
 	}
 
 	return nil
+}
+
+func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowId, value string) ([]NewValue, error) {
+	nameKey := fmt.Sprintf("app_execution_values")
+	var workflows []NewValue
+
+	// Appending the users' workflows
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		//"workflow_id":    executionId,
+		//"parameter_name": parameterNames,
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return workflows, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return workflows, err
+		}
+
+		if res.StatusCode == 404 {
+			return workflows, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return workflows, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return workflows, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflows, err
+		}
+
+		wrapped := NewValueSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflows, err
+		}
+
+		log.Printf("\n\nFOUND: %d", len(wrapped.Hits.Hits))
+		workflows = []NewValue{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.Value == value && hit.Source.OrgId == orgId {
+				workflows = append(workflows, hit.Source)
+			}
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("workflow_id =", workflowId).Filter("parameter_name =", parameterNames).Filter("value =", value)
+		//foundCount, err := project.Dbclient.Count(ctx, q)
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := NewValue{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					} else {
+						log.Printf("[WARNING] CreateValue iterator issue: %s", err)
+						break
+					}
+				}
+
+				workflows = append(workflows, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
+
+			}
+		}
+	}
+
+	return workflows, nil
 }

@@ -108,10 +108,8 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := getContext(request)
 
-	var orgs []Org
-	q := datastore.NewQuery("Organizations")
-	_, err = project.Dbclient.GetAll(ctx, q, &orgs)
-	if err != nil && len(orgs) == 0 {
+	orgs, err := GetAllOrgs(ctx)
+	if err != nil || len(orgs) == 0 {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get orgs"}`))
 		return
@@ -925,6 +923,13 @@ func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient s
 	}
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
+	if dbType == "elasticsearch" {
+		res, err := project.Es.Get("test", "test")
+		log.Printf("Res: %#v", res)
+		if err != nil {
+			log.Fatalf("[WARNING] Error: %s", err)
+		}
+	}
 
 	return project
 }
@@ -1096,36 +1101,12 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	// Query for the specifci workflowId
 	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
 	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId)
-	q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
-	var workflowExecutions []WorkflowExecution
-	_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-	if err != nil && len(workflowExecutions) == 0 {
-		if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-			q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(15)
-			_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-			if err != nil && len(workflowExecutions) == 0 {
-				log.Printf("[WARNING] Error getting workflowexec (2): %s", err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
-				return
-			}
-		} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
-			//log.Printf("[INFO] Failed precondition in workflowexecs: %s", err)
-
-			q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Limit(25)
-			_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-			if err != nil && len(workflowExecutions) == 0 {
-				log.Printf("[WARNING] Error getting workflowexec (3): %s", err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
-				return
-			}
-		} else {
-			log.Printf("[WARNING] Error getting workflowexec (4): %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions for %s"}`, fileId)))
-			return
-		}
+	workflowExecutions, err := GetAllWorkflowExecutions(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting executions for %s", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	if len(workflowExecutions) == 0 {
@@ -1424,12 +1405,8 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if config.Action == "assign_everywhere" {
-		log.Printf("Should set authentication config")
-		q := datastore.NewQuery("workflow").Filter("org_id =", user.ActiveOrg.Id)
-		q = q.Order("-edited").Limit(35)
-
-		var workflows []Workflow
-		_, err = project.Dbclient.GetAll(ctx, q, &workflows)
+		log.Printf("[INFO] Should set authentication config")
+		workflows, err := GetAllWorkflowsByQuery(ctx, user)
 		if err != nil && len(workflows) == 0 {
 			log.Printf("Getall error in auth update: %s", err)
 			resp.WriteHeader(401)
@@ -1638,12 +1615,11 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(t.Username) > 0 {
-		q := datastore.NewQuery("Users").Filter("username =", t.Username)
-		var users []User
-		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		users, err := FindUser(ctx, strings.ToLower(strings.TrimSpace(t.Username)))
 		if err != nil && len(users) == 0 {
+			log.Printf("[WARNING] Failed getting user %s: %s", t.Username, err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed getting users when updating user"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 			return
 		}
 
@@ -3410,7 +3386,7 @@ func SendHookResult(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	hook, err := GetHook(ctx, workflowId)
 	if err != nil {
-		log.Printf("Failed getting hook %s (send): %s", workflowId, err)
+		log.Printf("[WARNING] Failed getting hook %s (send): %s", workflowId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3477,7 +3453,7 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	hook, err := GetHook(ctx, workflowId)
 	if err != nil {
-		log.Printf("Failed getting hook %s (get hook): %s", workflowId, err)
+		log.Printf("[WARNING] Failed getting hook %s (get hook): %s", workflowId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3924,18 +3900,6 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	user.PrivateApps = privateApps
 
-	// Find similar apps without an owner
-	//log.Printf("APPNAME: %s", app.Name)
-	//q := datastore.NewQuery("workflowapp").Filter("name =", app.Name).Limit(30)
-	//var workflowapps []WorkflowApp
-	//_, err = project.Dbclient.GetAll(ctx, q, &workflowapps)
-	//for _, curapp := range workflowapps {
-	//	log.Printf("APP: %#v", curapp)
-	//}
-
-	//log.Printf("USERLEN: %d", len(user.PrivateApps))
-	//log.Printf("LEN: %d", len(workflowapps))
-
 	err = SetUser(ctx, &user, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed removing %s app for user %s: %s", app.Name, user.Username, err)
@@ -4089,11 +4053,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	parameterNames := fmt.Sprintf("%s_%s", value.App, strings.Join(value.ParameterNames, "_"))
 	log.Printf("[INFO] PARAMNAME: %s", parameterNames)
 	if tmpData.WorkflowCheck {
-		//for _, item := range tmpData.Values {
-		//	log.Printf("[INFO] Should validate if values %#v in app parameter %#v exists WITH WORKFLOW %s", item.ParameterValues, item.ParameterNames, workflowExecution.Workflow.ID)
-
 		// FIXME: Make this alphabetical
-
 		for _, value := range value.ParameterValues {
 			if len(value) == 0 {
 				log.Printf("Shouldn't have value of length 0!")
@@ -4102,14 +4062,15 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 			log.Printf("[INFO] Looking for value %s in Workflow %s of ORG %s", value, workflowExecution.Workflow.ID, org.Id)
 
-			q := datastore.NewQuery(dbKey).Filter("org_id =", org.Id).Filter("workflow_id =", workflowExecution.Workflow.ID).Filter("parameter_name =", parameterNames).Filter("value =", value)
-			foundCount, err := project.Dbclient.Count(ctx, q)
+			executionValues, err := GetAppExecutionValues(ctx, parameterNames, org.Id, workflowExecution.Workflow.ID, value)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting key %s: %s", dbKey, err)
 				notFound = append(notFound, value)
 				//found = append(found, value)
 				continue
 			}
+
+			foundCount := len(executionValues)
 
 			if foundCount > 0 {
 				found = append(found, value)
@@ -4119,8 +4080,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	} else {
-		//log.Printf("[INFO] Should validate if value %s in app %s exists WITH ORG %s", workflowExecution.Workflow.ID)
-
+		log.Printf("[INFO] Should validate if value %s is in workflow id %s", value, workflowExecution.Workflow.ID)
 		for _, value := range value.ParameterValues {
 			if len(value) == 0 {
 				log.Printf("Shouldn't have value of length 0!")
@@ -4129,14 +4089,15 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 			log.Printf("[INFO] Looking for value %s in ORG %s", value, org.Id)
 
-			q := datastore.NewQuery(dbKey).Filter("org_id =", org.Id).Filter("workflow_id =", "").Filter("parameter_name =", parameterNames).Filter("value =", value)
-			foundCount, err := project.Dbclient.Count(ctx, q)
+			executionValues, err := GetAppExecutionValues(ctx, parameterNames, org.Id, workflowExecution.Workflow.ID, value)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting key %s: %s", dbKey, err)
 				notFound = append(notFound, value)
 				//found = append(found, value)
 				continue
 			}
+
+			foundCount := len(executionValues)
 
 			if foundCount > 0 {
 				found = append(found, value)
@@ -4155,17 +4116,6 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	appended := 0
 	if tmpData.Append {
 		log.Printf("[INFO] Should append %d values!", len(notFound))
-		dbKey := fmt.Sprintf("app_execution_values")
-
-		//q := datastore.NewQuery(dbKey).Filter("org_id =", org.Id).Filter("workflow_id", workflowExecution.Workflow.ID).Filter("app_name =", parameterNames).Filter("value =", value)
-		key := datastore.NameKey(dbKey, "", nil)
-		type NewValue struct {
-			OrgId               string `json:"org_id" datastore:"org_id"`
-			WorkflowId          string `json:"workflow_id" datastore:"workflow_id"`
-			WorkflowExecutionId string `json:"workflow_execution_id" datastore:"workflow_execution_id"`
-			ParameterName       string `json:"parameter_name" datastore:"parameter_name"`
-			Value               string `json:"value" datastore:"value"`
-		}
 
 		//parameterNames := strings.Join(value.ParameterNames, "_")
 		for _, notFoundValue := range notFound {
@@ -4176,11 +4126,13 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 				Value:               notFoundValue,
 			}
 
+			// WorkflowId:          workflowExecution.Workflow.Id,
 			if tmpData.WorkflowCheck {
 				newRequest.WorkflowId = workflowExecution.Workflow.ID
 			}
 
-			if _, err := project.Dbclient.Put(ctx, key, &newRequest); err != nil {
+			err = SetNewValue(ctx, newRequest)
+			if err != nil {
 				log.Printf("Error adding %s to appvalue: %s", notFoundValue, err)
 				continue
 			}
@@ -5045,9 +4997,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		//log.Printf("User: %#v", user)
 		if user.ActiveOrg.Id != "" {
-
 			err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
 			if err != nil {
 				log.Printf("[WARNING] Bad password: %s", err)
@@ -5167,7 +5117,7 @@ func checkUsername(Username string) error {
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
 
 	if actionResult.Action.ID == "" {
-		log.Printf("[ERROR] Failed handling EMPTY action %#v", actionResult)
+		//log.Printf("[ERROR] Failed handling EMPTY action %#v", actionResult)
 		return &workflowExecution, true, err
 	}
 

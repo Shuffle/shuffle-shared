@@ -544,6 +544,16 @@ type SyncDataUsage struct {
 	Counter   int64  `json:"counter" datastore:"counter"`
 }
 
+type NewValue struct {
+	OrgId               string `json:"org_id" datastore:"org_id"`
+	WorkflowId          string `json:"workflow_id" datastore:"workflow_id"`
+	WorkflowExecutionId string `json:"workflow_execution_id" datastore:"workflow_execution_id"`
+	ParameterName       string `json:"parameter_name" datastore:"parameter_name"`
+	Value               string `json:"value" datastore:"value"`
+	Created             int64  `json:"created" datastore:"created"`
+	Id                  string `json:"id" datastore:"id"`
+}
+
 type SyncFeatures struct {
 	Webhook            SyncData `json:"webhook" datastore:"webhook"`
 	Schedules          SyncData `json:"schedules" datastore:"schedules"`
@@ -1064,6 +1074,56 @@ type StatisticsItem struct {
 	OrgId     string           `json:"org_id" datastore:"org_id"`
 }
 
+type NewValueSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string   `json:"_index"`
+			Type   string   `json:"_type"`
+			ID     string   `json:"_id"`
+			Score  float64  `json:"_score"`
+			Source NewValue `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type ExecutionSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string            `json:"_index"`
+			Type   string            `json:"_type"`
+			ID     string            `json:"_id"`
+			Score  float64           `json:"_score"`
+			Source WorkflowExecution `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type OrgSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -1114,6 +1174,56 @@ type AppSearchWrapper struct {
 	} `json:"hits"`
 }
 
+type ScheduleSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string      `json:"_index"`
+			Type   string      `json:"_type"`
+			ID     string      `json:"_id"`
+			Score  float64     `json:"_score"`
+			Source ScheduleOld `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type FileSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			Type   string  `json:"_type"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source File    `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type WorkflowSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -1160,6 +1270,31 @@ type EnvironmentSearchWrapper struct {
 			ID     string      `json:"_id"`
 			Score  float64     `json:"_score"`
 			Source Environment `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type ExecRequestSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string           `json:"_index"`
+			Type   string           `json:"_type"`
+			ID     string           `json:"_id"`
+			Score  float64          `json:"_score"`
+			Source ExecutionRequest `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
 }
@@ -1300,14 +1435,14 @@ type ScheduleWrapper struct {
 }
 
 type ExecRequestWrapper struct {
-	Index       string                  `json:"_index"`
-	Type        string                  `json:"_type"`
-	ID          string                  `json:"_id"`
-	Version     int                     `json:"_version"`
-	SeqNo       int                     `json:"_seq_no"`
-	PrimaryTerm int                     `json:"_primary_term"`
-	Found       bool                    `json:"found"`
-	Source      ExecutionRequestWrapper `json:"_source"`
+	Index       string           `json:"_index"`
+	Type        string           `json:"_type"`
+	ID          string           `json:"_id"`
+	Version     int              `json:"_version"`
+	SeqNo       int              `json:"_seq_no"`
+	PrimaryTerm int              `json:"_primary_term"`
+	Found       bool             `json:"found"`
+	Source      ExecutionRequest `json:"_source"`
 }
 
 type UserWrapper struct {
