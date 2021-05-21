@@ -925,10 +925,10 @@ func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient s
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
 	if dbType == "elasticsearch" {
 		res, err := project.Es.Get("test", "test")
-		log.Printf("Res: %#v", res)
 		if err != nil {
-			log.Fatalf("[WARNING] Error: %s", err)
+			log.Fatalf("[WARNING] Error in connection: %s", err)
 		}
+		_ = res
 	}
 
 	return project
@@ -1168,7 +1168,6 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
-		//log.Printf("CACHEDATA: %#v", cacheData)
 		err = json.Unmarshal(cacheData, &workflows)
 		if err == nil {
 			resp.WriteHeader(200)
@@ -6562,3 +6561,44 @@ func HandleGetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(b))
 }
+
+/*
+func CleanupExecutions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Api authentication failed in cleanup executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "message": "Not authenticated"}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "message": "Insufficient permissions"}`))
+		return
+	}
+
+	ctx := context.Background()
+
+	// Removes three months from today
+	timestamp := int64(time.Now().AddDate(0, -2, 0).Unix())
+	log.Println(timestamp)
+	q := datastore.NewQuery("workflowexecution").Filter("started_at <", timestamp)
+	var workflowExecutions []WorkflowExecution
+	_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
+	if err != nil {
+		log.Printf("Error getting workflowexec (cleanup): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+*/

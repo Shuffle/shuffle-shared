@@ -1294,10 +1294,38 @@ func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) 
 }
 
 func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) {
-	key := datastore.NameKey("openapi3", id, nil)
+	nameKey := "openapi3"
 	api := &ParsedOpenApi{}
-	if err := project.Dbclient.Get(ctx, key, api); err != nil {
-		return ParsedOpenApi{}, err
+
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return *api, err
+		}
+
+		if res.StatusCode == 404 {
+			return *api, errors.New("Workflow doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return *api, err
+		}
+
+		wrapped := ParsedApiWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return *api, err
+		}
+
+		api = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if err := project.Dbclient.Get(ctx, key, api); err != nil {
+			return ParsedOpenApi{}, err
+		}
 	}
 
 	return *api, nil
@@ -1661,10 +1689,79 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		}
 	}
 
-	q := datastore.NewQuery(nameKey).Filter("org_id = ", orgId)
-	_, err = project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
-	if err != nil && len(allworkflowappAuths) == 0 {
-		return []AppAuthenticationStorage{}, err
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": orgId,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return allworkflowappAuths, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return allworkflowappAuths, err
+		}
+
+		if res.StatusCode == 404 {
+			return allworkflowappAuths, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return allworkflowappAuths, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return allworkflowappAuths, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return allworkflowappAuths, err
+		}
+
+		wrapped := AppAuthSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return allworkflowappAuths, err
+		}
+
+		allworkflowappAuths = []AppAuthenticationStorage{}
+		for _, hit := range wrapped.Hits.Hits {
+			allworkflowappAuths = append(allworkflowappAuths, hit.Source)
+		}
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id = ", orgId)
+		_, err = project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
+		if err != nil && len(allworkflowappAuths) == 0 {
+			return allworkflowappAuths, err
+		}
 	}
 
 	if project.CacheDb {
@@ -2736,12 +2833,83 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 
 func GetApikey(ctx context.Context, apikey string) (User, error) {
 	// Query for the specific API-key in users
-	q := datastore.NewQuery("Users").Filter("apikey =", apikey)
+	nameKey := "Users"
 	var users []User
-	_, err = project.Dbclient.GetAll(ctx, q, &users)
-	if err != nil && len(users) == 0 {
-		log.Printf("[WARNING] Error getting apikey: %s", err)
-		return User{}, err
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"apikey": apikey,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return User{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return User{}, err
+		}
+
+		if res.StatusCode == 404 {
+			return User{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return User{}, nil
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return User{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return User{}, err
+		}
+
+		wrapped := UserSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return User{}, err
+		}
+
+		users = []User{}
+		for _, hit := range wrapped.Hits.Hits {
+			users = append(users, hit.Source)
+		}
+
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("apikey =", apikey)
+		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil && len(users) == 0 {
+			log.Printf("[WARNING] Error getting apikey: %s", err)
+			return User{}, err
+		}
 	}
 
 	if len(users) == 0 {
