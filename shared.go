@@ -911,7 +911,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) ShuffleStorage {
+func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
 	project = ShuffleStorage{
 		Dbclient:      dbclient,
 		StorageClient: storageClient,
@@ -924,14 +924,13 @@ func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient s
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
 	if dbType == "elasticsearch" {
-		res, err := project.Es.Get("test", "test")
+		_, err := project.Es.Get("test", "test")
 		if err != nil {
-			log.Fatalf("[WARNING] Error in connection: %s", err)
+			return project, err
 		}
-		_ = res
 	}
 
-	return project
+	return project, nil
 }
 
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
@@ -4986,7 +4985,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(users) > 1 {
-		log.Printf("[ERROR] Username %s has multiple users!!: %d", data.Username, len(users))
+		log.Printf("[WARNING] Username %s has multiple users (%d). Checking if it matches any.", data.Username, len(users))
 	}
 
 	userdata := User{}
@@ -4996,7 +4995,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		if user.ActiveOrg.Id != "" {
+		if len(users) > 1 && user.ActiveOrg.Id != "" {
 			err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
 			if err != nil {
 				log.Printf("[WARNING] Bad password: %s", err)
