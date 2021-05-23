@@ -4995,7 +4995,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		if len(users) > 1 && user.ActiveOrg.Id != "" {
+		if user.ActiveOrg.Id != "" {
 			err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
 			if err != nil {
 				log.Printf("[WARNING] Bad password: %s", err)
