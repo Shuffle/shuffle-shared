@@ -326,11 +326,14 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	//if !strings.HasPrefix(strings.ToLower(url), "http") {
 
 	// Modifies url to have the right path and such
+	//log.Printf("URL: %s", urlSplit)
+	//if len(swagger.Servers) > 0 {
+	//	log.Printf("SwaggerURL: %#v", swagger.Servers[0].URL)
+	//}
+
 	urlSplit := strings.Split(url, "/")
 	if strings.HasPrefix(url, "http") && len(urlSplit) > 2 {
-		//log.Printf("SPLITTING: %s", url)
 		tmpUrl := strings.Join(urlSplit[3:len(urlSplit)], "/")
-		//log.Printf("TMP: %s", tmpUrl)
 		if len(tmpUrl) > 0 {
 			url = "/" + tmpUrl
 		} else {
@@ -359,8 +362,16 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	verifyWrapper := `if type(ssl_verify) == str: ssl_verify = False if ssl_verify.lower() == "false" or ssl_verify == "0" else True`
 	verifyAddin := ", verify=ssl_verify"
 
+	// Codegen for headers
+	headerParserCode := ""
 	if len(parameters) > 0 {
 		parameterData = fmt.Sprintf(", %s", strings.Join(parameters, ", "))
+
+		for _, param := range parameters {
+			if strings.Contains(param, "headers=") {
+				headerParserCode = "if len(headers) > 0:\n            for header in headers.split(\"\n\"):\n            if '=' in header:\n                headersplit=header.split('=')\n                headers[headersplit[0]] = strip(headersplit[1])"
+			}
+		}
 	}
 
 	// FIXME - add checks for query data etc
@@ -432,6 +443,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         %s
         %s
         %s
+				%s
         %s
         %s
         %s
@@ -454,6 +466,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		url,
 		verifyWrapper,
 		authenticationSetup,
+		headerParserCode,
 		queryData,
 		bodyFormatter,
 		fileGrabber,
@@ -466,8 +479,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	//log.Printf("\n%s", data)
-	if strings.Contains(functionname, "attachment") {
+	if strings.Contains(functionname, "get_ticket") {
+		log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
 		//log.Printf("Queries: %s", queryString)
@@ -507,9 +520,15 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		api.Link = api.Link[:len(api.Link)-1]
 	}
 
-	example := "https://api-url/api/v1"
+	example := "https://api-url"
 	if len(api.Link) > 0 {
 		example = api.Link
+		linkSplit := strings.Split(api.Link, "/")
+		if len(linkSplit) > 3 {
+			example = strings.Join(linkSplit[0:3], "/")
+		}
+
+		//log.Printf("EXAMPLE: %s", example)
 	}
 
 	api.AppVersion = "1.0.0"
@@ -713,6 +732,33 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 	// This is the python code to be generated
 	// Could just as well be go at this point lol
 	pythonFunctions := []string{}
+
+	optionalParameters := []WorkflowAppActionParameter{}
+	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
+		Name:        "headers",
+		Description: "Add or edit headers",
+		Multiline:   true,
+		Required:    false,
+		Example:     "Content-Type=application/json\nAccept=application/json",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
+		Name:        "ssl_verify",
+		Description: "Check if you want to verify request",
+		Multiline:   false,
+		Required:    false,
+		Example:     "True",
+		Options: []string{
+			"True",
+			"False",
+		},
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
 	//Verified      bool   `json:"verified" yaml:"verified" required:false datastore:"verified"`
 	for actualPath, path := range swagger.Paths {
 		actualPath = strings.Replace(actualPath, " ", "_", -1)
@@ -726,37 +772,37 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		// FIXME: Handle everything behind questionmark (?) with dots as well.
 		// https://godoc.org/github.com/getkin/kin-openapi/openapi3#PathItem
 		if path.Get != nil {
-			action, curCode := HandleGet(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleGet(swagger, api, extraParameters, path, actualPath, optionalParameters)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Connect != nil {
-			action, curCode := HandleConnect(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleConnect(swagger, api, extraParameters, path, actualPath, optionalParameters)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Head != nil {
-			action, curCode := HandleHead(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleHead(swagger, api, extraParameters, path, actualPath, optionalParameters)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Delete != nil {
-			action, curCode := HandleDelete(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandleDelete(swagger, api, extraParameters, path, actualPath, optionalParameters)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Post != nil {
-			action, curCode := HandlePost(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandlePost(swagger, api, extraParameters, path, actualPath, optionalParameters)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Patch != nil {
-			action, curCode := HandlePatch(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandlePatch(swagger, api, extraParameters, path, actualPath, optionalParameters)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 		if path.Put != nil {
-			action, curCode := HandlePut(swagger, api, extraParameters, path, actualPath)
+			action, curCode := HandlePut(swagger, api, extraParameters, path, actualPath, optionalParameters)
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
@@ -1065,7 +1111,7 @@ func ValidateParameterName(name string) string {
 	return newname
 }
 
-func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Connect.Summary, actualPath)
 
@@ -1088,21 +1134,6 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
-		Name:        "ssl_verify",
-		Description: "Check if you want to verify request",
-		Multiline:   false,
-		Required:    false,
-		Example:     "True",
-		Options: []string{
-			"True",
-			"False",
-		},
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
 
 	headersFound := []string{}
 	if len(path.Connect.Parameters) > 0 {
@@ -1204,7 +1235,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	return action, curCode
 }
 
-func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Get.Summary, actualPath)
 
@@ -1227,22 +1258,6 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 
 	// FIXME - remove this when authentication is properly introduced
 	parameters := []string{}
-	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
-		Name:        "ssl_verify",
-		Description: "Check if you want to verify the SSL certificate request",
-		Multiline:   false,
-		Required:    false,
-		Example:     "False - default=True",
-		Options: []string{
-			"True",
-			"False",
-		},
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
-
 	headersFound := []string{}
 	if len(path.Get.Parameters) > 0 {
 		for counter, param := range path.Get.Parameters {
@@ -1328,6 +1343,45 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		}
 	}
 
+	if len(headersFound) > 0 {
+		setIndex := -1
+		for paramIndex, param := range optionalParameters {
+			if param.Name == "headers" {
+				setIndex = paramIndex
+				break
+			}
+		}
+
+		if setIndex >= 0 {
+			for _, header := range headersFound {
+				if !strings.Contains(header, "=") {
+					continue
+				}
+
+				headerKey := strings.Split(header, "=")[0]
+				if strings.Contains(optionalParameters[setIndex].Value, headerKey) {
+					continue
+				}
+
+				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
+			}
+
+			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
+			//log.Printf("HI: %s",
+			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
+			// Removing newlines at the end
+			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
+				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+			}
+
+			log.Printf("%#v", optionalParameters[setIndex].Value)
+			headerKey := `headers=""`
+			if !ArrayContains(parameters, headerKey) {
+				parameters = append(parameters, headerKey)
+			}
+		}
+	}
+
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
@@ -1343,7 +1397,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	return action, curCode
 }
 
-func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Head.Summary, actualPath)
 
@@ -1366,22 +1420,6 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
-		Name:        "ssl_verify",
-		Description: "Check if you want to verify request",
-		Multiline:   false,
-		Required:    false,
-		Example:     "True",
-		Options: []string{
-			"True",
-			"False",
-		},
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
-
 	headersFound := []string{}
 	if len(path.Head.Parameters) > 0 {
 		for counter, param := range path.Head.Parameters {
@@ -1480,7 +1518,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	return action, curCode
 }
 
-func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Delete.Summary, actualPath)
 
@@ -1503,21 +1541,6 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
-		Name:        "ssl_verify",
-		Description: "Check if you want to verify request",
-		Multiline:   false,
-		Required:    false,
-		Example:     "True",
-		Options: []string{
-			"True",
-			"False",
-		},
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
 
 	headersFound := []string{}
 	if len(path.Delete.Parameters) > 0 {
@@ -1618,7 +1641,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	return action, curCode
 }
 
-func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	//log.Printf("PATH: %s", actualPath)
 	functionName := FixFunctionName(path.Post.Summary, actualPath)
@@ -1640,21 +1663,6 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
-		Name:        "ssl_verify",
-		Description: "Check if you want to verify request",
-		Multiline:   false,
-		Required:    false,
-		Example:     "True",
-		Options: []string{
-			"True",
-			"False",
-		},
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
 
 	fileField := ""
 	if path.Post.RequestBody != nil {
@@ -1793,7 +1801,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	return action, curCode
 }
 
-func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Patch.Summary, actualPath)
 
@@ -1816,21 +1824,6 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
-		Name:        "ssl_verify",
-		Description: "Check if you want to verify request",
-		Multiline:   false,
-		Required:    false,
-		Example:     "True",
-		Options: []string{
-			"True",
-			"False",
-		},
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
 
 	headersFound := []string{}
 	if len(path.Patch.Parameters) > 0 {
@@ -1930,7 +1923,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	return action, curCode
 }
 
-func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string) (WorkflowAppAction, string) {
+func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Put.Summary, actualPath)
 
@@ -1953,21 +1946,6 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
-		Name:        "ssl_verify",
-		Description: "Check if you want to verify request",
-		Multiline:   false,
-		Required:    false,
-		Example:     "True",
-		Options: []string{
-			"True",
-			"False",
-		},
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
 
 	headersFound := []string{}
 	if len(path.Put.Parameters) > 0 {

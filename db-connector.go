@@ -641,7 +641,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
@@ -709,7 +708,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
 			var buf bytes.Buffer
 			query := map[string]interface{}{
-				"from": 0,
 				"size": 1000,
 				"query": map[string]interface{}{
 					"match": map[string]interface{}{
@@ -1401,7 +1399,6 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
@@ -1693,7 +1690,6 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		//log.Printf("GETTING ES USER %s",
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
@@ -1805,7 +1801,6 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		//log.Printf("GETTING ES USER %s",
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
@@ -2299,7 +2294,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 1000,
 		}
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -3528,8 +3522,12 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 100,
+			"sort": map[string]interface{}{
+				"started_at": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"workflow_id": workflowId,
@@ -3631,7 +3629,6 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 1000,
 		}
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -3737,7 +3734,6 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
