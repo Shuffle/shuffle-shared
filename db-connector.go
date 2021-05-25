@@ -3857,3 +3857,114 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 
 	return workflows, nil
 }
+
+// Used for cache for individual organizations
+func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
+	nameKey := "org_cache"
+	timeNow := int64(time.Now().Unix())
+	cacheData.Edited = timeNow
+	cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
+	cacheData.Authorization = ""
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(cacheData)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set cache key: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, cacheId, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, cacheId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
+			log.Printf("Error adding workflow: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for set cache key: %s", err)
+		}
+	}
+
+	return nil
+}
+
+// Used for cache for individual organizations
+func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
+	cacheData := &CacheKeyData{}
+	nameKey := "org_cache"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			parsedCache := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(parsedCache, &cacheData)
+			if err == nil {
+				return cacheData, nil
+			}
+		} else {
+			log.Printf("[DEBUG] Failed getting cache for cache key %s: %s", id, err)
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return cacheData, err
+		}
+
+		if res.StatusCode == 404 {
+			return cacheData, errors.New("Key doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return cacheData, err
+		}
+
+		wrapped := CacheKeyWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return cacheData, err
+		}
+
+		cacheData = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
+				err = nil
+			} else {
+				return cacheData, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(cacheData)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getcachekey: %s", err)
+			return cacheData, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for get cache key: %s", err)
+		}
+	}
+
+	return cacheData, nil
+}

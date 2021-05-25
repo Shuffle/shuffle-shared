@@ -502,6 +502,17 @@ type Defaults struct {
 	WorkflowDownloadBranch string `json:"workflow_download_branch" datastore:"workflow_download_branch"`
 }
 
+type CacheKeyData struct {
+	Success       bool   `json:"success"`
+	WorkflowId    string `json:"workflow_id,"`
+	ExecutionId   string `json:"execution_id,omityempty"`
+	Authorization string `json:"authorization,omitempty"`
+	OrgId         string `json:"org_id,omitempty"`
+	Key           string `json:"key"`
+	Value         string `json:"value"`
+	Edited        int64  `json:"edited"`
+}
+
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
@@ -1490,4 +1501,15 @@ type UserWrapper struct {
 	PrimaryTerm int    `json:"_primary_term"`
 	Found       bool   `json:"found"`
 	Source      User   `json:"_source"`
+}
+
+type CacheKeyWrapper struct {
+	Index       string       `json:"_index"`
+	Type        string       `json:"_type"`
+	ID          string       `json:"_id"`
+	Version     int          `json:"_version"`
+	SeqNo       int          `json:"_seq_no"`
+	PrimaryTerm int          `json:"_primary_term"`
+	Found       bool         `json:"found"`
+	Source      CacheKeyData `json:"_source"`
 }

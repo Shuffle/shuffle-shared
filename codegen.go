@@ -264,9 +264,37 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	queryString := ""
 	queryData := ""
 
+	extraHeaders := ""
+	extraQueries := ""
+	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth"}
+	if swagger.Components.SecuritySchemes != nil {
+		for key, value := range swagger.Components.SecuritySchemes {
+			if ArrayContains(reservedKeys, key) {
+				continue
+			}
+
+			if value.Value.In == "header" {
+				queryString += fmt.Sprintf(", %s=\"\"", key)
+				if len(extraHeaders) > 0 {
+					extraHeaders += "\n        "
+				}
+				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, key, key, key)
+			} else if value.Value.In == "query" {
+				queryString += fmt.Sprintf(", %s=\"\"", key)
+				if len(extraQueries) > 0 {
+					extraQueries += "\n        "
+				}
+				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, key, key, key)
+			} else {
+				log.Printf("[WARNING] Can't handle type %s", value.Value.In)
+			}
+		}
+	}
+
 	// FIXME - this might break - need to check if ? or & should be set as query
 	parameterData := ""
 	if len(optionalQueries) > 0 {
+		//if len(queryString
 		queryString += ", "
 		for index, query := range optionalQueries {
 			// Check if it's a part of the URL already
@@ -296,7 +324,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	if swagger.Components.SecuritySchemes != nil {
 		if swagger.Components.SecuritySchemes["BearerAuth"] != nil {
 			authenticationParameter = ", apikey"
-			authenticationSetup = "if apikey != \" \" and not apikey.startswith(\"Bearer\"): headers[\"Authorization\"] = f\"Bearer {apikey}\""
+			authenticationSetup = "if apikey != \" \" and not apikey.startswith(\"Bearer\"): request_headers[\"Authorization\"] = f\"Bearer {apikey}\""
 		} else if swagger.Components.SecuritySchemes["BasicAuth"] != nil {
 			authenticationParameter = ", username_basic, password_basic"
 			authenticationAddin = ", auth=(username_basic, password_basic)"
@@ -304,7 +332,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			authenticationParameter = ", apikey"
 			if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "header" {
 				// This is a way to bypass apikeys by passing " "
-				authenticationSetup = fmt.Sprintf(`if apikey != " ": headers["%s"] = apikey`, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+				authenticationSetup = fmt.Sprintf(`if apikey != " ": request_headers["%s"] = apikey`, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
 			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
 				// This might suck lol
 				key := "?"
@@ -364,17 +392,18 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	// Codegen for headers
 	headerParserCode := ""
+	queryParserCode := ""
 	if len(parameters) > 0 {
 		parameterData = fmt.Sprintf(", %s", strings.Join(parameters, ", "))
 
 		for _, param := range parameters {
 			if strings.Contains(param, "headers=") {
-				headerParserCode = "if len(headers) > 0:\n            for header in headers.split(\"\n\"):\n            if '=' in header:\n                headersplit=header.split('=')\n                headers[headersplit[0]] = strip(headersplit[1])"
+				headerParserCode = "if len(headers) > 0:\n            for header in headers.split(\"\\n\"):\n                if '=' in header:\n                    headersplit=header.split('=')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()\n                elif ':' in header:\n                    headersplit=header.split(':')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()"
+			} else if strings.Contains(param, "queries=") {
+				queryParserCode = "\n        if len(queries) > 0:\n            for query in queries.split(\"\\&\"):\n                if '=' in query:\n                    headersplit=query.split('&')\n                    params[headersplit[0].strip()] = headersplit[1].strip()"
 			}
 		}
 	}
-
-	// FIXME - add checks for query data etc
 
 	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
 	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
@@ -395,9 +424,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		}
 	}
 
-	preparedHeaders := "headers={}"
+	preparedHeaders := "request_headers={}"
 	if len(headers) > 0 {
-		preparedHeaders = "headers={"
+		preparedHeaders = "request_headers={"
 		for count, header := range headers {
 			headerSplit := strings.Split(header, "=")
 			added := false
@@ -436,24 +465,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
-	data := fmt.Sprintf(`    async def %s(self%s%s%s%s%s%s%s):
-        params={}
-        %s
-        url=f"%s%s"
-        %s
-        %s
-        %s
-				%s
-        %s
-        %s
-        %s
-        ret = requests.%s(url, headers=headers, params=params%s%s%s%s)
-        try:
-          return ret.json()
-        except json.decoder.JSONDecodeError:
-          return ret.text
-		`,
-		functionname,
+	parsedParameters := fmt.Sprintf("%s%s%s%s%s%s%s",
 		authenticationParameter,
 		urlParameter,
 		fileParameter,
@@ -461,12 +473,40 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		queryString,
 		bodyParameter,
 		verifyParam,
+	)
+	//log.Printf("PARSED: %s", parsedParameters)
+
+	data := fmt.Sprintf(`    async def %s(self%s):
+        params={}
+        %s
+        url=f"%s%s"
+        %s
+        %s
+        %s
+        %s
+        %s
+        %s
+        %s
+        %s
+				%s
+				%s
+        ret = requests.%s(url, headers=request_headers, params=params%s%s%s%s)
+        try:
+        	return ret.json()
+        except json.decoder.JSONDecodeError:
+        	return ret.text
+		`,
+		functionname,
+		parsedParameters,
 		preparedHeaders,
 		urlInline,
 		url,
 		verifyWrapper,
 		authenticationSetup,
+		extraHeaders,
+		extraQueries,
 		headerParserCode,
+		queryParserCode,
 		queryData,
 		bodyFormatter,
 		fileGrabber,
@@ -479,8 +519,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "get_ticket") {
-		log.Printf("\n%s", data)
+	if strings.Contains(functionname, "get_users") {
+		//log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
 		//log.Printf("Queries: %s", queryString)
@@ -593,6 +633,8 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 	}
 
 	securitySchemes := swagger.Components.SecuritySchemes
+	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth"}
+
 	if securitySchemes != nil {
 		//log.Printf("%#v", securitySchemes)
 
@@ -653,6 +695,29 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 					Type: "string",
 				},
 			})
+		} else if securitySchemes["Oauth2"] != nil {
+			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+				Name:        "client_id",
+				Value:       "",
+				Example:     "client_id",
+				Description: securitySchemes["Oauth2j"].Value.Description,
+				In:          securitySchemes["Oauth2"].Value.In,
+				Scheme:      securitySchemes["Oauth2"].Value.Scheme,
+				Schema: SchemaDefinition{
+					Type: securitySchemes["BasicAuth"].Value.Scheme,
+				},
+			})
+			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+				Name:        "client_secret",
+				Value:       "",
+				Example:     "client_secret",
+				Description: securitySchemes["Oauth2j"].Value.Description,
+				In:          securitySchemes["Oauth2"].Value.In,
+				Scheme:      securitySchemes["Oauth2"].Value.Scheme,
+				Schema: SchemaDefinition{
+					Type: securitySchemes["BasicAuth"].Value.Scheme,
+				},
+			})
 		} else if securitySchemes["BasicAuth"] != nil {
 			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 				Name:        "username_basic",
@@ -703,6 +768,38 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		}
 	}
 
+	for key, value := range securitySchemes {
+		if ArrayContains(reservedKeys, key) {
+			continue
+		}
+
+		//log.Printf("%s: %#v", key, value.Value)
+		exampleData := fmt.Sprintf("Extra auth field (%s)", value.Value.In)
+		api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+			Name:        key,
+			Value:       "",
+			Example:     exampleData,
+			Description: exampleData,
+			In:          value.Value.In,
+			Scheme:      "",
+			Schema: SchemaDefinition{
+				Type: "string",
+			},
+		})
+
+		extraParameters = append(extraParameters, WorkflowAppActionParameter{
+			Name:          key,
+			Multiline:     false,
+			Required:      true,
+			Description:   exampleData,
+			Example:       exampleData,
+			Configuration: true,
+			Schema: SchemaDefinition{
+				Type: "string",
+			},
+		})
+	}
+
 	// Adds a link parameter if it's not already defined
 	api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 		Name:        "url",
@@ -740,6 +837,16 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		Multiline:   true,
 		Required:    false,
 		Example:     "Content-Type=application/json\nAccept=application/json",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
+		Name:        "queries",
+		Description: "Add or edit queries",
+		Multiline:   true,
+		Required:    false,
+		Example:     "view=basic&redirect=test",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1220,6 +1327,52 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 		}
 	}
 
+	if len(headersFound) > 0 {
+		setIndex := -1
+		for paramIndex, param := range optionalParameters {
+			if param.Name == "headers" {
+				setIndex = paramIndex
+				break
+			}
+		}
+
+		if setIndex >= 0 {
+			for _, header := range headersFound {
+				if !strings.Contains(header, "=") {
+					continue
+				}
+
+				headerKey := strings.Split(header, "=")[0]
+				if strings.Contains(optionalParameters[setIndex].Value, headerKey) {
+					continue
+				}
+
+				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
+			}
+
+			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
+			//log.Printf("HI: %s",
+			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
+			// Removing newlines at the end
+			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
+				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+			}
+
+			log.Printf("%#v", optionalParameters[setIndex].Value)
+		}
+	}
+
+	// Must be here 'cus they should be last
+	headerKey := `headers=""`
+	if !ArrayContains(parameters, headerKey) {
+		parameters = append(parameters, headerKey)
+	}
+
+	queryKey := `queries=""`
+	if !ArrayContains(parameters, queryKey) {
+		parameters = append(parameters, queryKey)
+	}
+
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
@@ -1374,12 +1527,19 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
 			}
 
-			log.Printf("%#v", optionalParameters[setIndex].Value)
-			headerKey := `headers=""`
-			if !ArrayContains(parameters, headerKey) {
-				parameters = append(parameters, headerKey)
-			}
+			//log.Printf("%#v", optionalParameters[setIndex].Value)
 		}
+	}
+
+	// Must be here 'cus they should be last
+	headerKey := `headers=""`
+	if !ArrayContains(parameters, headerKey) {
+		parameters = append(parameters, headerKey)
+	}
+
+	queryKey := `queries=""`
+	if !ArrayContains(parameters, queryKey) {
+		parameters = append(parameters, queryKey)
 	}
 
 	// ensuring that they end up last in the specification
@@ -1503,6 +1663,52 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		}
 	}
 
+	if len(headersFound) > 0 {
+		setIndex := -1
+		for paramIndex, param := range optionalParameters {
+			if param.Name == "headers" {
+				setIndex = paramIndex
+				break
+			}
+		}
+
+		if setIndex >= 0 {
+			for _, header := range headersFound {
+				if !strings.Contains(header, "=") {
+					continue
+				}
+
+				headerKey := strings.Split(header, "=")[0]
+				if strings.Contains(optionalParameters[setIndex].Value, headerKey) {
+					continue
+				}
+
+				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
+			}
+
+			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
+			//log.Printf("HI: %s",
+			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
+			// Removing newlines at the end
+			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
+				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+			}
+
+			//log.Printf("%#v", optionalParameters[setIndex].Value)
+		}
+	}
+
+	// Must be here 'cus they should be last
+	headerKey := `headers=""`
+	if !ArrayContains(parameters, headerKey) {
+		parameters = append(parameters, headerKey)
+	}
+
+	queryKey := `queries=""`
+	if !ArrayContains(parameters, queryKey) {
+		parameters = append(parameters, queryKey)
+	}
+
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
@@ -1624,6 +1830,52 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 			}
 
 		}
+	}
+
+	if len(headersFound) > 0 {
+		setIndex := -1
+		for paramIndex, param := range optionalParameters {
+			if param.Name == "headers" {
+				setIndex = paramIndex
+				break
+			}
+		}
+
+		if setIndex >= 0 {
+			for _, header := range headersFound {
+				if !strings.Contains(header, "=") {
+					continue
+				}
+
+				headerKey := strings.Split(header, "=")[0]
+				if strings.Contains(optionalParameters[setIndex].Value, headerKey) {
+					continue
+				}
+
+				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
+			}
+
+			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
+			//log.Printf("HI: %s",
+			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
+			// Removing newlines at the end
+			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
+				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+			}
+
+			//log.Printf("%#v", optionalParameters[setIndex].Value)
+		}
+	}
+
+	// Must be here 'cus they should be last
+	headerKey := `headers=""`
+	if !ArrayContains(parameters, headerKey) {
+		parameters = append(parameters, headerKey)
+	}
+
+	queryKey := `queries=""`
+	if !ArrayContains(parameters, queryKey) {
+		parameters = append(parameters, queryKey)
 	}
 
 	// ensuring that they end up last in the specification
@@ -1781,6 +2033,52 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		}
 	}
 
+	if len(headersFound) > 0 {
+		setIndex := -1
+		for paramIndex, param := range optionalParameters {
+			if param.Name == "headers" {
+				setIndex = paramIndex
+				break
+			}
+		}
+
+		if setIndex >= 0 {
+			for _, header := range headersFound {
+				if !strings.Contains(header, "=") {
+					continue
+				}
+
+				headerKey := strings.Split(header, "=")[0]
+				if strings.Contains(optionalParameters[setIndex].Value, headerKey) {
+					continue
+				}
+
+				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
+			}
+
+			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
+			//log.Printf("HI: %s",
+			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
+			// Removing newlines at the end
+			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
+				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+			}
+
+			//log.Printf("%#v", optionalParameters[setIndex].Value)
+		}
+	}
+
+	// Must be here 'cus they should be last
+	headerKey := `headers=""`
+	if !ArrayContains(parameters, headerKey) {
+		parameters = append(parameters, headerKey)
+	}
+
+	queryKey := `queries=""`
+	if !ArrayContains(parameters, queryKey) {
+		parameters = append(parameters, queryKey)
+	}
+
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
@@ -1908,6 +2206,52 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 		}
 	}
 
+	if len(headersFound) > 0 {
+		setIndex := -1
+		for paramIndex, param := range optionalParameters {
+			if param.Name == "headers" {
+				setIndex = paramIndex
+				break
+			}
+		}
+
+		if setIndex >= 0 {
+			for _, header := range headersFound {
+				if !strings.Contains(header, "=") {
+					continue
+				}
+
+				headerKey := strings.Split(header, "=")[0]
+				if strings.Contains(optionalParameters[setIndex].Value, headerKey) {
+					continue
+				}
+
+				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
+			}
+
+			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
+			//log.Printf("HI: %s",
+			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
+			// Removing newlines at the end
+			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
+				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+			}
+
+			//log.Printf("%#v", optionalParameters[setIndex].Value)
+		}
+	}
+
+	// Must be here 'cus they should be last
+	headerKey := `headers=""`
+	if !ArrayContains(parameters, headerKey) {
+		parameters = append(parameters, headerKey)
+	}
+
+	queryKey := `queries=""`
+	if !ArrayContains(parameters, queryKey) {
+		parameters = append(parameters, queryKey)
+	}
+
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
@@ -2029,6 +2373,52 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 			}
 
 		}
+	}
+
+	if len(headersFound) > 0 {
+		setIndex := -1
+		for paramIndex, param := range optionalParameters {
+			if param.Name == "headers" {
+				setIndex = paramIndex
+				break
+			}
+		}
+
+		if setIndex >= 0 {
+			for _, header := range headersFound {
+				if !strings.Contains(header, "=") {
+					continue
+				}
+
+				headerKey := strings.Split(header, "=")[0]
+				if strings.Contains(optionalParameters[setIndex].Value, headerKey) {
+					continue
+				}
+
+				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
+			}
+
+			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
+			//log.Printf("HI: %s",
+			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
+			// Removing newlines at the end
+			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
+				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+			}
+
+			//log.Printf("%#v", optionalParameters[setIndex].Value)
+		}
+	}
+
+	// Must be here 'cus they should be last
+	headerKey := `headers=""`
+	if !ArrayContains(parameters, headerKey) {
+		parameters = append(parameters, headerKey)
+	}
+
+	queryKey := `queries=""`
+	if !ArrayContains(parameters, queryKey) {
+		parameters = append(parameters, queryKey)
 	}
 
 	// ensuring that they end up last in the specification
