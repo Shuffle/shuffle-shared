@@ -4969,7 +4969,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Handling login of %s", data.Username)
 
-	data.Username = strings.ToLower(data.Username)
+	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
 	err = checkUsername(data.Username)
 	if err != nil {
 		resp.WriteHeader(401)

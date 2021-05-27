@@ -1470,9 +1470,18 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		}
 	}
 
-	log.Printf("[INFO] Found %d user(s) for email %s in db-connector", len(users), username)
+	newUsers := []User{}
+	parsedUsername := strings.ToLower(strings.TrimSpace(username))
+	for _, user := range users {
+		if strings.ToLower(strings.TrimSpace(user.Username)) != parsedUsername {
+			continue
+		}
 
-	return users, nil
+		newUsers = append(newUsers, user)
+	}
+
+	log.Printf("[INFO] Found %d (%d) user(s for email %s in db-connector", len(newUsers), len(users), username)
+	return newUsers, nil
 }
 
 // ListBooks returns a list of books, ordered by title.
