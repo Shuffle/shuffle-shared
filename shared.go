@@ -238,7 +238,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	session, err := GetSession(ctx, userInfo.Session)
 	if err != nil {
-		log.Printf("Session %#v doesn't exist: %s", session, err)
+		log.Printf("[WARNING] Session %#v doesn't exist: %s", session, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "No session"}`))
 		return
@@ -882,7 +882,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		sessionToken := c.Value
 		session, err := GetSession(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[INFO] Session %#v doesn't exist: %s", sessionToken, err)
+			//log.Printf("[DEBUG] Session %#v doesn't exist: %s", sessionToken, err)
 			return User{}, err
 		}
 
@@ -3219,11 +3219,13 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if len(t.Newpassword) < 10 || len(t.Newpassword2) < 10 {
-			err := "Passwords too short - 2"
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
-			return
+		if project.Environment == "cloud" {
+			if len(t.Newpassword) < 10 || len(t.Newpassword2) < 10 {
+				err := "Passwords too short - 2"
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+				return
+			}
 		}
 	} else {
 		// Check ORG HERE?
@@ -3250,7 +3252,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(users) != 1 {
-			log.Printf(`Found multiple or no users with the same username: %s: %d`, t.Username, len(users))
+			log.Printf(`[WARNING] Found multiple or no users with the same username: %s: %d`, t.Username, len(users))
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Found %d users with the same username: %s"}`, len(users), t.Username)))
 			return
@@ -3271,7 +3273,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !orgFound {
-			log.Printf("User %s is admin, but can't change user's passowrd outside their own org.", userInfo.Id)
+			log.Printf("[INFO] User %s is admin, but can't change user's passowrd outside their own org.", userInfo.Id)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 			return
@@ -3287,10 +3289,14 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+
+		// log.Printf("FOUND: %#v", curUserFound)
+		foundUser = userInfo
+		//userInfo, err := HandleApiAuthentication(resp, request)
 	}
 
 	if len(foundUser.Id) == 0 {
-		log.Printf("Something went wrong in password reset: couldn't find user.")
+		log.Printf("[WARNING] Something went wrong in password reset: couldn't find user.")
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -3304,7 +3310,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	userInfo.Password = string(hashedPassword)
+	foundUser.Password = string(hashedPassword)
 	err = SetUser(ctx, &foundUser, true)
 	if err != nil {
 		log.Printf("Error fixing password for user %s: %s", userInfo.Username, err)
