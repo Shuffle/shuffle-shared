@@ -395,6 +395,12 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	//for _, env := range allworkflowappAuths {
+	//	for _, param := range env.Fields {
+	//		log.Printf("ENV: %#v", param)
+	//	}
+	//}
+
 	// Cleanup for frontend
 	newAuth := []AppAuthenticationStorage{}
 	for _, auth := range allAuths {
@@ -406,7 +412,17 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		newAuth = append(newAuth, newAuthField)
 	}
 
-	newbody, err := json.Marshal(allAuths)
+	type returnStruct struct {
+		Success bool                       `json:"success"`
+		Data    []AppAuthenticationStorage `json:"data"`
+	}
+
+	allAuth := returnStruct{
+		Success: true,
+		Data:    allAuths,
+	}
+
+	newbody, err := json.Marshal(allAuth)
 	if err != nil {
 		log.Printf("Failed unmarshalling all app auths: %s", err)
 		resp.WriteHeader(401)
@@ -414,10 +430,10 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	data := fmt.Sprintf(`{"success": true, "data": %s}`, string(newbody))
+	//data := fmt.Sprintf(`{"success": true, "data": %s}`, string(newbody))
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(data))
+	resp.Write([]byte(newbody))
 
 }
 
@@ -616,8 +632,13 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
+	nameKey := "workflowappauth"
 	auth, err := GetWorkflowAppAuthDatastore(ctx, fileId)
 	if err != nil {
+		// Deleting cache here, as it seems to be a constant issue
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, user.ActiveOrg.Id)
+		DeleteCache(ctx, cacheKey)
+
 		log.Printf("[WARNING] Authget error (DELETE): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": ":("}`))
@@ -634,7 +655,6 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	// 1. Get the auth
 	// 2. Loop the workflows (.Usage) and set them to have errors
 	// 3. Loop the nodes in workflows and do the same
-	nameKey := "workflowappauth"
 	err = DeleteKey(ctx, nameKey, fileId)
 	if err != nil {
 		log.Printf("Failed deleting workflowapp")
@@ -644,6 +664,8 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, user.ActiveOrg.Id)
+	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("%s_%s", nameKey, fileId)
 	DeleteCache(ctx, cacheKey)
 
 	resp.WriteHeader(200)
@@ -2451,7 +2473,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			oldworkflow.IsValid = false
 			err = SetWorkflow(ctx, *oldworkflow, fileId)
 			if err != nil {
-				log.Printf("Failed saving workflow to database: %s", err)
+				log.Printf("[WARNING] Failed saving workflow to database: %s", err)
 				if workflow.PreviouslySaved {
 					resp.WriteHeader(401)
 					resp.Write([]byte(`{"success": false}`))
@@ -3273,7 +3295,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !orgFound {
-			log.Printf("[INFO] User %s is admin, but can't change user's passowrd outside their own org.", userInfo.Id)
+			log.Printf("[INFO] User %s is admin, but can't change user's password outside their own org.", userInfo.Id)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 			return

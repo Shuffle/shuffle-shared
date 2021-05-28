@@ -1691,7 +1691,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 				return allworkflowappAuths, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for app auth: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for app auth: %s", err)
 		}
 	}
 
@@ -1706,6 +1706,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 				},
 			},
 		}
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
 			return allworkflowappAuths, err
@@ -1781,8 +1782,14 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			log.Printf("[WARNING] Failed updating get app auth cache: %s", err)
 		}
 
-		log.Printf("[DEBUG] Set cache for app auth %s", cacheKey)
+		log.Printf("[DEBUG] Set cache for app auth %s with length %d", cacheKey, len(allworkflowappAuths))
 	}
+
+	//for _, env := range allworkflowappAuths {
+	//	for _, param := range env.Fields {
+	//		log.Printf("ENV: %#v", param)
+	//	}
+	//}
 
 	return allworkflowappAuths, nil
 }
@@ -2755,7 +2762,9 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 		}
 	}
 
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowappauth.OrgId)
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("%s_%s", nameKey, workflowappauth.OrgId)
 	DeleteCache(ctx, cacheKey)
 
 	return nil
