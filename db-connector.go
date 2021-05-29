@@ -2310,7 +2310,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"size": 1000,
+			"size": maxLen,
 		}
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
@@ -2381,7 +2381,19 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 			for appIndex, loopedApp := range allApps {
 				if loopedApp.Name == innerApp.Name {
 					if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
-						found = true
+
+						// If the new is active, and the old one is NOT - replace it.
+						// FIXME: May be a problem here with semantic versioning
+						// As of 0.8 this is not a concern, hence is ignored.
+						if innerApp.Activated && !loopedApp.Activated {
+							newIndex = appIndex
+							newApp = innerApp
+							//newApp.Versions = loopedApp.Versions
+							//newApp.LoopVersions = loopedApp.Versions
+							found = false
+						} else {
+							found = true
+						}
 					} else {
 						//log.Printf("\n\nFound NEW version %s of app %s on index %d\n\n", innerApp.AppVersion, innerApp.Name, appIndex)
 

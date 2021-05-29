@@ -2111,6 +2111,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	newOrgApps := []string{}
 	for _, action := range workflow.Actions {
+		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
+			continue
+		}
+
 		allNodes = append(allNodes, action.ID)
 		if workflow.Start == action.ID {
 			//log.Printf("[INFO] FOUND STARTNODE %d", workflow.Start)
@@ -2232,7 +2236,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !startnodeFound {
-		log.Printf("No startnode found during save!!")
+		log.Printf("[WARNING] No startnode found during save of %s!!", workflow.ID)
 	}
 
 	// Automatically adding new apps
@@ -2264,6 +2268,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	newTriggers := []Trigger{}
 	for _, trigger := range workflow.Triggers {
+		if trigger.SourceWorkflow != workflow.ID && len(trigger.SourceWorkflow) > 0 {
+			continue
+		}
+
 		log.Printf("[INFO] Workflow: %s, Trigger %s: %s", workflow.ID, trigger.TriggerType, trigger.Status)
 
 		// Check if it's actually running
@@ -2881,7 +2889,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetWorkflow(ctx, workflow, fileId)
 	if err != nil {
-		log.Printf("Failed saving workflow to database: %s", err)
+		log.Printf("[WARNING] Failed saving workflow to database: %s", err)
 		if workflow.PreviouslySaved {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
@@ -4575,6 +4583,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		Workflow    string `json:"workflow"`
 		Start       string `json:"start"`
 		Environment string `json:"environment"`
+		Auth        string `json:"auth"`
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -4649,6 +4658,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 			PrimaryItemId: newId,
 			SecondaryItem: startNode,
 			ThirdItem:     requestdata.Workflow,
+			FourthItem:    requestdata.Auth,
 		}
 
 		err = executeCloudAction(action, org.SyncConfig.Apikey)
@@ -4685,6 +4695,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		Running:     false,
 		OrgId:       user.ActiveOrg.Id,
 		Environment: requestdata.Environment,
+		Auth:        requestdata.Auth,
 	}
 
 	hook.Status = "running"
@@ -6881,4 +6892,46 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(b)
+}
+
+// Checks authentication string for Webhooks
+func CheckHookAuth(request *http.Request, auth string) error {
+	if len(auth) == 0 {
+		return nil
+	}
+
+	authSplit := strings.Split(auth, "\n")
+	for _, line := range authSplit {
+		lineSplit := strings.Split(line, "=")
+		if strings.Contains(line, ":") {
+			lineSplit = strings.Split(line, "=")
+		}
+
+		if len(lineSplit) == 2 {
+			validationHeader := strings.ToLower(strings.TrimSpace(lineSplit[0]))
+			found := false
+			for key, value := range request.Header {
+				if strings.ToLower(key) == validationHeader && len(value) > 0 {
+					//log.Printf("FOUND KEY %#v. Value: %s", validationHeader, value)
+					if value[0] == strings.TrimSpace(lineSplit[1]) {
+						found = true
+						break
+					}
+				}
+			}
+
+			if !found {
+				return errors.New(fmt.Sprintf("Missing or bad header: %#v", validationHeader))
+			}
+
+			//log.Printf("Find header %#v", validationHeader)
+			//itemHeader := request.Header[validationHeader]
+			//log.Printf("LINE: %s. Header: %s", line, itemHeader)
+		} else {
+			log.Printf("[WARNING] Bad auth line: %s. NOT checking auth.", line)
+		}
+	}
+
+	//return errors.New("Bad auth!")
+	return nil
 }

@@ -142,6 +142,7 @@ type WorkflowAppAction struct {
 	AuthenticationId string `json:"authentication_id" datastore:"authentication_id"`
 	Example          string `json:"example,noindex" datastore:"example" yaml:"example"`
 	AuthNotRequired  bool   `json:"auth_not_required" datastore:"auth_not_required" yaml:"auth_not_required"`
+	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 }
 
 type Authentication struct {
@@ -463,6 +464,7 @@ type Hook struct {
 	Running     bool         `json:"running" datastore:"running"`
 	OrgId       string       `json:"org_id" datastore:"org_id"`
 	Environment string       `json:"environment" datastore:"environment"`
+	Auth        string       `json:"auth" datastore:"auth"`
 }
 
 // Used within a user
@@ -655,6 +657,7 @@ type Action struct {
 	Category         string `json:"category" datastore:"category"`
 	ReferenceUrl     string `json:"reference_url" datastore:"reference_url"`
 	SubAction        bool   `json:"sub_action" datastore:"sub_action"`
+	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 }
 
 // Added environment for location to execute
@@ -680,7 +683,8 @@ type Trigger struct {
 		X float64 `json:"x" datastore:"x"`
 		Y float64 `json:"y" datastore:"y"`
 	} `json:"position"`
-	Priority int `json:"priority" datastore:"priority"`
+	Priority       int    `json:"priority" datastore:"priority"`
+	SourceWorkflow string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 }
 
 type Branch struct {
