@@ -4521,6 +4521,23 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	for resultIndex, result := range workflowExecution.Results {
+		for parameterIndex, param := range result.Action.Parameters {
+			if param.Configuration {
+				workflowExecution.Results[resultIndex].Action.Parameters[parameterIndex].Value = ""
+			}
+		}
+	}
+
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
+		for parameterIndex, param := range action.Parameters {
+			if param.Configuration {
+				//log.Printf("Cleaning up %s in %s", param.Name, action.Name)
+				workflowExecution.Workflow.Actions[actionIndex].Parameters[parameterIndex].Value = ""
+			}
+		}
+	}
+
 	err = SetWorkflowExecution(ctx, *workflowExecution, true)
 	if err != nil {
 		log.Printf("Error saving workflow execution for updates when aborting %s: %s", topic, err)
@@ -5193,6 +5210,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		ExecutionVariable: actionResult.Action.ExecutionVariable,
 	}
 
+	// Cleaning up result authentication
+	for paramIndex, param := range actionResult.Action.Parameters {
+		if param.Configuration {
+			//log.Printf("[INFO] Deleting param %s (auth)", param.Name)
+			actionResult.Action.Parameters[paramIndex].Value = ""
+		}
+	}
+
 	// Fills in data from subflows, whether they're loops or not
 	if actionResult.Status == "SUCCESS" && actionResult.Action.AppName == "shuffle-subflow" {
 		runCheck := false
@@ -5831,6 +5856,15 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if finished {
 			dbSave = true
 			log.Printf("[INFO] Execution of %s finished.", workflowExecution.ExecutionId)
+
+			for actionIndex, action := range workflowExecution.Workflow.Actions {
+				for parameterIndex, param := range action.Parameters {
+					if param.Configuration {
+						//log.Printf("Cleaning up %s in %s", param.Name, action.Name)
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[parameterIndex].Value = ""
+					}
+				}
+			}
 			//log.Println("Might be finished based on length of results and everything being SUCCESS or FINISHED - VERIFY THIS. Setting status to finished.")
 
 			workflowExecution.Result = lastResult

@@ -750,8 +750,8 @@ func main() {
 	appname := "twitter"
 	appversion := "1.0.0"
 
-	//deployAll()
-	//return
+	deployAll()
+	return
 
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
