@@ -2436,6 +2436,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//resp.WriteHeader(401)
 			//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Variable %s can't be empty"}`, variable.Name)))
 			//return
+			//} else {
+			//	log.Printf("VALUE OF VAR IS %s", variable.Value)
 		}
 	}
 
@@ -6968,4 +6970,177 @@ func CheckHookAuth(request *http.Request, auth string) error {
 
 	//return errors.New("Bad auth!")
 	return nil
+}
+
+// Fileid = the app to execute
+// Body = The action body received from the user to test.
+func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte) (WorkflowExecution, error) {
+	var action Action
+	workflowExecution := WorkflowExecution{}
+	err = json.Unmarshal(body, &action)
+	if err != nil {
+		log.Printf("[WARNING] Failed action single execution unmarshaling: %s", err)
+		return workflowExecution, err
+	}
+
+	/*
+		if len(workflow.Name) > 0 || len(workflow.Owner) > 0 || len(workflow.OrgId) > 0 || len(workflow.Actions) != 1 {
+			log.Printf("[WARNING] Bad length for some characteristics in single execution of %s", fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	*/
+
+	if fileId != action.AppID {
+		log.Printf("[WARNING] Bad appid in single execution of App %s", fileId)
+		return workflowExecution, err
+	}
+
+	if len(action.ID) == 0 {
+		action.ID = uuid.NewV4().String()
+	}
+
+	app, err := GetApp(ctx, fileId, user)
+	if err != nil {
+		log.Printf("[WARNING] Error getting app (execute SINGLE workflow): %s", fileId)
+		return workflowExecution, err
+	}
+
+	if app.Authentication.Required && len(action.AuthenticationId) == 0 {
+		log.Printf("[WARNING] Tried to execute SINGLE %s WITHOUT auth (missing)", app.Name)
+
+		found := false
+		for _, param := range action.Parameters {
+			if param.Configuration {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return workflowExecution, errors.New("You must authenticate the app first")
+		}
+	}
+
+	newParams := []WorkflowAppActionParameter{}
+	if len(action.AuthenticationId) > 0 {
+		log.Printf("[INFO] Adding auth in single execution!")
+		curAuth, err := GetWorkflowAppAuthDatastore(ctx, action.AuthenticationId)
+
+		if err != nil {
+			log.Printf("[WARNING] Failed getting authentication for your org: %s", err)
+			return workflowExecution, err
+		}
+
+		if user.ActiveOrg.Id != curAuth.OrgId {
+			log.Printf("[WARNING] User %s tried to use bad auth %s", user.Id, action.AuthenticationId)
+			return workflowExecution, err
+		}
+
+		// Rebuild params with the right data. This is to prevent issues on the frontend
+		for _, auth := range curAuth.Fields {
+			newParam := WorkflowAppActionParameter{
+				Name:  auth.Key,
+				ID:    action.AuthenticationId,
+				Value: auth.Value,
+			}
+
+			newParams = append(newParams, newParam)
+		}
+
+		action.Parameters = newParams
+	}
+
+	for _, param := range action.Parameters {
+		if param.Required && len(param.Value) == 0 {
+			value := fmt.Sprintf("Param %s can't be empty. Fill all required parameters.", param.Name)
+			log.Printf("[WARNING] During single exec: %s", value)
+			return workflowExecution, err
+		}
+
+		newParams = append(newParams, param)
+	}
+
+	//log.Printf("Sharing: %#v, Public: %#v, Generated: %#v", action.Sharing, action.Public, action.Generated)
+	action.Sharing = app.Sharing
+	action.Public = app.Public
+	action.Generated = app.Generated
+	action.Parameters = newParams
+	workflow := Workflow{
+		Actions: []Action{
+			action,
+		},
+		Start: action.ID,
+		ID:    uuid.NewV4().String(),
+	}
+
+	workflowExecution = WorkflowExecution{
+		Workflow:      workflow,
+		Start:         workflow.Start,
+		ExecutionId:   uuid.NewV4().String(),
+		WorkflowId:    workflow.ID,
+		StartedAt:     int64(time.Now().Unix()),
+		CompletedAt:   0,
+		Authorization: uuid.NewV4().String(),
+		Status:        "EXECUTING",
+	}
+
+	err = SetWorkflowExecution(ctx, workflowExecution, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed handling single execution setup: %s", err)
+		return workflowExecution, err
+	}
+
+	return workflowExecution, nil
+}
+
+func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution) []byte {
+	cnt := 0
+	type retStruct struct {
+		Success       bool   `json:"success"`
+		Id            string `json:"id"`
+		Authorization string `json:"authorization"`
+		Result        string `json:"result"`
+	}
+
+	returnBody := retStruct{
+		Success:       true,
+		Id:            workflowExecution.ExecutionId,
+		Authorization: workflowExecution.Authorization,
+		Result:        "",
+	}
+
+	// VERY short sleeptime here on purpose
+	maxSeconds := 5
+	sleeptime := 25
+	for {
+		time.Sleep(25 * time.Millisecond)
+		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting single execution data: %s", err)
+			break
+		}
+
+		if len(newExecution.Results) > 0 {
+			if len(newExecution.Results[0].Result) > 0 {
+				returnBody.Result = newExecution.Results[0].Result
+				break
+			}
+		}
+
+		cnt += 1
+		log.Println(cnt)
+		if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
+			break
+		}
+	}
+
+	returnBytes, err := json.Marshal(returnBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal retStruct in single execution: %s", err)
+		return []byte{}
+	}
+
+	return returnBytes
 }
