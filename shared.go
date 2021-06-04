@@ -24,6 +24,7 @@ import (
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
+	"github.com/google/go-github/v28/github"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -7143,4 +7144,144 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	return returnBytes
+}
+
+func GetDocs(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	if len(location) != 5 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"`)))
+		return
+	}
+
+	ctx := getContext(request)
+	cacheKey := fmt.Sprintf("docs_%s", location[4])
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		resp.WriteHeader(200)
+		resp.Write(cacheData)
+		return
+	}
+
+	docPath := fmt.Sprintf("https://raw.githubusercontent.com/frikky/shuffle-docs/master/docs/%s.md", location[4])
+
+	client := &http.Client{}
+	req, err := http.NewRequest(
+		"GET",
+		docPath,
+		nil,
+	)
+
+	if err != nil {
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"`)))
+		resp.WriteHeader(404)
+		return
+	}
+
+	newresp, err := client.Do(req)
+	if err != nil {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"`)))
+		return
+	}
+
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't parse data"`)))
+		return
+	}
+
+	type Result struct {
+		Success bool   `json:"success"`
+		Reason  string `json:"reason"`
+	}
+
+	var result Result
+	result.Success = true
+
+	//applog.Infof(ctx, string(body))
+	//applog.Infof(ctx, "Url: %s", docPath)
+	//log.Printf("[INFO] GOT BODY OF LENGTH %d", len(string(body)))
+
+	result.Reason = string(body)
+	b, err := json.Marshal(result)
+	if err != nil {
+		http.Error(resp, err.Error(), 500)
+		return
+	}
+
+	err = SetCache(ctx, cacheKey, b)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
+func GetDocList(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := getContext(request)
+	cacheKey := "docs_list"
+	cache, err := GetCache(ctx, cacheKey)
+	result := FileList{}
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		resp.WriteHeader(200)
+		resp.Write(cacheData)
+		return
+	}
+
+	client := github.NewClient(nil)
+
+	_, item1, _, err := client.Repositories.GetContents(ctx, "shaffuru", "shuffle-docs", "docs", nil)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"`)))
+		return
+	}
+
+	if len(item1) == 0 {
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No docs available."`)))
+		return
+	}
+
+	names := []string{}
+	for _, item := range item1 {
+		if !strings.HasSuffix(*item.Name, "md") {
+			continue
+		}
+
+		names = append(names, (*item.Name)[0:len(*item.Name)-3])
+	}
+
+	//log.Println(names)
+	result.Success = true
+	result.Reason = "Success"
+	result.List = names
+	b, err := json.Marshal(result)
+	if err != nil {
+		http.Error(resp, err.Error(), 500)
+		return
+	}
+
+	err = SetCache(ctx, cacheKey, b)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
 }

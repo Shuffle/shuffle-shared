@@ -1517,3 +1517,9 @@ type CacheKeyWrapper struct {
 	Found       bool         `json:"found"`
 	Source      CacheKeyData `json:"_source"`
 }
+
+type FileList struct {
+	Success bool     `json:"success"`
+	Reason  string   `json:"reason"`
+	List    []string `json:"list"`
+}
