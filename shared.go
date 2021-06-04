@@ -5173,6 +5173,10 @@ func checkUsername(Username string) error {
 	return nil
 }
 
+// Handles workflow executions across systems (open source, worker, cloud)
+// getWorkflow
+// GetWorkflow
+// executeWorkflow
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
 
 	if actionResult.Action.ID == "" {
@@ -5226,7 +5230,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		runCheck := false
 		for _, param := range actionResult.Action.Parameters {
 			if param.Name == "check_result" {
-				//log.Printf("RESULT: %#v", param)
+				log.Printf("RESULT: %#v", param)
 				if param.Value == "true" {
 					runCheck = true
 				}
@@ -5235,7 +5239,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		//log.Printf("\n\nRUNCHECK: %#v\n\n", runCheck)
+		log.Printf("\n\nRUNCHECK: %#v\n\n", runCheck)
 		if runCheck {
 			log.Printf("[INFO] Validating subflow result in workflow %s", workflowExecution.ExecutionId)
 			type SubflowData struct {
@@ -5266,6 +5270,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					Proxy: nil,
 				},
 			}
+			newExecution := WorkflowExecution{}
 
 			httpProxy := os.Getenv("HTTP_PROXY")
 			httpsProxy := os.Getenv("HTTPS_PROXY")
@@ -5287,6 +5292,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					//log.Printf("[INFO] Should get data for %d subflow executions", len(subflowResults))
 					count := 0
 					updated := false
+					//newResult := ""
 
 					for {
 						time.Sleep(3 * time.Second)
@@ -5329,27 +5335,28 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 									continue
 								}
 
-								err = json.Unmarshal(body, &workflowExecution)
+								err = json.Unmarshal(body, &newExecution)
 								if err != nil {
-									log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
+									log.Printf("[ERROR] Failed newexecutuion unmarshal: %s", err)
 									continue
 								}
 
-								log.Printf("Results: %d, status: %s, result: %s", len(workflowExecution.Results), workflowExecution.Status, workflowExecution.Result)
-								if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
-									subflowResults[subflowIndex].Result = workflowExecution.Result
+								log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
+								if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
+									subflowResults[subflowIndex].Result = newExecution.Result
 									updated = true
 									finished += 1
 								}
 
 							} else {
-								workflowExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+								tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+								newExecution := *tmpExecution
 								if err != nil {
 									log.Printf("[WARNING] Error getting subflow data: %s", err)
 								} else {
 									//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
-									if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
-										subflowResults[subflowIndex].Result = workflowExecution.Result
+									if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
+										subflowResults[subflowIndex].Result = newExecution.Result
 										updated = true
 										finished += 1
 									}
@@ -5380,7 +5387,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			if err == nil && subflowResult.Success == true && len(subflowResult.ExecutionId) > 0 {
-				log.Printf("Should get data for subflow execution %s", subflowResult.ExecutionId)
+				log.Printf("[DEBUG] Should get data for subflow execution %s", subflowResult.ExecutionId)
 				count := 0
 				for {
 					time.Sleep(3 * time.Second)
@@ -5423,29 +5430,30 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							continue
 						}
 
-						err = json.Unmarshal(body, &workflowExecution)
+						err = json.Unmarshal(body, &newExecution)
 						if err != nil {
 							log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
 							count += 1
 							continue
 						}
 
-						log.Printf("Results: %d, status: %s, result: %s", len(workflowExecution.Results), workflowExecution.Status, workflowExecution.Result)
-						if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "SUCCESS" {
-							subflowResult.Result = workflowExecution.Result
+						log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
+						if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
+							subflowResult.Result = newExecution.Result
 							break
 							//subflowResults[subflowIndex].Result = workflowExecution.Result
 							//updated = true
 							//finished += 1
 						}
 					} else {
-						workflowExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+						tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+						newExecution = *tmpExecution
 						if err != nil {
 							log.Printf("[WARNING] Error getting subflow data: %s", err)
 						} else {
-							//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
-							if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
-								subflowResult.Result = workflowExecution.Result
+							log.Printf("Results: %d, status: %s", len(newExecution.Results), newExecution.Status)
+							if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
+								subflowResult.Result = newExecution.Result
 								break
 							}
 
@@ -5467,6 +5475,15 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		} else {
 			log.Printf("[WARNING] Skipping subresult check!")
 		}
+
+		parsedExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		if err != nil {
+			log.Printf("[ERROR] FAILED to reload execution after subflow check: %s", err)
+		} else {
+			log.Printf("[DEBUG] Re-updated execution after subflow check!")
+		}
+
+		workflowExecution = *parsedExecution
 	}
 
 	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
