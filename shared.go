@@ -2198,7 +2198,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if project.Environment == "cloud" {
 					appid, err := handleAlgoliaAppSearch(ctx, action.AppName)
 					if err == nil && len(appid) > 0 {
-						log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
+						//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
 						tmpApp, err := GetApp(ctx, appid, user)
 						if err == nil {
 							handled = true
@@ -5239,7 +5239,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		log.Printf("\n\nRUNCHECK: %#v\n\n", runCheck)
+		//log.Printf("\n\nRUNCHECK: %#v\n\n", runCheck)
 		if runCheck {
 			log.Printf("[INFO] Validating subflow result in workflow %s", workflowExecution.ExecutionId)
 			type SubflowData struct {
