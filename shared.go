@@ -102,32 +102,20 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Role != "global_admin" {
+		log.Printf("[WARNING] User %s isn't global admin and can't list orgs.", user.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
 	}
 
 	ctx := getContext(request)
-
 	orgs, err := GetAllOrgs(ctx)
 	if err != nil || len(orgs) == 0 {
+		log.Printf("[WARNING] Failed getting orgs: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get orgs"}`))
 		return
 	}
-
-	//newUsers := []User{}
-	//for _, item := range users {
-	//	if len(item.Username) == 0 {
-	//		continue
-	//	}
-
-	//	item.Password = ""
-	//	item.Session = ""
-	//	item.VerificationToken = ""
-
-	//	newUsers = append(newUsers, item)
-	//}
 
 	newjson, err := json.Marshal(orgs)
 	if err != nil {
@@ -4196,6 +4184,122 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	b, _ := json.Marshal(returnData)
 	resp.WriteHeader(200)
 	resp.Write(b)
+}
+
+func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("Api authentication failed in cloud setup: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("Not admin.")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	type ReturnData struct {
+		OrgId string `json:"org_id" datastore:"org_id"`
+		Name  string `json:"name" datastore:"name"`
+	}
+
+	var tmpData ReturnData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("Failed unmarshalling test: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
+		log.Printf("[WARNING] User can't edit the org %s", tmpData.OrgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	parentOrg, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[WARNING] Organization %s doesn't exist: %s", tmpData.OrgId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	orgId := uuid.NewV4().String()
+	newOrg := Org{
+		Name:        tmpData.Name,
+		Description: fmt.Sprintf("Created by org %s", parentOrg.Name),
+		Id:          orgId,
+		Org:         tmpData.Name,
+		Users:       []User{},
+		Roles:       []string{"admin", "user"},
+		CloudSync:   false,
+		ManagerOrgs: []OrgMini{
+			OrgMini{
+				Id:   tmpData.OrgId,
+				Name: parentOrg.Name,
+			},
+		},
+		CreatorOrg: tmpData.OrgId,
+	}
+
+	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
+		Name: tmpData.Name,
+		Id:   orgId,
+	})
+
+	err = SetOrg(ctx, newOrg, newOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating parent org %s: %s", newOrg.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//log.Printf("SUCCESSFULLY ADDED ORG CHILD ORG")
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
+
 }
 
 func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {

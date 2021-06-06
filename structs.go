@@ -495,6 +495,9 @@ type Org struct {
 	Edited          int64                 `json:"edited" datastore:"edited"`
 	Defaults        Defaults              `json:"defaults" datastore:"defaults"`
 	Invites         []string              `json:"invites" datastore:"invites"`
+	ChildOrgs       []OrgMini             `json:"child_orgs" datastore:"child_orgs"`
+	ManagerOrgs     []OrgMini             `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
+	CreatorOrg      string                `json:"creator_org" datastore:"creator_org"`
 }
 
 type Defaults struct {
