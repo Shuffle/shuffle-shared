@@ -5281,7 +5281,9 @@ func checkUsername(Username string) error {
 // getWorkflow
 // GetWorkflow
 // executeWorkflow
-func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
+
+// Updateparam is a check to see if the execution should be continuously validated
+func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool) (*WorkflowExecution, bool, error) {
 
 	if actionResult.Action.ID == "" {
 		//log.Printf("[ERROR] Failed handling EMPTY action %#v", actionResult)
@@ -5591,7 +5593,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			workflowExecution = *parsedExecution
 		} else {
-			return workflowExecution, false, errors.New("Rerun this transaction with updated values")
+			if updateParam {
+				return &workflowExecution, false, errors.New("Rerun this transaction with updated values")
+			}
+
+			log.Printf("Skipping updateparam")
 			// return &workflowExecution, dbSave, err
 			//return
 			//func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
