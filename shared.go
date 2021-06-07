@@ -5591,13 +5591,18 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			workflowExecution = *parsedExecution
 		} else {
+			return workflowExecution, false, errors.New("Rerun this transaction with updated values")
+			// return &workflowExecution, dbSave, err
+			//return
+			//func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
+
 			//type SubflowData struct {
 			//	Success       bool   `json:"success"`
 			//	ExecutionId   string `json:"execution_id"`
 			//	Authorization string `json:"authorization"`
 			//	Result        string `json:"result"`
 			//}
-			log.Printf("[DEBUG] NOT validating updated workflowExecution because worker")
+			//log.Printf("[DEBUG] NOT validating updated workflowExecution because worker")
 		}
 
 	}
