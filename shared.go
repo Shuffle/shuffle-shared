@@ -5293,7 +5293,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	dbSave := false
 	_, _, _, _, visited, executed, nextActions, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
 
-	if len(actionResult.Action.ExecutionVariable.Name) > 0 {
+	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 		actionResult.Action.ExecutionVariable.Value = actionResult.Result
 
 		foundIndex := -1
@@ -5500,6 +5500,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						break
 					}
 
+					// Worker & onprem
 					if project.Environment == "" {
 						data, err := json.Marshal(subflowResult)
 						if err != nil {
@@ -5580,14 +5581,25 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Skipping subresult check!")
 		}
 
-		parsedExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-		if err != nil {
-			log.Printf("[ERROR] FAILED to reload execution after subflow check: %s", err)
+		if project.Environment != "" {
+			parsedExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+			if err != nil {
+				log.Printf("[ERROR] FAILED to reload execution after subflow check: %s", err)
+			} else {
+				log.Printf("[DEBUG] Re-updated execution after subflow check!")
+			}
+
+			workflowExecution = *parsedExecution
 		} else {
-			log.Printf("[DEBUG] Re-updated execution after subflow check!")
+			//type SubflowData struct {
+			//	Success       bool   `json:"success"`
+			//	ExecutionId   string `json:"execution_id"`
+			//	Authorization string `json:"authorization"`
+			//	Result        string `json:"result"`
+			//}
+			log.Printf("[DEBUG] NOT validating updated workflowExecution because worker")
 		}
 
-		workflowExecution = *parsedExecution
 	}
 
 	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
