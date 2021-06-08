@@ -935,9 +935,23 @@ func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient s
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
 	if dbType == "elasticsearch" {
-		_, err := project.Es.Get("test", "test")
+		ret, err := project.Es.Info()
 		if err != nil {
+			log.Printf("[ERROR] Failed setting up ES: %s", err)
 			return project, err
+		}
+
+		if ret.StatusCode >= 300 {
+			respBody, err := ioutil.ReadAll(ret.Body)
+			if err != nil {
+				log.Printf("[ERROR] Failed handling ES setup: %#v", ret)
+				return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
+			}
+
+			log.Printf("[ERROR] Bad Status from ES: %d", ret.StatusCode)
+			log.Printf("[ERROR] Bad Body from ES: %s", string(respBody))
+
+			return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
 		}
 	}
 
@@ -5336,7 +5350,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		runCheck := false
 		for _, param := range actionResult.Action.Parameters {
 			if param.Name == "check_result" {
-				log.Printf("RESULT: %#v", param)
+				log.Printf("[INFO] RESULT: %#v", param)
 				if param.Value == "true" {
 					runCheck = true
 				}
@@ -5358,7 +5372,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// WAY lower timeout in cloud
 			// Should probably change it for enterprise customers?
 			// Idk how to handle this in cloud yet.
-			subflowTimeout := 180
+			subflowTimeout := 300
 			if project.Environment == "cloud" {
 				subflowTimeout = 15
 			}
@@ -5447,7 +5461,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 									continue
 								}
 
-								log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
+								//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
 								if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
 									subflowResults[subflowIndex].Result = newExecution.Result
 									updated = true
@@ -5544,7 +5558,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							continue
 						}
 
-						log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
+						//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
 						if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
 							subflowResult.Result = newExecution.Result
 							break
@@ -5558,7 +5572,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						if err != nil {
 							log.Printf("[WARNING] Error getting subflow data: %s", err)
 						} else {
-							log.Printf("Results: %d, status: %s", len(newExecution.Results), newExecution.Status)
+							//log.Printf("Results: %d, status: %s", len(newExecution.Results), newExecution.Status)
 							if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
 								subflowResult.Result = newExecution.Result
 								break
@@ -5583,6 +5597,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Skipping subresult check!")
 		}
 
+		// Updating in case the execution got more info
 		if project.Environment != "" {
 			parsedExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 			if err != nil {
@@ -5597,7 +5612,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				return &workflowExecution, false, errors.New("Rerun this transaction with updated values")
 			}
 
-			log.Printf("Skipping updateparam")
+			log.Printf("[INFO] Skipping updateparam with %d results", len(workflowExecution.Results))
 			// return &workflowExecution, dbSave, err
 			//return
 			//func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
