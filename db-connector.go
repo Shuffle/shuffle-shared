@@ -1480,7 +1480,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		newUsers = append(newUsers, user)
 	}
 
-	log.Printf("[INFO] Found %d (%d) user(s for email %s in db-connector", len(newUsers), len(users), username)
+	log.Printf("[INFO] Found %d (%d) user(s) for username %s in db-connector", len(newUsers), len(users), username)
 	return newUsers, nil
 }
 

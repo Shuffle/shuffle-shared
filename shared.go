@@ -5169,7 +5169,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	userdata := User{}
 	for _, user := range users {
-		if user.Id == "" {
+		if user.Id == "" && user.Username == "" {
 			log.Printf(`[WARNING] Username %s (%s) isn't valid. Amount of users checked: %d`, user.Username, user.Id, len(users))
 			continue
 		}
@@ -5186,8 +5186,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if userdata.Id == "" {
-		log.Printf(`[WARNING] Username %s isn't valid. Amount of users checked: %d`, data.Username, len(users))
+	if userdata.Id == "" && userdata.Username == "" {
+		log.Printf(`[WARNING] Username %s isn't valid. Amount of users checked: %d (2)`, data.Username, len(users))
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Username and/or password is incorrect"}`)))
 		return
