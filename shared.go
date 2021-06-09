@@ -6417,7 +6417,13 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	// support map[string]interface and similar (openapi3.Swagger)
 	var version versionCheck
 
-	log.Printf("API length SET: %d", len(string(body)))
+	//log.Printf("%s", string(body))
+
+	re := regexp.MustCompile("[[:^ascii:]]")
+	//re := regexp.MustCompile("[[:^unicode:]]")
+	t := re.ReplaceAllLiteralString(string(body), "")
+	log.Printf("[DEBUG] App build API length: %d. Cleanup length: %d", len(string(body)), len(t))
+	body = []byte(t)
 
 	isJson := false
 	err = json.Unmarshal(body, &version)
@@ -6426,6 +6432,9 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		err = yaml.Unmarshal(body, &version)
 		if err != nil {
 			log.Printf("Yaml error (3): %s", err)
+			//if len(string(body)) < 500 {
+			//	log.Printf("%s",
+			//}
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi to json and yaml. Is version defined?: %s"}`, err)))
 			return
