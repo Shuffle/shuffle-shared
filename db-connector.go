@@ -10,6 +10,7 @@ import (
 	"github.com/bradfitz/slice"
 	"io/ioutil"
 	"log"
+	"net/url"
 	"strings"
 	"time"
 
@@ -1304,7 +1305,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		}
 
 		if res.StatusCode == 404 {
-			return *api, errors.New("Workflow doesn't exist")
+			return *api, errors.New("OpenAPI spec doesn't exist")
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
@@ -3893,7 +3894,14 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	nameKey := "org_cache"
 	timeNow := int64(time.Now().Unix())
 	cacheData.Edited = timeNow
+
 	cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
+
+	if len(cacheId) > 128 {
+		cacheId = cacheId[0:127]
+	}
+
+	cacheId = url.QueryEscape(cacheId)
 	cacheData.Authorization = ""
 
 	// New struct, to not add body, author etc
@@ -3930,6 +3938,13 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 	cacheData := &CacheKeyData{}
 	nameKey := "org_cache"
+
+	if len(id) > 128 {
+		id = id[0:127]
+	}
+
+	id = url.QueryEscape(id)
+	//fmt.Println("http://example.com/say?message="+url.QueryEscape(s))
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
