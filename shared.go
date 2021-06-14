@@ -3947,8 +3947,6 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//return
-
 	err = DeleteKey(ctx, "workflowapp", app.ID)
 	if err != nil {
 		log.Printf("[WARNING] Failed deleting %s (%s) for by %s: %s", app.Name, app.ID, user.Username, err)
@@ -5350,7 +5348,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		runCheck := false
 		for _, param := range actionResult.Action.Parameters {
 			if param.Name == "check_result" {
-				log.Printf("[INFO] RESULT: %#v", param)
+				//log.Printf("[INFO] RESULT: %#v", param)
 				if param.Value == "true" {
 					runCheck = true
 				}

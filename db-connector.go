@@ -1203,12 +1203,11 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 		}
 
 		if res.StatusCode == 404 {
-			//log.Printf("Couldn't delete %s"
+			log.Printf("Couldn't delete %s:%s", entity, value)
 			return nil
 		}
 
 		defer res.Body.Close()
-
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -2310,8 +2309,10 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 	nameKey := "workflowapp"
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
+
+		// FIXME: Overwrite necessary?
 		query := map[string]interface{}{
-			"size": maxLen,
+			"size": 1000,
 		}
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
@@ -2365,10 +2366,17 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 
 		allApps = []WorkflowApp{}
+		//log.Printf("Hits: %d", len(wrapped.Hits.Hits))
 		for _, hit := range wrapped.Hits.Hits {
 			innerApp := hit.Source
 
 			if innerApp.Name == "Shuffle Subflow" {
+				continue
+			}
+
+			// This is used to validate with ALL apps
+			if maxLen == 0 {
+				allApps = append(allApps, innerApp)
 				continue
 			}
 
