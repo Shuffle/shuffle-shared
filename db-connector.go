@@ -2397,6 +2397,13 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 						if innerApp.Activated && !loopedApp.Activated {
 							newIndex = appIndex
 							newApp = innerApp
+
+							//newApp.Versions = append(newApp.Versions, AppVersion{
+							//	Version: innerApp.AppVersion,
+							//	ID:      innerApp.ID,
+							//})
+							//newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
+
 							//newApp.Versions = loopedApp.Versions
 							//newApp.LoopVersions = loopedApp.Versions
 							found = false
@@ -2408,23 +2415,24 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 
 						v2, err := semver.NewVersion(innerApp.AppVersion)
 						if err != nil {
-							log.Printf("Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+							log.Printf("[WARNING] Failed parsing original app version %s: %s", innerApp.AppVersion, err)
 						}
 
 						appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
 						c, err := semver.NewConstraint(appConstraint)
 						if err != nil {
-							log.Printf("Failed preparing constraint: %s", err)
+							log.Printf("[WARNING] Failed preparing constraint: %s", err)
 						}
 
 						if c.Check(v2) {
-							//log.Printf("New IS larger - changing app on index %d from %s to %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion)
 
 							newApp = innerApp
 							newApp.Versions = loopedApp.Versions
 							newApp.LoopVersions = loopedApp.LoopVersions
+
+							//log.Printf("[DEBUG] New IS larger - changing app on index %d from %s to %s. Versions: %#v", appIndex, loopedApp.AppVersion, innerApp.AppVersion, newApp.LoopVersions)
 						} else {
-							//log.Printf("New is NOT larger - just appending")
+							//log.Printf("[DEBUG] New is NOT larger: %s_%s (new) vs %s_%s - just appending", innerApp.Name, innerApp.AppVersion, loopedApp.Name, loopedApp.AppVersion)
 							newApp = loopedApp
 						}
 
@@ -2432,9 +2440,9 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 							Version: innerApp.AppVersion,
 							ID:      innerApp.ID,
 						})
-
 						newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
 						newIndex = appIndex
+						//log.Printf("Versions for %s_%s: %#v", newApp.Name, newApp.AppVersion, newApp.LoopVersions)
 					}
 
 					break
@@ -2446,6 +2454,12 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 				allApps[newIndex] = newApp
 			} else {
 				if !found {
+					innerApp.Versions = append(innerApp.Versions, AppVersion{
+						Version: innerApp.AppVersion,
+						ID:      innerApp.ID,
+					})
+					innerApp.LoopVersions = append(innerApp.LoopVersions, innerApp.AppVersion)
+
 					allApps = append(allApps, innerApp)
 				}
 			}
