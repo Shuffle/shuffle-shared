@@ -1944,7 +1944,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 // 3. Get PUBLIC apps
 func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	if project.Environment != "cloud" {
-		return GetAllWorkflowApps(ctx, 500)
+		return GetAllWorkflowApps(ctx, 1000)
 	}
 
 	log.Printf("[INFO] Getting apps for user %s with active org %s", user.Username, user.ActiveOrg.Id)

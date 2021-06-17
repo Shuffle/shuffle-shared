@@ -1777,7 +1777,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflowapps, err := GetPrioritizedApps(ctx, user)
 		envName := "cloud"
 		if project.Environment != "cloud" {
-			workflowapps, err = GetAllWorkflowApps(ctx, 500)
+			workflowapps, err = GetAllWorkflowApps(ctx, 1000)
 			envName = "Shuffle"
 		}
 
@@ -3818,6 +3818,8 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, cacheKey)
 	cacheKey = fmt.Sprintf("workflowapps-sorted-500")
 	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("workflowapps-sorted-1000")
+	shuffle.DeleteCache(ctx, cacheKey)
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 
 	log.Printf("[INFO] Changed App configuration for %s (%s)", app.Name, app.ID)
@@ -3902,6 +3904,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] App %s was deactivated for org %s", app.ID, user.ActiveOrg.Id)
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 					DeleteCache(ctx, "all_apps")
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
@@ -3958,6 +3961,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	// This is getting stupid :)
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 	DeleteCache(ctx, "all_apps")
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
