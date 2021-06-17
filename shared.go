@@ -3819,7 +3819,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	cacheKey = fmt.Sprintf("workflowapps-sorted-500")
 	DeleteCache(ctx, cacheKey)
 	cacheKey = fmt.Sprintf("workflowapps-sorted-1000")
-	shuffle.DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, cacheKey)
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 
 	log.Printf("[INFO] Changed App configuration for %s (%s)", app.Name, app.ID)
