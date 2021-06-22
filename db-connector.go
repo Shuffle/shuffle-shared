@@ -445,10 +445,12 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflowExecution, errors.New("User doesn't exist")
 		}
 
+		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return workflowExecution, err
@@ -511,10 +513,12 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 			return workflowApp, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflowApp, errors.New("App doesn't exist")
 		}
 
+		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return workflowApp, err
@@ -587,10 +591,12 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			return workflow, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflow, errors.New("Workflow doesn't exist")
 		}
 
+		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return workflow, err
@@ -665,11 +671,11 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			return workflows, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflows, nil
 		}
 
-		defer res.Body.Close()
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
@@ -732,6 +738,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				return workflows, err
 			}
 
+			defer res.Body.Close()
 			if res.StatusCode == 404 {
 				return workflows, nil
 			}
@@ -953,6 +960,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			return &Org{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &Org{}, errors.New("Org doesn't exist")
 		}
@@ -1150,6 +1158,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 			return session, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return session, errors.New("Session doesn't exist")
 		}
@@ -1202,6 +1211,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 			return err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			log.Printf("Couldn't delete %s:%s", entity, value)
 			return nil
@@ -1303,6 +1313,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			return *api, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return *api, errors.New("OpenAPI spec doesn't exist")
 		}
@@ -1422,6 +1433,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 			return []User{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []User{}, nil
 		}
@@ -1512,6 +1524,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			return curUser, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return curUser, errors.New("User doesn't exist")
 		}
@@ -1723,6 +1736,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			return allworkflowappAuths, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return allworkflowappAuths, nil
 		}
@@ -1840,6 +1854,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return environments, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			item := Environment{
 				Name:    "Shuffle",
@@ -2330,6 +2345,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 			return []WorkflowApp{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []WorkflowApp{}, err
 		}
@@ -2646,6 +2662,7 @@ func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, 
 			return ExecutionRequestWrapper{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return ExecutionRequestWrapper{}, nil
 		}
@@ -2851,6 +2868,7 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 			return &ScheduleOld{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &ScheduleOld{}, errors.New("Schedule doesn't exist")
 		}
@@ -2909,6 +2927,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			return User{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return User{}, nil
 		}
@@ -2999,6 +3018,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			return &Hook{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &Hook{}, errors.New("Hook doesn't exist")
 		}
@@ -3086,6 +3106,7 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 			return &File{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &File{}, errors.New("File doesn't exist")
 		}
@@ -3172,6 +3193,7 @@ func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
 			return files, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return files, nil
 		}
@@ -3263,6 +3285,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 			return appAuth, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return appAuth, errors.New("App auth doesn't exist")
 		}
@@ -3339,6 +3362,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 			return schedules, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return schedules, nil
 		}
@@ -3406,6 +3430,7 @@ func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 			return &TriggerAuth{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return &TriggerAuth{}, errors.New("Trigger auth doesn't exist")
 		}
@@ -3517,6 +3542,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 			return []User{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []User{}, nil
 		}
@@ -3604,6 +3630,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 			return executions, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return executions, nil
 		}
@@ -3701,6 +3728,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 			return []Org{}, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return []Org{}, nil
 		}
@@ -3819,6 +3847,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 			return workflows, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return workflows, nil
 		}
@@ -3991,6 +4020,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 			return cacheData, err
 		}
 
+		defer res.Body.Close()
 		if res.StatusCode == 404 {
 			return cacheData, errors.New("Key doesn't exist")
 		}

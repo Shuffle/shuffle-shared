@@ -5172,7 +5172,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	userdata := User{}
 	for _, user := range users {
 		if user.Id == "" && user.Username == "" {
-			log.Printf(`[WARNING] Username %s (%s) isn't valid. Amount of users checked: %d`, user.Username, user.Id, len(users))
+			log.Printf(`[WARNING] Username %s (%s) isn't valid. Amount of users checked: %d (1)`, user.Username, user.Id, len(users))
 			continue
 		}
 
