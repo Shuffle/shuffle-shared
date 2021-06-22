@@ -916,10 +916,36 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	return workflows, nil
 }
 
-/*
+func GetAllHooks(ctx context.Context) ([]Hook, error) {
+	var apis []Hook
+	q := datastore.NewQuery("hooks")
+
+	_, err := project.Dbclient.GetAll(ctx, q, &apis)
+	if err != nil && len(apis) == 0 {
+		return []Hook{}, err
+	}
+
+	return apis, nil
+}
+
+func GetAllOpenApi(ctx context.Context) ([]ParsedOpenApi, error) {
+	var apis []ParsedOpenApi
+	q := datastore.NewQuery("openapi3")
+
+	_, err := project.Dbclient.GetAll(ctx, q, &apis)
+	if err != nil && len(apis) == 0 {
+		return []ParsedOpenApi{}, err
+	}
+
+	return apis, nil
+}
+
 func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 	var allworkflows []Workflow
 	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId)
+	if orgId == "ALL" {
+		q = datastore.NewQuery("workflow")
+	}
 
 	_, err := project.Dbclient.GetAll(ctx, q, &allworkflows)
 	if err != nil && len(allworkflows) == 0 {
@@ -928,7 +954,6 @@ func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 
 	return allworkflows, nil
 }
-*/
 
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
@@ -1778,6 +1803,10 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		}
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("org_id = ", orgId)
+		if orgId == "ALL" && project.Environment != "cloud" {
+			q = datastore.NewQuery(nameKey)
+		}
+
 		_, err = project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
 		if err != nil && len(allworkflowappAuths) == 0 {
 			return allworkflowappAuths, err
@@ -1911,6 +1940,10 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
+		if orgId == "ALL" && project.Environment != "cloud" {
+			q = datastore.NewQuery(nameKey)
+		}
+
 		_, err = project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
 			return []Environment{}, err
@@ -2584,7 +2617,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 				//break
 			}
 
-			if len(allApps) > maxLen {
+			if len(allApps) > maxLen && maxLen != 0 {
 				break
 			}
 		}
@@ -2831,7 +2864,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	}
 
 	// New struct, to not add body, author etc
-	log.Printf("[INFO] SETTING ENVIRONMENT %s", env.Id)
+	//log.Printf("[INFO] SETTING ENVIRONMENT %s", env.Id)
 	if project.DbType == "elasticsearch" {
 		data, err := json.Marshal(env)
 		if err != nil {
