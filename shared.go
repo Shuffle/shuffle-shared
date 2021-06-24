@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -922,19 +923,20 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
-func RunInit(dbclient datastore.Client, es elasticsearch.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
+func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
 	project = ShuffleStorage{
 		Dbclient:      dbclient,
 		StorageClient: storageClient,
 		GceProject:    gceProject,
 		Environment:   environment,
 		CacheDb:       cacheDb,
-		Es:            es,
 		DbType:        dbType,
 	}
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
 	if dbType == "elasticsearch" {
+		project.Es = *GetEsConfig()
+
 		ret, err := project.Es.Info()
 		if err != nil {
 			log.Printf("[ERROR] Failed setting up ES: %s", err)
@@ -7454,4 +7456,81 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(b)
+}
+
+func GetEsConfig() *elasticsearch.Client {
+	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+	if len(esUrl) == 0 {
+		esUrl = "http://shuffle-opensearch:9200"
+	}
+
+	// https://github.com/elastic/go-elasticsearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/elasticsearch.go#L98
+	config := elasticsearch.Config{
+		Addresses: []string{esUrl},
+		Username:  os.Getenv("SHUFFLE_OPENSEARCH_USERNAME"),
+		Password:  os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD"),
+		APIKey:    os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
+		CloudID:   os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
+	}
+
+	//config.Transport.TLSClientConfig
+	//transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.MaxIdleConnsPerHost = 100
+	transport.ResponseHeaderTimeout = time.Second * 10
+	transport.Proxy = nil
+
+	if len(os.Getenv("SHUFFLE_OPENSEARCH_PROXY")) > 0 {
+		httpProxy := os.Getenv("SHUFFLE_OPENSEARCH_PROXY")
+
+		url_i := url.URL{}
+		url_proxy, err := url_i.Parse(httpProxy)
+		if err == nil {
+			log.Printf("[DEBUG] Setting Opensearch proxy to %s", httpProxy)
+			transport.Proxy = http.ProxyURL(url_proxy)
+		} else {
+			log.Printf("[ERROR] Failed setting proxy for %s", httpProxy)
+		}
+	}
+
+	skipSSLVerify := false
+	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
+		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
+		skipSSLVerify = true
+	}
+
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS11,
+		InsecureSkipVerify: skipSSLVerify,
+	}
+
+	//https://github.com/elastic/go-elasticsearch/blob/master/_examples/security/elasticsearch-cluster.yml
+	certificateLocation := os.Getenv("SHUFFLE_OPENSEARCH_CERTIFICATE_FILE")
+	if len(certificateLocation) > 0 {
+		cert, err := ioutil.ReadFile(certificateLocation)
+		if err != nil {
+			log.Fatalf("[WARNING] Failed configuring certificates: %s not found", err)
+		} else {
+			config.CACert = cert
+
+			//if transport.TLSClientConfig.RootCAs, err = x509.SystemCertPool(); err != nil {
+			//	log.Fatalf("[ERROR] Problem adding system CA: %s", err)
+			//}
+
+			//// --> Add the custom certificate authority
+			//if ok := transport.TLSClientConfig.RootCAs.AppendCertsFromPEM(cert); !ok {
+			//	log.Fatalf("[ERROR] Problem adding CA from file %q", *cert)
+			//}
+		}
+
+		log.Printf("[INFO] Added certificate %#v elastic client.", certificateLocation)
+	}
+	config.Transport = transport
+
+	es, err := elasticsearch.NewClient(config)
+	if err != nil {
+		log.Fatalf("[DEBUG] Database client for ELASTICSEARCH error during init (fatal): %s", err)
+	}
+
+	return es
 }
