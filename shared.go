@@ -20,7 +20,7 @@ import (
 
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
-	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v7"
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
@@ -4663,7 +4663,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetWorkflowExecution(ctx, *workflowExecution, true)
 	if err != nil {
-		log.Printf("Error saving workflow execution for updates when aborting %s: %s", topic, err)
+		log.Printf("[WARNING] Error saving workflow execution for updates when aborting %s: %s", topic, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting workflowexecution status to abort"}`)))
 		return

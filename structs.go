@@ -3,7 +3,7 @@ package shuffle
 import (
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
-	"github.com/elastic/go-elasticsearch/v8"
+	"github.com/elastic/go-elasticsearch/v7"
 	"time"
 )
 
