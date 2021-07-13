@@ -21,7 +21,8 @@ import (
 
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
-	"github.com/elastic/go-elasticsearch/v7"
+	elasticsearch "github.com/frikky/go-elasticsearch/v8"
+
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
@@ -686,7 +687,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Println("[WARNING] Failed getting environments")
+		log.Println("[WARNING] Failed getting environments: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get environments when setting"}`))
 		return
@@ -715,7 +716,37 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Validate input here
+	defaults := 0
+	parsedEnvs := []Environment{}
+	for _, env := range newEnvironments {
+		if env.Type == "cloud" && env.Archived {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Can't disable cloud environments"}`))
+			return
+		}
+
+		if env.Default && env.Archived {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Can't disable default environment"}`))
+			return
+		}
+
+		if defaults > 0 {
+			env.Default = false
+		}
+
+		if env.Default {
+			defaults += 1
+		}
+
+		parsedEnvs = append(parsedEnvs, env)
+	}
+
+	newEnvironments = parsedEnvs
+
 	// Clear old data? Removed for archiving purpose. No straight deletion
+	log.Printf("[INFO] Deleting %d environments before resetting!", len(environments))
 	nameKey := "Environments"
 	for _, item := range environments {
 		DeleteKey(ctx, nameKey, item.Id)
@@ -744,13 +775,15 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			item.Id = uuid.NewV4().String()
 		}
 
-		//err = SetEnvironment(ctx, &item)
-		//if err != nil {
-		//	resp.WriteHeader(401)
-		//	resp.Write([]byte(`{"success": false, "reason": "Failed setting environment variable"}`))
-		//	return
-		//}
+		err = SetEnvironment(ctx, &item)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting environment variable"}`))
+			return
+		}
 	}
+
+	log.Printf("[INFO] Set %d new environments for org %s", len(newEnvironments), user.ActiveOrg.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -1761,7 +1794,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if action.Environment == "" {
 			//action.Environment = baseEnvironment
 			if project.Environment == "cloud" {
-				action.Environment = "cloud"
+				action.Environment = "Cloud"
 			}
 
 			action.IsValid = true
@@ -2111,6 +2144,21 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("ENVIRONMENTS: %#v", environments)
+	defaultEnv := ""
+	for _, env := range environments {
+		if env.Default {
+			defaultEnv = env.Name
+			break
+		}
+	}
+
+	if defaultEnv == "" {
+		if project.Environment == "cloud" {
+			defaultEnv = "Cloud"
+		} else {
+			defaultEnv = "Shuffle"
+		}
+	}
 
 	startnodeFound := false
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
@@ -2134,7 +2182,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		if action.Environment == "" {
 			if project.Environment == "cloud" {
-				action.Environment = "cloud"
+				action.Environment = defaultEnv
 			} else {
 				if len(environments) > 0 {
 					for _, env := range environments {
@@ -2147,10 +2195,28 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if action.Environment == "" {
-					action.Environment = "Shuffle"
+					action.Environment = defaultEnv
 				}
 
 				action.IsValid = true
+			}
+		} else {
+			for _, env := range environments {
+				found := false
+				if env.Name == action.Environment {
+					found = false
+					if env.Archived {
+						log.Printf("[DEBUG] Environment %s is archived. Changing to default.")
+						action.Environment = defaultEnv
+					}
+
+					break
+				}
+
+				if !found {
+					log.Printf("[DEBUG] Environment %s isn't available. Changing to default.")
+					action.Environment = defaultEnv
+				}
 			}
 		}
 
@@ -2447,15 +2513,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(workflow.ExecutionVariables) > 0 {
-		log.Printf("[INFO] Found %d execution variable(s)", len(workflow.ExecutionVariables))
+		log.Printf("[INFO] Found %d execution variable(s) for workflow %s", len(workflow.ExecutionVariables), workflow.ID)
 	}
 
 	if len(workflow.WorkflowVariables) > 0 {
-		log.Printf("[INFO] Found %d workflow variable(s)", len(workflow.WorkflowVariables))
+		log.Printf("[INFO] Found %d workflow variable(s) for workflow %s", len(workflow.WorkflowVariables), workflow.ID)
 	}
 
-	// FIXME - do actual checks ROFL
-	// FIXME - minor issues with e.g. hello world and self.console_logger
 	// Nodechecks
 	foundNodes := []string{}
 	for _, node := range allNodes {
@@ -5313,7 +5377,18 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	dbSave := false
 	_, _, _, _, visited, executed, nextActions, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
 
+	//log.Printf("RESULT: %#v", actionResult.Action.ExecutionVariable)
+	// Shitty workaround as it may be missing it at times
+	for _, action := range workflowExecution.Workflow.Actions {
+		if action.ID == actionResult.Action.ID {
+			//log.Printf("HAS EXEC VARIABLE: %#v", action.ExecutionVariable)
+			actionResult.Action.ExecutionVariable = action.ExecutionVariable
+			break
+		}
+	}
+
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
+		//log.Printf("Updating execution variable")
 		actionResult.Action.ExecutionVariable.Value = actionResult.Result
 
 		foundIndex := -1

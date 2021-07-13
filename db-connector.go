@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver"
-	"github.com/elastic/go-elasticsearch/v8/esapi"
+	"github.com/frikky/go-elasticsearch/v8/esapi"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
@@ -2652,6 +2652,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 			return nil
 		}
 
+		nameKey = strings.ToLower(nameKey)
 		err = indexEs(ctx, nameKey, executionRequest.ExecutionId, data)
 		if err != nil {
 			return err
