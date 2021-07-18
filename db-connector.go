@@ -3707,14 +3707,14 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 
 		return executions, nil
 	} else {
-		q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Order("-started_at").Limit(30)
-		var workflowExecutions []WorkflowExecution
-		_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-		if err != nil && len(workflowExecutions) == 0 {
+		q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Limit(30)
+		_, err = project.Dbclient.GetAll(ctx, q, &executions)
+		if err != nil && len(executions) == 0 {
+			log.Printf("Failed initial execution grabber: %s", err)
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-				q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Order("-started_at").Limit(15)
-				_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-				if err != nil && len(workflowExecutions) == 0 {
+				q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Limit(15)
+				_, err = project.Dbclient.GetAll(ctx, q, &executions)
+				if err != nil && len(executions) == 0 {
 					log.Printf("[WARNING] Error getting workflowexec (2): %s", err)
 					return executions, err
 				}
@@ -3722,8 +3722,8 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 				//log.Printf("[INFO] Failed precondition in workflowexecs: %s", err)
 
 				q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Limit(25)
-				_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-				if err != nil && len(workflowExecutions) == 0 {
+				_, err = project.Dbclient.GetAll(ctx, q, &executions)
+				if err != nil && len(executions) == 0 {
 					log.Printf("[WARNING] Error getting workflowexec (3): %s", err)
 					return executions, err
 				}
