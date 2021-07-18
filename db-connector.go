@@ -3041,7 +3041,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
 		}
 	}
-	log.Printf("DBTYPE: %#v", project.DbType)
+	//log.Printf("DBTYPE: %#v", project.DbType)
 
 	var err error
 	if project.DbType == "elasticsearch" {

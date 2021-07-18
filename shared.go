@@ -1148,7 +1148,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	// FIXME - have a check for org etc too..
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, workflow.ID)
+			log.Printf("[INFO] User %s is accessing %s executions as admin (get executions)", user.Username, workflow.ID)
 		} else {
 			log.Printf("[WARNING] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
@@ -2045,7 +2045,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Id != tmpworkflow.Owner {
 		if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing workflow %s as admin", user.Username, tmpworkflow.ID)
+			log.Printf("[INFO] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID
 		} else if tmpworkflow.Public {
 			//log.Printf("\n\nSHOULD CREATE A NEW WORKFLOW FOR THE USER :O\n\n")
@@ -2074,7 +2074,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": true, "new_id": "%s"}`, workflow.ID)))
 			return
 		} else {
-			log.Printf("Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
+			log.Printf("[WARNING] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -2214,7 +2214,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if !found {
-					log.Printf("[DEBUG] Environment %s isn't available. Changing to default.")
+					log.Printf("[DEBUG] Environment %s isn't available. Changing to default.", action.Environment)
 					action.Environment = defaultEnv
 				}
 			}
@@ -2408,8 +2408,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			//log.Printf("WEBHOOK: %d", len(trigger.Parameters))
-			if len(trigger.Parameters) != 2 {
-				log.Printf("[WARNING] Issue with parameters in webhook %s!!", trigger.ID)
+			if len(trigger.Parameters) < 2 {
+				log.Printf("[WARNING] Issue with parameters in webhook %s - missing params", trigger.ID)
 			} else {
 				if !strings.Contains(trigger.Parameters[0].Value, trigger.ID) {
 					log.Printf("[INFO] Fixing webhook URL for %s", trigger.ID)
@@ -3637,7 +3637,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Check workflow.Sharing == private / public / org  too
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing workflow %s as admin", user.Username, workflow.ID)
+			log.Printf("[INFO] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
 			log.Printf("[INFO] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 		} else {
