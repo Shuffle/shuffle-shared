@@ -19,6 +19,8 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
+
+	"cloud.google.com/go/storage"
 	"google.golang.org/appengine/memcache"
 )
 
@@ -255,7 +257,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			return err
 		}
 	} else {
-
 		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
 			log.Printf("Error adding workflow_execution: %s", err)
@@ -1330,6 +1331,20 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 	nameKey := "openapi3"
 	api := &ParsedOpenApi{}
 
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &api)
+			if err == nil {
+				return *api, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for user: %s", err)
+		}
+	}
+
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(nameKey), id)
@@ -1358,7 +1373,51 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, api); err != nil {
-			return ParsedOpenApi{}, err
+			internalBucket := "shuffler.appspot.com"
+			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
+			//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+			log.Printf("[WARNING] Couldn't find openapi for %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
+
+			client, err := storage.NewClient(ctx)
+			if err != nil {
+				log.Printf("[WARNING] Failed to create client (storage - algolia img): %s", err)
+				return *api, err
+			}
+
+			bucket := client.Bucket(internalBucket)
+			obj := bucket.Object(fullParsedPath)
+			fileReader, err := obj.NewReader(ctx)
+			if err != nil {
+				log.Printf("[WARNING] Failed making reader for %s: %s", fullParsedPath, err)
+				return *api, err
+			}
+
+			data, err := ioutil.ReadAll(fileReader)
+			if err != nil {
+				log.Printf("[WARNING] Failed reading from filereader: %s", err)
+				return *api, err
+			}
+
+			err = json.Unmarshal(data, &api)
+			if err != nil {
+				log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
+				return *api, err
+			}
+
+			defer fileReader.Close()
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(api)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling openapi: %s", err)
+			return *api, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating openapi cache: %s", err)
 		}
 	}
 
@@ -2045,6 +2104,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	nameKey := "workflowapp"
 
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		log.Printf("[WARNING] Failed to create client (storage - prioritizedapps): %s", err)
+	}
+
 	query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(limit)
 	for {
 		it := project.Dbclient.Run(ctx, query)
@@ -2058,8 +2122,34 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					continue
 				}
 
-				log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
+				//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
 				break
+			}
+
+			if len(innerApp.Actions) == 0 {
+				log.Printf("App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+
+				internalBucket := "shuffler.appspot.com"
+				fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
+				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
+
+				bucket := client.Bucket(internalBucket)
+				obj := bucket.Object(fullParsedPath)
+				fileReader, err := obj.NewReader(ctx)
+				if err == nil {
+
+					data, err := ioutil.ReadAll(fileReader)
+					if err == nil {
+						err = json.Unmarshal(data, &innerApp)
+						if err != nil {
+							log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
+							continue
+						}
+					}
+				}
+
+				//log.Printf("%s\n%s - %s\n%d\n", string(data), innerApp.Name, innerApp.ID, len(innerApp.Actions))
 			}
 
 			found := false
@@ -2176,23 +2266,35 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						continue
 					}
 
-					log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
+					//log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
 					break
 				}
 
-				//log.Printf("APP: %s", innerApp.Name)
-				//found := false
-				////log.Printf("ACTIONS: %d - %s", len(app.Actions), app.Name)
-				//for _, loopedApp := range allApps {
-				//	if loopedApp.Name == innerApp.Name || loopedApp.ID == innerApp.ID {
-				//		found = true
-				//		break
-				//	}
-				//}
+				if len(innerApp.Actions) == 0 {
+					log.Printf("App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
-				//if !found {
-				//	publicApps = append(publicApps, innerApp)
-				//}
+					internalBucket := "shuffler.appspot.com"
+					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
+					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+					//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
+
+					bucket := client.Bucket(internalBucket)
+					obj := bucket.Object(fullParsedPath)
+					fileReader, err := obj.NewReader(ctx)
+					if err == nil {
+
+						data, err := ioutil.ReadAll(fileReader)
+						if err == nil {
+							err = json.Unmarshal(data, &innerApp)
+							if err != nil {
+								log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
+								continue
+							}
+						}
+					}
+
+					//log.Printf("%s\n%s - %s\n%d\n", string(data), innerApp.Name, innerApp.ID, len(innerApp.Actions))
+				}
 
 				found := false
 				newIndex := -1
