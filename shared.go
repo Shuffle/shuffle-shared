@@ -450,10 +450,12 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	//log.Printf("%s", string(body))
+
 	var appAuth AppAuthenticationStorage
 	err = json.Unmarshal(body, &appAuth)
 	if err != nil {
-		log.Printf("Failed unmarshaling (appauth): %s", err)
+		log.Printf("[WARNING] Failed unmarshaling (appauth): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -504,16 +506,15 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	// Super basic check
 	if len(appAuth.App.ID) != 36 && len(appAuth.App.ID) != 32 {
-		log.Printf("Bad ID for app: %s", appAuth.App.ID)
+		log.Printf("[WARNING] Bad ID for app: %s", appAuth.App.ID)
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App has to be defined"}`)))
 		return
 	}
 
-	// FIXME: Doesn't validate Org
 	app, err := GetApp(ctx, appAuth.App.ID, user)
 	if err != nil {
-		log.Printf("[WARNING] Failed finding app %s while setting auth. Finding it by looping apps.", appAuth.App.ID)
+		log.Printf("[DEBUG] Failed finding app %s while setting auth. Finding it by looping apps.", appAuth.App.ID)
 		workflowapps, err := GetPrioritizedApps(ctx, user)
 		if err != nil {
 			resp.WriteHeader(409)
@@ -530,7 +531,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if foundIndex >= 0 {
-			log.Printf("[INFO] Found app %s by looping auth", appAuth.App.ID)
+			log.Printf("[INFO] Found app %s (%s) by looping auth with %d parameters", workflowapps[foundIndex].Name, workflowapps[foundIndex].ID, len(workflowapps[foundIndex].Authentication.Parameters))
+			app = &workflowapps[foundIndex]
+			//appAuth.App.Name, appAuth.App.ID, len(appAuth.Fields)))
 		} else {
 			log.Printf("[ERROR] Failed finding app %s which has auth after looping", appAuth.App.ID)
 			resp.WriteHeader(409)
@@ -561,13 +564,14 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	for _, field := range appAuth.Fields {
 		found := false
 		for _, param := range app.Authentication.Parameters {
+			//log.Printf("Fields: %#v - %s", field, param.Name)
 			if field.Key == param.Name {
 				found = true
 			}
 		}
 
 		if !found {
-			log.Printf("Failed finding field %s in appauth fields", field.Key)
+			log.Printf("[WARNING] Failed finding field %s in appauth fields for %s", field.Key, appAuth.App.Name)
 			resp.WriteHeader(409)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
 			return
@@ -579,14 +583,15 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	appAuth.Defined = true
 	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
 	if err != nil {
-		log.Printf("Failed setting up app auth %s: %s", appAuth.Id, err)
+		log.Printf("[WARNING] Failed setting up app auth %s: %s", appAuth.Id, err)
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
 
+	log.Printf("[INFO] Set new workflow auth for %s (%s) with ID %s", app.Name, app.ID, appAuth.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, appAuth.Id)))
 }
 
 func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
@@ -2356,6 +2361,16 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		} else if trigger.TriggerType == "SUBFLOW" {
 			for index, param := range trigger.Parameters {
+				//log.Printf("PARAMS: %#v", param)
+				if param.Name == "workflow" {
+					// Validate workflow exists
+					_, err := GetWorkflow(ctx, param.Value)
+					if err != nil {
+						workflow.Errors = append(workflow.Errors, fmt.Sprintf("Workflow %s in Subflow %s (%s) doesn't exist", workflow.ID, trigger.Label, trigger.ID))
+						log.Printf("[WARNING] Couldn't find subflow %s for workflow %s (%s)", param.Value, workflow.Name, workflow.ID)
+					}
+				}
+
 				if len(param.Value) == 0 && param.Name != "argument" {
 					//log.Printf("Param: %#v", param)
 					if param.Name == "user_apikey" {
@@ -2631,6 +2646,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// 2. Update the node and workflow info in the auth
 		// 3. Get the values in the auth and add them to the action values
 		if len(action.AuthenticationId) > 0 {
+			log.Printf("\n\nLen: %d", len(allAuths))
 			authFound := false
 			for _, auth := range allAuths {
 				if auth.Id == action.AuthenticationId {
@@ -2644,7 +2660,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			if !authFound {
 				log.Printf("[WARNING] App auth %s doesn't exist. Setting error", action.AuthenticationId)
-				workflow.Errors = append(workflow.Errors, fmt.Sprintf("App authentication for %s doesn't exist!", action.AppName))
+
+				errorMsg := fmt.Sprintf("App authentication %s for app %s doesn't exist!", action.AuthenticationId, action.AppName)
+				if !ArrayContains(workflow.Errors, errorMsg) {
+					workflow.Errors = append(workflow.Errors, errorMsg)
+				}
 				workflow.IsValid = false
 
 				action.Errors = append(action.Errors, "App authentication doesn't exist")
@@ -4268,6 +4288,125 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
+func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed change org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//if user.Role != "admin" {
+	//	log.Printf("Not admin.")
+	//	resp.WriteHeader(401)
+	//	resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+	//	return
+	//}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	type ReturnData struct {
+		OrgId string `json:"org_id" datastore:"org_id"`
+		//Name  string `json:"name" datastore:"name"`
+	}
+
+	var tmpData ReturnData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("Failed unmarshalling test: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	ctx := getContext(request)
+	foundOrg := false
+	for _, org := range user.Orgs {
+		if org == tmpData.OrgId {
+			foundOrg = true
+			break
+		}
+	}
+
+	if !foundOrg || tmpData.OrgId != fileId {
+		log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "No permission to change to this org"}`))
+		return
+	}
+
+	org, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[WARNING] Organization %s doesn't exist: %s", tmpData.OrgId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	userFound := false
+	usr := User{}
+	for _, orgUsr := range org.Users {
+		//log.Printf("Usr: %#v", orgUsr)
+		if user.Id == orgUsr.Id {
+			usr = orgUsr
+			userFound = true
+			break
+		}
+	}
+
+	if !userFound {
+		log.Printf("[WARNING] User can't edit the org \"%s\" (2)", tmpData.OrgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
+		return
+	}
+
+	user.ActiveOrg = OrgMini{
+		Name: org.Name,
+		Id:   org.Id,
+		Role: usr.Role,
+	}
+
+	user.Role = usr.Role
+
+	err = SetUser(ctx, &user, false)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating user when changing org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
+
+}
+
 func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -4310,6 +4449,13 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(tmpData.Name) < 3 {
+		log.Printf("[WARNING] Suborgname too short (min 3) %s", tmpData.Name)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Name must at least be 3 characters."}`))
+		return
+	}
+
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -4324,7 +4470,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
-		log.Printf("[WARNING] User can't edit the org %s", tmpData.OrgId)
+		log.Printf("[WARNING] User can't edit the org \"%s\"", tmpData.OrgId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
 		return
@@ -4342,12 +4488,14 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	orgId := uuid.NewV4().String()
 	newOrg := Org{
 		Name:        tmpData.Name,
-		Description: fmt.Sprintf("Created by org %s", parentOrg.Name),
+		Description: fmt.Sprintf("Sub-org by user %s in parent-org %s", user.Username, parentOrg.Name),
 		Id:          orgId,
 		Org:         tmpData.Name,
-		Users:       []User{},
-		Roles:       []string{"admin", "user"},
-		CloudSync:   false,
+		Users: []User{
+			user,
+		},
+		Roles:     []string{"admin", "user"},
+		CloudSync: false,
 		ManagerOrgs: []OrgMini{
 			OrgMini{
 				Id:   tmpData.OrgId,
@@ -4378,7 +4526,17 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("SUCCESSFULLY ADDED ORG CHILD ORG")
+	user.Orgs = append(user.Orgs, newOrg.Id)
+	log.Printf("[INFO] Usr: %#v (%d)", user.Orgs, len(user.Orgs))
+	err = SetUser(ctx, &user, false)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating user when setting creating suborg: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[INFO] User %s SUCCESSFULLY ADDED child org %s (%s) for parent %s (%s)", user.Username, newOrg.Name, newOrg.Id, parentOrg.Name, parentOrg.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
@@ -4499,7 +4657,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("SUCCESSFULLY UPDATED ORG")
+	log.Printf("[INFO] Successfully updated org %s (%s)", org.Name, org.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
@@ -4810,18 +4968,17 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// CBA making a real thing. Already had some code lol
 	newId := requestdata.Id
 	if len(newId) != 36 {
-		log.Printf("[WARNING] Bad webhook ID")
+		log.Printf("[WARNING] Bad webhook ID: %s", newId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Invalid ID"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Invalid Webhook ID: bad formatting"}`))
 		return
 	}
 
 	if requestdata.Id == "" || requestdata.Name == "" {
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Requires fields id and name can't be empty"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Required fields id and name can't be empty"}`))
 		return
 
 	}
@@ -4869,7 +5026,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 
 		err = executeCloudAction(action, org.SyncConfig.Apikey)
 		if err != nil {
-			log.Printf("Failed cloud action START execution: %s", err)
+			log.Printf("[WARNING] Failed cloud action START execution: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 			return
@@ -6121,23 +6278,25 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	//GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
-		if len(tmpJson) >= 1048487 {
-			dbSave = true
-			log.Printf("[ERROR] Result length is too long! Need to reduce result size")
+		if project.DbType != "elasticsearch" {
+			if len(tmpJson) >= 1048487 {
+				dbSave = true
+				log.Printf("[ERROR] Result length is too long! Need to reduce result size")
 
-			// Result        string `json:"result" datastore:"result,noindex"`
-			// Arbitrary reduction size
-			maxSize := 500000
-			newResults := []ActionResult{}
-			for _, item := range workflowExecution.Results {
-				if len(item.Result) > maxSize {
-					item.Result = "[ERROR] Result too large to handle (https://github.com/frikky/shuffle/issues/171)"
+				// Result        string `json:"result" datastore:"result,noindex"`
+				// Arbitrary reduction size
+				maxSize := 500000
+				newResults := []ActionResult{}
+				for _, item := range workflowExecution.Results {
+					if len(item.Result) > maxSize {
+						item.Result = "[ERROR] Result too large to handle (https://github.com/frikky/shuffle/issues/171)"
+					}
+
+					newResults = append(newResults, item)
 				}
 
-				newResults = append(newResults, item)
+				workflowExecution.Results = newResults
 			}
-
-			workflowExecution.Results = newResults
 		}
 	}
 

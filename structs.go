@@ -470,10 +470,12 @@ type Hook struct {
 
 // Used within a user
 type OrgMini struct {
-	Name  string     `json:"name" datastore:"name"`
-	Id    string     `json:"id" datastore:"id"`
-	Users []UserMini `json:"users" datastore:"users"`
-	Role  string     `json:"role" datastore:"role"`
+	Name       string     `json:"name" datastore:"name"`
+	Id         string     `json:"id" datastore:"id"`
+	Users      []UserMini `json:"users" datastore:"users"`
+	Role       string     `json:"role" datastore:"role"`
+	CreatorOrg string     `json:"creator_org" datastore:"creator_org"`
+	Image      string     `json:"image" datastore:"image,noindex"`
 }
 
 type Org struct {
@@ -1526,4 +1528,21 @@ type FileList struct {
 	Success bool     `json:"success"`
 	Reason  string   `json:"reason"`
 	List    []string `json:"list"`
+}
+
+type SessionCookie struct {
+	Key        string `json:"key"`
+	Value      string `json:"value"`
+	Expiration int64  `json:"expiration"`
+}
+
+type HandleInfo struct {
+	Success   bool            `json:"success"`
+	Admin     string          `json:"admin"`
+	Username  string          `json:"username"`
+	Tutorials []string        `json:"tutorials"`
+	Id        string          `json:"id"`
+	Orgs      []OrgMini       `json:"orgs"`
+	ActiveOrg OrgMini         `json:"active_org"`
+	Cookies   []SessionCookie `json:"session_cookie"`
 }
