@@ -103,14 +103,37 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	ctx := getContext(request)
 	if user.Role != "global_admin" {
-		log.Printf("[WARNING] User %s isn't global admin and can't list orgs.", user.Username)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+		orgs := []OrgMini{}
+		for _, item := range user.Orgs {
+			// FIXM: Should return normal orgs, but hidden if the user isn't admin
+			org, err := GetOrg(ctx, item)
+			if err == nil {
+				orgs = append(orgs, OrgMini{
+					Id:         org.Id,
+					Name:       org.Name,
+					CreatorOrg: org.CreatorOrg,
+					Image:      org.Image,
+				})
+				// Role:       "admin",
+			}
+		}
+
+		newjson, err := json.Marshal(orgs)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshal in get orgs: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
+			return
+		}
+
+		log.Printf("[INFO] User %s (%s) isn't global admin and can't list orgs. Returning list of local orgs.", user.Username, user.Id)
+		resp.WriteHeader(200)
+		resp.Write([]byte(newjson))
 		return
 	}
 
-	ctx := getContext(request)
 	orgs, err := GetAllOrgs(ctx)
 	if err != nil || len(orgs) == 0 {
 		log.Printf("[WARNING] Failed getting orgs: %s", err)
@@ -121,7 +144,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	newjson, err := json.Marshal(orgs)
 	if err != nil {
-		log.Printf("Failed unmarshal: %s", err)
+		log.Printf("[WARNING] Failed unmarshal in get orgs: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
 		return
@@ -514,7 +537,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	app, err := GetApp(ctx, appAuth.App.ID, user)
 	if err != nil {
-		log.Printf("[DEBUG] Failed finding app %s while setting auth. Finding it by looping apps.", appAuth.App.ID)
+		log.Printf("[DEBUG] Failed finding app %s (%s) while setting auth. Finding it by looping apps.", appAuth.App.Name, appAuth.App.ID)
 		workflowapps, err := GetPrioritizedApps(ctx, user)
 		if err != nil {
 			resp.WriteHeader(409)
@@ -1955,7 +1978,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
-		log.Printf("Failed setting workflow: %s", err)
+		log.Printf("[WARNING] Failed setting workflow: %s (Set workflow)", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2646,7 +2669,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// 2. Update the node and workflow info in the auth
 		// 3. Get the values in the auth and add them to the action values
 		if len(action.AuthenticationId) > 0 {
-			log.Printf("\n\nLen: %d", len(allAuths))
+			//log.Printf("\n\nLen: %d", len(allAuths))
 			authFound := false
 			for _, auth := range allAuths {
 				if auth.Id == action.AuthenticationId {
@@ -4401,6 +4424,14 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Cleanup cache for the user
+	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("apps_%s", user.Id)
+	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+
 	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
@@ -4524,6 +4555,30 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	// Update all admins to have access to this suborg
+	for _, loopUser := range parentOrg.Users {
+		if loopUser.Role != "admin" {
+			continue
+		}
+
+		if loopUser.Id == user.Id {
+			continue
+		}
+
+		foundUser, err := GetUser(ctx, loopUser.Id)
+		if err != nil {
+			log.Printf("[WARNING] User with Identifier %s doesn't exist: %s (update admins - create)", loopUser.Id, err)
+			continue
+		}
+
+		foundUser.Orgs = append(foundUser.Orgs, newOrg.Id)
+		err = SetUser(ctx, foundUser, false)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating user when setting creating suborg (update admins - update): %s ", err)
+			continue
+		}
 	}
 
 	user.Orgs = append(user.Orgs, newOrg.Id)

@@ -645,7 +645,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 	// Appending the users' workflows
 	nameKey := "workflow"
-	log.Printf("[INFO] Getting workflows for user %s (%s)", user.Username, user.Role)
+	log.Printf("[INFO] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -656,6 +656,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				},
 			},
 		}
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
 			return workflows, err
@@ -707,13 +708,13 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			return workflows, err
 		}
 
-		workflows = []Workflow{}
 		for _, hit := range wrapped.Hits.Hits {
-			workflows = append(workflows, hit.Source)
+			if hit.Source.Owner == user.Id {
+				workflows = append(workflows, hit.Source)
+			}
 		}
 
 		if user.Role == "admin" {
-			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s", user.ActiveOrg.Id)
 			var buf bytes.Buffer
 			query := map[string]interface{}{
 				"size": 1000,
@@ -775,7 +776,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				return workflows, err
 			}
 
-			workflows = []Workflow{}
+			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s. Already have %d workflows for the user. Found %d for org", user.ActiveOrg.Id, len(workflows), len(wrapped.Hits.Hits))
 			for _, hit := range wrapped.Hits.Hits {
 				found := false
 				for _, workflow := range workflows {
@@ -910,11 +911,20 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		}
 	}
 
-	slice.Sort(workflows[:], func(i, j int) bool {
-		return workflows[i].Edited > workflows[j].Edited
+	fixedWorkflows := []Workflow{}
+	for _, workflow := range workflows {
+		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
+			continue
+		}
+
+		fixedWorkflows = append(fixedWorkflows, workflow)
+	}
+
+	slice.Sort(fixedWorkflows[:], func(i, j int) bool {
+		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
 	})
 
-	return workflows, nil
+	return fixedWorkflows, nil
 }
 
 func GetAllHooks(ctx context.Context) ([]Hook, error) {
