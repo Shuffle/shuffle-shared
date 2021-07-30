@@ -267,6 +267,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	extraHeaders := ""
 	extraQueries := ""
 	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth"}
+
 	if swagger.Components.SecuritySchemes != nil {
 		for key, value := range swagger.Components.SecuritySchemes {
 			if ArrayContains(reservedKeys, key) {
@@ -280,6 +281,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				}
 				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, key, key, key)
 			} else if value.Value.In == "query" {
+				log.Printf("Handling extra queries for %#v", value.Value)
 				queryString += fmt.Sprintf(", %s=\"\"", key)
 				if len(extraQueries) > 0 {
 					extraQueries += "\n        "
@@ -294,6 +296,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// FIXME - this might break - need to check if ? or & should be set as query
 	parameterData := ""
 	if len(optionalQueries) > 0 {
+		//log.Printf("OPTIONAL %#v", optionalQueries)
 		//if len(queryString
 		queryString += ", "
 		for index, query := range optionalQueries {
@@ -310,7 +313,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			*/
 			queryData += fmt.Sprintf(`
         if %s:
-            params["%s"] = %s`, query, query, query)
+            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, query, query, query)
 		}
 	} else {
 		//log.Printf("No optional queries?")
@@ -395,12 +398,19 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	queryParserCode := ""
 	if len(parameters) > 0 {
 		parameterData = fmt.Sprintf(", %s", strings.Join(parameters, ", "))
+		//log.Printf("Params: %#v", parameters)
 
 		for _, param := range parameters {
 			if strings.Contains(param, "headers=") {
 				headerParserCode = "if len(headers) > 0:\n            for header in headers.split(\"\\n\"):\n                if '=' in header:\n                    headersplit=header.split('=')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()\n                elif ':' in header:\n                    headersplit=header.split(':')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()"
 			} else if strings.Contains(param, "queries=") {
-				queryParserCode = "\n        if len(queries) > 0:\n            for query in queries.split(\"\\&\"):\n                if '=' in query:\n                    headersplit=query.split('&')\n                    params[headersplit[0].strip()] = headersplit[1].strip()"
+				queryParserCode = "\n        if len(queries) > 0:\n            if queries[0] == \"?\" or queries[0] == \"&\":\n                queries = queries[1:len(queries)]\n            if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                queries = queries[0:-1]\n            for query in queries.split(\"&\"):\n                if '=' in query:\n                    headersplit=query.split('=')\n                    params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                else:\n                    params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])\n        print(params)"
+			} else {
+				if !strings.Contains(url, fmt.Sprintf("{%s}", param)) {
+					queryData += fmt.Sprintf(`
+        if %s:
+            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, param, param, param)
+				}
 			}
 		}
 	}
@@ -420,7 +430,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			bodyAddin = ", data=body"
 
 			// FIXME: Does JSON data work?
-			bodyFormatter = `body = " ".join(body.strip().split()).encode("utf-8")`
+			bodyFormatter = "try:\n            body = \" \".join(body.strip().split()).encode(\"utf-8\")\n        except:\n            pass"
 		}
 	}
 
@@ -476,6 +486,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 	//log.Printf("PARSED: %s", parsedParameters)
 
+	// Use spaces while in here!
 	data := fmt.Sprintf(`    async def %s(self%s):
         params={}
         %s
@@ -488,13 +499,17 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         %s
         %s
         %s
-				%s
-				%s
+        %s
+        %s
+        if "http:/" in url:
+            url = url.replace("http:/", "http://", -1)
+        if "https:/" in url:
+            url = url.replace("https:/", "https://", -1)
         ret = requests.%s(url, headers=request_headers, params=params%s%s%s%s)
         try:
-        	return ret.json()
+            return ret.json()
         except json.decoder.JSONDecodeError:
-        	return ret.text
+            return ret.text
 		`,
 		functionname,
 		parsedParameters,
@@ -506,8 +521,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		extraHeaders,
 		extraQueries,
 		headerParserCode,
-		queryParserCode,
 		queryData,
+		queryParserCode,
 		bodyFormatter,
 		fileGrabber,
 		fileAdder,
@@ -519,8 +534,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "get_users") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(functionname, "test") {
+		log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
 		//log.Printf("Queries: %s", queryString)
@@ -1237,8 +1252,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	//log.Println(path.Parameters)
 
 	// Parameters:  []WorkflowAppActionParameter{},
-	// FIXME - add data for POST stuff
-	firstQuery := true
+	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
 
@@ -1316,12 +1330,12 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 					continue
 				}
 
-				if firstQuery && !strings.Contains(baseUrl, "?") {
-					baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				} else {
-					baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				}
-				firstQuery = false
+				//if firstQuery && !strings.Contains(baseUrl, "?") {
+				//	baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//} else {
+				//	baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//}
+				//firstQuery = false
 			}
 
 		}
@@ -1405,8 +1419,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 
 	// Parameters:  []WorkflowAppActionParameter{},
-	// FIXME - add data for POST stuff
-	firstQuery := true
+	//firstQuery := true
 	optionalQueries := []string{}
 
 	// FIXME - remove this when authentication is properly introduced
@@ -1485,12 +1498,12 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 					continue
 				}
 
-				if firstQuery && !strings.Contains(baseUrl, "?") {
-					baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				} else {
-					baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				}
-				firstQuery = false
+				//if firstQuery && !strings.Contains(baseUrl, "?") {
+				//	baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//} else {
+				//	baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//}
+				//firstQuery = false
 			}
 
 		}
@@ -1576,8 +1589,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	//log.Println(path.Parameters)
 
 	// Parameters:  []WorkflowAppActionParameter{},
-	// FIXME - add data for POST stuff
-	firstQuery := true
+	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
 	headersFound := []string{}
@@ -1653,12 +1665,12 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 					continue
 				}
 
-				if firstQuery && !strings.Contains(baseUrl, "?") {
-					baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				} else {
-					baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				}
-				firstQuery = false
+				//if firstQuery && !strings.Contains(baseUrl, "?") {
+				//	baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//} else {
+				//	baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//}
+				//firstQuery = false
 			}
 		}
 	}
@@ -1743,8 +1755,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	//log.Println(path.Parameters)
 
 	// Parameters:  []WorkflowAppActionParameter{},
-	// FIXME - add data for POST stuff
-	firstQuery := true
+	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
 
@@ -1821,12 +1832,12 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 					continue
 				}
 
-				if firstQuery && !strings.Contains(baseUrl, "?") {
-					baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				} else {
-					baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				}
-				firstQuery = false
+				//if firstQuery && !strings.Contains(baseUrl, "?") {
+				//	baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//} else {
+				//	baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//}
+				//firstQuery = false
 			}
 
 		}
@@ -1912,7 +1923,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 
 	// Parameters:  []WorkflowAppActionParameter{},
 	// FIXME - add data for POST stuff
-	firstQuery := true
+	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
 
@@ -2023,12 +2034,12 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 					continue
 				}
 
-				if firstQuery && !strings.Contains(baseUrl, "?") {
-					baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				} else {
-					baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				}
-				firstQuery = false
+				//if firstQuery && !strings.Contains(baseUrl, "?") {
+				//	baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//} else {
+				//	baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//}
+				//firstQuery = false
 			}
 		}
 	}
@@ -2118,8 +2129,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	//log.Println(path.Parameters)
 
 	// Parameters:  []WorkflowAppActionParameter{},
-	// FIXME - add data for POST stuff
-	firstQuery := true
+	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
 
@@ -2196,12 +2206,12 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 					continue
 				}
 
-				if firstQuery && !strings.Contains(baseUrl, "?") {
-					baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				} else {
-					baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				}
-				firstQuery = false
+				//if firstQuery && !strings.Contains(baseUrl, "?") {
+				//	baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//} else {
+				//	baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//}
+				//firstQuery = false
 			}
 		}
 	}
@@ -2286,8 +2296,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	//log.Println(path.Parameters)
 
 	// Parameters:  []WorkflowAppActionParameter{},
-	// FIXME - add data for POST stuff
-	firstQuery := true
+	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
 
@@ -2364,12 +2373,12 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 					continue
 				}
 
-				if firstQuery && !strings.Contains(baseUrl, "?") {
-					baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				} else {
-					baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
-				}
-				firstQuery = false
+				//if firstQuery && !strings.Contains(baseUrl, "?") {
+				//	baseUrl = fmt.Sprintf("%s?%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//} else {
+				//	baseUrl = fmt.Sprintf("%s&%s={%s}", baseUrl, param.Value.Name, param.Value.Name)
+				//}
+				//firstQuery = false
 			}
 
 		}
