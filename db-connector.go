@@ -100,10 +100,12 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 	//log.Printf("DATA SIZE: %d", len(data))
 	// Maxsize ish~
 
+	// Splitting into multiple cache items
 	if project.Environment == "cloud" {
-		if len(data) > maxCacheSize*10 {
+		if len(data) > maxCacheSize*25 {
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*10))
 		}
+
 		loop := false
 		if len(data) > maxCacheSize {
 			loop = true
