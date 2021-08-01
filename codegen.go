@@ -501,9 +501,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         %s
         %s
         %s
-        if "http:/" in url:
+        if "http:/" in url and not "http://" in url:
             url = url.replace("http:/", "http://", -1)
-        if "https:/" in url:
+        if "https:/" in url and not "https://" in url:
             url = url.replace("https:/", "https://", -1)
         ret = requests.%s(url, headers=request_headers, params=params%s%s%s%s)
         try:
