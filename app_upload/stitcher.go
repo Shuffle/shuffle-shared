@@ -400,7 +400,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 		_, err = patchCall.Do()
 		if err != nil {
 			if strings.Contains(fmt.Sprintf("%s", err), "Quota exceeded for quota") {
-				log.Printf("[WARNING] Failed patching function: %s", err)
+				log.Printf("[WARNING] Failed patching function (1): %s", err)
 
 				log.Printf("\n\n[INFO] Waiting 1 minute before continuing - quota exceeded\n\n")
 				time.Sleep(65 * time.Second)
@@ -410,7 +410,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 					return err
 				}
 			} else {
-				log.Printf("Failed patching function: %s", err)
+				log.Printf("[WARNING] Failed patching function (2): %s", err)
 				return err
 			}
 		}
@@ -468,7 +468,7 @@ func deployAppCloudFunc(appname string, appversion string) {
 	for _, location := range locations {
 		err := deployFunction(fullAppname, location, bucketname, environmentVariables)
 		if err != nil {
-			log.Printf("Failed to deploy: %s", err)
+			log.Printf("[WARNING] Failed to deploy: %s", err)
 			return
 			os.Exit(3)
 		}
@@ -737,20 +737,28 @@ func deployAll() {
 	}
 
 	for _, appname := range allapps {
+		//if !strings.Contains(appname, "tools") {
+		//	continue
+		//}
 		//location := fmt.Sprintf("%s/%s/%s/api.yaml", basefolder, appname, appversion)
 
-		appVersions := []string{"1.0.0"}
-		files, err := ioutil.ReadDir(fmt.Sprintf("%s/%s", appfolder, appname))
+		appVersions := []string{}
+		appdir := fmt.Sprintf("%s/%s", appfolder, appname)
+		files, err := ioutil.ReadDir(appdir)
 		if err != nil {
-			//appVersions := "1.0.0"
-			log.Printf("\n\n[WARNING] Failed parsing versions for %s\n\n", appfolder)
-		} else {
-			appVersions := []string{}
-			for _, f := range files {
-				appVersions = append(appVersions, f.Name())
-			}
+			log.Printf("\n\n[WARNING] Failed parsing versions for %s\n\n", appdir)
 		}
 
+		for _, f := range files {
+			appVersions = append(appVersions, f.Name())
+		}
+
+		if len(appVersions) == 0 {
+			log.Printf("[WARNING] Failed parsing appversions for %s (%s)\n\n", appname, appdir)
+			continue
+		}
+
+		log.Printf("[INFO] Name: %s (%d) - %#v", appname, len(files), appVersions)
 		for _, appversion := range appVersions {
 			err := deployConfigToBackend(appfolder, appname, appversion)
 			if err != nil {
