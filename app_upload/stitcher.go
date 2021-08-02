@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"archive/tar"
 	//"cloud.google.com/go/iam"
@@ -398,8 +399,20 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 		patchCall := projectsLocationsFunctionsService.Patch(fmt.Sprintf("%s/functions/%s", location, appname), cloudFunction)
 		_, err = patchCall.Do()
 		if err != nil {
-			log.Printf("Failed patching function: %s", err)
-			return err
+			if strings.Contains(fmt.Sprintf("%s", err), "Quota exceeded for quota") {
+				log.Printf("Failed patching function: %s", err)
+
+				log.Printf("\n\nWaiting 1 minute before continuing - quota exceeded\n\n")
+				time.Sleep(65 * time.Second)
+
+				_, err = patchCall.Do()
+				if err != nil {
+					return err
+				}
+			} else {
+				log.Printf("Failed patching function: %s", err)
+				return err
+			}
 		}
 
 		log.Printf("Successfully patched %s to %s", appname, localization)
@@ -746,13 +759,11 @@ func main() {
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
 	log.Printf("\n\nRunning with: \nUrl: %s\nApikey: %s\n\n", baseUrl, apikey)
-
-	appname := "twitter"
-	appversion := "1.0.0"
-
 	deployAll()
 	return
 
+	appname := "twitter"
+	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("Failed uploading config: %s", err)
