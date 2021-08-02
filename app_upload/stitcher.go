@@ -233,6 +233,30 @@ func getAppbase(filepath string) []string {
 	return validLines
 }
 
+func addRequirements(filelocation string) {
+	if !strings.Contains(filelocation, "generated") {
+		return
+	}
+
+	data, err := ioutil.ReadFile(filelocation)
+	if err != nil {
+		log.Panicf("[WARNING] failed reading data from file: %s", err)
+		return
+	}
+
+	if strings.Contains(string(data), "liquid") && strings.Contains(string(data), "requests") {
+		log.Printf("[WARNING] Req file already formatted with liquid and requests?")
+		return
+	}
+
+	filedata := string(data) + "\nrequests==2.25.1\nliquidpy==0.6.3\n"
+	err = ioutil.WriteFile(filelocation, []byte(filedata), os.ModePerm)
+	if err != nil {
+		log.Panicf("[WARNING] failed writing data to file: %s", err)
+		return
+	}
+}
+
 // Puts together ./static_baseline.py, onprem/app_sdk_app_base.py and the
 // appcode in a generated_app folder based on appname+version
 func stitcher(appname string, appversion string) string {
@@ -288,7 +312,7 @@ func stitcher(appname string, appversion string) string {
 	}
 
 	folderPath := fmt.Sprintf("%s/%s/%s/src", appfolder, appname, appversion)
-	//log.Printf("CHECKING FOLDER %s", folderPath)
+	//log.Printf("CHECKING Gen FOLDER %s", foldername)
 	allFiles, err := ioutil.ReadDir(folderPath)
 	if err != nil {
 		log.Printf("Failed getting src files")
@@ -312,6 +336,8 @@ func stitcher(appname string, appversion string) string {
 
 		files = append(files, fmt.Sprintf("%s/%s", foldername, f.Name()))
 	}
+
+	addRequirements(fmt.Sprintf("%s/requirements.txt", foldername))
 
 	//os.Exit(3)
 	log.Printf("[INFO] Successfully stitched files in %s/main.py", foldername)
@@ -380,7 +406,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 	functionName := fmt.Sprintf("%s/functions/%s", location, appname)
 
 	cloudFunction := &cloudfunctions.CloudFunction{
-		AvailableMemoryMb:    128,
+		AvailableMemoryMb:    256,
 		EntryPoint:           "run",
 		EnvironmentVariables: environmentVariables,
 		HttpsTrigger:         &cloudfunctions.HttpsTrigger{},
@@ -772,6 +798,7 @@ func deployAll() {
 }
 
 func main() {
+	addRequirements("generated_apps/shuffle-tools_1.0.0/requirements.txt")
 	if len(os.Args) < 3 {
 		log.Printf("[WARNING] Missing arguments. Required: go run stitcher.go APIKEY URL")
 		return
