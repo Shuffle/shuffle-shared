@@ -208,7 +208,7 @@ func ZipFiles(filename string, files []string) error {
 func getAppbase(filepath string) []string {
 	appBase, err := ioutil.ReadFile(filepath)
 	if err != nil {
-		log.Printf("Readerror: %s", err)
+		log.Printf("[WARNING] Readerror: %s", err)
 		return []string{}
 	}
 
@@ -264,7 +264,7 @@ func stitcher(appname string, appversion string) string {
 	foldername := fmt.Sprintf("generated_apps/%s_%s", appname, appversion)
 	err = os.Mkdir(foldername, os.ModePerm)
 	if err != nil {
-		log.Println("Failed making temporary app folder. Probably already exists. Remaking")
+		log.Println("[INFO] Failed making temporary app folder. Probably already exists. Remaking")
 		os.RemoveAll(foldername)
 		os.MkdirAll(foldername, os.ModePerm)
 	}
@@ -288,7 +288,7 @@ func stitcher(appname string, appversion string) string {
 	}
 
 	folderPath := fmt.Sprintf("%s/%s/%s/src", appfolder, appname, appversion)
-	log.Printf("CHECKING FOLDER %s", folderPath)
+	//log.Printf("CHECKING FOLDER %s", folderPath)
 	allFiles, err := ioutil.ReadDir(folderPath)
 	if err != nil {
 		log.Printf("Failed getting src files")
@@ -314,7 +314,7 @@ func stitcher(appname string, appversion string) string {
 	}
 
 	//os.Exit(3)
-	log.Printf("Successfully stitched files in %s/main.py", foldername)
+	log.Printf("[INFO] Successfully stitched files in %s/main.py", foldername)
 	outputfile := fmt.Sprintf("%s.zip", foldername)
 
 	err = ZipFiles(outputfile, files)
@@ -394,15 +394,15 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 	createCall := projectsLocationsFunctionsService.Create(location, cloudFunction)
 	_, err = createCall.Do()
 	if err != nil {
-		log.Println("Failed creating new function. Attempting patch, as it might exist already")
+		log.Println("[WARNING] Failed creating new function. Attempting patch, as it might exist already")
 
 		patchCall := projectsLocationsFunctionsService.Patch(fmt.Sprintf("%s/functions/%s", location, appname), cloudFunction)
 		_, err = patchCall.Do()
 		if err != nil {
 			if strings.Contains(fmt.Sprintf("%s", err), "Quota exceeded for quota") {
-				log.Printf("Failed patching function: %s", err)
+				log.Printf("[WARNING] Failed patching function: %s", err)
 
-				log.Printf("\n\nWaiting 1 minute before continuing - quota exceeded\n\n")
+				log.Printf("\n\n[INFO] Waiting 1 minute before continuing - quota exceeded\n\n")
 				time.Sleep(65 * time.Second)
 
 				_, err = patchCall.Do()
@@ -415,9 +415,9 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 			}
 		}
 
-		log.Printf("Successfully patched %s to %s", appname, localization)
+		log.Printf("[INFO] Successfully patched %s to %s\n\n", appname, localization)
 	} else {
-		log.Printf("Successfully deployed %s to %s", appname, localization)
+		log.Printf("[INFO] Successfully deployed %s to %s\n\n", appname, localization)
 	}
 
 	// FIXME - use response to define the HTTPS entrypoint. It's default to an easy one tho
@@ -480,7 +480,7 @@ func loadYaml(fileLocation string) (shuffle.WorkflowApp, error) {
 
 	yamlFile, err := ioutil.ReadFile(fileLocation)
 	if err != nil {
-		log.Printf("yamlFile.Get err: %s", err)
+		log.Printf("[WARNING] yamlFile.Get err: %s", err)
 		return shuffle.WorkflowApp{}, err
 	}
 
@@ -505,7 +505,7 @@ func loadYaml(fileLocation string) (shuffle.WorkflowApp, error) {
 func deployConfigToBackend(basefolder, appname, appversion string) error {
 	// FIXME - no static path pls
 	location := fmt.Sprintf("%s/%s/%s/api.yaml", basefolder, appname, appversion)
-	log.Printf("FILE LOCATION: %s", location)
+	log.Printf("[INFO] FILE LOCATION: %s", location)
 	action, err := loadYaml(location)
 	if err != nil {
 		log.Println(err)
@@ -520,7 +520,7 @@ func deployConfigToBackend(basefolder, appname, appversion string) error {
 		return err
 	}
 
-	log.Printf("Starting file upload to backend")
+	//log.Printf("[INFO] Starting file upload to backend")
 	url := fmt.Sprintf("%s/api/v1/workflows/apps?overwrite=%s&sharing=true", baseUrl, overwriteExistingApps)
 	client := &http.Client{}
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(data))
@@ -535,7 +535,7 @@ func deployConfigToBackend(basefolder, appname, appversion string) error {
 		return err
 	}
 
-	log.Printf("Status: %s", ret.Status)
+	//log.Printf("Status: %s", ret.Status)
 	body, err := ioutil.ReadAll(ret.Body)
 	if err != nil {
 		return err
@@ -556,7 +556,6 @@ func deployConfigToBackend(basefolder, appname, appversion string) error {
 		return errors.New(fmt.Sprintf("Status %s. App probably already exists. Raw:\n%s", ret.Status, string(body)))
 	}
 
-	log.Println(string(body))
 	return nil
 }
 
@@ -656,7 +655,7 @@ func tarDir(source string, target string) (*bytes.Reader, error) {
 func buildImage(client *client.Client, tags []string, dockerBuildCtxDir string) error {
 	dockerBuildContext, err := tarDir(dockerBuildCtxDir, ".")
 	if err != nil {
-		log.Printf("Error in taring the docker root folder - %s", err.Error())
+		log.Printf("[WARNING] Error in taring the docker root folder - %s", err.Error())
 		return err
 	}
 
@@ -696,7 +695,7 @@ func deployWorker(appname, appversion string) error {
 	tags := []string{fmt.Sprintf("%s-%s", appname, appversion)}
 	err = buildImage(client, tags, fmt.Sprintf("./apps/%s/%s", appname, appversion))
 	if err != nil {
-		log.Printf("Build error: %s", err)
+		log.Printf("[WARNING] Build error: %s", err)
 		return err
 	}
 
@@ -730,7 +729,7 @@ func deployAll() {
 
 	for _, f := range files {
 		if strings.Contains(f.Name(), ".") {
-			log.Printf("Skipping %s", f.Name())
+			log.Printf("[INFO] Skipping %s", f.Name())
 			continue
 		}
 
@@ -738,27 +737,41 @@ func deployAll() {
 	}
 
 	for _, appname := range allapps {
-		appversion := "1.0.0"
+		//location := fmt.Sprintf("%s/%s/%s/api.yaml", basefolder, appname, appversion)
 
-		err := deployConfigToBackend(appfolder, appname, appversion)
+		appVersions := []string{"1.0.0"}
+		files, err := ioutil.ReadDir(fmt.Sprintf("%s/%s", appfolder, appname))
 		if err != nil {
-			log.Printf("Failed uploading config: %s", err)
-			continue
+			//appVersions := "1.0.0"
+			log.Printf("\n\n[WARNING] Failed parsing versions for %s\n\n", appfolder)
+		} else {
+			appVersions := []string{}
+			for _, f := range files {
+				appVersions = append(appVersions, f.Name())
+			}
 		}
 
-		deployAppCloudFunc(appname, appversion)
+		for _, appversion := range appVersions {
+			err := deployConfigToBackend(appfolder, appname, appversion)
+			if err != nil {
+				log.Printf("[WARNING] Failed uploading config: %s", err)
+				continue
+			}
+
+			deployAppCloudFunc(appname, appversion)
+		}
 	}
 }
 
 func main() {
 	if len(os.Args) < 3 {
-		log.Printf("Missing arguments. Required: go run stitcher.go APIKEY URL")
+		log.Printf("[WARNING] Missing arguments. Required: go run stitcher.go APIKEY URL")
 		return
 	}
 
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
-	log.Printf("\n\nRunning with: \nUrl: %s\nApikey: %s\n\n", baseUrl, apikey)
+	log.Printf("\n\n[INFO] Running with: \nUrl: %s\nApikey: %s\n\n", baseUrl, apikey)
 	deployAll()
 	return
 
@@ -766,10 +779,10 @@ func main() {
 	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
-		log.Printf("Failed uploading config: %s", err)
+		log.Printf("[WARNING] Failed uploading config: %s", err)
 		os.Exit(1)
 	}
 
-	log.Printf("Starting cloud function deploy")
+	log.Printf("[INFO] Starting cloud function deploy")
 	deployAppCloudFunc(appname, appversion)
 }
