@@ -211,11 +211,12 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 	}
 
 	if project.CacheDb {
-
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for setapp: %s", err)
 		}
+
+		DeleteCache(ctx, fmt.Sprintf("openapi3_%s", id))
 	}
 
 	return nil

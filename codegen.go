@@ -119,6 +119,8 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 		return filename, err
 	}
 
+	//log.Printf("Merging requirements: %s", requirements)
+
 	zipFile, err = zipWriter.Create("requirements.txt")
 	if err != nil {
 		log.Printf("Packing failed to create zip file from bucket: %v", err)
