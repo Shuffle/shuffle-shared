@@ -507,6 +507,12 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
             url = url.replace("http:/", "http://", -1)
         if "https:/" in url and not "https://" in url:
             url = url.replace("https:/", "https://", -1)
+        if "http:///" in url:
+            url = url.replace("http:///", "http://", -1)
+        if "https:///" in url:
+            url = url.replace("https:///", "https://", -1)
+        if not "http://" in url and not "http" in url:
+            url = f"http://{url}" 
         ret = requests.%s(url, headers=request_headers, params=params%s%s%s%s)
         try:
             return ret.json()
@@ -537,7 +543,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	// Use lowercase when checking
 	if strings.Contains(functionname, "test") {
-		//log.Printf("\n%s", data)
+		log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
 		//log.Printf("Queries: %s", queryString)
