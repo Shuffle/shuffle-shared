@@ -27,6 +27,7 @@ import (
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
 	"github.com/google/go-github/v28/github"
+	"github.com/google/go-querystring/query"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -448,7 +449,144 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(newbody))
+}
 
+func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationStorage) error {
+	url := ""
+	for _, field := range appAuth.Fields {
+		if field.Key == "authentication_url" {
+			log.Printf("Make request to %s", field.Value)
+			url = field.Value
+		}
+	}
+
+	if len(url) == 0 {
+		return errors.New("No authentication URL provided")
+	}
+
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	client := &http.Client{
+		Transport: transport,
+	}
+
+	type DataToSend struct {
+		Code         string `url:"code" json:"code"`
+		GrantType    string `url:"grant_type" json:"grant_type"`
+		ClientSecret string `url:"client_secret" json:"client_secret"`
+		ClientId     string `url:"client_id" json:"client_id"`
+		Scope        string `url:"scope" json:"scope"`
+		RedirectUri  string `url:"redirect_uri" json:"redirect_uri"`
+	}
+
+	requestData := DataToSend{
+		GrantType: "authorization_code",
+	}
+
+	//q := req.URL.Query()
+	for _, field := range appAuth.Fields {
+		if field.Key == "code" {
+			requestData.Code = field.Value
+		}
+
+		if field.Key == "client_secret" {
+			requestData.ClientSecret = field.Value
+		}
+
+		if field.Key == "client_id" {
+			//q.Add("client_id", field.Value)
+			requestData.ClientId = field.Value
+		}
+
+		if field.Key == "scope" {
+			//q.Add("scope", field.Value)
+			requestData.Scope = field.Value
+		}
+
+		if field.Key == "redirect_uri" {
+			//q.Add("redirect_uri", field.Value)
+			requestData.RedirectUri = field.Value
+		}
+	}
+
+	//req.URL.RawQuery = q.Encode()
+	//b, err := json.Marshal(requestData)
+	//if err != nil {
+	//	return err
+	//}
+
+	v, err := query.Values(requestData)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		url,
+		bytes.NewBuffer([]byte(v.Encode())),
+	)
+
+	if err != nil {
+		return err
+	}
+
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	newresp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	//log.Printf("Data: %#v", newresp)
+	//log.Printf("Data: %d", newresp.StatusCode)
+
+	respBody, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		return err
+	}
+
+	if newresp.StatusCode >= 300 {
+		return errors.New(fmt.Sprintf("Bad status code: %d. Message: %s", newresp.StatusCode, respBody))
+	}
+
+	log.Printf("\n\nRESPONSE: %s\n\n", string(respBody))
+	type Oauth2Resp struct {
+		TokenType    string `json:"token_type"`
+		Scope        string `json:"scope"`
+		ExpiresIn    int    `json:"expires_in"`
+		ExtExpiresIn int    `json:"ext_expires_in"`
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+	}
+
+	var oauthResp Oauth2Resp
+	err = json.Unmarshal(respBody, &oauthResp)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling (appauth oauth2): %s", err)
+		return err
+	}
+
+	//Fields            []AuthenticationStore `json:"fields" datastore:"fields"`
+	appAuth.Fields = []AuthenticationStore{}
+	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+		Key:   "access_token",
+		Value: oauthResp.AccessToken,
+	})
+	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+		Key:   "refresh_token",
+		Value: oauthResp.RefreshToken,
+	})
+
+	// FIXME: Set up auth for this with oauth2 in app?
+	// How does this work with the SDK?
+	appAuth.OrgId = user.ActiveOrg.Id
+	appAuth.Defined = true
+	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting up app auth %s: %s (oauth2)", appAuth.Id, err)
+		return err
+	}
+
+	//log.Printf("%#v", oauthResp)
+	return nil
 }
 
 func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
@@ -560,7 +698,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			log.Printf("[ERROR] Failed finding app %s which has auth after looping", appAuth.App.ID)
 			resp.WriteHeader(409)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding app %s (%s)"}`, appAuth.App.Name, appAuth.App.ID)))
 			return
 		}
 	} else {
@@ -581,6 +719,45 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] Org %s already has app %s active.", user.ActiveOrg.Id, app.ID)
 			}
 		}
+	}
+
+	log.Printf("[INFO] TYPE: %s", appAuth.Type)
+	if appAuth.Type == "oauth2" {
+		log.Printf("\n\nOAUTH222 for workflow %s\n\n", appAuth.ReferenceWorkflow)
+		workflow, err := GetWorkflow(ctx, appAuth.ReferenceWorkflow)
+		if err != nil {
+			log.Printf("[WARNING] WorkflowId %s doesn't exist (set oauth2)", appAuth.ReferenceWorkflow)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		log.Printf("Post workflow")
+
+		if user.Id != workflow.Owner || len(user.Id) == 0 {
+			if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (set oauth2)", user.Username, workflow.ID)
+			} else if workflow.Public {
+				log.Printf("[AUDIT] Letting user %s access workflow %s FOR AUTH because it's public", user.Username, workflow.ID)
+			} else {
+				log.Printf("[WARNING] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+		}
+
+		err = runOauth2Request(ctx, user, appAuth)
+		if err != nil {
+			log.Printf("[WARNING] Failed oauth2 request: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed authorization: %s"}`, err)))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully set up authentication", "id": "%s"}`, appAuth.Id)))
+		return
 	}
 
 	// Check if the items are correct
@@ -2668,12 +2845,17 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// 1. Find the auth in question
 		// 2. Update the node and workflow info in the auth
 		// 3. Get the values in the auth and add them to the action values
+		handleOauth := false
 		if len(action.AuthenticationId) > 0 {
 			//log.Printf("\n\nLen: %d", len(allAuths))
 			authFound := false
 			for _, auth := range allAuths {
 				if auth.Id == action.AuthenticationId {
 					authFound = true
+
+					if strings.ToLower(auth.Type) == "oauth2" {
+						handleOauth = true
+					}
 
 					// Updates the auth item itself IF necessary
 					go UpdateAppAuth(ctx, auth, workflow.ID, action.ID, true)
@@ -2833,12 +3015,17 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					// Handles check for required params
 					if !paramFound && param.Required {
-						//log.Printf("Appaction %s with required param %s doesn't exist.", action.Name, param.Name)
-						thisError := fmt.Sprintf("Parameter %s is required", param.Name)
-						action.Errors = append(action.Errors, thisError)
+						if handleOauth {
+							log.Printf("\n\n[WARNING] Handling oauth2 app saving, hence not throwing warnings\n\n")
+							workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration.", action.Name))
+						} else {
+							thisError := fmt.Sprintf("Parameter %s is required", param.Name)
+							action.Errors = append(action.Errors, thisError)
 
-						workflow.Errors = append(workflow.Errors, thisError)
-						action.IsValid = false
+							workflow.Errors = append(workflow.Errors, thisError)
+							action.IsValid = false
+						}
+
 						//newActions = append(newActions, action)
 						//resp.WriteHeader(401)
 						//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Appaction %s with required param '%s' is empty."}`, action.Name, param.Name)))

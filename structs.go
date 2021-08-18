@@ -147,9 +147,10 @@ type WorkflowAppAction struct {
 }
 
 type Authentication struct {
-	Required   bool                   `json:"required" datastore:"required" yaml:"required" `
-	Type       string                 `json:"type" datastore:"type" yaml:"type"`
-	Parameters []AuthenticationParams `json:"parameters" datastore:"parameters" yaml:"parameters"`
+	Required    bool                   `json:"required" datastore:"required" yaml:"required" `
+	Type        string                 `json:"type" datastore:"type" yaml:"type"`
+	RedirectUri string                 `json:"redirect_uri" datastore:"redirect_uri" yaml:"redirect_uri"`
+	Parameters  []AuthenticationParams `json:"parameters" datastore:"parameters" yaml:"parameters"`
 }
 
 type AuthenticationStore struct {
@@ -821,18 +822,20 @@ type File struct {
 }
 
 type AppAuthenticationStorage struct {
-	Active        bool                  `json:"active" datastore:"active"`
-	Label         string                `json:"label" datastore:"label"`
-	Id            string                `json:"id" datastore:"id"`
-	App           WorkflowApp           `json:"app" datastore:"app,noindex"`
-	Fields        []AuthenticationStore `json:"fields" datastore:"fields"`
-	Usage         []AuthenticationUsage `json:"usage" datastore:"usage"`
-	WorkflowCount int64                 `json:"workflow_count" datastore:"workflow_count"`
-	NodeCount     int64                 `json:"node_count" datastore:"node_count"`
-	OrgId         string                `json:"org_id" datastore:"org_id"`
-	Created       int64                 `json:"created" datastore:"created"`
-	Edited        int64                 `json:"edited" datastore:"edited"`
-	Defined       bool                  `json:"defined" datastore:"defined"`
+	Active            bool                  `json:"active" datastore:"active"`
+	Label             string                `json:"label" datastore:"label"`
+	Id                string                `json:"id" datastore:"id"`
+	App               WorkflowApp           `json:"app" datastore:"app,noindex"`
+	Fields            []AuthenticationStore `json:"fields" datastore:"fields"`
+	Usage             []AuthenticationUsage `json:"usage" datastore:"usage"`
+	WorkflowCount     int64                 `json:"workflow_count" datastore:"workflow_count"`
+	NodeCount         int64                 `json:"node_count" datastore:"node_count"`
+	OrgId             string                `json:"org_id" datastore:"org_id"`
+	Created           int64                 `json:"created" datastore:"created"`
+	Edited            int64                 `json:"edited" datastore:"edited"`
+	Defined           bool                  `json:"defined" datastore:"defined"`
+	Type              string                `json:"type" datastore:"type"`
+	ReferenceWorkflow string                `json:"reference_workflow" datastore:"reference_workflow"`
 }
 
 type PasswordChange struct {
