@@ -335,10 +335,10 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 				}
 
 				if trigger.ID == branch.SourceID {
-					log.Printf("Trigger %s is the source!", trigger.AppName)
+					log.Printf("[INFO] Trigger %s is the source!", trigger.AppName)
 					sourceFound = true
 				} else if trigger.ID == branch.DestinationID {
-					log.Printf("Trigger %s is the destination!", trigger.AppName)
+					log.Printf("[INFO] Trigger %s is the destination!", trigger.AppName)
 					destinationFound = true
 				}
 			}
@@ -3822,31 +3822,63 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 
 		return executions, nil
 	} else {
-		q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Limit(30)
-		_, err = project.Dbclient.GetAll(ctx, q, &executions)
-		if err != nil && len(executions) == 0 {
-			log.Printf("Failed initial execution grabber: %s", err)
-			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-				q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Limit(15)
-				_, err = project.Dbclient.GetAll(ctx, q, &executions)
-				if err != nil && len(executions) == 0 {
-					log.Printf("[WARNING] Error getting workflowexec (2): %s", err)
-					return executions, err
-				}
-			} else if strings.Contains(fmt.Sprintf("%s", err), "FailedPrecondition") {
-				//log.Printf("[INFO] Failed precondition in workflowexecs: %s", err)
+		// FIXME: Sorting doesn't seem to work...
+		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
+		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
+		max := 50
+		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
 
-				q = datastore.NewQuery("workflowexecution").Filter("workflow_id =", workflowId).Limit(25)
-				_, err = project.Dbclient.GetAll(ctx, q, &executions)
-				if err != nil && len(executions) == 0 {
-					log.Printf("[WARNING] Error getting workflowexec (3): %s", err)
-					return executions, err
+			for {
+				innerWorkflow := WorkflowExecution{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					//log.Printf("Error: %s", err)
+					break
+					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					//} else {
+					//	//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					//	break
+					//}
 				}
+
+				executions = append(executions, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			if len(executions) >= max {
+				break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[WARNING] Cursorerror: %s", err)
+				break
 			} else {
-				log.Printf("[WARNING] Error getting workflowexec (4): %s", err)
-				return executions, err
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
 			}
 		}
+
+		//log.Printf("Got %d executions", len(executions))
+		slice.Sort(executions[:], func(i, j int) bool {
+			return executions[i].StartedAt > executions[j].StartedAt
+		})
 	}
 
 	return executions, nil

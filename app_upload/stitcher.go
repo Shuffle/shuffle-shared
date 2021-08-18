@@ -798,7 +798,7 @@ func deployAll() {
 }
 
 func main() {
-	addRequirements("generated_apps/shuffle-tools_1.0.0/requirements.txt")
+	//addRequirements("generated_apps/shuffle-tools_1.0.0/requirements.txt")
 	if len(os.Args) < 3 {
 		log.Printf("[WARNING] Missing arguments. Required: go run stitcher.go APIKEY URL")
 		return
@@ -807,11 +807,11 @@ func main() {
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
 	log.Printf("\n\n[INFO] Running with: \nUrl: %s\nApikey: %s\n\n", baseUrl, apikey)
-	deployAll()
-	return
+	//deployAll()
+	//return
 
-	appname := "twitter"
-	appversion := "1.0.0"
+	appname := "shuffle-tools"
+	appversion := "1.1.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

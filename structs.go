@@ -148,6 +148,7 @@ type WorkflowAppAction struct {
 
 type Authentication struct {
 	Required   bool                   `json:"required" datastore:"required" yaml:"required" `
+	Type       string                 `json:"type" datastore:"type" yaml:"type"`
 	Parameters []AuthenticationParams `json:"parameters" datastore:"parameters" yaml:"parameters"`
 }
 
@@ -630,6 +631,7 @@ type WorkflowExecution struct {
 	Results            []ActionResult `json:"results" datastore:"results,noindex"`
 	ExecutionVariables []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
 	OrgId              string         `json:"org_id" datastore:"org_id"`
+	SubExecutionCount  int64          `json:"sub_execution_count" yaml:"sub_execution_count"`
 }
 
 // This is for the nodes in a workflow, NOT the app action itself.
