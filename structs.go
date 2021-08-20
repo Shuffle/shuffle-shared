@@ -150,6 +150,8 @@ type Authentication struct {
 	Required    bool                   `json:"required" datastore:"required" yaml:"required" `
 	Type        string                 `json:"type" datastore:"type" yaml:"type"`
 	RedirectUri string                 `json:"redirect_uri" datastore:"redirect_uri" yaml:"redirect_uri"`
+	TokenUri    string                 `json:"token_uri" datastore:"token_uri" yaml:"token_uri"`
+	Scope       []string               `json:"scope" datastore:"scope" yaml:"scope"`
 	Parameters  []AuthenticationParams `json:"parameters" datastore:"parameters" yaml:"parameters"`
 }
 
