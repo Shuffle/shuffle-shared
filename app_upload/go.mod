@@ -16,6 +16,7 @@ require (
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/elastic/go-elasticsearch/v8 v8.0.0-20210519083322-55daf7425ecb // indirect
 	github.com/frikky/shuffle-shared v0.0.37
+	github.com/go-git/go-git/v5 v5.4.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.0.1 // indirect
@@ -23,5 +24,6 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sirupsen/logrus v1.8.1 // indirect
 	google.golang.org/api v0.42.0
+	gopkg.in/src-d/go-git.v4 v4.13.1 // indirect
 	gopkg.in/yaml.v2 v2.4.0
 )

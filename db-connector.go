@@ -2942,6 +2942,12 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthenticationStorage, id string) error {
 	nameKey := "workflowappauth"
+	timeNow := int64(time.Now().Unix())
+	if workflowappauth.Created == 0 {
+		workflowappauth.Created = timeNow
+	}
+
+	workflowappauth.Edited = timeNow
 
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
