@@ -616,27 +616,28 @@ type Variable struct {
 }
 
 type WorkflowExecution struct {
-	Type               string         `json:"type" datastore:"type"`
-	Status             string         `json:"status" datastore:"status"`
-	Start              string         `json:"start" datastore:"start"`
-	ExecutionArgument  string         `json:"execution_argument" datastore:"execution_argument,noindex"`
-	ExecutionId        string         `json:"execution_id" datastore:"execution_id"`
-	ExecutionSource    string         `json:"execution_source" datastore:"execution_source"`
-	ExecutionParent    string         `json:"execution_parent" datastore:"execution_parent"`
-	ExecutionOrg       string         `json:"execution_org" datastore:"execution_org"`
-	WorkflowId         string         `json:"workflow_id" datastore:"workflow_id"`
-	LastNode           string         `json:"last_node" datastore:"last_node"`
-	Authorization      string         `json:"authorization" datastore:"authorization"`
-	Result             string         `json:"result" datastore:"result,noindex"`
-	StartedAt          int64          `json:"started_at" datastore:"started_at"`
-	CompletedAt        int64          `json:"completed_at" datastore:"completed_at"`
-	ProjectId          string         `json:"project_id" datastore:"project_id"`
-	Locations          []string       `json:"locations" datastore:"locations"`
-	Workflow           Workflow       `json:"workflow" datastore:"workflow,noindex"`
-	Results            []ActionResult `json:"results" datastore:"results,noindex"`
-	ExecutionVariables []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
-	OrgId              string         `json:"org_id" datastore:"org_id"`
-	SubExecutionCount  int64          `json:"sub_execution_count" yaml:"sub_execution_count"`
+	Type                string         `json:"type" datastore:"type"`
+	Status              string         `json:"status" datastore:"status"`
+	Start               string         `json:"start" datastore:"start"`
+	ExecutionArgument   string         `json:"execution_argument" datastore:"execution_argument,noindex"`
+	ExecutionId         string         `json:"execution_id" datastore:"execution_id"`
+	ExecutionSource     string         `json:"execution_source" datastore:"execution_source"`
+	ExecutionParent     string         `json:"execution_parent" datastore:"execution_parent"`
+	ExecutionOrg        string         `json:"execution_org" datastore:"execution_org"`
+	WorkflowId          string         `json:"workflow_id" datastore:"workflow_id"`
+	LastNode            string         `json:"last_node" datastore:"last_node"`
+	Authorization       string         `json:"authorization" datastore:"authorization"`
+	Result              string         `json:"result" datastore:"result,noindex"`
+	StartedAt           int64          `json:"started_at" datastore:"started_at"`
+	CompletedAt         int64          `json:"completed_at" datastore:"completed_at"`
+	ProjectId           string         `json:"project_id" datastore:"project_id"`
+	Locations           []string       `json:"locations" datastore:"locations"`
+	Workflow            Workflow       `json:"workflow" datastore:"workflow,noindex"`
+	Results             []ActionResult `json:"results" datastore:"results,noindex"`
+	ExecutionVariables  []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
+	OrgId               string         `json:"org_id" datastore:"org_id"`
+	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"`
+	ExecutionSourceNode string         `json:"execution_source_node" yaml:"execution_source_node"`
 }
 
 // This is for the nodes in a workflow, NOT the app action itself.
@@ -758,6 +759,7 @@ type Workflow struct {
 	Categories           Categories `json:"categories" datastore:"categories"`
 	ExampleArgument      string     `json:"example_argument" datastore:"example_argument,noindex"`
 	Public               bool       `json:"public" datastore:"public"`
+	DefaultReturnValue   string     `json:"default_return_value" datastore:"default_return_value"`
 	ContactInfo          struct {
 		Name string `json:"name" datastore:"name" yaml:"name"`
 		Url  string `json:"url" datastore:"url" yaml:"url"`

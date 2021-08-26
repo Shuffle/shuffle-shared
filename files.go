@@ -522,6 +522,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		io.Copy(resp, Openfile) //'Copy' the file to the client
 	}
 }
+
 func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {

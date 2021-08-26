@@ -2250,6 +2250,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	//log.Printf("BODY: %s", body)
+
 	err = json.Unmarshal([]byte(body), &workflow)
 	if err != nil {
 		log.Printf(string(body))
@@ -2321,11 +2323,16 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(workflow.Name) == 0 {
+	if len(workflow.Actions) == 0 {
 		log.Printf("[WARNING] Can't save workflow without a single action.")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow needs at least one action"}`))
 		return
+	}
+
+	if len(workflow.DefaultReturnValue) > 0 && len(workflow.DefaultReturnValue) < 200 {
+		log.Printf("[INFO] Set default return value to on failure to (%s): %s", workflow.ID, workflow.DefaultReturnValue)
+		//workflow.DefaultReturnValue
 	}
 
 	log.Printf("[INFO] Saving workflow %s with %d actions and %d triggers", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
@@ -5020,7 +5027,16 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if workflowExecution.Status == "ABORTED" || workflowExecution.Status == "FAILURE" || workflowExecution.Status == "FINISHED" {
+		//err = SetWorkflowExecution(ctx, *workflowExecution, true)
+		//if err != nil {
+		//}
 		log.Printf("[INFO] Stopped execution of %s with status %s", executionId, workflowExecution.Status)
+		if len(workflowExecution.ExecutionParent) > 0 {
+		}
+
+		//ExecutionSource    string         `json:"execution_source" datastore:"execution_source"`
+		//ExecutionParent    string         `json:"execution_parent" datastore:"execution_parent"`
+
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Status for %s is %s, which can't be aborted."}`, executionId, workflowExecution.Status)))
 		return
@@ -5803,7 +5819,16 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-		//log.Printf("Updating execution variable")
+		log.Printf("\n\nSETTING RESULTS: %#v", workflowExecution.Results)
+		if len(workflowExecution.Results) > 0 {
+			lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
+			log.Printf("LAST: %s", lastResult)
+		}
+
+		//for _, item := range workflowExecution.Results {
+
+		//}
+		//workflowExecution.Result = workflowExecution.Workflow.DefaultReturnValue
 		actionResult.Action.ExecutionVariable.Value = actionResult.Result
 
 		foundIndex := -1
@@ -5866,9 +5891,13 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// WAY lower timeout in cloud
 			// Should probably change it for enterprise customers?
 			// Idk how to handle this in cloud yet.
-			subflowTimeout := 300
+			// FIXME: Check "if finished {" location, and the ExecutionParent for realtime data
+			// E.g. the subitem itself updating it
+			// 60*30 = 1800 = 30 minutes of waiting potentially
+			// This is NOT ideal.
+			subflowTimeout := 1800
 			if project.Environment == "cloud" {
-				subflowTimeout = 15
+				subflowTimeout = 120
 			}
 
 			subflowResult := SubflowData{}
@@ -6129,6 +6158,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Should set workflowExecution and exit all running functions", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			workflowExecution.Status = actionResult.Status
 			workflowExecution.LastNode = actionResult.Action.ID
+
+			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
+				workflowExecution.Result = workflowExecution.Workflow.DefaultReturnValue
+			}
 			// Find underlying nodes and add them
 		} else {
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
@@ -6423,6 +6456,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		} else {
 			log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
 			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+			//if subresult.Status == "SKIPPED" subresult.Status != "FAILURE" {
 		}
 	} else {
 		log.Printf("[INFO] Setting value of %s (INIT - %s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
@@ -6511,7 +6545,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("Finished? %#v", finished)
 		if finished {
 			dbSave = true
-			log.Printf("[INFO] Execution of %s finished.", workflowExecution.ExecutionId)
+			log.Printf("[INFO] Execution of %s in workflow %s finished.", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
 
 			for actionIndex, action := range workflowExecution.Workflow.Actions {
 				for parameterIndex, param := range action.Parameters {
@@ -6521,6 +6555,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 				}
 			}
+
 			//log.Println("Might be finished based on length of results and everything being SUCCESS or FINISHED - VERIFY THIS. Setting status to finished.")
 
 			workflowExecution.Result = lastResult
@@ -6530,6 +6565,35 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				workflowExecution.LastNode = actionResult.Action.ID
 			}
 
+			// 1. Check if the LAST node is FAILURE or ABORTED or SKIPPED
+			// 2. If it's either of those, set the executionResult default value to DefaultReturnValue
+
+			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
+				log.Printf("\n\nCHECKING RESULT FOR LAST NODE: %s\n\n", workflowExecution.Workflow.DefaultReturnValue)
+				for _, result := range workflowExecution.Results {
+					if result.Action.ID == workflowExecution.LastNode {
+						if result.Status == "ABORTED" || result.Status == "FAILURE" || result.Status == "SKIPPED" {
+							workflowExecution.Result = workflowExecution.Workflow.DefaultReturnValue
+							if len(workflowExecution.ExecutionParent) > 0 {
+								log.Printf("FOUND SUBFLOW WITH EXECUTIONPARENT %s!", workflowExecution.ExecutionParent)
+							}
+						}
+						break
+					}
+				}
+			}
+
+			if len(workflowExecution.ExecutionParent) > 0 {
+				log.Printf("\n\nFound execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
+				// Should look for the source node in parent workflow's execution
+				//parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
+				//if err == nil {
+				//	for _, item := range parentExecution.Results {
+				//		//if item.Result.
+				//		//log.Printf("Found item!!
+				//	}
+				//}
+			}
 		}
 	}
 
