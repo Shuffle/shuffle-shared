@@ -1272,7 +1272,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 			}
 		}
 
-		log.Printf("[DEBUG] Deleted %s (%s)", strings.ToLower(entity), value)
+		//log.Printf("[DEBUG] Deleted %s (%s)", strings.ToLower(entity), value)
 	} else {
 		key1 := datastore.NameKey(entity, value, nil)
 		err = project.Dbclient.Delete(ctx, key1)
@@ -1924,7 +1924,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 				return environments, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache in GET environments: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache in GET environments: %s", err)
 		}
 	}
 
@@ -2739,7 +2739,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 	}
 
 	if project.CacheDb {
-		log.Printf("[INFO] Setting %d apps in cache for 10 minutes for %s", len(allApps), cacheKey)
+		//log.Printf("[INFO] Setting %d apps in cache for 10 minutes for %s", len(allApps), cacheKey)
 
 		//requestCache.Set(cacheKey, &apps, cache.DefaultExpiration)
 		data, err := json.Marshal(allApps)

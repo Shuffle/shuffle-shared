@@ -751,7 +751,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			} else if workflow.Public {
 				log.Printf("[AUDIT] Letting user %s access workflow %s FOR AUTH because it's public", user.Username, workflow.ID)
 			} else {
-				log.Printf("[WARNING] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
+				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
@@ -1364,9 +1364,9 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	// FIXME - have a check for org etc too..
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing %s executions as admin (get executions)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] User %s is accessing %s executions as admin (get executions)", user.Username, workflow.ID)
 		} else {
-			log.Printf("[WARNING] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -2263,7 +2263,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Id != tmpworkflow.Owner {
 		if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID
 		} else if tmpworkflow.Public {
 			//log.Printf("\n\nSHOULD CREATE A NEW WORKFLOW FOR THE USER :O\n\n")
@@ -3890,11 +3890,11 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Check workflow.Sharing == private / public / org  too
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
-			log.Printf("[INFO] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 		} else {
-			log.Printf("[WARNING] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -5005,7 +5005,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	if workflowExecution.Authorization != parsedKey {
 		user, err := HandleApiAuthentication(resp, request)
 		if err != nil {
-			log.Printf("[WARNING] Api authentication failed in abort workflow: %s", err)
+			log.Printf("[AUDIT] Api authentication failed in abort workflow: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -5014,9 +5014,9 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("User: %s, org: %s vs %s", user.Role, workflowExecution.Workflow.OrgId, user.ActiveOrg.Id)
 		if user.Id != workflowExecution.Workflow.Owner {
 			if workflowExecution.Workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-				log.Printf("[INFO] User %s is aborting execution %s as admin", user.Username, workflowExecution.Workflow.ID)
+				log.Printf("[AUDIT] User %s is aborting execution %s as admin", user.Username, workflowExecution.Workflow.ID)
 			} else {
-				log.Printf("[INFO] Wrong user (%s) for ABORT of workflowexecution workflow %s", user.Username, workflowExecution.Workflow.ID)
+				log.Printf("[AUDIT] Wrong user (%s) for ABORT of workflowexecution workflow %s", user.Username, workflowExecution.Workflow.ID)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
@@ -5795,6 +5795,202 @@ func checkUsername(Username string) error {
 // GetWorkflow
 // executeWorkflow
 
+// This should happen locally.. Meaning, polling may be stupid.
+// Let's do it anyway, since it seems like the best way to scale
+// without remoting problems and the like.
+
+// FIXME: Does this work from a Worker?
+func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
+	log.Printf("\n\nPARENT: %s, AUTH: %s, parentNode: %s\nVALUE: %s\n\n", executionParent, parentAuth, parentNode, returnValue)
+	backendUrl := os.Getenv("BASE_URL")
+	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
+	//log.Printf("[DEBUG] ResultURL: %s", backendUrl)
+	topClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+	newExecution := WorkflowExecution{}
+
+	httpProxy := os.Getenv("HTTP_PROXY")
+	httpsProxy := os.Getenv("HTTPS_PROXY")
+	if len(httpProxy) > 0 || len(httpsProxy) > 0 {
+		topClient = &http.Client{}
+	} else {
+		if len(httpProxy) > 0 {
+			log.Printf("Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+		}
+		if len(httpsProxy) > 0 {
+			log.Printf("Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+		}
+	}
+
+	requestData := ActionResult{
+		Authorization: parentAuth,
+		ExecutionId:   executionParent,
+	}
+	data, err := json.Marshal(requestData)
+	if err != nil {
+		log.Printf("[WARNING] Failed init marshal: %s", err)
+		return err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		resultUrl,
+		bytes.NewBuffer([]byte(data)),
+	)
+
+	newresp, err := topClient.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed making request: %s", err)
+		return err
+	}
+
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading body: %s", err)
+		return err
+	}
+	//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
+
+	if newresp.StatusCode != 200 {
+		log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
+		return errors.New(fmt.Sprintf("Bad statuscode: %s", newresp.StatusCode))
+	}
+
+	err = json.Unmarshal(body, &newExecution)
+	if err != nil {
+		log.Printf("[ERROR] Failed newexecutuion unmarshal: %s", err)
+		return err
+	}
+
+	foundResult := ActionResult{}
+	for _, result := range newExecution.Results {
+		if result.Action.ID == parentNode {
+			foundResult = result
+			break
+		}
+	}
+
+	//log.Printf("FOUND RESULT: %#v", foundResult)
+	isLooping := false
+	selectedTrigger := Trigger{}
+	for _, trigger := range newExecution.Workflow.Triggers {
+		if trigger.ID == parentNode {
+			selectedTrigger = trigger
+			for _, param := range trigger.Parameters {
+				if param.Name == "argument" && strings.Contains(param.Value, ".#") {
+					isLooping = true
+					break
+				}
+			}
+
+			break
+		}
+	}
+
+	if isLooping {
+		log.Printf("\n\nITS LOOPING!")
+	}
+
+	// UPDATE value
+
+	actionValue := SubflowData{
+		Success:       true,
+		ExecutionId:   executionParent,
+		Authorization: parentAuth,
+		Result:        returnValue,
+	}
+
+	parsedActionValue, err := json.Marshal(actionValue)
+	if err != nil {
+		return err
+	}
+
+	sendRequest := false
+	resultData := []byte{}
+	if len(foundResult.Action.ID) == 0 {
+		log.Printf("Couldn't find the result!")
+		parsedAction := Action{
+			Label:       selectedTrigger.Label,
+			ID:          selectedTrigger.ID,
+			Name:        "run_subflow",
+			AppName:     "shuffle-subflow",
+			AppVersion:  "1.0.0",
+			Environment: selectedTrigger.Environment,
+			Parameters:  []WorkflowAppActionParameter{},
+		}
+
+		timeNow := time.Now().Unix()
+		newResult := ActionResult{
+			Action:        parsedAction,
+			ExecutionId:   executionParent,
+			Authorization: parentAuth,
+			Result:        string(parsedActionValue),
+			StartedAt:     timeNow,
+			CompletedAt:   timeNow,
+			Status:        "SUCCESS",
+		}
+
+		resultData, err = json.Marshal(newResult)
+		if err != nil {
+			return err
+		}
+
+		sendRequest = true
+	} else {
+		log.Printf("Should UPDATE parentResult: %s", string(parsedActionValue))
+		foundResult.Result = string(parsedActionValue)
+		resultData, err = json.Marshal(foundResult)
+		if err != nil {
+			return err
+		}
+
+		sendRequest = true
+	}
+
+	if sendRequest && len(resultData) > 0 {
+		//log.Printf("SHOULD SEND REQUEST!")
+		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
+		req, err := http.NewRequest(
+			"POST",
+			streamUrl,
+			bytes.NewBuffer([]byte(resultData)),
+		)
+
+		if err != nil {
+			log.Printf("Error building subflow request: %s", err)
+			return err
+		}
+
+		newresp, err := topClient.Do(req)
+		if err != nil {
+			log.Printf("Error running subflow request: %s", err)
+			return err
+		}
+
+		body, err := ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			log.Printf("Failed reading body when waiting: %s", err)
+			return err
+		}
+
+		log.Printf("[INFO] ADDED NEW ACTION REUSLT (%d): %s", newresp.StatusCode, body)
+	} else {
+		log.Printf("[INFO] NOT sending request because data len is %d and request is %#v", len(resultData), sendRequest)
+	}
+
+	return nil
+
+	//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
+	//if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
+	//	subflowResults[subflowIndex].Result = newExecution.Result
+	//	updated = true
+	//	finished += 1
+	//}
+}
+
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool) (*WorkflowExecution, bool, error) {
 
@@ -5864,290 +6060,308 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
+	// Used for testing subflow shit
+	//if strings.Contains(actionResult.Action.Label, "Shuffle Workflow_30") {
+	//	log.Printf("RESULT FOR %s: %#v", actionResult.Action.Label, actionResult.Result)
+	//	if !strings.Contains(actionResult.Result, "\"result\"") {
+	//		log.Printf("NO RESULT - RETURNING!")
+	//		return &workflowExecution, false, nil
+	//	}
+	//}
+
 	// Fills in data from subflows, whether they're loops or not
+	// Deprecated! Now runs updateExecutionParent() instead
+	// Update: handling this farther down the function
 	if actionResult.Status == "SUCCESS" && actionResult.Action.AppName == "shuffle-subflow" {
-		runCheck := false
-		for _, param := range actionResult.Action.Parameters {
-			if param.Name == "check_result" {
-				//log.Printf("[INFO] RESULT: %#v", param)
-				if param.Value == "true" {
-					runCheck = true
-				}
+		//runCheck := false
+		//for _, param := range actionResult.Action.Parameters {
+		//	if param.Name == "check_result" {
+		//		//log.Printf("[INFO] RESULT: %#v", param)
+		//		if param.Value == "true" {
+		//			runCheck = true
+		//		}
 
-				break
-			}
-		}
+		//		break
+		//	}
+		//}
 
-		//log.Printf("\n\nRUNCHECK: %#v\n\n", runCheck)
-		if runCheck {
-			log.Printf("[INFO] Validating subflow result in workflow %s", workflowExecution.ExecutionId)
-			type SubflowData struct {
-				Success       bool   `json:"success"`
-				ExecutionId   string `json:"execution_id"`
-				Authorization string `json:"authorization"`
-				Result        string `json:"result"`
-			}
+		//_ = runCheck
+		////log.Printf("\n\nRUNCHECK: %#v\n\n", runCheck)
+		//if runCheck {
+		//	log.Printf("[WARNING] Sinkholing request IF the subflow-result DOESNT have result. Value: %s", actionResult.Result)
+		//	var subflowData SubflowData
+		//	err = json.Unmarshal([]byte(actionResult.Result), &subflowData)
+		//	if err == nil {
+		//		if len(subflowData.Result) == 0 {
+		//			//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
+		//			log.Printf("\n\nNO RESULT FOR SUBFLOW RESULT - RETURNING\n\n")
+		//			return &workflowExecution, false, nil
+		//		}
+		//	}
+		//	//type SubflowData struct {
+		//}
+		//	log.Printf("[INFO] Validating subflow result in workflow %s", workflowExecution.ExecutionId)
 
-			// WAY lower timeout in cloud
-			// Should probably change it for enterprise customers?
-			// Idk how to handle this in cloud yet.
-			// FIXME: Check "if finished {" location, and the ExecutionParent for realtime data
-			// E.g. the subitem itself updating it
-			// 60*30 = 1800 = 30 minutes of waiting potentially
-			// This is NOT ideal.
-			subflowTimeout := 1800
-			if project.Environment == "cloud" {
-				subflowTimeout = 120
-			}
+		//	// WAY lower timeout in cloud
+		//	// Should probably change it for enterprise customers?
+		//	// Idk how to handle this in cloud yet.
+		//	// FIXME: Check "if finished {" location, and the ExecutionParent for realtime data
+		//	// E.g. the subitem itself updating it
+		//	// 60*30 = 1800 = 30 minutes of waiting potentially
+		//	// This is NOT ideal.
+		//	subflowTimeout := 1800
+		//	if project.Environment == "cloud" {
+		//		subflowTimeout = 120
+		//	}
 
-			subflowResult := SubflowData{}
-			subflowResults := []SubflowData{}
-			err = json.Unmarshal([]byte(actionResult.Result), &subflowResult)
+		//	subflowResult := SubflowData{}
+		//	subflowResults := []SubflowData{}
+		//	err = json.Unmarshal([]byte(actionResult.Result), &subflowResult)
 
-			// This is just in case it's running in the worker
-			backendUrl := os.Getenv("BASE_URL")
-			resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
-			log.Printf("[DEBUG] ResultURL: %s", backendUrl)
-			topClient := &http.Client{
-				Transport: &http.Transport{
-					Proxy: nil,
-				},
-			}
-			newExecution := WorkflowExecution{}
+		//	// This is just in case it's running in the worker
+		//	backendUrl := os.Getenv("BASE_URL")
+		//	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
+		//	log.Printf("[DEBUG] ResultURL: %s", backendUrl)
+		//	topClient := &http.Client{
+		//		Transport: &http.Transport{
+		//			Proxy: nil,
+		//		},
+		//	}
+		//	newExecution := WorkflowExecution{}
 
-			httpProxy := os.Getenv("HTTP_PROXY")
-			httpsProxy := os.Getenv("HTTPS_PROXY")
-			if len(httpProxy) > 0 || len(httpsProxy) > 0 {
-				topClient = &http.Client{}
-			} else {
-				if len(httpProxy) > 0 {
-					log.Printf("Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
-				}
-				if len(httpsProxy) > 0 {
-					log.Printf("Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
-				}
-			}
+		//	httpProxy := os.Getenv("HTTP_PROXY")
+		//	httpsProxy := os.Getenv("HTTPS_PROXY")
+		//	if len(httpProxy) > 0 || len(httpsProxy) > 0 {
+		//		topClient = &http.Client{}
+		//	} else {
+		//		if len(httpProxy) > 0 {
+		//			log.Printf("Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+		//		}
+		//		if len(httpsProxy) > 0 {
+		//			log.Printf("Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+		//		}
+		//	}
 
-			if err != nil {
-				subflowResults = []SubflowData{}
-				err = json.Unmarshal([]byte(actionResult.Result), &subflowResults)
-				if err == nil {
-					//log.Printf("[INFO] Should get data for %d subflow executions", len(subflowResults))
-					count := 0
-					updated := false
-					//newResult := ""
+		//	if err != nil {
+		//		subflowResults = []SubflowData{}
+		//		err = json.Unmarshal([]byte(actionResult.Result), &subflowResults)
+		//		if err == nil {
+		//			//log.Printf("[INFO] Should get data for %d subflow executions", len(subflowResults))
+		//			count := 0
+		//			updated := false
+		//			//newResult := ""
 
-					for {
-						time.Sleep(3 * time.Second)
+		//			for {
+		//				time.Sleep(3 * time.Second)
 
-						finished := 0
-						for subflowIndex, subflowResult := range subflowResults {
-							if !subflowResult.Success || len(subflowResult.Result) != 0 {
-								finished += 1
-								continue
-							}
+		//				finished := 0
+		//				for subflowIndex, subflowResult := range subflowResults {
+		//					if !subflowResult.Success || len(subflowResult.Result) != 0 {
+		//						finished += 1
+		//						continue
+		//					}
 
-							// Have to get from backend IF no environment (worker, onprem)
-							if project.Environment == "" {
-								data, err := json.Marshal(subflowResult)
-								if err != nil {
-									log.Printf("[WARNING] Failed init marshal: %s", err)
-									continue
-								}
+		//					// Have to get from backend IF no environment (worker, onprem)
+		//					if project.Environment == "" {
+		//						data, err := json.Marshal(subflowResult)
+		//						if err != nil {
+		//							log.Printf("[WARNING] Failed init marshal: %s", err)
+		//							continue
+		//						}
 
-								req, err := http.NewRequest(
-									"POST",
-									resultUrl,
-									bytes.NewBuffer([]byte(data)),
-								)
+		//						req, err := http.NewRequest(
+		//							"POST",
+		//							resultUrl,
+		//							bytes.NewBuffer([]byte(data)),
+		//						)
 
-								newresp, err := topClient.Do(req)
-								if err != nil {
-									log.Printf("[ERROR] Failed making request: %s", err)
-									continue
-								}
+		//						newresp, err := topClient.Do(req)
+		//						if err != nil {
+		//							log.Printf("[ERROR] Failed making request: %s", err)
+		//							continue
+		//						}
 
-								body, err := ioutil.ReadAll(newresp.Body)
-								if err != nil {
-									log.Printf("[ERROR] Failed reading body: %s", err)
-									continue
-								}
+		//						body, err := ioutil.ReadAll(newresp.Body)
+		//						if err != nil {
+		//							log.Printf("[ERROR] Failed reading body: %s", err)
+		//							continue
+		//						}
 
-								if newresp.StatusCode != 200 {
-									log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
-									continue
-								}
+		//						if newresp.StatusCode != 200 {
+		//							log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
+		//							continue
+		//						}
 
-								err = json.Unmarshal(body, &newExecution)
-								if err != nil {
-									log.Printf("[ERROR] Failed newexecutuion unmarshal: %s", err)
-									continue
-								}
+		//						err = json.Unmarshal(body, &newExecution)
+		//						if err != nil {
+		//							log.Printf("[ERROR] Failed newexecutuion unmarshal: %s", err)
+		//							continue
+		//						}
 
-								//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
-								if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
-									subflowResults[subflowIndex].Result = newExecution.Result
-									updated = true
-									finished += 1
-								}
+		//						//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
+		//						if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
+		//							subflowResults[subflowIndex].Result = newExecution.Result
+		//							updated = true
+		//							finished += 1
+		//						}
 
-							} else {
-								tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
-								newExecution := *tmpExecution
-								if err != nil {
-									log.Printf("[WARNING] Error getting subflow data: %s", err)
-								} else {
-									//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
-									if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
-										subflowResults[subflowIndex].Result = newExecution.Result
-										updated = true
-										finished += 1
-									}
-								}
-							}
-						}
+		//					} else {
+		//						tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+		//						newExecution := *tmpExecution
+		//						if err != nil {
+		//							log.Printf("[WARNING] Error getting subflow data: %s", err)
+		//						} else {
+		//							//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
+		//							if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
+		//								subflowResults[subflowIndex].Result = newExecution.Result
+		//								updated = true
+		//								finished += 1
+		//							}
+		//						}
+		//					}
+		//				}
 
-						if finished == len(subflowResults) {
-							break
-						}
+		//				if finished == len(subflowResults) {
+		//					break
+		//				}
 
-						if count >= subflowTimeout/3 {
-							break
-						}
+		//				if count >= subflowTimeout/3 {
+		//					break
+		//				}
 
-						count += 1
-					}
+		//				count += 1
+		//			}
 
-					if updated {
-						newJson, err := json.Marshal(subflowResults)
-						if err == nil {
-							actionResult.Result = string(newJson)
-						} else {
-							log.Printf("[WARNING] Failed marshalling subflowresultS: %s", err)
-						}
-					}
-				}
-			}
+		//			if updated {
+		//				newJson, err := json.Marshal(subflowResults)
+		//				if err == nil {
+		//					actionResult.Result = string(newJson)
+		//				} else {
+		//					log.Printf("[WARNING] Failed marshalling subflowresultS: %s", err)
+		//				}
+		//			}
+		//		}
+		//	}
 
-			if err == nil && subflowResult.Success == true && len(subflowResult.ExecutionId) > 0 {
-				log.Printf("[DEBUG] Should get data for subflow execution %s", subflowResult.ExecutionId)
-				count := 0
-				for {
-					time.Sleep(3 * time.Second)
+		//	if err == nil && subflowResult.Success == true && len(subflowResult.ExecutionId) > 0 {
+		//		log.Printf("[DEBUG] Should get data for subflow execution %s", subflowResult.ExecutionId)
+		//		count := 0
+		//		for {
+		//			time.Sleep(3 * time.Second)
 
-					if count >= subflowTimeout/3 {
-						break
-					}
+		//			if count >= subflowTimeout/3 {
+		//				break
+		//			}
 
-					// Worker & onprem
-					if project.Environment == "" {
-						data, err := json.Marshal(subflowResult)
-						if err != nil {
-							log.Printf("[WARNING] Failed init marshal: %s", err)
-							count += 1
-							continue
-						}
+		//			// Worker & onprem
+		//			if project.Environment == "" {
+		//				data, err := json.Marshal(subflowResult)
+		//				if err != nil {
+		//					log.Printf("[WARNING] Failed init marshal: %s", err)
+		//					count += 1
+		//					continue
+		//				}
 
-						req, err := http.NewRequest(
-							"POST",
-							resultUrl,
-							bytes.NewBuffer([]byte(data)),
-						)
+		//				req, err := http.NewRequest(
+		//					"POST",
+		//					resultUrl,
+		//					bytes.NewBuffer([]byte(data)),
+		//				)
 
-						newresp, err := topClient.Do(req)
-						if err != nil {
-							log.Printf("[ERROR] Failed making request: %s", err)
-							count += 1
-							continue
-						}
+		//				newresp, err := topClient.Do(req)
+		//				if err != nil {
+		//					log.Printf("[ERROR] Failed making request: %s", err)
+		//					count += 1
+		//					continue
+		//				}
 
-						body, err := ioutil.ReadAll(newresp.Body)
-						if err != nil {
-							log.Printf("[ERROR] Failed reading body: %s", err)
-							count += 1
-							continue
-						}
+		//				body, err := ioutil.ReadAll(newresp.Body)
+		//				if err != nil {
+		//					log.Printf("[ERROR] Failed reading body: %s", err)
+		//					count += 1
+		//					continue
+		//				}
 
-						if newresp.StatusCode != 200 {
-							log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
-							count += 1
-							continue
-						}
+		//				if newresp.StatusCode != 200 {
+		//					log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
+		//					count += 1
+		//					continue
+		//				}
 
-						err = json.Unmarshal(body, &newExecution)
-						if err != nil {
-							log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
-							count += 1
-							continue
-						}
+		//				err = json.Unmarshal(body, &newExecution)
+		//				if err != nil {
+		//					log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
+		//					count += 1
+		//					continue
+		//				}
 
-						//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
-						if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
-							subflowResult.Result = newExecution.Result
-							break
-							//subflowResults[subflowIndex].Result = workflowExecution.Result
-							//updated = true
-							//finished += 1
-						}
-					} else {
-						tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
-						newExecution = *tmpExecution
-						if err != nil {
-							log.Printf("[WARNING] Error getting subflow data: %s", err)
-						} else {
-							//log.Printf("Results: %d, status: %s", len(newExecution.Results), newExecution.Status)
-							if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
-								subflowResult.Result = newExecution.Result
-								break
-							}
+		//				//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
+		//				if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
+		//					subflowResult.Result = newExecution.Result
+		//					break
+		//					//subflowResults[subflowIndex].Result = workflowExecution.Result
+		//					//updated = true
+		//					//finished += 1
+		//				}
+		//			} else {
+		//				tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
+		//				newExecution = *tmpExecution
+		//				if err != nil {
+		//					log.Printf("[WARNING] Error getting subflow data: %s", err)
+		//				} else {
+		//					//log.Printf("Results: %d, status: %s", len(newExecution.Results), newExecution.Status)
+		//					if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
+		//						subflowResult.Result = newExecution.Result
+		//						break
+		//					}
 
-						}
-					}
+		//				}
+		//			}
 
-					count += 1
-				}
-			}
+		//			count += 1
+		//		}
+		//	}
 
-			if len(subflowResult.Result) > 0 {
-				newJson, err := json.Marshal(subflowResult)
-				if err == nil {
-					actionResult.Result = string(newJson)
-				} else {
-					log.Printf("[WARNING] Failed marshalling subflowresult: %s", err)
-				}
-			}
-		} else {
-			log.Printf("[WARNING] Skipping subresult check!")
-		}
+		//	if len(subflowResult.Result) > 0 {
+		//		newJson, err := json.Marshal(subflowResult)
+		//		if err == nil {
+		//			actionResult.Result = string(newJson)
+		//		} else {
+		//			log.Printf("[WARNING] Failed marshalling subflowresult: %s", err)
+		//		}
+		//	}
+		//} else {
+		//	log.Printf("[WARNING] Skipping subresult check!")
+		//}
 
 		// Updating in case the execution got more info
-		if project.Environment != "" {
-			parsedExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-			if err != nil {
-				log.Printf("[ERROR] FAILED to reload execution after subflow check: %s", err)
-			} else {
-				log.Printf("[DEBUG] Re-updated execution after subflow check!")
-			}
+		//if project.Environment != "" {
+		//	parsedExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		//	if err != nil {
+		//		log.Printf("[ERROR] FAILED to reload execution after subflow check: %s", err)
+		//	} else {
+		//		log.Printf("[DEBUG] Re-updated execution after subflow check!")
+		//	}
 
-			workflowExecution = *parsedExecution
-		} else {
-			if updateParam {
-				return &workflowExecution, false, errors.New("Rerun this transaction with updated values")
-			}
+		//	workflowExecution = *parsedExecution
+		//} else {
+		//	if updateParam {
+		//		return &workflowExecution, false, errors.New("Rerun this transaction with updated values")
+		//	}
 
-			log.Printf("[INFO] Skipping updateparam with %d results", len(workflowExecution.Results))
-			// return &workflowExecution, dbSave, err
-			//return
-			//func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
+		//	log.Printf("[INFO] Skipping updateparam with %d results", len(workflowExecution.Results))
+		//	// return &workflowExecution, dbSave, err
+		//	//return
+		//	//func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
 
-			//type SubflowData struct {
-			//	Success       bool   `json:"success"`
-			//	ExecutionId   string `json:"execution_id"`
-			//	Authorization string `json:"authorization"`
-			//	Result        string `json:"result"`
-			//}
-			//log.Printf("[DEBUG] NOT validating updated workflowExecution because worker")
-		}
+		//	//type SubflowData struct {
+		//	//	Success       bool   `json:"success"`
+		//	//	ExecutionId   string `json:"execution_id"`
+		//	//	Authorization string `json:"authorization"`
+		//	//	Result        string `json:"result"`
+		//	//}
+		//	//log.Printf("[DEBUG] NOT validating updated workflowExecution because worker")
+		//}
 
 	}
 
@@ -6569,13 +6783,16 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// 2. If it's either of those, set the executionResult default value to DefaultReturnValue
 
 			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
-				log.Printf("\n\nCHECKING RESULT FOR LAST NODE: %s\n\n", workflowExecution.Workflow.DefaultReturnValue)
+				//log.Printf("\n\nCHECKING RESULT FOR LAST NODE %s with value \"%s\". Executionparent: %s\n\n", workflowExecution.ExecutionSourceNode, workflowExecution.Workflow.DefaultReturnValue, workflowExecution.ExecutionParent)
 				for _, result := range workflowExecution.Results {
 					if result.Action.ID == workflowExecution.LastNode {
 						if result.Status == "ABORTED" || result.Status == "FAILURE" || result.Status == "SKIPPED" {
 							workflowExecution.Result = workflowExecution.Workflow.DefaultReturnValue
 							if len(workflowExecution.ExecutionParent) > 0 {
 								log.Printf("FOUND SUBFLOW WITH EXECUTIONPARENT %s!", workflowExecution.ExecutionParent)
+
+								// 1. Find the parent workflow
+								// 2. Find the parent's existing value
 							}
 						}
 						break
@@ -6584,15 +6801,49 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			if len(workflowExecution.ExecutionParent) > 0 {
-				log.Printf("\n\nFound execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
-				// Should look for the source node in parent workflow's execution
-				//parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
-				//if err == nil {
-				//	for _, item := range parentExecution.Results {
-				//		//if item.Result.
-				//		//log.Printf("Found item!!
-				//	}
-				//}
+				//log.Printf("\n\nFound execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
+
+				err = updateExecutionParent(workflowExecution.ExecutionParent, workflowExecution.Workflow.DefaultReturnValue, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
+				if err != nil {
+					log.Printf("[ERROR] Failed running update execution parent: %s", err)
+				}
+			}
+		}
+	}
+
+	// Had to move this to run AFTER "updateExecutionParent()", as it's controlling whether a subflow should be updated or not
+	if actionResult.Status == "SUCCESS" && actionResult.Action.AppName == "shuffle-subflow" {
+		runCheck := false
+		for _, param := range actionResult.Action.Parameters {
+			if param.Name == "check_result" {
+				//log.Printf("[INFO] RESULT: %#v", param)
+				if param.Value == "true" {
+					runCheck = true
+				}
+
+				break
+			}
+		}
+
+		if runCheck {
+			log.Printf("[WARNING] Sinkholing request of %s IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
+			var subflowData SubflowData
+			err = json.Unmarshal([]byte(actionResult.Result), &subflowData)
+			if err == nil && len(subflowData.Result) == 0 {
+				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
+				log.Printf("\n\nNO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING\n\n")
+				//return &workflowExecution, false, nil
+				workflowExecution.Status = "EXECUTING"
+			} else {
+				log.Printf("\n\nNOT sinkholed!")
+				for resultIndex, result := range workflowExecution.Results {
+					if result.Action.ID == actionResult.Action.ID {
+						workflowExecution.Results[resultIndex] = actionResult
+						break
+					}
+				}
+
+				dbSave = true
 			}
 		}
 	}
@@ -8583,4 +8834,112 @@ func md5sum(data []byte) string {
 	hasher.Write(data)
 	newmd5 := hex.EncodeToString(hasher.Sum(nil))
 	return newmd5
+}
+
+// Checks if data is sent from Worker >0.8.51, which sends a full execution
+// instead of individial results
+func ValidateNewWorkerExecution(body []byte) error {
+	ctx := context.Background()
+	var execution WorkflowExecution
+	err := json.Unmarshal(body, &execution)
+	if err != nil {
+		log.Printf("[WARNING] Failed execution unmarshaling: %s", err)
+		return err
+	}
+	//log.Printf("\n\nGOT EXEC WITH RESULT %#v (%d)\n\n", execution.Status, len(execution.Results))
+
+	baseExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting execution (workflowqueue) %s: %s", execution.ExecutionId, err)
+		return err
+	}
+
+	if baseExecution.Authorization != execution.Authorization {
+		return errors.New("Bad authorization when validating execution")
+	}
+
+	// used to validate if it's actually the right marshal
+	if len(baseExecution.Workflow.Actions) != len(execution.Workflow.Actions) {
+		return errors.New(fmt.Sprintf("Bad length of actions (probably normal app): %d", len(execution.Workflow.Actions)))
+	}
+
+	if len(baseExecution.Workflow.Triggers) != len(execution.Workflow.Triggers) {
+		return errors.New(fmt.Sprintf("Bad length of trigger: %d (probably normal app)", len(execution.Workflow.Triggers)))
+	}
+
+	if len(baseExecution.Results) >= len(execution.Results) {
+		return errors.New(fmt.Sprintf("Can't have less actions in a full execution than what exists: %d (old) vs %d (new)", len(baseExecution.Results), len(execution.Results)))
+	}
+
+	//if baseExecution.Status != "WAITING" && baseExecution.Status != "EXECUTING" {
+	//	return errors.New(fmt.Sprintf("Workflow is already finished or failed. Can't update"))
+	//}
+
+	if execution.Status == "EXECUTING" {
+		//log.Printf("[INFO] Inside executing.")
+		extra := 0
+		for _, trigger := range execution.Workflow.Triggers {
+			//log.Printf("Appname trigger (0): %s", trigger.AppName)
+			if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+				extra += 1
+			}
+		}
+
+		if len(execution.Workflow.Actions)+extra == len(execution.Results) {
+			execution.Status = "FINISHED"
+		}
+	}
+
+	// Finds if subflow HAS a value when it should, otherwise it's not being set
+	for _, result := range execution.Results {
+		if result.Action.AppName == "shuffle-subflow" {
+			if result.Status == "SKIPPED" {
+				continue
+			}
+
+			log.Printf("\n\nFound SUBFLOW in full result send \n\n")
+			for _, trigger := range baseExecution.Workflow.Triggers {
+				if trigger.ID == result.Action.ID {
+					log.Printf("Found SUBFLOW id: %s", trigger.ID)
+
+					for _, param := range trigger.Parameters {
+						if param.Name == "check_result" && param.Value == "true" {
+							log.Printf("Found check as true!")
+
+							var subflowData SubflowData
+							err = json.Unmarshal([]byte(result.Result), &subflowData)
+							if err != nil {
+								log.Printf("Failed unmarshal in subflow check for %s: %s", result.Result, err)
+							} else if len(subflowData.Result) == 0 {
+								log.Printf("There is no result yet. Don't save?")
+							} else {
+								log.Printf("There is is a result: %s", result.Result)
+							}
+
+							break
+						}
+					}
+
+					break
+				}
+			}
+		}
+	}
+
+	// FIXME: Add extra here
+	//executionLength := len(baseExecution.Workflow.Actions)
+	//if executionLength != len(execution.Results) {
+	//	return errors.New(fmt.Sprintf("Bad length of actions vs results: want: %d have: %d", executionLength, len(execution.Results)))
+	//}
+
+	//log.Printf("\n\nSHOULD SET BACKEND DATA FOR EXEC \n\n")
+	err = SetWorkflowExecution(ctx, execution, true)
+	if err == nil {
+		log.Printf("[INFO] Set workflowexecution based on new worker (>0.8.53) for execution %s. Actions: %d, Triggers: %d, Results: %d, Status: %s", execution.ExecutionId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status) //, execution.Result)
+		//log.Printf("[INFO] Successfully set the execution to wait.")
+	} else {
+		log.Printf("[WARNING] Failed to set the execution to wait.")
+	}
+
+	return nil
 }

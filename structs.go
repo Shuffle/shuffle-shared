@@ -638,6 +638,7 @@ type WorkflowExecution struct {
 	OrgId               string         `json:"org_id" datastore:"org_id"`
 	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"`
 	ExecutionSourceNode string         `json:"execution_source_node" yaml:"execution_source_node"`
+	ExecutionSourceAuth string         `json:"execution_source_auth" yaml:"execution_source_auth"`
 }
 
 // This is for the nodes in a workflow, NOT the app action itself.
@@ -1562,4 +1563,11 @@ type BuildLaterStruct struct {
 	Tags  []string
 	Extra string
 	Id    string
+}
+
+type SubflowData struct {
+	Success       bool   `json:"success"`
+	ExecutionId   string `json:"execution_id"`
+	Authorization string `json:"authorization"`
+	Result        string `json:"result"`
 }
