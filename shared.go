@@ -743,8 +743,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		//log.Printf("Post workflow")
-
 		if user.Id != workflow.Owner || len(user.Id) == 0 {
 			if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (set oauth2)", user.Username, workflow.ID)
@@ -757,6 +755,21 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+
+		// Finding count in same workflow & setting large image if missing
+		count := 0
+		for _, action := range workflow.Actions {
+			if action.AppName == appAuth.App.Name {
+				count += 1
+				if len(appAuth.App.LargeImage) == 0 && len(action.LargeImage) > 0 {
+					appAuth.App.LargeImage = action.LargeImage
+				}
+
+			}
+		}
+
+		appAuth.NodeCount = int64(count)
+		appAuth.WorkflowCount = 1
 
 		err = runOauth2Request(ctx, user, appAuth)
 		if err != nil {
