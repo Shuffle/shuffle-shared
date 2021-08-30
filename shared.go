@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -480,15 +481,6 @@ func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		Transport: transport,
 	}
 
-	type DataToSend struct {
-		Code         string `url:"code" json:"code"`
-		GrantType    string `url:"grant_type" json:"grant_type"`
-		ClientSecret string `url:"client_secret" json:"client_secret"`
-		ClientId     string `url:"client_id" json:"client_id"`
-		Scope        string `url:"scope" json:"scope"`
-		RedirectUri  string `url:"redirect_uri" json:"redirect_uri"`
-	}
-
 	requestData := DataToSend{
 		GrantType: "authorization_code",
 	}
@@ -558,16 +550,7 @@ func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		return errors.New(fmt.Sprintf("Bad status code: %d. Message: %s", newresp.StatusCode, respBody))
 	}
 
-	//log.Printf("\n\nRESPONSE: %s\n\n", string(respBody))
-	type Oauth2Resp struct {
-		TokenType    string `json:"token_type"`
-		Scope        string `json:"scope"`
-		ExpiresIn    int    `json:"expires_in"`
-		ExtExpiresIn int    `json:"ext_expires_in"`
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-
+	log.Printf("\n\nRESPONSE: %s\n\n", string(respBody))
 	var oauthResp Oauth2Resp
 	err = json.Unmarshal(respBody, &oauthResp)
 	if err != nil {
@@ -584,6 +567,14 @@ func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
 		Key:   "refresh_token",
 		Value: oauthResp.RefreshToken,
+	})
+
+	// FIXME: Does this work with string?
+	//https://stackoverflow.com/questions/43870554/microsoft-oauth2-authentication-not-returning-refresh-token
+	parsedTime := strconv.FormatInt(int64(time.Now().Unix())+int64(oauthResp.ExpiresIn), 10)
+	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+		Key:   "expiration",
+		Value: parsedTime,
 	})
 
 	// FIXME: Set up auth for this with oauth2 in app?
@@ -761,6 +752,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		for _, action := range workflow.Actions {
 			if action.AppName == appAuth.App.Name {
 				count += 1
+
 				if len(appAuth.App.LargeImage) == 0 && len(action.LargeImage) > 0 {
 					appAuth.App.LargeImage = action.LargeImage
 				}

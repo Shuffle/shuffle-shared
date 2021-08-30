@@ -1565,9 +1565,30 @@ type BuildLaterStruct struct {
 	Id    string
 }
 
+// Overwriting results fo a subflow trigger
 type SubflowData struct {
 	Success       bool   `json:"success"`
 	ExecutionId   string `json:"execution_id"`
 	Authorization string `json:"authorization"`
 	Result        string `json:"result"`
+}
+
+// AuthenticationStore with oauth2
+type Oauth2Resp struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	TokenType    string `json:"token_type"`
+	Scope        string `json:"scope"`
+	ExpiresIn    int    `json:"expires_in"`
+	ExtExpiresIn int    `json:"ext_expires_in"`
+}
+
+// The data to be parsed
+type DataToSend struct {
+	Code         string `url:"code" json:"code"`
+	GrantType    string `url:"grant_type" json:"grant_type"`
+	ClientSecret string `url:"client_secret" json:"client_secret"`
+	ClientId     string `url:"client_id" json:"client_id"`
+	Scope        string `url:"scope" json:"scope"`
+	RedirectUri  string `url:"redirect_uri" json:"redirect_uri"`
 }
