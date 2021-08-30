@@ -8278,7 +8278,7 @@ func GetEsConfig() *elasticsearch.Client {
 
 	// https://github.com/elastic/go-elasticsearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/elasticsearch.go#L98
 	config := elasticsearch.Config{
-		Addresses: []string{esUrl},
+		Addresses: strings.Split(esUrl, ","),
 		Username:  os.Getenv("SHUFFLE_OPENSEARCH_USERNAME"),
 		Password:  os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD"),
 		APIKey:    os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
