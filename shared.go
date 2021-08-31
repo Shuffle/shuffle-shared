@@ -5806,7 +5806,7 @@ func checkUsername(Username string) error {
 
 // FIXME: Does this work from a Worker?
 func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
-	log.Printf("\n\nPARENT: %s, AUTH: %s, parentNode: %s\nVALUE: %s\n\n", executionParent, parentAuth, parentNode, returnValue)
+	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s\nVALUE: %s\n\n", executionParent, parentAuth, parentNode, returnValue)
 	backendUrl := os.Getenv("BASE_URL")
 	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
 	//log.Printf("[DEBUG] ResultURL: %s", backendUrl)
@@ -5916,7 +5916,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	sendRequest := false
 	resultData := []byte{}
 	if len(foundResult.Action.ID) == 0 {
-		log.Printf("Couldn't find the result!")
+		//log.Printf("Couldn't find the result!")
 		parsedAction := Action{
 			Label:       selectedTrigger.Label,
 			ID:          selectedTrigger.ID,
@@ -5981,7 +5981,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 			return err
 		}
 
-		log.Printf("[INFO] ADDED NEW ACTION REUSLT (%d): %s", newresp.StatusCode, body)
+		log.Printf("[INFO] ADDED NEW ACTION RESULT (%d): %s", newresp.StatusCode, body)
 	} else {
 		log.Printf("[INFO] NOT sending request because data len is %d and request is %#v", len(resultData), sendRequest)
 	}
@@ -6486,6 +6486,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			newResults = append(newResults, result)
 		}
 
+		if workflowExecution.LastNode == "" {
+			workflowExecution.LastNode = actionResult.Action.ID
+		}
 		workflowExecution.Result = lastResult
 		workflowExecution.Results = newResults
 	}
@@ -6720,6 +6723,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	//log.Printf("EXTRA: %d", extraInputs)
 	//log.Printf("LENGTH: %d - %d", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
+	updateParentRan := false
 	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
 		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
 		finished := true
@@ -6786,8 +6790,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			// 1. Check if the LAST node is FAILURE or ABORTED or SKIPPED
 			// 2. If it's either of those, set the executionResult default value to DefaultReturnValue
+			log.Printf("\n\n===========\nSETTING VALUE TO %#v\n============\nPARENT: %s\n\n", lastResult, workflowExecution.ExecutionParent)
+			log.Printf("%#v", workflowExecution)
 
+			valueToReturn := ""
 			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
+				valueToReturn = workflowExecution.Workflow.DefaultReturnValue
 				//log.Printf("\n\nCHECKING RESULT FOR LAST NODE %s with value \"%s\". Executionparent: %s\n\n", workflowExecution.ExecutionSourceNode, workflowExecution.Workflow.DefaultReturnValue, workflowExecution.ExecutionParent)
 				for _, result := range workflowExecution.Results {
 					if result.Action.ID == workflowExecution.LastNode {
@@ -6803,21 +6811,25 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						break
 					}
 				}
+			} else {
+				valueToReturn = workflowExecution.Result
 			}
 
 			if len(workflowExecution.ExecutionParent) > 0 {
-				//log.Printf("\n\nFound execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
+				log.Printf("Found execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
 
-				err = updateExecutionParent(workflowExecution.ExecutionParent, workflowExecution.Workflow.DefaultReturnValue, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
+				err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
 				if err != nil {
 					log.Printf("[ERROR] Failed running update execution parent: %s", err)
+				} else {
+					updateParentRan = true
 				}
 			}
 		}
 	}
 
 	// Had to move this to run AFTER "updateExecutionParent()", as it's controlling whether a subflow should be updated or not
-	if actionResult.Status == "SUCCESS" && actionResult.Action.AppName == "shuffle-subflow" {
+	if actionResult.Status == "SUCCESS" && actionResult.Action.AppName == "shuffle-subflow" && !updateParentRan {
 		runCheck := false
 		for _, param := range actionResult.Action.Parameters {
 			if param.Name == "check_result" {
@@ -6834,11 +6846,25 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Sinkholing request of %s IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
 			var subflowData SubflowData
 			err = json.Unmarshal([]byte(actionResult.Result), &subflowData)
-			if err == nil && len(subflowData.Result) == 0 {
+			if err == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
 				log.Printf("\n\nNO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING\n\n")
 				//return &workflowExecution, false, nil
+
+				// Finding the result, and removing it if it exists. "Sinkholing"
 				workflowExecution.Status = "EXECUTING"
+				newResults := []ActionResult{}
+				for _, result := range workflowExecution.Results {
+					if result.Action.ID == actionResult.Action.ID {
+						continue
+					}
+
+					newResults = append(newResults, result)
+				}
+
+				workflowExecution.Results = newResults
+
+				//for _, result := range
 			} else {
 				log.Printf("\n\nNOT sinkholed!")
 				for resultIndex, result := range workflowExecution.Results {
