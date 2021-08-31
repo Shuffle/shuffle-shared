@@ -249,7 +249,7 @@ func addRequirements(filelocation string) {
 		return
 	}
 
-	filedata := string(data) + "\nrequests==2.25.1\nliquidpy==0.6.3\n"
+	filedata := string(data) + "\nrequests==2.25.1\nliquidpy==0.7.0\n"
 	err = ioutil.WriteFile(filelocation, []byte(filedata), os.ModePerm)
 	if err != nil {
 		log.Panicf("[WARNING] failed writing data to file: %s", err)

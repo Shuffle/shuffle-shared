@@ -3317,7 +3317,7 @@ func SetFile(ctx context.Context, file File) error {
 	return nil
 }
 
-func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
+func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 	var files []File
 
 	nameKey := "Files"
@@ -3332,6 +3332,30 @@ func GetAllFiles(ctx context.Context, orgId string) ([]File, error) {
 				},
 			},
 		}
+
+		if len(namespace) > 0 {
+			query = map[string]interface{}{
+				"from": 0,
+				"size": 1000,
+				"query": map[string]interface{}{
+					"bool": map[string]interface{}{
+						"must": []map[string]interface{}{
+							map[string]interface{}{
+								"match": map[string]interface{}{
+									"org_id": orgId,
+								},
+							},
+							map[string]interface{}{
+								"match": map[string]interface{}{
+									"namespace": namespace,
+								},
+							},
+						},
+					},
+				},
+			}
+		}
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
 			return files, err

@@ -826,6 +826,7 @@ type File struct {
 	ContentType  string   `json:"content_type" datastore:"content_type"`
 	UpdatedBy    string   `json:"updated_by" datastore:"updated_by"`
 	CreatedBy    string   `json:"created_by" datastore:"created_by"`
+	Namespace    string   `json:"namespace" datastore:"namespace"`
 }
 
 type AppAuthenticationStorage struct {
@@ -1591,4 +1592,9 @@ type DataToSend struct {
 	ClientId     string `url:"client_id" json:"client_id"`
 	Scope        string `url:"scope" json:"scope"`
 	RedirectUri  string `url:"redirect_uri" json:"redirect_uri"`
+}
+
+type FileResponse struct {
+	Files      []File   `json:"files" datastore:"files"`
+	Namespaces []string `json:"namespaces" datastore:"namespaces"`
 }

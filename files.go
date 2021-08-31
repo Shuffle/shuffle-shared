@@ -5,6 +5,7 @@ package shuffle
 */
 
 import (
+	"archive/zip"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
@@ -99,12 +100,12 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 	if user.Role != "admin" {
 		log.Printf("[AUTH] User isn't admin")
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Need to be admin"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Need to be admin to list files"}`)))
 		return
 	}
 
 	ctx := getContext(request)
-	files, err := GetAllFiles(ctx, user.ActiveOrg.Id)
+	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, "")
 	if err != nil && len(files) == 0 {
 		log.Printf("[ERROR] Failed to get files: %s", err)
 		resp.WriteHeader(500)
@@ -116,8 +117,22 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 		return files[i].UpdatedAt > files[j].UpdatedAt
 	})
 
-	log.Printf("[INFO] Got %d files for org %s", len(files), user.ActiveOrg.Id)
-	newBody, err := json.Marshal(files)
+	fileResponse := FileResponse{
+		Files:      files,
+		Namespaces: []string{"default"},
+	}
+	for _, file := range files {
+		if file.Namespace != "" && file.Namespace != "default" {
+			if !ArrayContains(fileResponse.Namespaces, file.Namespace) {
+				fileResponse.Namespaces = append(fileResponse.Namespaces, file.Namespace)
+			}
+		}
+	}
+
+	// Shitty way to build it, but works before scale. Need ES search mechanism for namespaces
+
+	log.Printf("[INFO] Got %d files and %d namespaces for org %s", len(files), len(fileResponse.Namespaces), user.ActiveOrg.Id)
+	newBody, err := json.Marshal(fileResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshaling files: %s", err)
 		resp.WriteHeader(500)
@@ -350,6 +365,132 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	var namespace string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 5 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		namespace = location[5]
+	}
+
+	if strings.Contains(namespace, "?") {
+		namespace = strings.Split(namespace, "?")[0]
+	}
+
+	log.Printf("\n\n[INFO] User is trying to download files from namespace %s\n\n", namespace)
+
+	// 1. Check user directly
+	// 2. Check workflow execution authorization
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("INITIAL Api authentication failed in file download: %s", err)
+
+		orgId, err := fileAuthentication(request)
+		if err != nil {
+			log.Printf("Bad file authentication in get namespace %s: %s", namespace, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		user.ActiveOrg.Id = orgId
+		user.Username = "Execution File API"
+	}
+
+	ctx := getContext(request)
+	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, namespace)
+	if err != nil && len(files) == 0 {
+		log.Printf("[ERROR] Failed to get files: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error getting files."}`)))
+		return
+	}
+
+	sort.Slice(files[:], func(i, j int) bool {
+		return files[i].UpdatedAt > files[j].UpdatedAt
+	})
+
+	fileResponse := FileResponse{
+		Files:      []File{},
+		Namespaces: []string{namespace},
+	}
+
+	for _, file := range files {
+		if file.Status != "active" {
+			log.Printf("File %s (%s) is not active", file.Filename, file.Id)
+			continue
+		}
+
+		if file.Namespace == namespace && file.OrgId == user.ActiveOrg.Id {
+			fileResponse.Files = append(fileResponse.Files, file)
+		}
+	}
+
+	log.Printf("Found %d (%d) files for namespace %s", len(files), len(fileResponse.Files), namespace)
+
+	//zipfile := fmt.Sprintf("%s.zip", namespace)
+	buf := new(bytes.Buffer)
+	zipWriter := zip.NewWriter(buf)
+
+	packed := 0
+	for _, file := range fileResponse.Files {
+		filedata, err := ioutil.ReadFile(file.DownloadPath)
+		if err != nil {
+			log.Printf("Filereading failed for %s create zip file : %v", file.Filename, err)
+			continue
+		}
+
+		//log.Printf("DATA: %s", string(filedata))
+
+		zipFile, err := zipWriter.Create(file.Filename)
+		if err != nil {
+			log.Printf("Packing failed for %s create zip file: %v", file.Filename, err)
+			continue
+		}
+
+		// Have to use Fprintln otherwise it tries to parse all strings etc.
+		if _, err := fmt.Fprintf(zipFile, string(filedata)); err != nil {
+			log.Printf("Datapasting failed for %s when creating zip file from bucket: %v", file.Filename, err)
+			continue
+		}
+
+		packed += 1
+	}
+
+	err = zipWriter.Close()
+	if err != nil {
+		log.Printf("Packing failed to close zip file writer: %v", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if packed == 0 {
+		log.Printf("[WARNING] Couldn't find anything for namespace %s in org %s", namespace, user.ActiveOrg.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("Packed %d files from namespace %s into the zip", packed, namespace)
+	FileHeader := make([]byte, 512)
+	FileContentType := http.DetectContentType(FileHeader)
+	resp.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zip", namespace))
+	resp.Header().Set("Content-Type", FileContentType)
+	io.Copy(resp, buf)
+}
+
 func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -376,8 +517,6 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("\n\n[INFO] User is trying to download file %s\n\n", fileId)
-
 	// 1. Check user directly
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
@@ -394,17 +533,11 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 		user.ActiveOrg.Id = orgId
 		user.Username = "Execution File API"
-		/*
-			} else {
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-		*/
 	}
 
+	log.Printf("[AUDIT] User %s (%s) downloading file %s for org %s", user.Username, user.Id, fileId, user.ActiveOrg.Id)
+
 	// 1. Verify if the user has access to the file: org_id and workflow
-	log.Printf("[INFO] Should get file %s", fileId)
 	ctx := getContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
@@ -729,6 +862,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		Filename   string `json:"filename"`
 		OrgId      string `json:"org_id"`
 		WorkflowId string `json:"workflow_id"`
+		Namespace  string `json:"namespace"`
 	}
 
 	var curfile FileStructure
@@ -862,6 +996,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		DownloadPath: downloadPath,
 		Subflows:     duplicateWorkflows,
 		StorageArea:  "local",
+		Namespace:    curfile.Namespace,
 	}
 
 	if project.Environment == "cloud" {
@@ -875,7 +1010,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed setting file reference"}`))
 		return
 	} else {
-		log.Printf("[INFO] Created file %s", newFile.DownloadPath)
+		log.Printf("[INFO] Created file %s with namespace %s", newFile.DownloadPath, newFile.Namespace)
 	}
 
 	resp.WriteHeader(200)

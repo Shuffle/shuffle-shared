@@ -719,26 +719,33 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				},
 			})
 		} else if securitySchemes["Oauth2"] != nil {
+			api.Authentication.Type = "oauth2"
+
+			//securitySchemes["Oauth2"].Value.Flows = openapi3.OauthFlows{}
+			//api.Authentication.RedirectUri =
+			//log.Printf("%#v", securitySchemes["Oauth2"].Value.Flows.AuthorizationCode)
+			log.Printf("%#v", securitySchemes["Oauth2"].Value.Flows)
+			//.AuthorizationUrl
 			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 				Name:        "client_id",
 				Value:       "",
 				Example:     "client_id",
-				Description: securitySchemes["Oauth2j"].Value.Description,
+				Description: securitySchemes["Oauth2"].Value.Description,
 				In:          securitySchemes["Oauth2"].Value.In,
 				Scheme:      securitySchemes["Oauth2"].Value.Scheme,
 				Schema: SchemaDefinition{
-					Type: securitySchemes["BasicAuth"].Value.Scheme,
+					Type: securitySchemes["Oauth2"].Value.Scheme,
 				},
 			})
 			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 				Name:        "client_secret",
 				Value:       "",
 				Example:     "client_secret",
-				Description: securitySchemes["Oauth2j"].Value.Description,
+				Description: securitySchemes["Oauth2"].Value.Description,
 				In:          securitySchemes["Oauth2"].Value.In,
 				Scheme:      securitySchemes["Oauth2"].Value.Scheme,
 				Schema: SchemaDefinition{
-					Type: securitySchemes["BasicAuth"].Value.Scheme,
+					Type: securitySchemes["Oauth2"].Value.Scheme,
 				},
 			})
 		} else if securitySchemes["BasicAuth"] != nil {
