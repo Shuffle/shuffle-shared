@@ -10,9 +10,10 @@ require (
 	github.com/Masterminds/semver v1.5.0
 	github.com/algolia/algoliasearch-client-go/v3 v3.18.1
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
-	github.com/frikky/go-elasticsearch/v8 v8.13.1 // indirect
+	github.com/frikky/go-elasticsearch/v8 v8.13.1
 	github.com/frikky/kin-openapi v0.38.0
-	github.com/google/go-github/v28 v28.1.1 // indirect
+	github.com/google/go-github/v28 v28.1.1
+	github.com/google/go-querystring v1.0.0
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/satori/go.uuid v1.2.0
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9

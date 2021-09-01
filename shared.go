@@ -467,7 +467,11 @@ func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		return errors.New("No authentication URL provided")
 	}
 
-	transport := http.DefaultTransport.(*http.Transport).Clone()
+	//transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.MaxIdleConnsPerHost = 100
+	transport.ResponseHeaderTimeout = time.Second * 10
+	transport.Proxy = nil
 	client := &http.Client{
 		Transport: transport,
 	}
