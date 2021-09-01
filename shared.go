@@ -3543,7 +3543,6 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Handling password change for %s", t.Username)
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in password change: %s", err)
@@ -3551,6 +3550,8 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	log.Printf("[AUDIT] Handling password change for %s from %s (%s)", t.Username, userInfo.Username, userInfo.Id)
 
 	curUserFound := false
 	if t.Username != userInfo.Username {
@@ -3635,9 +3636,9 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		// Admins can re-generate others' passwords as well.
 		if userInfo.Role != "admin" {
-			err = bcrypt.CompareHashAndPassword([]byte(userInfo.Password), []byte(t.Newpassword))
+			err = bcrypt.CompareHashAndPassword([]byte(userInfo.Password), []byte(t.Currentpassword))
 			if err != nil {
-				log.Printf("Bad password for %s: %s", userInfo.Username, err)
+				log.Printf("[WARNING] Bad password for %s: %s", userInfo.Username, err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 				return
@@ -8434,29 +8435,6 @@ func GetEsConfig() *elasticsearch.Client {
 	}
 
 	return es
-}
-
-// Bad check for workflowapps :)
-// FIXME - use tags and struct reflection
-func checkWorkflowApp(workflowApp WorkflowApp) error {
-	// Validate fields
-	if workflowApp.Name == "" {
-		return errors.New("App field name doesn't exist")
-	}
-
-	if workflowApp.Description == "" {
-		return errors.New("App field description doesn't exist")
-	}
-
-	if workflowApp.AppVersion == "" {
-		return errors.New("App field app_version doesn't exist")
-	}
-
-	if workflowApp.ContactInfo.Name == "" {
-		return errors.New("App field contact_info.name doesn't exist")
-	}
-
-	return nil
 }
 
 func md5sum(data []byte) string {
