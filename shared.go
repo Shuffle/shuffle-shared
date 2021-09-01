@@ -5509,6 +5509,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		App     []byte `json:"app"`
 	}
 
+	//app.Activate = true
 	data, err := json.Marshal(app)
 	if err != nil {
 		resp.WriteHeader(422)
@@ -5584,9 +5585,9 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Id != app.Owner {
 		if user.Role == "admin" && app.Owner == "" {
-			log.Printf("[INFO] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
+			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
-			log.Printf("[WARNING] Wrong user (%s) for app %s", user.Username, app.Name)
+			log.Printf("[AUDIT] Wrong user (%s) for app %s", user.Username, app.Name)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -6385,9 +6386,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		} else {
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			// Finds ALL childnodes to set them to SKIPPED
-			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID)
 			// Remove duplicates
 			//log.Printf("CHILD NODES: %d", len(childNodes))
+			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID)
+			//log.Printf("\n\nFOUND %d CHILDNODES\n\n", len(childNodes))
 			for _, nodeId := range childNodes {
 				if nodeId == actionResult.Action.ID {
 					continue
@@ -6403,9 +6405,30 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 				}
 
+				isTrigger := false
 				if len(curAction.ID) == 0 {
-					log.Printf("Couldn't find subnode %s", nodeId)
-					continue
+					for _, trigger := range workflowExecution.Workflow.Triggers {
+						//log.Printf("%s : %s", trigger.ID, nodeId)
+						if trigger.ID == nodeId {
+							isTrigger = true
+							name := "shuffle-subflow"
+							curAction = Action{
+								AppName:    name,
+								AppVersion: trigger.AppVersion,
+								Label:      trigger.Label,
+								Name:       trigger.Name,
+								ID:         trigger.ID,
+							}
+
+							//log.Printf("SET NODE!!")
+							break
+						}
+					}
+
+					if len(curAction.ID) == 0 {
+						log.Printf("Couldn't find subnode %s", nodeId)
+						continue
+					}
 				}
 
 				resultExists := false
@@ -6420,8 +6443,22 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					// Check parents are done here. Only add it IF all parents are skipped
 					skipNodeAdd := false
 					for _, branch := range workflowExecution.Workflow.Branches {
-						if branch.DestinationID == nodeId {
+						if branch.DestinationID == nodeId && !isTrigger {
 							// If the branch's source node is NOT in childNodes, it's not a skipped parent
+							// Checking if parent is a trigger
+							parentTrigger := false
+							for _, trigger := range workflowExecution.Workflow.Triggers {
+								if trigger.ID == branch.SourceID {
+									if trigger.AppName != "User Input" && trigger.AppName != "Shuffle Workflow" {
+										parentTrigger = true
+									}
+								}
+							}
+
+							if parentTrigger {
+								continue
+							}
+
 							sourceNodeFound := false
 							for _, item := range childNodes {
 								if item == branch.SourceID {
@@ -6791,7 +6828,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// 1. Check if the LAST node is FAILURE or ABORTED or SKIPPED
 			// 2. If it's either of those, set the executionResult default value to DefaultReturnValue
 			log.Printf("\n\n===========\nSETTING VALUE TO %#v\n============\nPARENT: %s\n\n", lastResult, workflowExecution.ExecutionParent)
-			log.Printf("%#v", workflowExecution)
+			//log.Printf("%#v", workflowExecution)
 
 			valueToReturn := ""
 			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
@@ -6815,7 +6852,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				valueToReturn = workflowExecution.Result
 			}
 
-			if len(workflowExecution.ExecutionParent) > 0 {
+			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
 				log.Printf("Found execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
 
 				err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
@@ -6912,12 +6949,13 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string {
 	//log.Printf("\nNODE TO FIX: %s\n\n", nodeId)
 	allChildren := []string{nodeId}
+	//log.Printf("\n\n")
 
 	// 1. Find children of this specific node
 	// 2. Find the children of those nodes etc.
 	for _, branch := range workflowExecution.Workflow.Branches {
 		if branch.SourceID == nodeId {
-			//log.Printf("Children: %s", branch.DestinationID)
+			//log.Printf("NODE: %s, SRC: %s, CHILD: %s\n", nodeId, branch.SourceID, branch.DestinationID)
 			allChildren = append(allChildren, branch.DestinationID)
 
 			childNodes := FindChildNodes(workflowExecution, branch.DestinationID)
@@ -6964,7 +7002,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get orgs: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get active apps: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -6985,10 +7023,40 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	app, err := GetApp(ctx, fileId, user)
 	if err != nil {
-		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
-		return
+		appName := request.URL.Query().Get("app_name")
+		appVersion := request.URL.Query().Get("app_version")
+		if len(appName) > 0 && len(appVersion) > 0 {
+			apps, err := FindWorkflowAppByName(ctx, appName)
+			//log.Printf("[INFO] Found %d apps for %s", len(apps), appName)
+			if err != nil || len(apps) == 0 {
+				log.Printf("[WARNING] Error getting app %s (app config): %s", appName, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+				return
+			}
+
+			selectedApp := WorkflowApp{}
+			for _, app := range apps {
+				if !app.Sharing && !app.Public {
+					continue
+				}
+
+				if app.Name == appName {
+					selectedApp = app
+				}
+
+				if app.Name == appName && app.AppVersion == appVersion {
+					selectedApp = app
+				}
+			}
+
+			app = &selectedApp
+		} else {
+			log.Printf("[WARNING] Error getting app with ID %s (app config): %s", fileId, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+			return
+		}
 	}
 
 	if app.Sharing || app.Public {

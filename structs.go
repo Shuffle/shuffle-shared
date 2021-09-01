@@ -621,8 +621,6 @@ type WorkflowExecution struct {
 	Start               string         `json:"start" datastore:"start"`
 	ExecutionArgument   string         `json:"execution_argument" datastore:"execution_argument,noindex"`
 	ExecutionId         string         `json:"execution_id" datastore:"execution_id"`
-	ExecutionSource     string         `json:"execution_source" datastore:"execution_source"`
-	ExecutionParent     string         `json:"execution_parent" datastore:"execution_parent"`
 	ExecutionOrg        string         `json:"execution_org" datastore:"execution_org"`
 	WorkflowId          string         `json:"workflow_id" datastore:"workflow_id"`
 	LastNode            string         `json:"last_node" datastore:"last_node"`
@@ -637,6 +635,8 @@ type WorkflowExecution struct {
 	ExecutionVariables  []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
 	OrgId               string         `json:"org_id" datastore:"org_id"`
 	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"`
+	ExecutionSource     string         `json:"execution_source" datastore:"execution_source"`
+	ExecutionParent     string         `json:"execution_parent" datastore:"execution_parent"`
 	ExecutionSourceNode string         `json:"execution_source_node" yaml:"execution_source_node"`
 	ExecutionSourceAuth string         `json:"execution_source_auth" yaml:"execution_source_auth"`
 }
@@ -1550,14 +1550,15 @@ type SessionCookie struct {
 }
 
 type HandleInfo struct {
-	Success   bool            `json:"success"`
-	Admin     string          `json:"admin"`
-	Username  string          `json:"username"`
-	Tutorials []string        `json:"tutorials"`
-	Id        string          `json:"id"`
-	Orgs      []OrgMini       `json:"orgs"`
-	ActiveOrg OrgMini         `json:"active_org"`
-	Cookies   []SessionCookie `json:"session_cookie"`
+	Success    bool            `json:"success"`
+	Admin      string          `json:"admin"`
+	Username   string          `json:"username"`
+	Tutorials  []string        `json:"tutorials"`
+	ActiveApps []string        `json:"active_apps"`
+	Id         string          `json:"id"`
+	Orgs       []OrgMini       `json:"orgs"`
+	ActiveOrg  OrgMini         `json:"active_org"`
+	Cookies    []SessionCookie `json:"session_cookie"`
 }
 
 type BuildLaterStruct struct {

@@ -654,8 +654,19 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"owner": user.Id,
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"owner": user.Id,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"owner": "",
+							},
+						},
+					},
 				},
 			},
 		}
@@ -711,15 +722,18 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			return workflows, err
 		}
 
+		//log.Printf("Found workflows: %d", len(wrapped.Hits.Hits))
 		for _, hit := range wrapped.Hits.Hits {
 			if hit.Source.Owner == user.Id {
 				workflows = append(workflows, hit.Source)
+			} else {
+				//log.Printf("bad workflow owner: %s", hit.Source.Owner)
 			}
 		}
 
 		if user.Role == "admin" {
 			var buf bytes.Buffer
-			query := map[string]interface{}{
+			query = map[string]interface{}{
 				"size": 1000,
 				"query": map[string]interface{}{
 					"match": map[string]interface{}{
@@ -779,7 +793,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				return workflows, err
 			}
 
-			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s. Already have %d workflows for the user. Found %d for org", user.ActiveOrg.Id, len(workflows), len(wrapped.Hits.Hits))
+			userWorkflowLen := len(workflows)
 			for _, hit := range wrapped.Hits.Hits {
 				found := false
 				for _, workflow := range workflows {
@@ -793,6 +807,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 					workflows = append(workflows, hit.Source)
 				}
 			}
+
+			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
 		}
 
 	} else {
@@ -926,6 +942,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	slice.Sort(fixedWorkflows[:], func(i, j int) bool {
 		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
 	})
+
+	//log.Printf("Returning %d workflows", len(fixedWorkflows))
 
 	return fixedWorkflows, nil
 }
@@ -1498,6 +1516,90 @@ func SetSession(ctx context.Context, user User, value string) error {
 	}
 
 	return nil
+}
+
+func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, error) {
+	var apps []WorkflowApp
+
+	nameKey := "workflowapp"
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"name": appName,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find app query: %s", err)
+			return apps, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response: %s", err)
+			return apps, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return apps, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return apps, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return apps, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return apps, err
+		}
+
+		wrapped := AppSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return apps, err
+		}
+
+		apps = []WorkflowApp{}
+		for _, hit := range wrapped.Hits.Hits {
+			apps = append(apps, hit.Source)
+		}
+	} else {
+		log.Printf("Looking for name %s in %s", appName, nameKey)
+		q := datastore.NewQuery(nameKey).Filter("name =", appName)
+		_, err = project.Dbclient.GetAll(ctx, q, &apps)
+		if err != nil && len(apps) == 0 {
+			log.Printf("[WARNING] Failed getting apps for name: %s", appName)
+			return apps, err
+		}
+	}
+
+	log.Printf("[INFO] Found %d apps for name %s in db-connector", len(apps), appName)
+	return apps, nil
 }
 
 func FindUser(ctx context.Context, username string) ([]User, error) {
@@ -2429,6 +2531,38 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		err = project.Dbclient.GetMulti(ctx, allKeys, newApps)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting org apps: %s", err)
+		}
+
+		// IF the app doesn't have actions, check OpenAPI
+		// 1. Get the app directly
+		// 2. Parse OpenAPI for it to get the actions
+		for appIndex, app := range newApps {
+			if len(app.Actions) == 0 && len(app.Name) > 0 {
+				log.Printf("%s has %d actions (%s)", app.Name, len(app.Actions), app.ID)
+
+				parsedApi, err := GetOpenApiDatastore(ctx, app.ID)
+				if err != nil {
+					log.Printf("[WARNING] Failed to find OpenAPI while parsing %s", app)
+					continue
+				}
+
+				_ = parsedApi
+				// Hardcoded for a test sample
+				newActions := []WorkflowAppAction{}
+				if app.ID == "SentinelOne" {
+					newActions = append(newActions, WorkflowAppAction{
+						Name: "get_threats",
+					})
+				}
+
+				//if len(parsedApi.Body.Paths) > 0 {
+				//	for path, pathValue := range parsedApi.Paths {
+				//		log.Printf("Path: %s", path)
+				//	}
+				//}
+
+				newApps[appIndex].Actions = newActions
+			}
 		}
 
 		allApps = append(allApps, newApps...)
