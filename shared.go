@@ -8540,13 +8540,17 @@ func ValidateNewWorkerExecution(body []byte) error {
 	//	return errors.New(fmt.Sprintf("Bad length of actions vs results: want: %d have: %d", executionLength, len(execution.Results)))
 	//}
 
-	//log.Printf("\n\nSHOULD SET BACKEND DATA FOR EXEC \n\n")
 	err = SetWorkflowExecution(ctx, execution, true)
 	if err == nil {
 		log.Printf("[INFO] Set workflowexecution based on new worker (>0.8.53) for execution %s. Actions: %d, Triggers: %d, Results: %d, Status: %s", execution.ExecutionId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status) //, execution.Result)
-		//log.Printf("[INFO] Successfully set the execution to wait.")
 	} else {
-		log.Printf("[WARNING] Failed to set the execution to wait.")
+		log.Printf("[WARNING] Failed setting the execution for new worker (>0.8.53) - retrying once: %s. ExecutionId: %s, Actions: %d, Triggers: %d, Results: %d, Status: %s", err, execution.ExecutionId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status)
+		// Retrying
+		time.Sleep(5 * time.Second)
+		err = SetWorkflowExecution(ctx, execution, true)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting the execution for new worker (>0.8.53) - 2nd attempt: %s. ExecutionId: %s, Actions: %d, Triggers: %d, Results: %d, Status: %s", err, execution.ExecutionId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status)
+		}
 	}
 
 	return nil

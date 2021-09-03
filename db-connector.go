@@ -683,7 +683,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get workflows): %s", err)
 			return workflows, err
 		}
 
@@ -753,7 +753,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				project.Es.Search.WithTrackTotalHits(true),
 			)
 			if err != nil {
-				log.Printf("[WARNING] Error getting response: %s", err)
+				log.Printf("[WARNING] Error getting response from Opensearch (Get workflows 2): %s", err)
 				return workflows, err
 			}
 
@@ -1115,7 +1115,7 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 
 	res, err := req.Do(ctx, &project.Es)
 	if err != nil {
-		log.Printf("[WARNING] Error getting response: %s", err)
+		log.Printf("[WARNING] Error getting response from Opensearch (index ES): %s", err)
 		return err
 	}
 
@@ -1544,7 +1544,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (find app by name): %s", err)
 			return apps, err
 		}
 
@@ -1628,7 +1628,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (find user): %s", err)
 			return []User{}, err
 		}
 
@@ -1931,7 +1931,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get app auth): %s", err)
 			return allworkflowappAuths, err
 		}
 
@@ -2053,7 +2053,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get environments): %s", err)
 			return environments, err
 		}
 
@@ -2623,7 +2623,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get apps): %s", err)
 			return []WorkflowApp{}, err
 		}
 
@@ -2941,7 +2941,7 @@ func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, 
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get workflow queue): %s", err)
 			return ExecutionRequestWrapper{}, err
 		}
 
@@ -3212,7 +3212,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get api keys): %s", err)
 			return User{}, err
 		}
 
@@ -3502,7 +3502,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get files): %s", err)
 			return files, err
 		}
 
@@ -3671,7 +3671,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get schedules): %s", err)
 			return schedules, err
 		}
 
@@ -3851,7 +3851,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get all users): %s", err)
 			return []User{}, err
 		}
 
@@ -3939,7 +3939,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get workflow executions): %s", err)
 			return executions, err
 		}
 
@@ -4069,7 +4069,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get org): %s", err)
 			return []Org{}, err
 		}
 
@@ -4188,7 +4188,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[WARNING] Error getting response: %s", err)
+			log.Printf("[WARNING] Error getting response from Opensearch (get app exec values): %s", err)
 			return workflows, err
 		}
 
