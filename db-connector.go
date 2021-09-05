@@ -11,6 +11,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -24,12 +25,25 @@ import (
 	"google.golang.org/appengine/memcache"
 )
 
+
 var err error
 var requestCache *cache.Cache
 
 var maxCacheSize = 1020000
 
 //var maxCacheSize = 2000000
+
+// Create ElasticSearch/OpenSearch index prefix
+// It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
+// Shuffle instance
+// E.g. Instance1_Workflowapp
+func GetESIndexPrefix(index string) string {
+	prefix := os.Getenv("SHUFFLE_OPENSEARCH_INDEX_PREFIX")
+	if len(prefix) > 0 {
+		return fmt.Sprintf("%s_%s", prefix, index)
+	}
+	return index
+}
 
 // Cache handlers
 func DeleteCache(ctx context.Context, name string) error {
@@ -443,7 +457,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return workflowExecution, err
@@ -511,7 +525,7 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return workflowApp, err
@@ -589,7 +603,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return workflow, err
@@ -678,7 +692,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -748,7 +762,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 			res, err := project.Es.Search(
 				project.Es.Search.WithContext(context.Background()),
-				project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+				project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 				project.Es.Search.WithBody(&buf),
 				project.Es.Search.WithTrackTotalHits(true),
 			)
@@ -1011,7 +1025,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	setOrg := false
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return &Org{}, err
@@ -1106,7 +1120,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	req := esapi.IndexRequest{
-		Index:      strings.ToLower(nameKey),
+		Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
 		DocumentID: id,
 		Body:       strings.NewReader(string(bytes)),
 		Refresh:    "true",
@@ -1209,7 +1223,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	nameKey := "sessions"
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), thissession)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), thissession)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return session, err
@@ -1261,7 +1275,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
 
 	if project.DbType == "elasticsearch" {
-		res, err := project.Es.Delete(strings.ToLower(entity), value)
+		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(entity)), value)
 
 		if err != nil {
 			log.Printf("[WARNING] Error in DELETE: %s", err)
@@ -1378,7 +1392,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return *api, err
@@ -1539,7 +1553,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -1623,7 +1637,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -1717,7 +1731,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	nameKey := "Users"
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), parsedKey)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), parsedKey)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return curUser, err
@@ -1926,7 +1940,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -2048,7 +2062,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -2618,7 +2632,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -2936,7 +2950,7 @@ func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, 
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -3151,7 +3165,7 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 	curUser := &ScheduleOld{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), strings.ToLower(schedulename))
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), strings.ToLower(schedulename))
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return &ScheduleOld{}, err
@@ -3207,7 +3221,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -3301,7 +3315,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 	var err error
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), hookId)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), hookId)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return &Hook{}, err
@@ -3389,7 +3403,7 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 	curFile := &File{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return &File{}, err
@@ -3497,7 +3511,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -3592,7 +3606,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return appAuth, err
@@ -3666,7 +3680,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 		// Perform the search request.
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -3737,7 +3751,7 @@ func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 	triggerauth := &TriggerAuth{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), strings.ToLower(id))
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), strings.ToLower(id))
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return &TriggerAuth{}, err
@@ -3846,7 +3860,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -3934,7 +3948,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 		// Perform the search request.
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -4064,7 +4078,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 		// Perform the search request.
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(index)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -4183,7 +4197,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 
 		res, err := project.Es.Search(
 			project.Es.Search.WithContext(context.Background()),
-			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
 		)
@@ -4359,7 +4373,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(nameKey), id)
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error: %s", err)
 			return cacheData, err
