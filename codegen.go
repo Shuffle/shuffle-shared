@@ -513,6 +513,12 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
             url = url.replace("https:///", "https://", -1)
         if not "http://" in url and not "http" in url:
             url = f"http://{url}" 
+
+        try:
+            body = json.dumps(body)
+        except:
+            pass
+
         ret = requests.%s(url, headers=request_headers, params=params%s%s%s%s)
         try:
             return ret.json()
@@ -542,7 +548,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "jira") {
+	if strings.Contains(functionname, "rule") {
 		//log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
