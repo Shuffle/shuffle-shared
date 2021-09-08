@@ -5893,63 +5893,88 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	}
 
 	if isLooping {
-		log.Printf("\n\nITS LOOPING!")
+		log.Printf("\n\n[DEBUG] ITS LOOPING!\n\n")
+	} else {
+		log.Printf("\n\n[DEBUG] ITS _NOT_ LOOPING!\n\n")
 	}
 
-	// UPDATE value
-
-	actionValue := SubflowData{
-		Success:       true,
-		ExecutionId:   executionParent,
-		Authorization: parentAuth,
-		Result:        returnValue,
-	}
-
-	parsedActionValue, err := json.Marshal(actionValue)
-	if err != nil {
-		return err
-	}
-
+	// 1. Get result of parentnode's subflow (foundResult.Result)
+	// 2. Try to marshal parent into a loop.
+	// 3. If possible, loop through and find the one matching SubflowData.ExecutionId with "executionParent"
+	// 4. If it's matching, update ONLY that one.
 	sendRequest := false
 	resultData := []byte{}
-	if len(foundResult.Action.ID) == 0 {
-		//log.Printf("Couldn't find the result!")
-		parsedAction := Action{
-			Label:       selectedTrigger.Label,
-			ID:          selectedTrigger.ID,
-			Name:        "run_subflow",
-			AppName:     "shuffle-subflow",
-			AppVersion:  "1.0.0",
-			Environment: selectedTrigger.Environment,
-			Parameters:  []WorkflowAppActionParameter{},
+	var subflowDataLoop []SubflowData
+	err = json.Unmarshal([]byte(foundResult.Result), &subflowDataLoop)
+	if err == nil {
+		for subflowIndex, subflowData := range subflowDataLoop {
+			if subflowData.ExecutionId == executionParent {
+				log.Printf("[DEBUG] Updating execution Id %s with subflow info", subflowData.ExecutionId)
+				subflowDataLoop[subflowIndex].Result = returnValue
+			}
 		}
 
-		timeNow := time.Now().Unix()
-		newResult := ActionResult{
-			Action:        parsedAction,
-			ExecutionId:   executionParent,
-			Authorization: parentAuth,
-			Result:        string(parsedActionValue),
-			StartedAt:     timeNow,
-			CompletedAt:   timeNow,
-			Status:        "SUCCESS",
-		}
-
-		resultData, err = json.Marshal(newResult)
+		//bytes.NewBuffer([]byte(resultData)),
+		resultData, err = json.Marshal(subflowDataLoop)
 		if err != nil {
+			log.Printf("[WARNING] Failed updating resultData: %s", err)
 			return err
 		}
 
 		sendRequest = true
 	} else {
-		log.Printf("Should UPDATE parentResult: %s", string(parsedActionValue))
-		foundResult.Result = string(parsedActionValue)
-		resultData, err = json.Marshal(foundResult)
+		actionValue := SubflowData{
+			Success:       true,
+			ExecutionId:   executionParent,
+			Authorization: parentAuth,
+			Result:        returnValue,
+		}
+
+		parsedActionValue, err := json.Marshal(actionValue)
 		if err != nil {
 			return err
 		}
 
-		sendRequest = true
+		// This is probably bad for loops
+		if len(foundResult.Action.ID) == 0 {
+			//log.Printf("Couldn't find the result!")
+			parsedAction := Action{
+				Label:       selectedTrigger.Label,
+				ID:          selectedTrigger.ID,
+				Name:        "run_subflow",
+				AppName:     "shuffle-subflow",
+				AppVersion:  "1.0.0",
+				Environment: selectedTrigger.Environment,
+				Parameters:  []WorkflowAppActionParameter{},
+			}
+
+			timeNow := time.Now().Unix()
+			newResult := ActionResult{
+				Action:        parsedAction,
+				ExecutionId:   executionParent,
+				Authorization: parentAuth,
+				Result:        string(parsedActionValue),
+				StartedAt:     timeNow,
+				CompletedAt:   timeNow,
+				Status:        "SUCCESS",
+			}
+
+			resultData, err = json.Marshal(newResult)
+			if err != nil {
+				return err
+			}
+
+			sendRequest = true
+		} else {
+			log.Printf("[INFO] Should UPDATE parentResult: %s", string(parsedActionValue))
+			foundResult.Result = string(parsedActionValue)
+			resultData, err = json.Marshal(foundResult)
+			if err != nil {
+				return err
+			}
+
+			sendRequest = true
+		}
 	}
 
 	if sendRequest && len(resultData) > 0 {
@@ -6850,7 +6875,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
-				log.Printf("Found execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
+				log.Printf("[DEBUG] Found execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
 
 				err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
 				if err != nil {
@@ -6900,12 +6925,42 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				//for _, result := range
 			} else {
-				log.Printf("\n\nNOT sinkholed!")
-				for resultIndex, result := range workflowExecution.Results {
-					if result.Action.ID == actionResult.Action.ID {
-						workflowExecution.Results[resultIndex] = actionResult
-						break
+				var subflowDataList []SubflowData
+				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
+				if err != nil || len(subflowDataList) == 0 {
+					log.Printf("\n\nNOT sinkholed")
+					for resultIndex, result := range workflowExecution.Results {
+						if result.Action.ID == actionResult.Action.ID {
+							workflowExecution.Results[resultIndex] = actionResult
+							break
+						}
 					}
+				} else {
+					log.Printf("\n\nLIST NOT sinkholed (%d) - Should apply list setup for same as subflow without result!\n\n", len(subflowDataList))
+
+					workflowExecution.Status = "EXECUTING"
+
+					for resultIndex, result := range workflowExecution.Results {
+						if result.Action.ID == actionResult.Action.ID {
+							workflowExecution.Results[resultIndex] = actionResult
+							break
+						}
+					}
+
+					/*
+						for _, subflowItem := range subflowDataList {
+							log.Printf("%s == %s", subflowItem.ExecutionId, workflowExecution.ExecutionId)
+
+							if len(subflowItem.Result) == 0 {
+								subflowItem.Result = workflowExecution.Result
+
+								//if subflowItem.ExecutionId == workflowExecution.ExecutionId {
+								//	log.Printf("FOUND EXECUTION ID IN SUBFLOW: %s", subflowItem.ExecutionId)
+								//tmpJson, err := json.Marshal(workflowExecution)
+								//if strings.Contains(
+							}
+						}
+					*/
 				}
 
 				dbSave = true
@@ -8500,7 +8555,9 @@ func ValidateNewWorkerExecution(body []byte) error {
 	}
 
 	// Finds if subflow HAS a value when it should, otherwise it's not being set
+	log.Printf("\n\nUpdating worker execution info")
 	for _, result := range execution.Results {
+		log.Printf("%s = %s", result.Action.AppName, result.Status)
 		if result.Action.AppName == "shuffle-subflow" {
 			if result.Status == "SKIPPED" {
 				continue

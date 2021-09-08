@@ -249,7 +249,7 @@ func addRequirements(filelocation string) {
 		return
 	}
 
-	filedata := string(data) + "\nrequests==2.25.1\nliquidpy==0.7.0\n"
+	filedata := "\nrequests==2.25.1\nliquidpy==0.7.0\nMarkupSafe==2.0.1\n" + string(data)
 	err = ioutil.WriteFile(filelocation, []byte(filedata), os.ModePerm)
 	if err != nil {
 		log.Panicf("[WARNING] failed writing data to file: %s", err)
@@ -806,9 +806,9 @@ func main() {
 
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
-	log.Printf("\n\n[INFO] Running with: \nUrl: %s\nApikey: %s\n\n", baseUrl, apikey)
-	//deployAll()
-	//return
+	log.Printf("\n\n============================= \n[INFO] Running with: \nUrl: %s\nApikey: %s\n============================= \n\n", baseUrl, apikey)
+	deployAll()
+	return
 
 	appname := "shuffle-tools"
 	appversion := "1.1.0"
