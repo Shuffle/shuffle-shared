@@ -653,6 +653,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad app configuration: need to specify correct name"}`)))
 				return
 			}
+
+			// Setting this to ensure that any new config is encrypted anew
+			auth.Encrypted = false
 		}
 	}
 
@@ -718,7 +721,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] TYPE: %s", appAuth.Type)
+	//log.Printf("[INFO] TYPE: %s", appAuth.Type)
 	if appAuth.Type == "oauth2" {
 		log.Printf("[DEBUG] OAUTH2 for workflow %s. User: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id)
 		workflow, err := GetWorkflow(ctx, appAuth.ReferenceWorkflow)
