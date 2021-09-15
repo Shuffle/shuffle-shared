@@ -8555,9 +8555,9 @@ func ValidateNewWorkerExecution(body []byte) error {
 	}
 
 	// Finds if subflow HAS a value when it should, otherwise it's not being set
-	log.Printf("\n\nUpdating worker execution info")
+	//log.Printf("\n\nUpdating worker execution info")
 	for _, result := range execution.Results {
-		log.Printf("%s = %s", result.Action.AppName, result.Status)
+		//log.Printf("%s = %s", result.Action.AppName, result.Status)
 		if result.Action.AppName == "shuffle-subflow" {
 			if result.Status == "SKIPPED" {
 				continue

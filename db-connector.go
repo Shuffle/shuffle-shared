@@ -1270,7 +1270,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			log.Printf("Couldn't delete %s:%s", entity, value)
+			log.Printf("[WARNING] Couldn't delete %s:%s. Status: %d", entity, value, res.StatusCode)
 			return nil
 		}
 

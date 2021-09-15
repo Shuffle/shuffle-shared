@@ -67,12 +67,12 @@ type WorkflowApp struct {
 	ReferenceInfo struct {
 		DocumentationUrl string `json:"documentation_url" datastore:"documentation_url"`
 		GithubUrl        string `json:"github_url" datastore:"github_url"`
-	}
+	} `json:"reference_info" datastore:"reference_info"`
 	FolderMount struct {
 		FolderMount       bool   `json:"folder_mount" datastore:"folder_mount"`
 		SourceFolder      string `json:"source_folder" datastore:"source_folder"`
 		DestinationFolder string `json:"destination_folder" datastore:"destination_folder"`
-	}
+	} `json:"folder_mount" datastore:"folder_mount"`
 	Actions        []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
 	Authentication Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
 	Tags           []string            `json:"tags" yaml:"tags" required:false datastore:"activated"`
@@ -87,6 +87,7 @@ type WorkflowApp struct {
 	ReferenceOrg   string              `json:"reference_org" datastore:"reference_org"`
 	ReferenceUrl   string              `json:"reference_url" datastore:"reference_url"`
 	ActionFilePath string              `json:"action_file_path" datastore:"action_file_path"`
+	Documentation  string              `json:"documentation" datastore:"documentation"`
 }
 
 type AppVersion struct {
