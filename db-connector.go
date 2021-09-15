@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"cloud.google.com/go/datastore"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/bradfitz/slice"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -22,6 +25,8 @@ import (
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/appengine/memcache"
+
+	elasticsearch "github.com/frikky/go-elasticsearch/v8"
 )
 
 var err error
@@ -3083,6 +3088,33 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 
 	workflowappauth.Edited = timeNow
 
+	// Will ALWAYS encrypt the values when it's not done already
+	// This makes it so just re-saving the auth will encrypt them (next run)
+
+	// Uses OrgId (Database) + Backend (ENV) modifier for the keys.
+	// Using created timestamp to ensure it's always unique, even if it's the same key of same app in same org.
+	if !workflowappauth.Encrypted {
+		//log.Printf("[INFO] Encrypting authentication values")
+		setEncrypted := true
+		newFields := []AuthenticationStore{}
+		for _, field := range workflowappauth.Fields {
+			parsedKey := fmt.Sprintf("%s_%d_%s_%s", workflowappauth.OrgId, workflowappauth.Created, workflowappauth.Label, field.Key)
+			newKey, err := handleKeyEncryption(field.Value, parsedKey)
+			if err != nil {
+				setEncrypted = false
+				break
+			}
+
+			field.Value = newKey
+			newFields = append(newFields, field)
+		}
+
+		if setEncrypted {
+			workflowappauth.Fields = newFields
+			workflowappauth.Encrypted = true
+		}
+	}
+
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
 		data, err := json.Marshal(workflowappauth)
@@ -4409,4 +4441,118 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 	}
 
 	return cacheData, nil
+}
+
+func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
+	project = ShuffleStorage{
+		Dbclient:      dbclient,
+		StorageClient: storageClient,
+		GceProject:    gceProject,
+		Environment:   environment,
+		CacheDb:       cacheDb,
+		DbType:        dbType,
+	}
+
+	requestCache = cache.New(15*time.Minute, 30*time.Minute)
+	if dbType == "elasticsearch" {
+		project.Es = *GetEsConfig()
+
+		ret, err := project.Es.Info()
+		if err != nil {
+			log.Printf("[ERROR] Failed setting up ES: %s", err)
+			return project, err
+		}
+
+		if ret.StatusCode >= 300 {
+			respBody, err := ioutil.ReadAll(ret.Body)
+			if err != nil {
+				log.Printf("[ERROR] Failed handling ES setup: %#v", ret)
+				return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
+			}
+
+			log.Printf("[ERROR] Bad Status from ES: %d", ret.StatusCode)
+			log.Printf("[ERROR] Bad Body from ES: %s", string(respBody))
+
+			return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
+		}
+	}
+
+	return project, nil
+}
+
+func GetEsConfig() *elasticsearch.Client {
+	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+	if len(esUrl) == 0 {
+		esUrl = "http://shuffle-opensearch:9200"
+	}
+
+	// https://github.com/elastic/go-elasticsearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/elasticsearch.go#L98
+	config := elasticsearch.Config{
+		Addresses: strings.Split(esUrl, ","),
+		Username:  os.Getenv("SHUFFLE_OPENSEARCH_USERNAME"),
+		Password:  os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD"),
+		APIKey:    os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
+		CloudID:   os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
+	}
+
+	//config.Transport.TLSClientConfig
+	//transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.MaxIdleConnsPerHost = 100
+	transport.ResponseHeaderTimeout = time.Second * 10
+	transport.Proxy = nil
+
+	if len(os.Getenv("SHUFFLE_OPENSEARCH_PROXY")) > 0 {
+		httpProxy := os.Getenv("SHUFFLE_OPENSEARCH_PROXY")
+
+		url_i := url.URL{}
+		url_proxy, err := url_i.Parse(httpProxy)
+		if err == nil {
+			log.Printf("[DEBUG] Setting Opensearch proxy to %s", httpProxy)
+			transport.Proxy = http.ProxyURL(url_proxy)
+		} else {
+			log.Printf("[ERROR] Failed setting proxy for %s", httpProxy)
+		}
+	}
+
+	skipSSLVerify := false
+	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
+		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
+		skipSSLVerify = true
+	}
+
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS11,
+		InsecureSkipVerify: skipSSLVerify,
+	}
+
+	//https://github.com/elastic/go-elasticsearch/blob/master/_examples/security/elasticsearch-cluster.yml
+	certificateLocation := os.Getenv("SHUFFLE_OPENSEARCH_CERTIFICATE_FILE")
+	if len(certificateLocation) > 0 {
+		cert, err := ioutil.ReadFile(certificateLocation)
+		if err != nil {
+			log.Fatalf("[WARNING] Failed configuring certificates: %s not found", err)
+		} else {
+			config.CACert = cert
+
+			//if transport.TLSClientConfig.RootCAs, err = x509.SystemCertPool(); err != nil {
+			//	log.Fatalf("[ERROR] Problem adding system CA: %s", err)
+			//}
+
+			//// --> Add the custom certificate authority
+			//if ok := transport.TLSClientConfig.RootCAs.AppendCertsFromPEM(cert); !ok {
+			//	log.Fatalf("[ERROR] Problem adding CA from file %q", *cert)
+			//}
+		}
+
+		log.Printf("[INFO] Added certificate %#v elastic client.", certificateLocation)
+	}
+	config.Transport = transport
+
+	es, err := elasticsearch.NewClient(config)
+	if err != nil {
+		log.Fatalf("[DEBUG] Database client for ELASTICSEARCH error during init (fatal): %s", err)
+	}
+
+	return es
 }

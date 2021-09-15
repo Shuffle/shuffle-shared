@@ -844,6 +844,7 @@ type AppAuthenticationStorage struct {
 	Edited            int64                 `json:"edited" datastore:"edited"`
 	Defined           bool                  `json:"defined" datastore:"defined"`
 	Type              string                `json:"type" datastore:"type"`
+	Encrypted         bool                  `json:"encrypted" datastore:"encrypted"`
 	ReferenceWorkflow string                `json:"reference_workflow" datastore:"reference_workflow"`
 }
 

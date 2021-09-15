@@ -3,13 +3,13 @@ package shuffle
 import (
 	"bytes"
 	"context"
-	"crypto/md5"
-	"crypto/tls"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -20,9 +20,10 @@ import (
 	"strings"
 	"time"
 
-	"cloud.google.com/go/datastore"
-	"cloud.google.com/go/storage"
-	elasticsearch "github.com/frikky/go-elasticsearch/v8"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/md5"
+	"crypto/rand"
 
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
@@ -30,7 +31,6 @@ import (
 
 	"github.com/google/go-github/v28/github"
 	"github.com/google/go-querystring/query"
-	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
@@ -789,6 +789,10 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// FIXME: encryption
+	//for _, param := range appAuth.Fields {
+	//}
+
 	//appAuth.LargeImage = ""
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
@@ -1170,43 +1174,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 	// Key = apikey
 	return User{}, errors.New("Missing authentication")
-}
-
-func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
-	project = ShuffleStorage{
-		Dbclient:      dbclient,
-		StorageClient: storageClient,
-		GceProject:    gceProject,
-		Environment:   environment,
-		CacheDb:       cacheDb,
-		DbType:        dbType,
-	}
-
-	requestCache = cache.New(15*time.Minute, 30*time.Minute)
-	if dbType == "elasticsearch" {
-		project.Es = *GetEsConfig()
-
-		ret, err := project.Es.Info()
-		if err != nil {
-			log.Printf("[ERROR] Failed setting up ES: %s", err)
-			return project, err
-		}
-
-		if ret.StatusCode >= 300 {
-			respBody, err := ioutil.ReadAll(ret.Body)
-			if err != nil {
-				log.Printf("[ERROR] Failed handling ES setup: %#v", ret)
-				return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
-			}
-
-			log.Printf("[ERROR] Bad Status from ES: %d", ret.StatusCode)
-			log.Printf("[ERROR] Bad Body from ES: %s", string(respBody))
-
-			return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
-		}
-	}
-
-	return project, nil
 }
 
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
@@ -7720,6 +7687,7 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	return []Action{}, []Branch{}, ""
 }
 
+/*
 func HandleGetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -7768,6 +7736,7 @@ func HandleGetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(b))
 }
+*/
 
 /*
 func CleanupExecutions(resp http.ResponseWriter, request *http.Request) {
@@ -7809,6 +7778,89 @@ func CleanupExecutions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 */
+
+// Uses a simple way to be able to modify the encryption key being used
+// FIXME: Investigate better ways of handling EVERYTHING related to encryption
+// E.g. rolling keys and such
+func create32Hash(key string) ([]byte, error) {
+	encryptionModifier := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
+	if len(encryptionModifier) == 0 {
+		return []byte{}, errors.New(fmt.Sprintf("No encryption modifier set. Define SHUFFLE_ENCRYPTION_MODIFIER and NEVER change it to start encrypting auth."))
+	}
+
+	key += encryptionModifier
+	hasher := md5.New()
+	hasher.Write([]byte(key))
+	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
+}
+
+func handleKeyEncryption(data string, passphrase string) (string, error) {
+	key, err := create32Hash(passphrase)
+	if err != nil {
+		log.Printf("[WARNING] Failed hashing in encrypt: %s", err)
+		return "", err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Printf("[WARNING] Error generating ciphertext: %s", err)
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		log.Printf("[WARNING] Error creating new GCM from block: %s", err)
+		return "", err
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
+		log.Printf("[WARNING] Error reading GCM nonce: %s", err)
+		return "", err
+	}
+
+	ciphertext := gcm.Seal(nonce, nonce, []byte(data), nil)
+
+	// base64 encoding to ensure we can store it as a string
+	parsedValue := base64.StdEncoding.EncodeToString(ciphertext)
+	return parsedValue, nil
+}
+
+func HandleKeyDecryption(data string, passphrase string) (string, error) {
+	key, err := create32Hash(passphrase)
+	if err != nil {
+		log.Printf("[WARNING] Failed hashing in decrypt: %s", err)
+		return "", err
+	}
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		log.Printf("[WARNING] Error creating cipher from key in decryption: %s", err)
+		return "", err
+	}
+
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		log.Printf("[WARNING] Error creating new GCM block in decryption: %s", err)
+		return "", err
+	}
+
+	parsedData, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
+		log.Printf("[WARNING] Failed base64 decode for an auth key: %s", err)
+		return "", err
+	}
+
+	nonceSize := gcm.NonceSize()
+	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		log.Printf("[WARNING] Error reading decryptionkey: %s", err)
+		return "", err
+	}
+
+	return string(plaintext), nil
+}
 
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -8414,83 +8466,6 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(b)
-}
-
-func GetEsConfig() *elasticsearch.Client {
-	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
-	if len(esUrl) == 0 {
-		esUrl = "http://shuffle-opensearch:9200"
-	}
-
-	// https://github.com/elastic/go-elasticsearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/elasticsearch.go#L98
-	config := elasticsearch.Config{
-		Addresses: strings.Split(esUrl, ","),
-		Username:  os.Getenv("SHUFFLE_OPENSEARCH_USERNAME"),
-		Password:  os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD"),
-		APIKey:    os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
-		CloudID:   os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
-	}
-
-	//config.Transport.TLSClientConfig
-	//transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport := http.DefaultTransport.(*http.Transport)
-	transport.MaxIdleConnsPerHost = 100
-	transport.ResponseHeaderTimeout = time.Second * 10
-	transport.Proxy = nil
-
-	if len(os.Getenv("SHUFFLE_OPENSEARCH_PROXY")) > 0 {
-		httpProxy := os.Getenv("SHUFFLE_OPENSEARCH_PROXY")
-
-		url_i := url.URL{}
-		url_proxy, err := url_i.Parse(httpProxy)
-		if err == nil {
-			log.Printf("[DEBUG] Setting Opensearch proxy to %s", httpProxy)
-			transport.Proxy = http.ProxyURL(url_proxy)
-		} else {
-			log.Printf("[ERROR] Failed setting proxy for %s", httpProxy)
-		}
-	}
-
-	skipSSLVerify := false
-	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
-		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
-		skipSSLVerify = true
-	}
-
-	transport.TLSClientConfig = &tls.Config{
-		MinVersion:         tls.VersionTLS11,
-		InsecureSkipVerify: skipSSLVerify,
-	}
-
-	//https://github.com/elastic/go-elasticsearch/blob/master/_examples/security/elasticsearch-cluster.yml
-	certificateLocation := os.Getenv("SHUFFLE_OPENSEARCH_CERTIFICATE_FILE")
-	if len(certificateLocation) > 0 {
-		cert, err := ioutil.ReadFile(certificateLocation)
-		if err != nil {
-			log.Fatalf("[WARNING] Failed configuring certificates: %s not found", err)
-		} else {
-			config.CACert = cert
-
-			//if transport.TLSClientConfig.RootCAs, err = x509.SystemCertPool(); err != nil {
-			//	log.Fatalf("[ERROR] Problem adding system CA: %s", err)
-			//}
-
-			//// --> Add the custom certificate authority
-			//if ok := transport.TLSClientConfig.RootCAs.AppendCertsFromPEM(cert); !ok {
-			//	log.Fatalf("[ERROR] Problem adding CA from file %q", *cert)
-			//}
-		}
-
-		log.Printf("[INFO] Added certificate %#v elastic client.", certificateLocation)
-	}
-	config.Transport = transport
-
-	es, err := elasticsearch.NewClient(config)
-	if err != nil {
-		log.Fatalf("[DEBUG] Database client for ELASTICSEARCH error during init (fatal): %s", err)
-	}
-
-	return es
 }
 
 func md5sum(data []byte) string {
