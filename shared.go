@@ -40,6 +40,7 @@ import (
 
 var project ShuffleStorage
 var baseDockerName = "frikky/shuffle"
+var SSOUrl = ""
 
 func getContext(request *http.Request) context.Context {
 	if project.Environment == "cloud" {
@@ -239,19 +240,22 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	http.SetCookie(resp, &http.Cookie{
-		Name:    "session_token",
-		Value:   "",
-		Path:    "/",
-		Expires: time.Unix(0, 0),
-	})
-
-	http.SetCookie(resp, &http.Cookie{
-		Name:    "session_token",
-		Value:   "",
-		Path:    "/workflows",
-		Expires: time.Unix(0, 0),
-	})
+	c, err := request.Cookie("session_token")
+	if err == nil {
+		http.SetCookie(resp, &http.Cookie{
+			Name:    "session_token",
+			Value:   c.Value,
+			Expires: time.Now().Add(-100 * time.Hour),
+			MaxAge:  -1,
+		})
+	} else {
+		http.SetCookie(resp, &http.Cookie{
+			Name:    "session_token",
+			Value:   "",
+			Expires: time.Now().Add(-100 * time.Hour),
+			MaxAge:  -1,
+		})
+	}
 
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -272,9 +276,9 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetSession(ctx, userInfo, "")
 	if err != nil {
-		log.Printf("Error removing session for: %s", err)
+		log.Printf("[WARNING] Error removing session in logout: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed reseting sessions"}`))
 		return
 	}
 
@@ -1157,18 +1161,38 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	if err == nil {
 		sessionToken := c.Value
 		session, err := GetSession(ctx, sessionToken)
-		log.Printf("[INFO] Found cookie %s", sessionToken)
 		if err != nil {
+			http.SetCookie(resp, &http.Cookie{
+				Name:    "session_token",
+				Value:   sessionToken,
+				Expires: time.Now().Add(-100 * time.Hour),
+				MaxAge:  -1,
+			})
+
 			return User{}, err
 		}
 
 		user, err := GetUser(ctx, session.UserId)
 		if err != nil {
 			log.Printf("[INFO] User with Identifier %s doesn't exist: %s", session.UserId, err)
+			http.SetCookie(resp, &http.Cookie{
+				Name:    "session_token",
+				Value:   sessionToken,
+				Expires: time.Now().Add(-100 * time.Hour),
+				MaxAge:  -1,
+			})
+
 			return User{}, err
 		}
 
 		if len(user.Id) == 0 && len(user.Username) == 0 {
+			http.SetCookie(resp, &http.Cookie{
+				Name:    "session_token",
+				Value:   sessionToken,
+				Expires: time.Now().Add(-100 * time.Hour),
+				MaxAge:  -1,
+			})
+
 			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 		}
 
@@ -4635,7 +4659,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in cloud setup: %s", err)
+		log.Printf("[WARNING] Api authentication failed in creating sub org: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -4794,7 +4818,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in cloud setup: %s", err)
+		log.Printf("[WARNING] Api authentication failed in edit org: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -4815,11 +4839,12 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type ReturnData struct {
-		Image       string   `json:"image" datastore:"image"`
-		Name        string   `json:"name" datastore:"name"`
-		Description string   `json:"description" datastore:"description"`
-		OrgId       string   `json:"org_id" datastore:"org_id"`
-		Defaults    Defaults `json:"defaults" datastore:"defaults"`
+		Image       string    `json:"image" datastore:"image"`
+		Name        string    `json:"name" datastore:"name"`
+		Description string    `json:"description" datastore:"description"`
+		OrgId       string    `json:"org_id" datastore:"org_id"`
+		Defaults    Defaults  `json:"defaults" datastore:"defaults"`
+		SSOConfig   SSOConfig `json:"sso_config" datastore:"sso_config"`
 	}
 
 	var tmpData ReturnData
@@ -4830,6 +4855,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+	//log.Printf("SSO: %#v", tmpData.SSOConfig)
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
@@ -4891,6 +4917,19 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	org.Name = tmpData.Name
 	org.Description = tmpData.Description
 	org.Defaults = tmpData.Defaults
+
+	savedCert := fixCertificate(tmpData.SSOConfig.SSOCertificate)
+
+	log.Printf("[INFO] Stripped down cert from %d to %d", len(tmpData.SSOConfig.SSOCertificate), len(savedCert))
+
+	org.SSOConfig = tmpData.SSOConfig
+	org.SSOConfig.SSOCertificate = savedCert
+
+	// if requestdata.Environment == "cloud" && project.Environment != "cloud" {
+	if project.Environment != "cloud" && len(org.SSOConfig.SSOEntrypoint) > 0 && len(org.ManagerOrgs) == 0 {
+		log.Printf("[INFO] Should set SSO entrypoint to %s", org.SSOConfig.SSOEntrypoint)
+		SSOUrl = org.SSOConfig.SSOEntrypoint
+	}
 
 	//log.Printf("Org: %#v", org)
 	err = SetOrg(ctx, *org, org.Id)
@@ -8600,6 +8639,20 @@ func ValidateNewWorkerExecution(body []byte) error {
 	return nil
 }
 
+func fixCertificate(parsedX509Key string) string {
+	if strings.Contains(parsedX509Key, "BEGIN CERT") && strings.Contains(parsedX509Key, "END CERT") {
+		parsedX509Key = strings.Replace(parsedX509Key, "-----BEGIN CERTIFICATE-----\n", "", -1)
+		parsedX509Key = strings.Replace(parsedX509Key, "-----BEGIN CERTIFICATE-----", "", -1)
+		parsedX509Key = strings.Replace(parsedX509Key, "-----END CERTIFICATE-----\n", "", -1)
+		parsedX509Key = strings.Replace(parsedX509Key, "-----END CERTIFICATE-----", "", -1)
+	}
+
+	parsedX509Key = strings.Replace(parsedX509Key, "\n", "", -1)
+	parsedX509Key = strings.Replace(parsedX509Key, " ", "", -1)
+	parsedX509Key = strings.TrimSpace(parsedX509Key)
+	return parsedX509Key
+}
+
 // Example implementation of SSO, including a redirect for the user etc
 // Should make this stuff only possible after login
 func HandleSSO(resp http.ResponseWriter, request *http.Request) {
@@ -8613,12 +8666,14 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	// Serialize
 
 	// SAML
-	savedCert := os.Getenv("SHUFFLE_CERTIFICATE_X509_SSO")
 	entryPoint := "https://dev-23367303.okta.com/app/dev-23367303_shuffletest_1/exk1vg1j7bYUYEG0k5d7/sso/saml"
-	issuer := "http://localhost:5001"
-	redirectUrl := "http://localhost:3000/login"
+	//issuer := "http://localhost:5001"
+	//_ = issuer
+	redirectUrl := "http://localhost:3000/workflows"
+
+	//log.Printf("URL: %#v", request.URL)
+	log.Printf("REDIRECT: %s", redirectUrl)
 	_ = entryPoint
-	_ = issuer
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -8670,28 +8725,41 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if strings.Contains(savedCert, "BEGIN CERT") && strings.Contains(savedCert, "END CERT") {
-		savedCert = strings.Replace(savedCert, "-----BEGIN CERTIFICATE-----\n", "", -1)
-		savedCert = strings.Replace(savedCert, "-----BEGIN CERTIFICATE-----", "", -1)
-		savedCert = strings.Replace(savedCert, "-----END CERTIFICATE-----\n", "", -1)
-		savedCert = strings.Replace(savedCert, "-----END CERTIFICATE-----", "", -1)
-	}
-
-	savedCert = strings.TrimSpace(savedCert)
-
-	// There is a bug with XML namespaces in Go that's causing XML attributes with colons to not be roundtrip
-	// marshal and unmarshaled so we'll keep the original string around for validation.
-	//log.Printf("%s", string(bytesXML))
-	//log.Printf("\n\nX509 (%d): \n%s", len(samlResp.Signature.KeyInfo.X509Data.X509Certificate), samlResp.Signature.KeyInfo.X509Data.X509Certificate)
-	//log.Printf("\n\nOLDCERT (%d): \n%s", len(savedCert), savedCert)
-
-	if strings.TrimSpace(savedCert) != strings.TrimSpace(samlResp.Signature.KeyInfo.X509Data.X509Certificate) {
-		log.Printf("[WARNING] Bad certificate: X509 doesnt match environment SHUFFLE_CERTIFICATE_X509_SSO")
+	parsedX509Key := fixCertificate(samlResp.Signature.KeyInfo.X509Data.X509Certificate)
+	ctx := getContext(request)
+	matchingOrgs, err := GetOrgByField(ctx, "sso_config.sso_certificate", parsedX509Key)
+	if err != nil {
+		log.Printf("[WARNING] Bad certificate: Failed to find a org with certificate matching the SSO")
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "env SHUFFLE_CERTIFICATE_X509_SSO doesn't match the apps certificate"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an org with the right certificate"}`)))
 		return
 	}
 
+	// Validating the orgs
+	if len(matchingOrgs) >= 1 {
+		newOrgs := []Org{}
+		for _, org := range matchingOrgs {
+			if org.SSOConfig.SSOCertificate == parsedX509Key {
+				newOrgs = append(newOrgs, org)
+			} else {
+				log.Printf("[WARNING] Skipping org append because bad cert: %d vs %d", len(org.SSOConfig.SSOCertificate), len(parsedX509Key))
+
+				log.Printf(parsedX509Key)
+				log.Printf(org.SSOConfig.SSOCertificate)
+			}
+		}
+
+		matchingOrgs = newOrgs
+	}
+
+	if len(matchingOrgs) != 1 {
+		log.Printf("[WARNING] Bad certificate: X509 doesnt match certificate for any organization")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Certificate for SSO doesn't match any organization"}`)))
+		return
+	}
+
+	foundOrg := matchingOrgs[0]
 	userName := samlResp.Assertion.Subject.NameID.Text
 	if len(userName) == 0 {
 		log.Printf("[WARNING] Failed finding user - No name: %#v", samlResp.Assertion.Subject)
@@ -8703,7 +8771,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	// Start actually fixing the user
 	// 1. Check if the user exists - if it does - give it a valid cookie
 	// 2. If it doesn't, find the correct org to connect them with, then register them
-	ctx := getContext(request)
 
 	if project.Environment == "cloud" {
 		log.Printf("[WARNING] SAML SSO implemented for cloud yet")
@@ -8719,7 +8786,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 			if user.Username == userName {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
 
-				log.Printf("SESSION: %s", user.Session)
+				//log.Printf("SESSION: %s", user.Session)
 
 				expiration := time.Now().Add(3600 * time.Second)
 				//if len(user.Session) == 0 {
@@ -8755,21 +8822,23 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	orgs, err := GetAllOrgs(ctx)
-	if err != nil {
-		log.Printf("[WARNING] Failed finding orgs during SSO setup: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting valid organizations"}`)))
-		return
-	}
-
-	foundOrg := Org{}
-	for _, org := range orgs {
-		if len(org.ManagerOrgs) == 0 {
-			foundOrg = org
-			break
+	/*
+		orgs, err := GetAllOrgs(ctx)
+		if err != nil {
+			log.Printf("[WARNING] Failed finding orgs during SSO setup: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting valid organizations"}`)))
+			return
 		}
-	}
+
+		foundOrg := Org{}
+		for _, org := range orgs {
+			if len(org.ManagerOrgs) == 0 {
+				foundOrg = org
+				break
+			}
+		}
+	*/
 
 	if len(foundOrg.Id) == 0 {
 		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
@@ -8788,7 +8857,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.CreationTime = time.Now().Unix()
 	newUser.Orgs = []string{foundOrg.Id}
 	newUser.LoginType = "SSO"
-	newUser.Role = "admin"
+	newUser.Role = "user"
 	newUser.Session = uuid.NewV4().String()
 
 	verifyToken := uuid.NewV4()
@@ -8796,6 +8865,25 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.Id = ID.String()
 	newUser.VerificationToken = verifyToken.String()
 
+	expiration := time.Now().Add(3600 * time.Second)
+	//if len(user.Session) == 0 {
+	log.Printf("[INFO] User does NOT have session - creating")
+	sessionToken := uuid.NewV4().String()
+	http.SetCookie(resp, &http.Cookie{
+		Name:    "session_token",
+		Value:   sessionToken,
+		Expires: expiration,
+	})
+
+	err = SetSession(ctx, *newUser, sessionToken)
+	if err != nil {
+		log.Printf("[WARNING] Error creating session for user: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+		return
+	}
+
+	newUser.Session = sessionToken
 	err = SetUser(ctx, newUser, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new user in DB: %s", err)

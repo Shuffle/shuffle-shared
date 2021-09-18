@@ -4080,6 +4080,88 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 	return executions, nil
 }
 
+func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) {
+	nameKey := "Organizations"
+
+	var orgs []Org
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						{
+							"match": map[string]interface{}{
+								fieldName: value,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return orgs, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response from Opensearch (get app exec values): %s", err)
+			return orgs, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return orgs, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return orgs, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return orgs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return orgs, err
+		}
+
+		wrapped := OrgSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return orgs, err
+		}
+
+		orgs = []Org{}
+		for _, hit := range wrapped.Hits.Hits {
+			orgs = append(orgs, hit.Source)
+		}
+	}
+
+	return orgs, nil
+}
+
 func GetAllOrgs(ctx context.Context) ([]Org, error) {
 	index := "Organizations"
 	var orgs []Org
@@ -4454,7 +4536,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
-	if dbType == "elasticsearch" {
+	if dbType == "elasticsearch" || dbType == "opensearch" {
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
@@ -4474,6 +4556,21 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			log.Printf("[ERROR] Bad Body from ES: %s", string(respBody))
 
 			return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
+		} else {
+			//log.Printf("\n\n[INFO] Should check for SSO during setup - finding main org\n\n")
+			ctx := context.Background()
+			orgs, err := GetAllOrgs(ctx)
+			if err == nil {
+				for _, org := range orgs {
+					if len(org.ManagerOrgs) == 0 && len(org.SSOConfig.SSOEntrypoint) > 0 {
+						log.Printf("[INFO] Set initial SSO url for logins to %s", org.SSOConfig.SSOEntrypoint)
+						SSOUrl = org.SSOConfig.SSOEntrypoint
+						break
+					}
+				}
+			} else {
+				log.Printf("[WARNING] Error loading orgs: %s", err)
+			}
 		}
 	}
 

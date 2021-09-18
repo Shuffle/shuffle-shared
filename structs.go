@@ -510,6 +510,7 @@ type Org struct {
 	ChildOrgs       []OrgMini             `json:"child_orgs" datastore:"child_orgs"`
 	ManagerOrgs     []OrgMini             `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
 	CreatorOrg      string                `json:"creator_org" datastore:"creator_org"`
+	SSOConfig       SSOConfig             `json:"sso_config" datastore:"sso_config"`
 }
 
 type Defaults struct {
@@ -1602,6 +1603,11 @@ type DataToSend struct {
 type FileResponse struct {
 	Files      []File   `json:"files" datastore:"files"`
 	Namespaces []string `json:"namespaces" datastore:"namespaces"`
+}
+
+type SSOConfig struct {
+	SSOEntrypoint  string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
+	SSOCertificate string `json:"sso_certificate" datastore:"sso_certificate"`
 }
 
 type SAMLResponse struct {
