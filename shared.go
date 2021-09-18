@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
@@ -242,6 +243,13 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		Name:    "session_token",
 		Value:   "",
 		Path:    "/",
+		Expires: time.Unix(0, 0),
+	})
+
+	http.SetCookie(resp, &http.Cookie{
+		Name:    "session_token",
+		Value:   "",
+		Path:    "/workflows",
 		Expires: time.Unix(0, 0),
 	})
 
@@ -1149,8 +1157,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	if err == nil {
 		sessionToken := c.Value
 		session, err := GetSession(ctx, sessionToken)
+		log.Printf("[INFO] Found cookie %s", sessionToken)
 		if err != nil {
-			//log.Printf("[DEBUG] Session %#v doesn't exist: %s", sessionToken, err)
 			return User{}, err
 		}
 
@@ -8590,4 +8598,214 @@ func ValidateNewWorkerExecution(body []byte) error {
 	}
 
 	return nil
+}
+
+// Example implementation of SSO, including a redirect for the user etc
+// Should make this stuff only possible after login
+func HandleSSO(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	//log.Printf("SSO LOGIN: %#v", request)
+	// Deserialize
+	// Serialize
+
+	// SAML
+	savedCert := os.Getenv("SHUFFLE_CERTIFICATE_X509_SSO")
+	entryPoint := "https://dev-23367303.okta.com/app/dev-23367303_shuffletest_1/exk1vg1j7bYUYEG0k5d7/sso/saml"
+	issuer := "http://localhost:5001"
+	redirectUrl := "http://localhost:3000/login"
+	_ = entryPoint
+	_ = issuer
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read of SSO: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//log.Printf("BODY: %s", string(body))
+	//log.Printf("BODY2: %s", request.FormValue("SAMLResponse"))
+
+	// Parsing out without using Field
+	parsedSAML := ""
+	for _, item := range strings.Split(string(body), "&") {
+		if strings.Contains(item, "SAMLResponse") {
+			equalsplit := strings.Split(item, "=")
+			if len(equalsplit) == 2 {
+				//log.Printf("ITEM: %s", equalsplit[1])
+
+				decodedValue, err := url.QueryUnescape(equalsplit[1])
+				if err != nil {
+					log.Printf("[WARNING] Failed url query escape: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed decoding saml value"}`)))
+					return
+				}
+
+				parsedSAML = decodedValue
+				break
+			}
+		}
+	}
+
+	bytesXML, err := base64.StdEncoding.DecodeString(parsedSAML)
+	if err != nil {
+		log.Printf("[WARNING] Failed base64 decode of SAML: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed base64 decoding in SAML"}`)))
+		return
+	}
+
+	var samlResp SAMLResponse
+	err = xml.Unmarshal(bytesXML, &samlResp)
+	if err != nil {
+		log.Printf("[WARNING] Failed XML unmarshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed XML unpacking in SAML"}`)))
+		return
+	}
+
+	if strings.Contains(savedCert, "BEGIN CERT") && strings.Contains(savedCert, "END CERT") {
+		savedCert = strings.Replace(savedCert, "-----BEGIN CERTIFICATE-----\n", "", -1)
+		savedCert = strings.Replace(savedCert, "-----BEGIN CERTIFICATE-----", "", -1)
+		savedCert = strings.Replace(savedCert, "-----END CERTIFICATE-----\n", "", -1)
+		savedCert = strings.Replace(savedCert, "-----END CERTIFICATE-----", "", -1)
+	}
+
+	savedCert = strings.TrimSpace(savedCert)
+
+	// There is a bug with XML namespaces in Go that's causing XML attributes with colons to not be roundtrip
+	// marshal and unmarshaled so we'll keep the original string around for validation.
+	//log.Printf("%s", string(bytesXML))
+	//log.Printf("\n\nX509 (%d): \n%s", len(samlResp.Signature.KeyInfo.X509Data.X509Certificate), samlResp.Signature.KeyInfo.X509Data.X509Certificate)
+	//log.Printf("\n\nOLDCERT (%d): \n%s", len(savedCert), savedCert)
+
+	if strings.TrimSpace(savedCert) != strings.TrimSpace(samlResp.Signature.KeyInfo.X509Data.X509Certificate) {
+		log.Printf("[WARNING] Bad certificate: X509 doesnt match environment SHUFFLE_CERTIFICATE_X509_SSO")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "env SHUFFLE_CERTIFICATE_X509_SSO doesn't match the apps certificate"}`)))
+		return
+	}
+
+	userName := samlResp.Assertion.Subject.NameID.Text
+	if len(userName) == 0 {
+		log.Printf("[WARNING] Failed finding user - No name: %#v", samlResp.Assertion.Subject)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding a user to authenticate"}`)))
+		return
+	}
+
+	// Start actually fixing the user
+	// 1. Check if the user exists - if it does - give it a valid cookie
+	// 2. If it doesn't, find the correct org to connect them with, then register them
+	ctx := getContext(request)
+
+	if project.Environment == "cloud" {
+		log.Printf("[WARNING] SAML SSO implemented for cloud yet")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud SSO not available for you"}`)))
+		return
+	}
+
+	users, err := FindUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	if err == nil && len(users) > 0 {
+
+		for _, user := range users {
+			if user.Username == userName {
+				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
+
+				log.Printf("SESSION: %s", user.Session)
+
+				expiration := time.Now().Add(3600 * time.Second)
+				//if len(user.Session) == 0 {
+				log.Printf("[INFO] User does NOT have session - creating")
+				sessionToken := uuid.NewV4().String()
+				http.SetCookie(resp, &http.Cookie{
+					Name:    "session_token",
+					Value:   sessionToken,
+					Expires: expiration,
+				})
+
+				err = SetSession(ctx, user, sessionToken)
+				if err != nil {
+					log.Printf("[WARNING] Error creating session for user: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+					return
+				}
+
+				user.Session = sessionToken
+				err = SetUser(ctx, &user, false)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
+					return
+				}
+
+				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
+				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
+				return
+			}
+		}
+	}
+
+	orgs, err := GetAllOrgs(ctx)
+	if err != nil {
+		log.Printf("[WARNING] Failed finding orgs during SSO setup: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting valid organizations"}`)))
+		return
+	}
+
+	foundOrg := Org{}
+	for _, org := range orgs {
+		if len(org.ManagerOrgs) == 0 {
+			foundOrg = org
+			break
+		}
+	}
+
+	if len(foundOrg.Id) == 0 {
+		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
+		return
+	}
+
+	log.Printf("[AUDIT] Adding user %s to org %s (%s) through single sign-on", userName, foundOrg.Name, foundOrg.Id)
+	newUser := new(User)
+	// Random password to ensure its not empty
+	newUser.Password = uuid.NewV4().String()
+	newUser.Username = userName
+	newUser.Verified = true
+	newUser.Active = true
+	newUser.CreationTime = time.Now().Unix()
+	newUser.Orgs = []string{foundOrg.Id}
+	newUser.LoginType = "SSO"
+	newUser.Role = "admin"
+	newUser.Session = uuid.NewV4().String()
+
+	verifyToken := uuid.NewV4()
+	ID := uuid.NewV4()
+	newUser.Id = ID.String()
+	newUser.VerificationToken = verifyToken.String()
+
+	err = SetUser(ctx, newUser, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting new user in DB: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed updating the user"}`)))
+		return
+	}
+
+	returnData := fmt.Sprintf(`{"success": true, "reason": "Successful login."}`)
+	resp.WriteHeader(200)
+	resp.Write([]byte(returnData))
+	return
 }

@@ -3,6 +3,7 @@ package shuffle
 import (
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
+	"encoding/xml"
 	"github.com/frikky/go-elasticsearch/v8"
 	"time"
 )
@@ -277,6 +278,7 @@ type User struct {
 	ActiveOrg         OrgMini       `json:"active_org" datastore:"active_org"`
 	Active            bool          `datastore:"active" json:"active"`
 	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
+	LoginType         string        `datastore:"login_type" json:"login_type"`
 }
 
 type Session struct {
@@ -1600,4 +1602,154 @@ type DataToSend struct {
 type FileResponse struct {
 	Files      []File   `json:"files" datastore:"files"`
 	Namespaces []string `json:"namespaces" datastore:"namespaces"`
+}
+
+type SAMLResponse struct {
+	XMLName      xml.Name `xml:"Response"`
+	Text         string   `xml:",chardata"`
+	Destination  string   `xml:"Destination,attr"`
+	ID           string   `xml:"ID,attr"`
+	IssueInstant string   `xml:"IssueInstant,attr"`
+	Version      string   `xml:"Version,attr"`
+	Saml2p       string   `xml:"saml2p,attr"`
+	Issuer       struct {
+		Text   string `xml:",chardata"`
+		Format string `xml:"Format,attr"`
+		Saml2  string `xml:"saml2,attr"`
+	} `xml:"Issuer"`
+	Signature struct {
+		Text       string `xml:",chardata"`
+		Ds         string `xml:"ds,attr"`
+		SignedInfo struct {
+			Text                   string `xml:",chardata"`
+			CanonicalizationMethod struct {
+				Text      string `xml:",chardata"`
+				Algorithm string `xml:"Algorithm,attr"`
+			} `xml:"CanonicalizationMethod"`
+			SignatureMethod struct {
+				Text      string `xml:",chardata"`
+				Algorithm string `xml:"Algorithm,attr"`
+			} `xml:"SignatureMethod"`
+			Reference struct {
+				Text       string `xml:",chardata"`
+				URI        string `xml:"URI,attr"`
+				Transforms struct {
+					Text      string `xml:",chardata"`
+					Transform []struct {
+						Text      string `xml:",chardata"`
+						Algorithm string `xml:"Algorithm,attr"`
+					} `xml:"Transform"`
+				} `xml:"Transforms"`
+				DigestMethod struct {
+					Text      string `xml:",chardata"`
+					Algorithm string `xml:"Algorithm,attr"`
+				} `xml:"DigestMethod"`
+				DigestValue string `xml:"DigestValue"`
+			} `xml:"Reference"`
+		} `xml:"SignedInfo"`
+		SignatureValue string `xml:"SignatureValue"`
+		KeyInfo        struct {
+			Text     string `xml:",chardata"`
+			X509Data struct {
+				Text            string `xml:",chardata"`
+				X509Certificate string `xml:"X509Certificate"`
+			} `xml:"X509Data"`
+		} `xml:"KeyInfo"`
+	} `xml:"Signature"`
+	Status struct {
+		Text       string `xml:",chardata"`
+		Saml2p     string `xml:"saml2p,attr"`
+		StatusCode struct {
+			Text  string `xml:",chardata"`
+			Value string `xml:"Value,attr"`
+		} `xml:"StatusCode"`
+	} `xml:"Status"`
+	Assertion struct {
+		Text         string `xml:",chardata"`
+		ID           string `xml:"ID,attr"`
+		IssueInstant string `xml:"IssueInstant,attr"`
+		Version      string `xml:"Version,attr"`
+		Saml2        string `xml:"saml2,attr"`
+		Issuer       struct {
+			Text   string `xml:",chardata"`
+			Format string `xml:"Format,attr"`
+			Saml2  string `xml:"saml2,attr"`
+		} `xml:"Issuer"`
+		Signature struct {
+			Text       string `xml:",chardata"`
+			Ds         string `xml:"ds,attr"`
+			SignedInfo struct {
+				Text                   string `xml:",chardata"`
+				CanonicalizationMethod struct {
+					Text      string `xml:",chardata"`
+					Algorithm string `xml:"Algorithm,attr"`
+				} `xml:"CanonicalizationMethod"`
+				SignatureMethod struct {
+					Text      string `xml:",chardata"`
+					Algorithm string `xml:"Algorithm,attr"`
+				} `xml:"SignatureMethod"`
+				Reference struct {
+					Text       string `xml:",chardata"`
+					URI        string `xml:"URI,attr"`
+					Transforms struct {
+						Text      string `xml:",chardata"`
+						Transform []struct {
+							Text      string `xml:",chardata"`
+							Algorithm string `xml:"Algorithm,attr"`
+						} `xml:"Transform"`
+					} `xml:"Transforms"`
+					DigestMethod struct {
+						Text      string `xml:",chardata"`
+						Algorithm string `xml:"Algorithm,attr"`
+					} `xml:"DigestMethod"`
+					DigestValue string `xml:"DigestValue"`
+				} `xml:"Reference"`
+			} `xml:"SignedInfo"`
+			SignatureValue string `xml:"SignatureValue"`
+			KeyInfo        struct {
+				Text     string `xml:",chardata"`
+				X509Data struct {
+					Text            string `xml:",chardata"`
+					X509Certificate string `xml:"X509Certificate"`
+				} `xml:"X509Data"`
+			} `xml:"KeyInfo"`
+		} `xml:"Signature"`
+		Subject struct {
+			Text   string `xml:",chardata"`
+			Saml2  string `xml:"saml2,attr"`
+			NameID struct {
+				Text   string `xml:",chardata"`
+				Format string `xml:"Format,attr"`
+			} `xml:"NameID"`
+			SubjectConfirmation struct {
+				Text                    string `xml:",chardata"`
+				Method                  string `xml:"Method,attr"`
+				SubjectConfirmationData struct {
+					Text         string `xml:",chardata"`
+					NotOnOrAfter string `xml:"NotOnOrAfter,attr"`
+					Recipient    string `xml:"Recipient,attr"`
+				} `xml:"SubjectConfirmationData"`
+			} `xml:"SubjectConfirmation"`
+		} `xml:"Subject"`
+		Conditions struct {
+			Text                string `xml:",chardata"`
+			NotBefore           string `xml:"NotBefore,attr"`
+			NotOnOrAfter        string `xml:"NotOnOrAfter,attr"`
+			Saml2               string `xml:"saml2,attr"`
+			AudienceRestriction struct {
+				Text     string `xml:",chardata"`
+				Audience string `xml:"Audience"`
+			} `xml:"AudienceRestriction"`
+		} `xml:"Conditions"`
+		AuthnStatement struct {
+			Text         string `xml:",chardata"`
+			AuthnInstant string `xml:"AuthnInstant,attr"`
+			SessionIndex string `xml:"SessionIndex,attr"`
+			Saml2        string `xml:"saml2,attr"`
+			AuthnContext struct {
+				Text                 string `xml:",chardata"`
+				AuthnContextClassRef string `xml:"AuthnContextClassRef"`
+			} `xml:"AuthnContext"`
+		} `xml:"AuthnStatement"`
+	} `xml:"Assertion"`
 }
