@@ -3136,7 +3136,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 			return err
 		}
 
-		indexEs(ctx, nameKey, id, data)
+		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
 		}
