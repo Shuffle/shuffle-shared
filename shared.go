@@ -4666,7 +4666,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Role != "admin" {
-		log.Printf("Not admin.")
+		log.Printf("[WARNING] Not admin: %s (%s).", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
@@ -4825,7 +4825,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Role != "admin" {
-		log.Printf("Not admin.")
+		log.Printf("[WARNING] Not admin: %s (%s).", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
@@ -8672,7 +8672,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	redirectUrl := "http://localhost:3000/workflows"
 
 	//log.Printf("URL: %#v", request.URL)
-	log.Printf("REDIRECT: %s", redirectUrl)
+	//log.Printf("REDIRECT: %s", redirectUrl)
 	_ = entryPoint
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -8725,11 +8725,19 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	parsedX509Key := fixCertificate(samlResp.Signature.KeyInfo.X509Data.X509Certificate)
+	baseCertificate := samlResp.Signature.KeyInfo.X509Data.X509Certificate
+	if len(baseCertificate) == 0 {
+		log.Printf("%#v", samlResp.Signature.KeyInfo.X509Data)
+		baseCertificate = samlResp.Assertion.Signature.KeyInfo.X509Data.X509Certificate
+	}
+
+	parsedX509Key := fixCertificate(baseCertificate)
 	ctx := getContext(request)
 	matchingOrgs, err := GetOrgByField(ctx, "sso_config.sso_certificate", parsedX509Key)
 	if err != nil {
-		log.Printf("[WARNING] Bad certificate: Failed to find a org with certificate matching the SSO")
+		log.Printf("[DEBUG] BYTES FROM REQUEST: %s", string(bytesXML))
+
+		log.Printf("[WARNING] Bad certificate (%d): Failed to find a org with certificate matching the SSO", len(parsedX509Key))
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an org with the right certificate"}`)))
 		return
@@ -8753,7 +8761,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(matchingOrgs) != 1 {
-		log.Printf("[WARNING] Bad certificate: X509 doesnt match certificate for any organization")
+		log.Printf("[WARNING] Bad certificate (%d): X509 doesnt match certificate for any organization", len(parsedX509Key))
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Certificate for SSO doesn't match any organization"}`)))
 		return
@@ -8892,8 +8900,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	returnData := fmt.Sprintf(`{"success": true, "reason": "Successful login."}`)
-	resp.WriteHeader(200)
-	resp.Write([]byte(returnData))
+	http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 	return
 }
