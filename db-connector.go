@@ -29,7 +29,6 @@ import (
 	elasticsearch "github.com/frikky/go-elasticsearch/v8"
 )
 
-
 var err error
 var requestCache *cache.Cache
 
@@ -1618,6 +1617,99 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 
 	log.Printf("[INFO] Found %d apps for name %s in db-connector", len(apps), appName)
 	return apps, nil
+}
+
+func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
+	var users []User
+
+	nameKey := "Users"
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"generated_username": username,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return []User{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response from Opensearch (find user): %s", err)
+			return []User{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return []User{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return []User{}, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []User{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []User{}, err
+		}
+
+		wrapped := UserSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return []User{}, err
+		}
+
+		users = []User{}
+		for _, hit := range wrapped.Hits.Hits {
+			users = append(users, hit.Source)
+		}
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("Username =", username)
+		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil && len(users) == 0 {
+			log.Printf("[WARNING] Failed getting users for username: %s", username)
+			return users, err
+		}
+	}
+
+	newUsers := []User{}
+	parsedUsername := strings.ToLower(strings.TrimSpace(username))
+	for _, user := range users {
+		if strings.ToLower(strings.TrimSpace(user.GeneratedUsername)) != parsedUsername {
+			continue
+		}
+
+		newUsers = append(newUsers, user)
+	}
+
+	log.Printf("[INFO] Found %d (%d) user(s) for username %s in db-connector", len(newUsers), len(users), username)
+	return newUsers, nil
 }
 
 func FindUser(ctx context.Context, username string) ([]User, error) {

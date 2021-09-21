@@ -222,6 +222,15 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	org.SyncConfig.Apikey = ""
 	org.SyncConfig.Source = ""
 
+	if !admin {
+		org.Defaults = Defaults{}
+		org.SSOConfig = SSOConfig{}
+		org.Subscriptions = []PaymentSubscription{}
+		org.ManagerOrgs = []OrgMini{}
+		org.ChildOrgs = []OrgMini{}
+		org.Invites = []string{}
+	}
+
 	newjson, err := json.Marshal(org)
 	if err != nil {
 		log.Printf("Failed unmarshal of org: %s", err)
@@ -646,7 +655,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if user.Role != "admin" {
-				log.Printf("[WARNING] User isn't admin during auth edit")
+				log.Printf("[AUDIT] User isn't admin during auth edit")
 				resp.WriteHeader(409)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": ":("}`)))
 				return
@@ -1619,7 +1628,7 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Role != "admin" {
-		log.Printf("[WARNING] User isn't admin during auth edit config")
+		log.Printf("[AUDIT] User isn't admin during auth edit config")
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
 		return
@@ -1857,6 +1866,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	defaultRole := foundUser.Role
 	orgFound := false
 	for _, item := range foundUser.Orgs {
 		if item == userInfo.ActiveOrg.Id {
@@ -1866,13 +1876,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !orgFound {
-		log.Printf("[WARNING] User %s is admin, but can't edit users outside their own org.", userInfo.Id)
+		log.Printf("[AUDIT] User %s is admin, but can't edit users outside their own org.", userInfo.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 		return
 	}
 
-	if t.Role != "admin" && t.Role != "user" {
+	if t.Role != "admin" && t.Role != "user" && t.Role != "" {
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to role user and admin"}`)))
@@ -1890,7 +1900,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		foundUser.Roles = []string{t.Role}
 	}
 
-	if len(t.Username) > 0 {
+	if len(t.Username) > 0 && project.Environment != "cloud" {
 		users, err := FindUser(ctx, strings.ToLower(strings.TrimSpace(t.Username)))
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Failed getting user %s: %s", t.Username, err)
@@ -1914,11 +1924,14 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		foundUser.Username = t.Username
+		if foundUser.Role == "" {
+			foundUser.Role = defaultRole
+		}
 	}
 
 	err = SetUser(ctx, foundUser, true)
 	if err != nil {
-		log.Printf("Error patching user %s: %s", foundUser.Username, err)
+		log.Printf("[WARNING] Error patching user %s: %s", foundUser.Username, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
@@ -3476,7 +3489,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Role != "admin" {
-		log.Printf("[INFO] User isn't admin (%s) and can't list users.", user.Role)
+		log.Printf("[AUDIT] User isn't admin (%s) and can't list users.", user.Role)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
@@ -8640,6 +8653,7 @@ func ValidateNewWorkerExecution(body []byte) error {
 }
 
 func fixCertificate(parsedX509Key string) string {
+	parsedX509Key = strings.Replace(parsedX509Key, "&#13;", "", -1)
 	if strings.Contains(parsedX509Key, "BEGIN CERT") && strings.Contains(parsedX509Key, "END CERT") {
 		parsedX509Key = strings.Replace(parsedX509Key, "-----BEGIN CERTIFICATE-----\n", "", -1)
 		parsedX509Key = strings.Replace(parsedX509Key, "-----BEGIN CERTIFICATE-----", "", -1)
@@ -8647,9 +8661,14 @@ func fixCertificate(parsedX509Key string) string {
 		parsedX509Key = strings.Replace(parsedX509Key, "-----END CERTIFICATE-----", "", -1)
 	}
 
+	// PingOne issue
+	parsedX509Key = strings.Replace(parsedX509Key, "\r\n", "", -1)
 	parsedX509Key = strings.Replace(parsedX509Key, "\n", "", -1)
+	parsedX509Key = strings.Replace(parsedX509Key, "\r", "", -1)
 	parsedX509Key = strings.Replace(parsedX509Key, " ", "", -1)
 	parsedX509Key = strings.TrimSpace(parsedX509Key)
+	//log.Printf("Len: %d", len(parsedX509Key))
+	//log.Printf("%#v", parsedX509Key)
 	return parsedX509Key
 }
 
@@ -8727,15 +8746,17 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	baseCertificate := samlResp.Signature.KeyInfo.X509Data.X509Certificate
 	if len(baseCertificate) == 0 {
-		log.Printf("%#v", samlResp.Signature.KeyInfo.X509Data)
+		//log.Printf("%#v", samlResp.Signature.KeyInfo.X509Data)
 		baseCertificate = samlResp.Assertion.Signature.KeyInfo.X509Data.X509Certificate
 	}
 
+	//log.Printf("\n\n%d - CERT: %s\n\n", len(baseCertificate), baseCertificate)
 	parsedX509Key := fixCertificate(baseCertificate)
+
 	ctx := getContext(request)
 	matchingOrgs, err := GetOrgByField(ctx, "sso_config.sso_certificate", parsedX509Key)
 	if err != nil {
-		log.Printf("[DEBUG] BYTES FROM REQUEST: %s", string(bytesXML))
+		log.Printf("[DEBUG] BYTES FROM REQUEST (DEBUG): %s", string(bytesXML))
 
 		log.Printf("[WARNING] Bad certificate (%d): Failed to find a org with certificate matching the SSO", len(parsedX509Key))
 		resp.WriteHeader(401)
@@ -8752,8 +8773,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 			} else {
 				log.Printf("[WARNING] Skipping org append because bad cert: %d vs %d", len(org.SSOConfig.SSOCertificate), len(parsedX509Key))
 
-				log.Printf(parsedX509Key)
-				log.Printf(org.SSOConfig.SSOCertificate)
+				//log.Printf(parsedX509Key)
+				//log.Printf(org.SSOConfig.SSOCertificate)
 			}
 		}
 
@@ -8761,7 +8782,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(matchingOrgs) != 1 {
-		log.Printf("[WARNING] Bad certificate (%d): X509 doesnt match certificate for any organization", len(parsedX509Key))
+		log.Printf("[DEBUG] BYTES FROM REQUEST (2 - DEBUG): %s", string(bytesXML))
+		log.Printf("[WARNING] Bad certificate (%d). Original orgs: %d: X509 doesnt match certificate for any organization", len(parsedX509Key), len(matchingOrgs))
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Certificate for SSO doesn't match any organization"}`)))
 		return
@@ -8787,9 +8809,52 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	users, err := FindUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
+		for _, user := range users {
+			log.Printf("%s - %s", user.GeneratedUsername, userName)
+			if user.GeneratedUsername == userName {
+				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
 
+				//log.Printf("SESSION: %s", user.Session)
+
+				expiration := time.Now().Add(3600 * time.Second)
+				//if len(user.Session) == 0 {
+				log.Printf("[INFO] User does NOT have session - creating")
+				sessionToken := uuid.NewV4().String()
+				http.SetCookie(resp, &http.Cookie{
+					Name:    "session_token",
+					Value:   sessionToken,
+					Expires: expiration,
+				})
+
+				err = SetSession(ctx, user, sessionToken)
+				if err != nil {
+					log.Printf("[WARNING] Error creating session for user: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+					return
+				}
+
+				user.Session = sessionToken
+				err = SetUser(ctx, &user, false)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
+					return
+				}
+
+				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
+				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
+				return
+			}
+		}
+	}
+
+	// Normal user. Checking because of backwards compatibility. Shouldn't break anything as we have unique names
+	users, err = FindUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
+	if err == nil && len(users) > 0 {
 		for _, user := range users {
 			if user.Username == userName {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
@@ -8860,6 +8925,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	// Random password to ensure its not empty
 	newUser.Password = uuid.NewV4().String()
 	newUser.Username = userName
+	newUser.GeneratedUsername = userName
 	newUser.Verified = true
 	newUser.Active = true
 	newUser.CreationTime = time.Now().Unix()

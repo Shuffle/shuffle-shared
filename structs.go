@@ -279,6 +279,7 @@ type User struct {
 	Active            bool          `datastore:"active" json:"active"`
 	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
 	LoginType         string        `datastore:"login_type" json:"login_type"`
+	GeneratedUsername string        `datastore:"generated_username" json:"generated_username"`
 }
 
 type Session struct {
