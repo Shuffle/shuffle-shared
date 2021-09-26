@@ -1543,10 +1543,24 @@ type CacheKeyWrapper struct {
 	Source      CacheKeyData `json:"_source"`
 }
 
+type GithubAuthor struct {
+	Name     string `json:"name"`
+	Url      string `json:"url"`
+	ImageUrl string `json:"image"`
+}
+
+type GithubResp struct {
+	Name         string         `json:"name"`
+	Contributors []GithubAuthor `json:"contributors"`
+	Edited       string         `json:"edited"`
+	ReadTime     int            `json:"read_time"`
+	Link         string         `json:"link"`
+}
+
 type FileList struct {
-	Success bool     `json:"success"`
-	Reason  string   `json:"reason"`
-	List    []string `json:"list"`
+	Success bool         `json:"success"`
+	Reason  string       `json:"reason"`
+	List    []GithubResp `json:"list"`
 }
 
 type SessionCookie struct {

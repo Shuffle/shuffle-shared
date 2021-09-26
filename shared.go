@@ -8414,9 +8414,12 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	docPath := fmt.Sprintf("https://raw.githubusercontent.com/frikky/shuffle-docs/master/docs/%s.md", location[4])
+	owner := "shuffle"
+	repo := "shuffle-docs"
+	path := "docs"
+	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
 
-	client := &http.Client{}
+	httpClient := &http.Client{}
 	req, err := http.NewRequest(
 		"GET",
 		docPath,
@@ -8424,32 +8427,81 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	)
 
 	if err != nil {
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"}`)))
 		resp.WriteHeader(404)
 		return
 	}
 
-	newresp, err := client.Do(req)
+	newresp, err := httpClient.Do(req)
 	if err != nil {
 		resp.WriteHeader(404)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"}`)))
 		return
 	}
 
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't parse data"`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't parse data"}`)))
 		return
 	}
 
+	commitOptions := &github.CommitsListOptions{
+		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
+	}
+
+	client := github.NewClient(nil)
+	githubResp := GithubResp{
+		Name:         location[4],
+		Contributors: []GithubAuthor{},
+		Edited:       "",
+		ReadTime:     len(body) / 10 / 250,
+		Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s.md", owner, repo, path, location[4]),
+	}
+
+	if githubResp.ReadTime == 0 {
+		githubResp.ReadTime = 1
+	}
+
+	info, _, err := client.Repositories.ListCommits(ctx, owner, repo, commitOptions)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting commit info: %s", err)
+	} else {
+		//log.Printf("Info: %#v", info)
+		for _, commit := range info {
+			//log.Printf("Commit: %#v", commit.Author)
+			newAuthor := GithubAuthor{}
+			if commit.Author != nil && commit.Author.AvatarURL != nil {
+				newAuthor.ImageUrl = *commit.Author.AvatarURL
+			}
+
+			if commit.Author != nil && commit.Author.HTMLURL != nil {
+				newAuthor.Url = *commit.Author.HTMLURL
+			}
+
+			found := false
+			for _, contributor := range githubResp.Contributors {
+				if contributor.Url == newAuthor.Url {
+					found = true
+					break
+				}
+			}
+
+			if !found && len(newAuthor.Url) > 0 && len(newAuthor.ImageUrl) > 0 {
+				githubResp.Contributors = append(githubResp.Contributors, newAuthor)
+			}
+		}
+	}
+
 	type Result struct {
-		Success bool   `json:"success"`
-		Reason  string `json:"reason"`
+		Success bool       `json:"success"`
+		Reason  string     `json:"reason"`
+		Meta    GithubResp `json:"meta"`
 	}
 
 	var result Result
 	result.Success = true
+	result.Meta = githubResp
 
 	//applog.Infof(ctx, string(body))
 	//applog.Infof(ctx, "Url: %s", docPath)
@@ -8464,7 +8516,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetCache(ctx, cacheKey, b)
 	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
+		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
 	}
 
 	resp.WriteHeader(200)
@@ -8489,27 +8541,42 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	client := github.NewClient(nil)
-
-	_, item1, _, err := client.Repositories.GetContents(ctx, "shaffuru", "shuffle-docs", "docs", nil)
+	owner := "shuffle"
+	repo := "shuffle-docs"
+	path := "docs"
+	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
 		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
 		return
 	}
 
 	if len(item1) == 0 {
 		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No docs available."`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No docs available."}`)))
 		return
 	}
 
-	names := []string{}
+	names := []GithubResp{}
 	for _, item := range item1 {
 		if !strings.HasSuffix(*item.Name, "md") {
 			continue
 		}
 
-		names = append(names, (*item.Name)[0:len(*item.Name)-3])
+		// Average word length = 5. Space = 1. 5+1 = 6 avg.
+		// Words = *item.Size/6/250
+		//250 = average read time / minute
+		// Doubling this for bloat removal in Markdown~
+		// Should fix this lol
+		githubResp := GithubResp{
+			Name:         (*item.Name)[0 : len(*item.Name)-3],
+			Contributors: []GithubAuthor{},
+			Edited:       "",
+			ReadTime:     *item.Size / 6 / 250,
+			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
+		}
+
+		names = append(names, githubResp)
 	}
 
 	//log.Println(names)
