@@ -376,10 +376,13 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				url = ""
 			}
 		}
-
 	} else {
+		tmpUrl := ""
+		if len(urlSplit) > 2 {
+			tmpUrl = "/" + strings.Join(urlSplit[3:len(urlSplit)], "/")
+		}
 		if !strings.HasPrefix(url, "/") {
-			url = ""
+			url = tmpUrl
 		}
 	}
 
@@ -520,6 +523,30 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
             pass
 
         ret = requests.%s(url, headers=request_headers, params=params%s%s%s%s)
+        try:
+            found = False
+            for item in self.action["parameters"]:
+                if item["name"] == "response_status":
+                    found = True
+                    break
+
+            if not found:
+                self.action["parameters"].append({
+                    "name": "shuffle_response_status",
+                    "value": f"{ret.status_code}",
+                })
+                self.action["parameters"].append({
+                    "name": "shuffle_response_length",
+                    "value": f"{len(ret.text)}",
+                })
+                self.action["parameters"].append({
+                    "name": "shuffle_request_url",
+                    "value": f"{url}",
+                })
+                self.action_result["action"] = self.action
+                print("Updated values in self.action_result from OpenAPI app!") 
+        except Exception as e:
+            print(f"Something went wrong when adding extra returns. {e}")
         try:
             return ret.json()
         except json.decoder.JSONDecodeError:
