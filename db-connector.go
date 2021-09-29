@@ -585,6 +585,114 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 	return workflowApp, nil
 }
 
+func SetSubscriptionRecipient(ctx context.Context, sub SubscriptionRecipient, id string) error {
+	nameKey := "gmail_subscription"
+	sub.Edited = int(time.Now().Unix())
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(sub)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in setSub: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &sub); err != nil {
+			log.Printf("Error adding sub: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for setworkflow: %s", err)
+		}
+	}
+
+	return nil
+}
+
+func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionRecipient, error) {
+	sub := &SubscriptionRecipient{}
+	nameKey := "gmail_subscription"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &sub)
+			if err == nil {
+				return sub, nil
+			}
+		} else {
+			log.Printf("[DEBUG] Failed getting cache for sub: %s", err)
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return sub, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return sub, errors.New("HistoryId doesn't exist")
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return sub, err
+		}
+
+		wrapped := SubWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return sub, err
+		}
+
+		sub = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, sub); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[INFO] Error in sub loading. Migrating sub to new sub handler.")
+				err = nil
+			} else {
+				return &SubscriptionRecipient{}, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		log.Printf("[DEBUG] Setting cache for sub %s", cacheKey)
+		data, err := json.Marshal(sub)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getsub: %s", err)
+			return sub, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getsub: %s", err)
+		}
+	}
+
+	return sub, nil
+}
+
 func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	workflow := &Workflow{}
 	nameKey := "workflow"
@@ -1276,6 +1384,10 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 func DeleteKey(ctx context.Context, entity string, value string) error {
 	// Non indexed User data
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
+	if len(value) == 0 {
+		log.Printf("[WARNING] Couldn't delete %s because value (id) must be longer than 0", entity)
+		return errors.New("Value to delete must be larger than 0")
+	}
 
 	if project.DbType == "elasticsearch" {
 		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(entity)), value)

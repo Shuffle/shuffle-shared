@@ -1086,6 +1086,18 @@ type OutlookProfile struct {
 	ID                string      `json:"id"`
 }
 
+type GmailLabels struct {
+	Labels []GmailLabel `json:"labels"`
+}
+
+type GmailLabel struct {
+	ID                    string `json:"id"`
+	Name                  string `json:"name"`
+	MessageListVisibility string `json:"messageListVisibility"`
+	LabelListVisibility   string `json:"labelListVisibility"`
+	Type                  string `json:"type"`
+}
+
 type OutlookFolder struct {
 	ID               string `json:"id"`
 	DisplayName      string `json:"displayName"`
@@ -1398,6 +1410,30 @@ type SessionWrapper struct {
 	PrimaryTerm int     `json:"_primary_term"`
 	Found       bool    `json:"found"`
 	Source      Session `json:"_source"`
+}
+
+type SubscriptionRecipient struct {
+	HistoryId  string `json:"history_id"`
+	TriggerId  string `json:"trigger_id"`
+	Edited     int    `json:"edited"`
+	Expiration string `json:"expiration"`
+	LastSync   int    `json:"last_sync"`
+}
+
+type SubResponse struct {
+	HistoryId  string `json:"historyId"`
+	Expiration string `json:"expiration`
+}
+
+type SubWrapper struct {
+	Index       string                `json:"_index"`
+	Type        string                `json:"_type"`
+	ID          string                `json:"_id"`
+	Version     int                   `json:"_version"`
+	SeqNo       int                   `json:"_seq_no"`
+	PrimaryTerm int                   `json:"_primary_term"`
+	Found       bool                  `json:"found"`
+	Source      SubscriptionRecipient `json:"_source"`
 }
 
 type WorkflowWrapper struct {
@@ -1773,4 +1809,19 @@ type SAMLResponse struct {
 			} `xml:"AuthnContext"`
 		} `xml:"AuthnStatement"`
 	} `xml:"Assertion"`
+}
+
+type WrappedData struct {
+	Data        string `json:"data"`
+	MessageId   string `json:"message_id"`
+	PublishTime string `json:"publish_time"`
+}
+
+type Inputdata struct {
+	Message      WrappedData `json:"message"`
+	Subscription string      `json:"subscription"`
+}
+type ParsedMessage struct {
+	EmailAddress string `json:"emailAddress"`
+	HistoryId    int    `json:"historyId"`
 }
