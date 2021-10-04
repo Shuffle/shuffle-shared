@@ -6423,6 +6423,24 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
+		// Add an else for HTTP request errors with success "false"
+		// These could be "silent" issues
+		if actionResult.Status == "FAILURE" {
+			log.Printf("[DEBUG] Result is failure. Making notification.")
+			err = createOrgNotification(
+				ctx,
+				fmt.Sprintf("Error in Workflow %#v", workflowExecution.Workflow.Name),
+				fmt.Sprintf("Node %s in Workflow %s was found to have an error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
+				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
+				workflowExecution.ExecutionOrg,
+				true,
+			)
+
+			if err != nil {
+				log.Printf("[WARNING] Failed making org notification: %s", err)
+			}
+		}
+
 		newResults := []ActionResult{}
 		childNodes := []string{}
 		if workflowExecution.Workflow.Configuration.ExitOnError {

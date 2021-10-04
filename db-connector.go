@@ -3633,6 +3633,45 @@ func SetHook(ctx context.Context, hook Hook) error {
 	return nil
 }
 
+func GetNotification(ctx context.Context, id string) (*Notification, error) {
+	nameKey := "notifications"
+	curFile := &Notification{}
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return &Notification{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return &Notification{}, errors.New("Notification with that ID doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &Notification{}, err
+		}
+
+		wrapped := NotificationWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &Notification{}, err
+		}
+
+		curFile = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
+			return &Notification{}, err
+		}
+
+	}
+
+	return curFile, nil
+}
+
 func GetFile(ctx context.Context, id string) (*File, error) {
 	nameKey := "Files"
 	curFile := &File{}
@@ -3672,6 +3711,39 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 	return curFile, nil
 }
 
+func SetNotification(ctx context.Context, notification Notification) error {
+	// clear session_token and API_token for user
+	timeNow := time.Now().Unix()
+	if notification.CreatedAt == 0 {
+		notification.CreatedAt = timeNow
+	}
+
+	notification.UpdatedAt = timeNow
+	nameKey := "notifications"
+	//log.Printf("SETTING NOTIFICATION: %#v", notification)
+
+	if project.DbType == "elasticsearch" {
+		data, err := json.Marshal(notification)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling set notification: %s", err)
+			return err
+		}
+
+		err = indexEs(ctx, nameKey, notification.Id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		k := datastore.NameKey(nameKey, notification.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, k, &notification); err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	return nil
+}
+
 func SetFile(ctx context.Context, file File) error {
 	// clear session_token and API_token for user
 	timeNow := time.Now().Unix()
@@ -3698,6 +3770,204 @@ func SetFile(ctx context.Context, file File) error {
 	}
 
 	return nil
+}
+
+func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, error) {
+	var notifications []Notification
+
+	nameKey := "notifications"
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": orgId,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return notifications, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response from Opensearch (get files): %s", err)
+			return notifications, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return notifications, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return notifications, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return notifications, err
+		}
+
+		wrapped := NotificationSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return notifications, err
+		}
+
+		notifications = []Notification{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.OrgId == orgId {
+				notifications = append(notifications, hit.Source)
+			}
+		}
+
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(100)
+
+		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+		if err != nil && len(notifications) == 0 {
+			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+				q = q.Limit(50)
+				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+				if err != nil && len(notifications) == 0 {
+					return notifications, err
+				}
+			} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+				log.Printf("[INFO] Failed loading SOME notifications - skipping: %s", err)
+			} else {
+				return notifications, err
+			}
+		}
+	}
+
+	return notifications, nil
+}
+
+func GetUserNotifications(ctx context.Context, userId string) ([]Notification, error) {
+	var notifications []Notification
+
+	nameKey := "notifications"
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"user_id": userId,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return notifications, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error getting response from Opensearch (get user notifications): %s", err)
+			return notifications, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return notifications, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return notifications, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return notifications, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return notifications, err
+		}
+
+		wrapped := NotificationSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return notifications, err
+		}
+
+		//log.Printf("[DEBUG] Have %d notifications for user %s", len(wrapped.Hits.Hits), userId)
+
+		notifications = []Notification{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.UserId == userId {
+				notifications = append(notifications, hit.Source)
+			}
+		}
+
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(100)
+
+		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+		if err != nil && len(notifications) == 0 {
+			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
+				q = q.Limit(50)
+				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+				if err != nil && len(notifications) == 0 {
+					return notifications, err
+				}
+			} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+				log.Printf("[INFO] Failed loading SOME notifications - skipping: %s", err)
+			} else {
+				return notifications, err
+			}
+		}
+	}
+
+	return notifications, nil
 }
 
 func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {

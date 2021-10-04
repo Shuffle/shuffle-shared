@@ -805,6 +805,24 @@ type AuthenticationUsage struct {
 	Nodes      []string `json:"nodes" datastore:"nodes"`
 }
 
+type Notification struct {
+	Image             string   `json:"image" datastore:"image"`
+	CreatedAt         int64    `json:"created_at" datastore:"created_at"`
+	UpdatedAt         int64    `json:"updated_at" datastore:"updated_at"`
+	Title             string   `json:"title" datastore:"title"`
+	Description       string   `json:"description" datastore:"description"`
+	OrgId             string   `json:"org_id" datastore:"org_id"`
+	UserId            string   `json:"user_id" datastore:"user_id"`
+	Tags              []string `json:"tags" datastore:"tags"`
+	Amount            int      `json:"amount" datastore:"amount"`
+	Id                string   `json:"id" datastore:"id"`
+	ReferenceUrl      string   `json:"reference_url" datastore:"reference_url"`
+	OrgNotificationId string   `json:"org_notification_id" datastore:"org_notification_id"`
+	Dismissable       bool     `json:"dismissable" datastore:"dismissable"`
+	Personal          bool     `json:"personal" datastore:"personal"`
+	Read              bool     `json:"read" datastore:"read"`
+}
+
 type File struct {
 	Id           string   `json:"id" datastore:"id"`
 	Type         string   `json:"type" datastore:"type"`
@@ -1251,6 +1269,31 @@ type ScheduleSearchWrapper struct {
 	} `json:"hits"`
 }
 
+type NotificationSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string       `json:"_index"`
+			Type   string       `json:"_type"`
+			ID     string       `json:"_id"`
+			Score  float64      `json:"_score"`
+			Source Notification `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type FileSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -1500,6 +1543,17 @@ type AppAuthWrapper struct {
 	PrimaryTerm int                      `json:"_primary_term"`
 	Found       bool                     `json:"found"`
 	Source      AppAuthenticationStorage `json:"_source"`
+}
+
+type NotificationWrapper struct {
+	Index       string       `json:"_index"`
+	Type        string       `json:"_type"`
+	ID          string       `json:"_id"`
+	Version     int          `json:"_version"`
+	SeqNo       int          `json:"_seq_no"`
+	PrimaryTerm int          `json:"_primary_term"`
+	Found       bool         `json:"found"`
+	Source      Notification `json:"_source"`
 }
 
 type FileWrapper struct {
@@ -1824,4 +1878,9 @@ type Inputdata struct {
 type ParsedMessage struct {
 	EmailAddress string `json:"emailAddress"`
 	HistoryId    int    `json:"historyId"`
+}
+
+type NotificationResponse struct {
+	Success       bool           `json:"success"`
+	Notifications []Notification `json:"notifications"`
 }
