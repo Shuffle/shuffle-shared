@@ -740,8 +740,9 @@ type Workflow struct {
 	Triggers       []Trigger  `json:"triggers" datastore:"triggers,noindex"`
 	Schedules      []Schedule `json:"schedules" datastore:"schedules,noindex"`
 	Configuration  struct {
-		ExitOnError  bool `json:"exit_on_error" datastore:"exit_on_error"`
-		StartFromTop bool `json:"start_from_top" datastore:"start_from_top"`
+		ExitOnError       bool `json:"exit_on_error" datastore:"exit_on_error"`
+		StartFromTop      bool `json:"start_from_top" datastore:"start_from_top"`
+		SkipNotifications bool `json:"skip_notifications" datastore:"skip_notifications"`
 	} `json:"configuration,omitempty" datastore:"configuration"`
 	Created              int64      `json:"created" datastore:"created"`
 	Edited               int64      `json:"edited" datastore:"edited"`

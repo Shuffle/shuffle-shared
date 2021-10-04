@@ -6423,21 +6423,23 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
-		// Add an else for HTTP request errors with success "false"
-		// These could be "silent" issues
-		if actionResult.Status == "FAILURE" {
-			log.Printf("[DEBUG] Result is failure. Making notification.")
-			err = createOrgNotification(
-				ctx,
-				fmt.Sprintf("Error in Workflow %#v", workflowExecution.Workflow.Name),
-				fmt.Sprintf("Node %s in Workflow %s was found to have an error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
-				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
-				workflowExecution.ExecutionOrg,
-				true,
-			)
+		if workflowExecution.Workflow.Configuration.SkipNotifications == false {
+			// Add an else for HTTP request errors with success "false"
+			// These could be "silent" issues
+			if actionResult.Status == "FAILURE" {
+				log.Printf("[DEBUG] Result is failure. Making notification.")
+				err = createOrgNotification(
+					ctx,
+					fmt.Sprintf("Error in Workflow %#v", workflowExecution.Workflow.Name),
+					fmt.Sprintf("Node %s in Workflow %s was found to have an error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
+					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
+					workflowExecution.ExecutionOrg,
+					true,
+				)
 
-			if err != nil {
-				log.Printf("[WARNING] Failed making org notification: %s", err)
+				if err != nil {
+					log.Printf("[WARNING] Failed making org notification: %s", err)
+				}
 			}
 		}
 
@@ -6739,6 +6741,31 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				workflowExecution.Results = append(workflowExecution.Results, res)
 			}
 		}
+	}
+
+	if actionResult.Status == "SUCCESS" && workflowExecution.Workflow.Configuration.SkipNotifications == false {
+		// Marshal default failures
+		type ResultChecker struct {
+			Success bool   `json:"success"`
+			Reason  string `json:"reason"`
+		}
+		resultCheck := ResultChecker{}
+		err = json.Unmarshal([]byte(actionResult.Result), &resultCheck)
+		if err == nil {
+			log.Printf("Unmarshal success!")
+			if resultCheck.Success == false {
+				err = createOrgNotification(
+					ctx,
+					fmt.Sprintf("Potential error in Workflow %#v", workflowExecution.Workflow.Name),
+					fmt.Sprintf("Node %s in Workflow %s failed silently. Click to see more. Reason: %#v", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason),
+					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
+					workflowExecution.ExecutionOrg,
+					true,
+				)
+			}
+		}
+
+		log.Printf("[DEBUG] Ran marshal on silent failure")
 	}
 
 	// FIXME rebuild to be like this or something
