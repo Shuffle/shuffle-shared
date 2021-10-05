@@ -3927,8 +3927,19 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 			"from": 0,
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"user_id": userId,
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"user_id": userId,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"read": false,
+							},
+						},
+					},
 				},
 			},
 		}

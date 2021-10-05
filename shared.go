@@ -6752,7 +6752,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		resultCheck := ResultChecker{}
 		err = json.Unmarshal([]byte(actionResult.Result), &resultCheck)
 		if err == nil {
-			log.Printf("Unmarshal success!")
+			//log.Printf("Unmarshal success!")
 			if resultCheck.Success == false {
 				err = createOrgNotification(
 					ctx,

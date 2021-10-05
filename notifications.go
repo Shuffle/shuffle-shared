@@ -11,6 +11,17 @@ import (
 	"strings"
 )
 
+// Standalone to make it work many places
+func markNotificationRead(ctx context.Context, notification *Notification) error {
+	notification.Read = true
+	err = SetNotification(ctx, *notification)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -65,8 +76,7 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	notification.Read = true
-	err = SetNotification(ctx, *notification)
+	err = markNotificationRead(ctx, notification)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating notification %s (%s) to read: %s", notification.Title, notification.Id, err)
 		resp.WriteHeader(500)
@@ -78,6 +88,57 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 
 	return
+}
+
+func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// 1. Check user directly
+	// 2. Check workflow execution authorization
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] INITIAL Api authentication failed in notification list: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	/*
+		if user.Role != "admin" {
+			log.Printf("[AUTH] User isn't admin")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Need to be admin to list files"}`)))
+			return
+		}
+	*/
+
+	ctx := getContext(request)
+	notifications, err := GetUserNotifications(ctx, user.Id)
+	if err != nil && len(notifications) == 0 {
+		log.Printf("[ERROR] Failed to get notifications (clear): %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error getting notifications."}`)))
+		return
+	}
+
+	for _, notification := range notifications {
+		err = markNotificationRead(ctx, &notification)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating notification %s (%s) to read (clear): %s", notification.Title, notification.Id, err)
+			continue
+			//resp.WriteHeader(500)
+			//resp.Write([]byte(`{"success": false, "reason": "Failed to mark it as read"}`))
+			//return
+		}
+	}
+
+	log.Printf("[INFO] Cleared all notifications for user %s (%s)", user.Username, user.Id)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }
 
 func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
@@ -163,17 +224,42 @@ func createOrgNotification(ctx context.Context, title, description, referenceUrl
 		return err
 	}
 
-	log.Printf("[DEBUG] Found %d notifications for org %s", len(notifications))
+	log.Printf("[DEBUG] Found %d notifications for org %s. Merge?", len(notifications), orgId)
 	foundNotifications := []Notification{}
 	for _, notification := range notifications {
-		if notification.Title == title && notification.ReferenceUrl == referenceUrl {
+		// notification.Title == title &&
+		//log.Printf("%s vs %s", notification.ReferenceUrl, referenceUrl)
+		if notification.Title == title && notification.Description == description {
 			foundNotifications = append(foundNotifications, notification)
 		}
 	}
 
+	log.Printf("[DEBUG] New found length: %d", len(foundNotifications))
 	if len(foundNotifications) > 0 {
 		// FIXME: This may have bugs for old workflows with new users (not being rediscovered)
-		log.Printf("[INFO] That notitification already exists (%s)", title)
+		usersHandled := []string{}
+		// Make sure to only reopen one per user
+		for _, notification := range foundNotifications {
+			if ArrayContains(usersHandled, notification.UserId) {
+				continue
+			}
+
+			if notification.Read == false {
+				usersHandled = append(usersHandled, notification.UserId)
+				continue
+			}
+
+			notification.Read = false
+			notification.Amount += 1
+			err = SetNotification(ctx, notification)
+			if err != nil {
+				log.Printf("[WARNING] Failed to reopen notification %s for user %s", notification.Title, notification.UserId)
+			} else {
+				log.Printf("[INFO] Reopened notification %s for %s", notification.Title, notification.UserId)
+				usersHandled = append(usersHandled, notification.UserId)
+			}
+		}
+
 		return nil
 	} else {
 		log.Printf("[INFO] Notification with title %#v is being made for users in org %s", title, orgId)
