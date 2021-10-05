@@ -555,12 +555,48 @@ func GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowApp); err != nil {
-			log.Printf("[WARNING] Failed getting app in GetApp: %s", err)
+			log.Printf("[WARNING] Failed getting app in GetApp: %s. Actions: %d", err, len(workflowApp.Actions))
 			for _, app := range user.PrivateApps {
 				if app.ID == id {
 					workflowApp = &app
 					break
 				}
+			}
+
+			// Exists in case of "too large" issues.
+			if (len(workflowApp.ID) == 0 || len(workflowApp.Actions) == 0) && project.Environment == "cloud" {
+				internalBucket := "shuffler.appspot.com"
+				fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", id)
+				log.Printf("[DEBUG] Couldn't find working app for %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
+				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+
+				client, err := storage.NewClient(ctx)
+				if err != nil {
+					log.Printf("[WARNING] Failed to create client (storage - algolia img): %s", err)
+					return workflowApp, err
+				}
+
+				bucket := client.Bucket(internalBucket)
+				obj := bucket.Object(fullParsedPath)
+				fileReader, err := obj.NewReader(ctx)
+				if err != nil {
+					log.Printf("[WARNING] Failed making reader for %s: %s", fullParsedPath, err)
+					return workflowApp, err
+				}
+
+				data, err := ioutil.ReadAll(fileReader)
+				if err != nil {
+					log.Printf("[WARNING] Failed reading from filereader: %s", err)
+					return workflowApp, err
+				}
+
+				err = json.Unmarshal(data, &workflowApp)
+				if err != nil {
+					log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
+					return workflowApp, err
+				}
+
+				defer fileReader.Close()
 			}
 		}
 	}
@@ -773,7 +809,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 	// Appending the users' workflows
 	nameKey := "workflow"
-	log.Printf("[INFO] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
+	log.Printf("[AUDIT] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -1536,7 +1572,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			internalBucket := "shuffler.appspot.com"
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
 			//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-			log.Printf("[WARNING] Couldn't find openapi for %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
+			log.Printf("[DEBUG] Couldn't find openapi for %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
 
 			client, err := storage.NewClient(ctx)
 			if err != nil {
@@ -2391,7 +2427,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return GetAllWorkflowApps(ctx, 1000)
 	}
 
-	log.Printf("[INFO] Getting apps for user %s with active org %s", user.Username, user.ActiveOrg.Id)
+	log.Printf("[AUDIT] Getting apps for user %s with active org %s", user.Username, user.ActiveOrg.Id)
 	allApps := []WorkflowApp{}
 	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
@@ -2406,8 +2442,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				return allApps, nil
 			} else {
 				log.Println(string(cacheData))
-				log.Printf("Failed unmarshaling apps: %s", err)
-				log.Printf("DATALEN: %d", len(cacheData))
+				log.Printf("[ERROR] Failed unmarshaling apps: %s", err)
+				log.Printf("[ERROR] DATALEN: %d", len(cacheData))
 			}
 		} else {
 			log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
@@ -2752,7 +2788,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		var newApps = make([]WorkflowApp, len(allKeys))
 		err = project.Dbclient.GetMulti(ctx, allKeys, newApps)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting org apps: %s", err)
+			log.Printf("[WARNING] Failed getting org apps: %s. Apps: %d", err, len(newApps))
 		}
 
 		// IF the app doesn't have actions, check OpenAPI
@@ -2760,22 +2796,34 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		// 2. Parse OpenAPI for it to get the actions
 		for appIndex, app := range newApps {
 			if len(app.Actions) == 0 && len(app.Name) > 0 {
-				log.Printf("%s has %d actions (%s)", app.Name, len(app.Actions), app.ID)
+				log.Printf("[WARNING] %s has %d actions (%s)", app.Name, len(app.Actions), app.ID)
 
-				parsedApi, err := GetOpenApiDatastore(ctx, app.ID)
+				newApp, err := GetApp(ctx, app.ID, user)
 				if err != nil {
-					log.Printf("[WARNING] Failed to find OpenAPI while parsing %s", app)
+					log.Printf("[WARNING] Failed to find app while parsing %s", app)
 					continue
+				} else {
+					log.Printf("[DEBUG] Found action %s (%s) directly with %d actions", app.Name, app.ID, len(newApp.Actions))
+					newApps[appIndex] = *newApp
 				}
 
-				_ = parsedApi
-				// Hardcoded for a test sample
-				newActions := []WorkflowAppAction{}
-				if app.ID == "SentinelOne" {
-					newActions = append(newActions, WorkflowAppAction{
-						Name: "get_threats",
-					})
-				}
+				/*
+					parsedApi, err := GetOpenApiDatastore(ctx, app.ID)
+					if err != nil {
+						log.Printf("[WARNING] Failed to find OpenAPI while parsing %s", app)
+						continue
+					}
+
+					log.Printf("API: %#v", parsedApi)
+					_ = parsedApi
+					// Hardcoded for a test sample
+				*/
+				//newActions := []WorkflowAppAction{}
+				//if app.ID == "SentinelOne" {
+				//	newActions = append(newActions, WorkflowAppAction{
+				//		Name: "get_threats",
+				//	})
+				//}
 
 				//if len(parsedApi.Body.Paths) > 0 {
 				//	for path, pathValue := range parsedApi.Paths {
@@ -2783,7 +2831,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				//	}
 				//}
 
-				newApps[appIndex].Actions = newActions
 			}
 		}
 
