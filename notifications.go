@@ -28,8 +28,6 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("Inside markasread")
-
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -84,6 +82,8 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("[AUDIT] Marked %s as read by user %s (%s)", notification.Id, user.Username, user.Id)
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
 
@@ -135,7 +135,7 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] Cleared all notifications for user %s (%s)", user.Username, user.Id)
+	log.Printf("[AUDIT] Cleared all notifications for user %s (%s)", user.Username, user.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -224,7 +224,7 @@ func createOrgNotification(ctx context.Context, title, description, referenceUrl
 		return err
 	}
 
-	log.Printf("[DEBUG] Found %d notifications for org %s. Merge?", len(notifications), orgId)
+	//log.Printf("[DEBUG] Found %d notifications for org %s. Merge?", len(notifications), orgId)
 	foundNotifications := []Notification{}
 	for _, notification := range notifications {
 		// notification.Title == title &&
@@ -234,7 +234,7 @@ func createOrgNotification(ctx context.Context, title, description, referenceUrl
 		}
 	}
 
-	log.Printf("[DEBUG] New found length: %d", len(foundNotifications))
+	//log.Printf("[DEBUG] New found length: %d", len(foundNotifications))
 	if len(foundNotifications) > 0 {
 		// FIXME: This may have bugs for old workflows with new users (not being rediscovered)
 		usersHandled := []string{}
