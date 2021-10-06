@@ -5080,9 +5080,9 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		Environment:   environment,
 		CacheDb:       cacheDb,
 		DbType:        dbType,
-		CloudUrl:      "https://729d-84-214-96-67.ngrok.io",
-		//CloudUrl:      "https://shuffler.io",
+		CloudUrl:      "https://shuffler.io",
 	}
+	//CloudUrl:      "https://729d-84-214-96-67.ngrok.io",
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
 	if dbType == "elasticsearch" || dbType == "opensearch" {
