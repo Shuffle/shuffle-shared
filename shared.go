@@ -34,7 +34,6 @@ import (
 	"github.com/google/go-querystring/query"
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
-	"golang.org/x/oauth2"
 	"google.golang.org/appengine"
 )
 
@@ -134,7 +133,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("[INFO] User %s (%s) isn't global admin and can't list orgs. Returning list of local orgs.", user.Username, user.Id)
+		//log.Printf("[AUDIT] User %s (%s) isn't global admin and can't list orgs. Returning list of local orgs.", user.Username, user.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte(newjson))
 		return
@@ -7414,83 +7413,6 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(b)
-}
-
-// THis all of a sudden became really horrible.. fml
-func GetGmailClient(ctx context.Context, code string, accessToken OauthToken, redirectUri string) (*http.Client, *oauth2.Token, error) {
-	conf := &oauth2.Config{
-		ClientID:     os.Getenv("GMAIL_CLIENT_ID"),
-		ClientSecret: os.Getenv("GMAIL_CLIENT_SECRET"),
-		Scopes: []string{
-			"https://www.googleapis.com/auth/gmail.readonly",
-		},
-		RedirectURL: redirectUri,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  "https://accounts.google.com/o/oauth2/auth",
-			TokenURL: "https://accounts.google.com/o/oauth2/token",
-		},
-	}
-
-	if len(code) > 0 {
-		access_token, err := conf.Exchange(ctx, code)
-		if err != nil {
-			log.Printf("Access_token issue: %s", err)
-			return &http.Client{}, access_token, err
-		}
-
-		client := conf.Client(ctx, access_token)
-		return client, access_token, nil
-	}
-
-	// Manually recreate the oauthtoken
-	access_token := &oauth2.Token{
-		AccessToken:  accessToken.AccessToken,
-		TokenType:    accessToken.TokenType,
-		RefreshToken: accessToken.RefreshToken,
-		Expiry:       accessToken.Expiry,
-	}
-
-	client := conf.Client(ctx, access_token)
-	return client, access_token, nil
-}
-
-// THis all of a sudden became really horrible.. fml
-func GetOutlookClient(ctx context.Context, code string, accessToken OauthToken, redirectUri string) (*http.Client, *oauth2.Token, error) {
-
-	conf := &oauth2.Config{
-		ClientID:     "fd55c175-aa30-4fa6-b303-09a29fb3f750",
-		ClientSecret: "14OBKgUpov.D7fe0~hp0z-cIQdP~SlYm.8",
-		Scopes: []string{
-			"Mail.Read",
-		},
-		RedirectURL: redirectUri,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  "https://login.microsoftonline.com/common/oauth2/authorize",
-			TokenURL: "https://login.microsoftonline.com/common/oauth2/token",
-		},
-	}
-
-	if len(code) > 0 {
-		access_token, err := conf.Exchange(ctx, code)
-		if err != nil {
-			log.Printf("Access_token issue: %s", err)
-			return &http.Client{}, access_token, err
-		}
-
-		client := conf.Client(ctx, access_token)
-		return client, access_token, nil
-	}
-
-	// Manually recreate the oauthtoken
-	access_token := &oauth2.Token{
-		AccessToken:  accessToken.AccessToken,
-		TokenType:    accessToken.TokenType,
-		RefreshToken: accessToken.RefreshToken,
-		Expiry:       accessToken.Expiry,
-	}
-
-	client := conf.Client(ctx, access_token)
-	return client, access_token, nil
 }
 
 func getGmailFolders(client *http.Client) (OutlookFolders, error) {

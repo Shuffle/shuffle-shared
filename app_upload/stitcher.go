@@ -807,8 +807,8 @@ func main() {
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
 	log.Printf("\n\n============================= \n[INFO] Running with: \nUrl: %s\nApikey: %s\n============================= \n\n", baseUrl, apikey)
-	deployAll()
-	return
+	//deployAll()
+	//return
 
 	appname := "shuffle-tools"
 	appversion := "1.1.0"

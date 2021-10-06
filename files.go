@@ -7,6 +7,7 @@ package shuffle
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"sort"
@@ -761,15 +763,29 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
 	file.FileSize = int64(len(contents))
-	md5 := Md5sum(contents)
 	file.ContentType = http.DetectContentType(contents)
 
 	buf.Reset()
 
+	err = uploadFile(ctx, file, contents, parsedFile)
+	if err != nil {
+		log.Printf("[ERROR] Failed to upload file: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to initialize with google cloud"}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func uploadFile(ctx context.Context, file *File, contents []byte, parsedFile multipart.File) error {
+	md5 := Md5sum(contents)
 	sha256Sum := sha256.Sum256(contents)
 
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		log.Printf("[INFO] SHOULD UPLOAD TO FILE TO GOOGLE STORAGE")
+		log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s", file.Id)
 		file.StorageArea = "google_storage"
 
 		//applocation := fmt.Sprintf("gs://%s/triggers/outlooktrigger.zip", bucketName)
@@ -780,9 +796,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		w := obj.NewWriter(ctx)
 		if _, err := fmt.Fprintf(w, string(contents)); err != nil {
 			log.Printf("[ERROR] Failed to write the file to datastore: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to initialize with google cloud"}`))
-			return
+			return err
 		}
 
 		// Close, just like writing a file.
@@ -797,14 +811,19 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 			SetFile(ctx, *file)
 
 			log.Printf("[ERROR] Failed uploading and creating file: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			return err
 		}
 
 		defer f.Close()
-		parsedFile.Seek(0, io.SeekStart)
-		io.Copy(f, parsedFile)
+
+		if parsedFile == nil {
+			// FIXME
+			// This doesn't work 100% yet
+			log.Printf("[DEBUG] Should upload a NEW file without parsedFile Seeking?")
+		} else {
+			parsedFile.Seek(0, io.SeekStart)
+			io.Copy(f, parsedFile)
+		}
 	}
 
 	// FIXME: Set this one to 200 anyway? Can't download file then tho..
@@ -816,14 +835,10 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	err = SetFile(ctx, *file)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting file back to active")
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed setting file to active"}`))
-		return
+		return err
 	}
 
-	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
-	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+	return nil
 }
 
 func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {

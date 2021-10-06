@@ -628,7 +628,7 @@ func SetSubscriptionRecipient(ctx context.Context, sub SubscriptionRecipient, id
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(sub)
 	if err != nil {
-		log.Printf("[WARNING] Failed marshalling in setSub: %s", err)
+		log.Printf("[WARNING] Failed marshalling in setGmailSub: %s", err)
 		return nil
 	}
 	if project.DbType == "elasticsearch" {
@@ -639,7 +639,7 @@ func SetSubscriptionRecipient(ctx context.Context, sub SubscriptionRecipient, id
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &sub); err != nil {
-			log.Printf("Error adding sub: %s", err)
+			log.Printf("\n\n[WARNING] Error adding gmail sub: %s\n\n", err)
 			return err
 		}
 	}
@@ -703,12 +703,13 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, sub); err != nil {
-			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[INFO] Error in sub loading. Migrating sub to new sub handler.")
-				err = nil
-			} else {
-				return &SubscriptionRecipient{}, err
-			}
+			return &SubscriptionRecipient{}, err
+			//if strings.Contains(err.Error(), `cannot load field`) {
+			//	log.Printf("[INFO] Error in sub loading. Migrating sub to new sub handler.")
+			//	err = nil
+			//} else {
+			//	return &SubscriptionRecipient{}, err
+			//}
 		}
 	}
 
@@ -2491,7 +2492,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			_, err := it.Next(&innerApp)
 			if err != nil {
 				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					log.Printf("[WARNING] Error in reference_org load: %s.", err)
+					//log.Printf("[WARNING] Error in reference_org load: %s.", err)
 					continue
 				}
 
@@ -2635,12 +2636,13 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[WARNING] Error in public app load: %s.", err)
-						continue
-					}
+						log.Printf("[WARNING] Error in public app load: %s", err)
+						//continue
+					} else {
 
-					//log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
-					break
+						//log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
+						break
+					}
 				}
 
 				if len(innerApp.Actions) == 0 {
@@ -2800,7 +2802,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 				newApp, err := GetApp(ctx, app.ID, user)
 				if err != nil {
-					log.Printf("[WARNING] Failed to find app while parsing %s", app)
+					log.Printf("[WARNING] Failed to find app while parsing app %s: %s", app.Name, err)
 					continue
 				} else {
 					log.Printf("[DEBUG] Found action %s (%s) directly with %d actions", app.Name, app.ID, len(newApp.Actions))
@@ -5078,6 +5080,8 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		Environment:   environment,
 		CacheDb:       cacheDb,
 		DbType:        dbType,
+		CloudUrl:      "https://729d-84-214-96-67.ngrok.io",
+		//CloudUrl:      "https://shuffler.io",
 	}
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)

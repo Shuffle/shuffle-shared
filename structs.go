@@ -16,6 +16,7 @@ type ShuffleStorage struct {
 	CacheDb       bool
 	Es            elasticsearch.Client
 	DbType        string
+	CloudUrl      string
 }
 
 type ExecutionRequestWrapper struct {
@@ -962,13 +963,15 @@ type TriggerAuth struct {
 	Id             string `json:"id" datastore:"id"`
 	SubscriptionId string `json:"subscriptionId" datastore:"subscriptionId"`
 
-	Username   string     `json:"username" datastore:"username,noindex"`
-	Owner      string     `json:"owner" datastore:"owner"`
-	Type       string     `json:"type" datastore:"type"`
-	Code       string     `json:"code,omitempty" datastore:"code,noindex"`
-	WorkflowId string     `json:"workflow_id" datastore:"workflow_id,noindex"`
-	Start      string     `json:"start" datastore:"start"`
-	OauthToken OauthToken `json:"oauth_token,omitempty" datastore:"oauth_token"`
+	Username       string     `json:"username" datastore:"username,noindex"`
+	Owner          string     `json:"owner" datastore:"owner"`
+	OrgId          string     `json:"org_id" datastore:"org_id"`
+	Type           string     `json:"type" datastore:"type"`
+	Code           string     `json:"code,omitempty" datastore:"code,noindex"`
+	WorkflowId     string     `json:"workflow_id" datastore:"workflow_id,noindex"`
+	Start          string     `json:"start" datastore:"start"`
+	OauthToken     OauthToken `json:"oauth_token,omitempty" datastore:"oauth_token"`
+	AssociatedUser string     `json:"associated_user" yaml:"associated_user" datastore:"associated_user"`
 }
 
 // This is what the structure should be when it's sent into a workflow
@@ -1070,10 +1073,43 @@ type FullEmail struct {
 		Contentid             interface{} `json:"contentId"`
 		Contentlocation       interface{} `json:"contentLocation"`
 		Contentbytes          string      `json:"contentBytes"`
-	}
+	} `json:"attachments"`
+	FileIds []string `json:"file_ids"`
 }
 
-type MailData struct {
+type OutlookAttachment struct {
+	OdataContext          string      `json:"@odata.context"`
+	OdataType             string      `json:"@odata.type"`
+	OdataMediaContentType string      `json:"@odata.mediaContentType"`
+	ID                    string      `json:"id"`
+	LastModifiedDateTime  time.Time   `json:"lastModifiedDateTime"`
+	Name                  string      `json:"name"`
+	ContentType           string      `json:"contentType"`
+	Size                  int         `json:"size"`
+	IsInline              bool        `json:"isInline"`
+	ContentID             interface{} `json:"contentId"`
+	ContentLocation       interface{} `json:"contentLocation"`
+	ContentBytes          string      `json:"contentBytes"`
+}
+
+type MailDataOutlookList struct {
+	OdataContext string `json:"@odata.context"`
+	Value        []struct {
+		OdataType             string      `json:"@odata.type"`
+		OdataMediaContentType string      `json:"@odata.mediaContentType"`
+		ID                    string      `json:"id"`
+		LastModifiedDateTime  time.Time   `json:"lastModifiedDateTime"`
+		Name                  string      `json:"name"`
+		ContentType           string      `json:"contentType"`
+		Size                  int         `json:"size"`
+		IsInline              bool        `json:"isInline"`
+		ContentID             interface{} `json:"contentId"`
+		ContentLocation       interface{} `json:"contentLocation"`
+		ContentBytes          string      `json:"contentBytes"`
+	} `json:"value"`
+}
+
+type MailDataOutlook struct {
 	Value []struct {
 		Subscriptionid                 string `json:"subscriptionId"`
 		Subscriptionexpirationdatetime string `json:"subscriptionExpirationDateTime"`
@@ -1456,12 +1492,24 @@ type SessionWrapper struct {
 	Source      Session `json:"_source"`
 }
 
+// Used for Gmail triggers using Pubsub
 type SubscriptionRecipient struct {
-	HistoryId  string `json:"history_id"`
-	TriggerId  string `json:"trigger_id"`
-	Edited     int    `json:"edited"`
-	Expiration string `json:"expiration"`
-	LastSync   int    `json:"last_sync"`
+	HistoryId    string `json:"history_id"`
+	TriggerId    string `json:"trigger_id"`
+	Edited       int    `json:"edited"`
+	Expiration   string `json:"expiration"`
+	LastSync     int    `json:"last_sync"`
+	WorkflowId   string `json:"workflow_id`
+	Startnode    string `json:"startnode`
+	IsCloud      bool   `json:"is_cloud"`
+	EmailAddress string `json:"email_address"`
+}
+
+type GmailProfile struct {
+	EmailAddress  string `json:"emailAddress"`
+	MessagesTotal int    `json:"messagesTotal"`
+	ThreadsTotal  int    `json:"threadsTotal"`
+	HistoryId     string `json:"historyId"`
 }
 
 type SubResponse struct {
@@ -1876,12 +1924,81 @@ type Inputdata struct {
 	Message      WrappedData `json:"message"`
 	Subscription string      `json:"subscription"`
 }
+
 type ParsedMessage struct {
 	EmailAddress string `json:"emailAddress"`
 	HistoryId    int    `json:"historyId"`
+	MessageId    string `json:"messageId"`
 }
 
 type NotificationResponse struct {
 	Success       bool           `json:"success"`
 	Notifications []Notification `json:"notifications"`
+}
+
+type GmailHistoryStruct struct {
+	History []struct {
+		ID       string `json:"id"`
+		Messages []struct {
+			ID       string `json:"id"`
+			ThreadID string `json:"threadId"`
+		} `json:"messages"`
+		MessagesDeleted []struct {
+			Message struct {
+				ID       string   `json:"id"`
+				ThreadID string   `json:"threadId"`
+				LabelIds []string `json:"labelIds"`
+			} `json:"message"`
+		} `json:"messagesDeleted,omitempty"`
+		MessagesAdded []struct {
+			Message struct {
+				ID       string   `json:"id"`
+				ThreadID string   `json:"threadId"`
+				LabelIds []string `json:"labelIds"`
+			} `json:"message"`
+		} `json:"messagesAdded,omitempty"`
+	} `json:"history"`
+	HistoryID string `json:"historyId"`
+}
+
+type GmailMessageStruct struct {
+	ID       string   `json:"id"`
+	ThreadID string   `json:"threadId"`
+	LabelIds []string `json:"labelIds"`
+	Snippet  string   `json:"snippet"`
+	Payload  struct {
+		PartID   string `json:"partId"`
+		MimeType string `json:"mimeType"`
+		Filename string `json:"filename"`
+		Headers  []struct {
+			Name  string `json:"name"`
+			Value string `json:"value"`
+		} `json:"headers"`
+		Body struct {
+			Size int `json:"size"`
+		} `json:"body"`
+		Parts []struct {
+			PartID   string `json:"partId"`
+			MimeType string `json:"mimeType"`
+			Filename string `json:"filename"`
+			Headers  []struct {
+				Name  string `json:"name"`
+				Value string `json:"value"`
+			} `json:"headers"`
+			Body struct {
+				AttachmentID string `json:"attachmentId"`
+				Size         int    `json:"size"`
+				Data         string `json:"data"`
+			} `json:"body"`
+		} `json:"parts"`
+	} `json:"payload"`
+	SizeEstimate int      `json:"sizeEstimate"`
+	HistoryID    string   `json:"historyId"`
+	InternalDate string   `json:"internalDate"`
+	FileIds      []string `json:"file_ids"`
+}
+
+type GmailAttachment struct {
+	Size int    `json:"size"`
+	Data string `json:"data"`
 }
