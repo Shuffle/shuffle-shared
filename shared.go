@@ -628,8 +628,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("%s", string(body))
-
 	var appAuth AppAuthenticationStorage
 	err = json.Unmarshal(body, &appAuth)
 	if err != nil {
@@ -5829,11 +5827,15 @@ func checkUsername(Username string) error {
 // This should happen locally.. Meaning, polling may be stupid.
 // Let's do it anyway, since it seems like the best way to scale
 // without remoting problems and the like.
-
-// FIXME: Does this work from a Worker?
 func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
-	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s\nVALUE: %s\n\n", executionParent, parentAuth, parentNode, returnValue)
+	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, VALUE: %s", executionParent, parentAuth, parentNode, returnValue)
+
 	backendUrl := os.Getenv("BASE_URL")
+	if project.Environment == "cloud" {
+		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
+		backendUrl = "https://shuffler.io"
+	}
+
 	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
 	//log.Printf("[DEBUG] ResultURL: %s", backendUrl)
 	topClient := &http.Client{
@@ -5862,7 +5864,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	}
 	data, err := json.Marshal(requestData)
 	if err != nil {
-		log.Printf("[WARNING] Failed init marshal: %s", err)
+		log.Printf("[WARNING] Failed parent init marshal: %s", err)
 		return err
 	}
 
@@ -5874,25 +5876,25 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 
 	newresp, err := topClient.Do(req)
 	if err != nil {
-		log.Printf("[ERROR] Failed making request: %s", err)
+		log.Printf("[ERROR] Failed making parent request: %s", err)
 		return err
 	}
 
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
-		log.Printf("[ERROR] Failed reading body: %s", err)
+		log.Printf("[ERROR] Failed reading parent body: %s", err)
 		return err
 	}
 	//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
-		log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
+		log.Printf("[ERROR] Bad statuscode setting subresult: %d, %s", newresp.StatusCode, string(body))
 		return errors.New(fmt.Sprintf("Bad statuscode: %s", newresp.StatusCode))
 	}
 
 	err = json.Unmarshal(body, &newExecution)
 	if err != nil {
-		log.Printf("[ERROR] Failed newexecutuion unmarshal: %s", err)
+		log.Printf("[ERROR] Failed newexecutuion parent unmarshal: %s", err)
 		return err
 	}
 
@@ -5922,9 +5924,9 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	}
 
 	if isLooping {
-		log.Printf("\n\n[DEBUG] ITS LOOPING!\n\n")
+		log.Printf("[DEBUG] ITS LOOPING!")
 	} else {
-		log.Printf("\n\n[DEBUG] ITS _NOT_ LOOPING!\n\n")
+		//log.Printf("\n\n[DEBUG] ITS _NOT_ LOOPING!\n\n")
 	}
 
 	// 1. Get result of parentnode's subflow (foundResult.Result)
@@ -5995,7 +5997,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 
 			sendRequest = true
 		} else {
-			log.Printf("[INFO] Should UPDATE parentResult: %s", string(parsedActionValue))
+			log.Printf("[DEBUG] Should UPDATE parentResult: %s", string(parsedActionValue))
 			foundResult.Result = string(parsedActionValue)
 			resultData, err = json.Marshal(foundResult)
 			if err != nil {
@@ -6026,13 +6028,14 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 			return err
 		}
 
-		body, err := ioutil.ReadAll(newresp.Body)
-		if err != nil {
-			log.Printf("Failed reading body when waiting: %s", err)
-			return err
-		}
-
-		log.Printf("[INFO] ADDED NEW ACTION RESULT (%d): %s", newresp.StatusCode, body)
+		//body, err := ioutil.ReadAll(newresp.Body)
+		//if err != nil {
+		//	log.Printf("Failed reading body when waiting: %s", err)
+		//	return err
+		//}
+		//log.Printf("[INFO] ADDED NEW ACTION RESULT (%d): %s", newresp.StatusCode, body)
+		//_ = body
+		_ = newresp
 	} else {
 		log.Printf("[INFO] NOT sending request because data len is %d and request is %#v", len(resultData), sendRequest)
 	}
@@ -6422,6 +6425,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
+		IncrementCache(ctx, workflowExecution.ExecutionOrg, "app_executions_failed")
 		if workflowExecution.Workflow.Configuration.SkipNotifications == false {
 			// Add an else for HTTP request errors with success "false"
 			// These could be "silent" issues
@@ -6445,6 +6449,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		newResults := []ActionResult{}
 		childNodes := []string{}
 		if workflowExecution.Workflow.Configuration.ExitOnError {
+			// Find underlying nodes and add them
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Should set workflowExecution and exit all running functions", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			workflowExecution.Status = actionResult.Status
 			workflowExecution.LastNode = actionResult.Action.ID
@@ -6452,7 +6457,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
 				workflowExecution.Result = workflowExecution.Workflow.DefaultReturnValue
 			}
-			// Find underlying nodes and add them
+
+			IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 		} else {
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			// Finds ALL childnodes to set them to SKIPPED
@@ -6596,6 +6602,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if workflowExecution.LastNode == "" {
 			workflowExecution.LastNode = actionResult.Action.ID
 		}
+
 		workflowExecution.Result = lastResult
 		workflowExecution.Results = newResults
 	}
@@ -6764,7 +6771,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		log.Printf("[DEBUG] Ran marshal on silent failure")
+		//log.Printf("[DEBUG] Ran marshal on silent failure")
 	}
 
 	// FIXME rebuild to be like this or something
@@ -6897,7 +6904,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			lastResult = result.Result
 		}
 
-		//log.Printf("Finished? %#v", finished)
+		//log.Printf("[debug] Finished? %#v", finished)
 		if finished {
 			dbSave = true
 			log.Printf("[INFO] Execution of %s in workflow %s finished.", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
@@ -6915,6 +6922,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			workflowExecution.Result = lastResult
 			workflowExecution.Status = "FINISHED"
+			IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
 			workflowExecution.CompletedAt = int64(time.Now().Unix())
 			if workflowExecution.LastNode == "" {
 				workflowExecution.LastNode = actionResult.Action.ID
@@ -6948,8 +6956,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				valueToReturn = workflowExecution.Result
 			}
 
+			//log.Printf("%#v, %#v, %#v", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
 			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
-				log.Printf("[DEBUG] Found execution parent %s for workflow %s\n\n", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
+				log.Printf("[DEBUG] Found execution parent %s for workflow %#v", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
 
 				err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
 				if err != nil {
@@ -6976,12 +6985,15 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		if runCheck {
-			log.Printf("[WARNING] Sinkholing request of %s IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
+			log.Printf("[WARNING] Sinkholing request of %#v IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
 			var subflowData SubflowData
 			err = json.Unmarshal([]byte(actionResult.Result), &subflowData)
 			if err == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
 				log.Printf("\n\nNO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING\n\n")
+
+				// This means it's started, hence executing :)
+				IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
 				//return &workflowExecution, false, nil
 
 				// Finding the result, and removing it if it exists. "Sinkholing"
@@ -7555,8 +7567,6 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	// This has to be done in a weird way because Datastore doesn't
 	// support map[string]interface and similar (openapi3.Swagger)
 	var version versionCheck
-
-	//log.Printf("%s", string(body))
 
 	re := regexp.MustCompile("[[:^ascii:]]")
 	//re := regexp.MustCompile("[[:^unicode:]]")

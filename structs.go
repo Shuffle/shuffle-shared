@@ -197,12 +197,23 @@ type Userapi struct {
 	ApiKey   string `datastore:"apikey"`
 }
 
+// Used to be related to users, now related to orgs.
+// Not directly, but being updated by org actions
 type ExecutionInfo struct {
+	// These have been configured for cache updates in db-connector.go with 5 hour (300 minutes) timeouts before dumping
+	LastCleared                     int64 `json:"last_cleared" datastore:"last_cleared"`
+	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
+	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
+	TotalSubflowExecutions          int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
+	TotalWorkflowExecutions         int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
+	TotalWorkflowExecutionsFinished int64 `json:"total_workflow_executions_finished" datastore:"total_workflow_executions_finished"`
+	TotalWorkflowExecutionsFailed   int64 `json:"total_workflow_executions_failed" datastore:"total_workflow_executions_failed"`
+	TotalOrgSyncActions             int64 `json:"total_org_sync_actions" datastore:"total_org_sync_actions"`
+	TotalCloudExecutions            int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
+	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
+
+	// These are just here in case we get use of them
 	TotalApiUsage           int64 `json:"total_api_usage" datastore:"total_api_usage"`
-	TotalWorkflowExecutions int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
-	TotalAppExecutions      int64 `json:"total_app_executions" datastore:"total_app_executions"`
-	TotalCloudExecutions    int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
-	TotalOnpremExecutions   int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
 	DailyApiUsage           int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
 	DailyWorkflowExecutions int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
 	DailyAppExecutions      int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
@@ -559,13 +570,13 @@ type SyncUsage struct {
 	SendMail           SyncDataUsage `json:"send_mail" datastore:"send_mail"`
 	SendSms            SyncDataUsage `json:"send_sms" datastore:"send_sms"`
 	EmailTrigger       SyncDataUsage `json:"email_trigger" datastore:"email_trigger"`
-	AppExecutions      SyncDataUsage `json:"app_executions" datastore:"app_executions"`
 	WorkflowExecutions SyncDataUsage `json:"workflow_executions" datastore:"workflow_executions"`
 	Apps               SyncDataUsage `json:"apps" datastore:"apps"`
-	Workflows          SyncDataUsage `json:"workflows" datastore:"workflows"`
 	Autocomplete       SyncDataUsage `json:"autocomplete" datastore:"autocomplete"`
 	Authentication     SyncDataUsage `json:"authentication" datastore:"authentication"`
 	Schedule           SyncDataUsage `json:"schedule" datastore:"schedule"`
+	AppExecutions      SyncDataUsage `json:"app_executions" datastore:"app_executions"`
+	Workflows          SyncDataUsage `json:"workflows" datastore:"workflows"`
 }
 
 type SyncDataUsage struct {

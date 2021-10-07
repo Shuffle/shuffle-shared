@@ -2,22 +2,24 @@ package shuffle
 
 import (
 	"bytes"
-	"cloud.google.com/go/datastore"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/bradfitz/slice"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+	//"strconv"
+	//"encoding/binary"
 	"strings"
 	"time"
 
+	"cloud.google.com/go/datastore"
 	"github.com/Masterminds/semver"
+	"github.com/bradfitz/slice"
 	"github.com/frikky/go-elasticsearch/v8/esapi"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
@@ -46,6 +48,154 @@ func GetESIndexPrefix(index string) string {
 		return fmt.Sprintf("%s_%s", prefix, index)
 	}
 	return index
+}
+
+// Dumps data from cache to DB for every 5 action
+var dumpInterval = 0x5
+
+func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
+	nameKey := "org_statistics"
+	orgStatistics := &ExecutionInfo{}
+
+	if project.Environment == "cloud" {
+		tx, err := project.Dbclient.NewTransaction(ctx)
+		if err != nil {
+			log.Printf("[WARNING] Error in cache dump: %#v", err)
+			return
+		}
+
+		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
+		if err := tx.Get(key, orgStatistics); err != nil {
+
+			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
+				log.Printf("[DEBUG] Continuing by creating cache entity for %s", orgId)
+			} else {
+				log.Printf("[ERROR] Failed getting stats: %s", err)
+				tx.Rollback()
+				return
+			}
+		}
+
+		if dataType == "workflow_executions" {
+			orgStatistics.TotalWorkflowExecutions += int64(dumpInterval)
+		} else if dataType == "workflow_executions_finished" {
+			orgStatistics.TotalWorkflowExecutionsFinished += int64(dumpInterval)
+		} else if dataType == "workflow_executions_failed" {
+			orgStatistics.TotalWorkflowExecutionsFailed += int64(dumpInterval)
+		} else if dataType == "app_executions" {
+			orgStatistics.TotalAppExecutions += int64(dumpInterval)
+		} else if dataType == "app_executions_failed" {
+			orgStatistics.TotalAppExecutionsFailed += int64(dumpInterval)
+		} else if dataType == "subflow_executions" {
+			orgStatistics.TotalSubflowExecutions += int64(dumpInterval)
+		} else if dataType == "org_sync_actions" {
+			orgStatistics.TotalOrgSyncActions += int64(dumpInterval)
+		} else if dataType == "workflow_executions_cloud" {
+			orgStatistics.TotalCloudExecutions += int64(dumpInterval)
+		} else if dataType == "workflow_executions_onprem" {
+			orgStatistics.TotalOnpremExecutions += int64(dumpInterval)
+		}
+
+		if _, err := tx.Put(key, orgStatistics); err != nil {
+			log.Printf("[WARNING] Failed setting stats: %s", err)
+			tx.Rollback()
+			return
+		}
+
+		if _, err = tx.Commit(); err != nil {
+			log.Printf("[WARNING] Failed commiting stats: %s", err)
+		}
+	}
+}
+
+// Rudementary caching system. WILL go wrong at times without sharding.
+// It's only good for the user in cloud, hence wont bother for a while
+func IncrementCache(ctx context.Context, orgId, dataType string) {
+	if project.Environment != "cloud" {
+		return
+	}
+
+	// Dump to disk every 5
+	dbDumpInterval := uint8(dumpInterval)
+
+	// 1. Get the existing value
+	// 2. Update it
+	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
+	if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
+		item := &memcache.Item{
+			Key:        key,
+			Value:      []byte(string(1)),
+			Expiration: time.Minute * 300,
+		}
+
+		if err := memcache.Set(ctx, item); err != nil {
+			log.Printf("[ERROR] Failed setting cache for key %s: %s", orgId, err)
+		}
+	} else {
+		if len(item.Value) == 1 {
+			num := item.Value[0]
+			//log.Printf("Item: %#v", num)
+
+			num += 1
+			//log.Printf("Item2: %#v", num)
+			if num >= dbDumpInterval {
+				// Memcache dump first to keep the counter going for other executions
+				num = 0
+
+				item := &memcache.Item{
+					Key:        key,
+					Value:      []byte(string(num)),
+					Expiration: time.Minute * 300,
+				}
+				if err := memcache.Set(ctx, item); err != nil {
+					log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
+				}
+
+				IncrementCacheDump(ctx, orgId, dataType)
+			} else {
+				//log.Printf("NOT Dumping!")
+
+				item := &memcache.Item{
+					Key:        key,
+					Value:      []byte(string(num)),
+					Expiration: time.Minute * 300,
+				}
+				if err := memcache.Set(ctx, item); err != nil {
+					log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
+				}
+			}
+
+		} else {
+			log.Printf("[ERROR] Length of cache value is more than 1: %#v", item.Value)
+		}
+	}
+
+	/*
+		cache, err := GetCache(ctx, key)
+		if err != nil {
+			SetCache(ctx, key, []byte(string(1)))
+		} else {
+			//cacheData := string([]byte(cache.([]uint8)))
+			cacheData := cache.(int)
+			log.Printf("\n\nGot cache value %s\n\n", cacheData)
+
+			//number, err := strconv.Atoi(cacheData)
+			//if err != nil {
+			//	log.Printf("[ERROR] error in cache setting: %s", err)
+			//	return
+			//}
+
+			//log.Printf("NUM: %d", number)
+			//cacheData += 1
+
+			//if cacheData == dbDumpInterVal {
+			//	log.
+			//}
+		}
+
+		//cache, err := GetCache(ctx, cacheKey)
+		//if err == nil {
+	*/
 }
 
 // Cache handlers
@@ -266,7 +416,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
-		log.Printf("[WARNING] SHOULD skip DB saving for execution")
+		//log.Printf("[WARNING] SHOULD skip DB saving for execution")
 		return nil
 	}
 
@@ -352,10 +502,10 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 				}
 
 				if trigger.ID == branch.SourceID {
-					log.Printf("[INFO] Trigger %s is the source!", trigger.AppName)
+					//log.Printf("[INFO] Trigger %s is the source!", trigger.AppName)
 					sourceFound = true
 				} else if trigger.ID == branch.DestinationID {
-					log.Printf("[INFO] Trigger %s is the destination!", trigger.AppName)
+					//log.Printf("[INFO] Trigger %s is the destination!", trigger.AppName)
 					destinationFound = true
 				}
 			}
@@ -2636,7 +2786,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[WARNING] Error in public app load: %s", err)
+						//log.Printf("[WARNING] Error in public app load: %s", err)
 						//continue
 					} else {
 
@@ -5082,7 +5232,6 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		DbType:        dbType,
 		CloudUrl:      "https://shuffler.io",
 	}
-	//CloudUrl:      "https://729d-84-214-96-67.ngrok.io",
 
 	requestCache = cache.New(15*time.Minute, 30*time.Minute)
 	if dbType == "elasticsearch" || dbType == "opensearch" {

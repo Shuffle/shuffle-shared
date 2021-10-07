@@ -547,6 +547,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
                 print("Updated values in self.action_result from OpenAPI app!") 
         except Exception as e:
             print(f"Something went wrong when adding extra returns. {e}")
+
         try:
             return ret.json()
         except json.decoder.JSONDecodeError:
@@ -575,8 +576,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "rule") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(functionname, "test") {
+		log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
 		//log.Printf("Queries: %s", queryString)

@@ -19,7 +19,7 @@ import (
 	"golang.org/x/oauth2"
 )
 
-func getOutlookAttachmentList(client *http.Client, emailId string) (MailDataOutlookList, error) {
+func GetOutlookAttachmentList(client *http.Client, emailId string) (MailDataOutlookList, error) {
 	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/messages/%s/attachments", emailId)
 	//log.Printf("Outlook email URL: %#v", requestUrl)
 
@@ -52,7 +52,7 @@ func getOutlookAttachmentList(client *http.Client, emailId string) (MailDataOutl
 	return list, nil
 }
 
-func getOutlookAttachment(client *http.Client, emailId, attachmentId string) (OutlookAttachment, []byte, error) {
+func GetOutlookAttachment(client *http.Client, emailId, attachmentId string) (OutlookAttachment, []byte, error) {
 	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/ec03b4f2-fccf-4c35-b0eb-be85a0f5dd43/mailFolders")
 
 	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/messages/%s/attachments/%s", emailId, attachmentId)
@@ -111,7 +111,7 @@ func getOutlookAttachment(client *http.Client, emailId, attachmentId string) (Ou
 	return attachment, body, nil
 }
 
-func getOutlookEmail(client *http.Client, maildata MailDataOutlook) ([]FullEmail, error) {
+func GetOutlookEmail(client *http.Client, maildata MailDataOutlook) ([]FullEmail, error) {
 	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/ec03b4f2-fccf-4c35-b0eb-be85a0f5dd43/mailFolders")
 
 	emails := []FullEmail{}
@@ -176,7 +176,7 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 		return string(body)
 	}
 
-	emails, err := getOutlookEmail(outlookClient, maildata)
+	emails, err := GetOutlookEmail(outlookClient, maildata)
 	if err != nil {
 		log.Printf("[WARNING] Outlook email error - webhook transfer: %s", err)
 		return string(body)
@@ -188,7 +188,7 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 		}
 
 		//log.Printf("[DEBUG] Email %s has attachments!!", email.ID)
-		list, err := getOutlookAttachmentList(outlookClient, email.ID)
+		list, err := GetOutlookAttachmentList(outlookClient, email.ID)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting attachments for email ID %s", email.ID)
 			continue
@@ -200,7 +200,7 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 		}
 
 		for _, attachment := range list.Value {
-			attachment, content, err := getOutlookAttachment(outlookClient, email.ID, attachment.ID)
+			attachment, content, err := GetOutlookAttachment(outlookClient, email.ID, attachment.ID)
 			if err != nil {
 				log.Printf("[WARNING] Failed to get fileId for attachment %s", attachment.ID)
 				continue
