@@ -395,6 +395,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(trigger.OrgId) == 0 {
+		//trigger.OrgId = user.OrgId
 		trigger.OrgId = user.ActiveOrg.Id
 	}
 
@@ -580,6 +581,10 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 			trigger.Username = profile.Mail
 		}
 	*/
+
+	if len(trigger.OrgId) == 0 {
+		trigger.OrgId = user.ActiveOrg.Id
+	}
 
 	trigger.Code = code
 	trigger.OauthToken = OauthToken{
