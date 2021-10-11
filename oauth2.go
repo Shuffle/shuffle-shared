@@ -325,7 +325,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 
 	url := fmt.Sprintf("http://%s%s", request.Host, request.URL.EscapedPath())
 	if project.Environment == "cloud" {
-		url = fmt.Sprintf("https://shuffler.io%s", request.Host, request.URL.EscapedPath())
+		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
 	}
 
 	log.Printf("[DEBUG] Redirect URI: %s", url)
@@ -503,7 +503,11 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	url := fmt.Sprintf("http://%s%s", request.Host, request.URL.EscapedPath())
-	log.Println(url)
+	if project.Environment == "cloud" {
+		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
+	}
+
+	log.Println("[DEBUG] REDIRECT URI: %s", url)
 	ctx := getContext(request)
 	_, accessToken, err := GetOutlookClient(ctx, code, OauthToken{}, url)
 	if err != nil {
