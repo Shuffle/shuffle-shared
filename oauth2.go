@@ -178,6 +178,8 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 		return string(body)
 	}
 
+	go ExtendOutlookSubscription(outlookClient, trigger.SubscriptionId)
+
 	emails, err := GetOutlookEmail(outlookClient, maildata)
 	if err != nil {
 		log.Printf("[WARNING] Outlook email error - webhook transfer: %s", err)
@@ -324,7 +326,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	url := fmt.Sprintf("http://%s%s", request.Host, request.URL.EscapedPath())
-	if project.Environment == "cloud" {
+	if project.Environment == "cloud" && os.Getenv("CLOUD_ENVIRONMENT") != "local" {
 		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
 	}
 
@@ -503,11 +505,11 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	url := fmt.Sprintf("http://%s%s", request.Host, request.URL.EscapedPath())
-	if project.Environment == "cloud" {
+	if project.Environment == "cloud" && os.Getenv("CLOUD_ENVIRONMENT") != "local" {
 		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
 	}
 
-	log.Println("[DEBUG] REDIRECT URI: %s", url)
+	log.Printf("[DEBUG] REDIRECT URI: %s", url)
 	ctx := getContext(request)
 	_, accessToken, err := GetOutlookClient(ctx, code, OauthToken{}, url)
 	if err != nil {
@@ -535,6 +537,7 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("STATE: %s", state)
 	stateitems := strings.Split(state, "%26")
 	if len(stateitems) == 1 {
 		stateitems = strings.Split(state, "&")
@@ -592,6 +595,7 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 	log.Println(senderUser)
 	log.Println(trigger.Type)
 	log.Printf("STARTNODE: %s", trigger.Start)
+
 	log.Printf("[INFO] Attempting to set up outlook trigger for %s", senderUser)
 	if trigger.WorkflowId == "" || trigger.Id == "" || senderUser == "" || trigger.Type == "" {
 		log.Printf("[INFO] All oauth items need to contain data to register a new state")
@@ -806,6 +810,7 @@ func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 	//log.Printf("GMAIL RESP: %s", string(body))
 
 	if res.StatusCode != 200 && res.StatusCode != 201 {
+		log.Printf("[ERROR] WATCH ERROR: %s", body)
 		return SubResponse{}, errors.New(fmt.Sprintf("Subscription failed: %s", string(body)))
 	}
 
@@ -817,6 +822,38 @@ func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 	}
 
 	return newSub, nil
+}
+
+// https://docs.microsoft.com/en-us/previous-versions/office/office-365-api/api/version-2.0/notify-rest-operations#RenewSub
+func ExtendOutlookSubscription(client *http.Client, subscriptionId string) error {
+	fullUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/subscriptions/%s", subscriptionId)
+
+	req, err := http.NewRequest(
+		"PATCH",
+		fullUrl,
+		nil,
+	)
+	req.Header.Add("Content-Type", "application/json")
+
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Client: %s", err)
+		return err
+	}
+
+	//log.Printf("[INFO] Subscription Status: %d", res.StatusCode)
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("Body: %s", err)
+		return err
+	}
+
+	if res.StatusCode != 200 && res.StatusCode != 201 {
+		log.Printf("[ERROR] Re-subscription failed. Status: %d", res.StatusCode)
+		return errors.New(fmt.Sprintf("RE-subscription failed: %s", string(body)))
+	}
+
+	return nil
 }
 
 func makeOutlookSubscription(client *http.Client, folderIds []string, notificationURL string) (string, error) {
@@ -1346,8 +1383,10 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding your organization"}`))
 		resp.WriteHeader(401)
 		return
+
 	}
 
+	trigger.Folders = curTrigger.Folders
 	if project.Environment != "cloud" {
 
 		log.Printf("[INFO] Starting cloud configuration TO START trigger %s in org %s for workflow %s", trigger.Id, org.Id, trigger.WorkflowId)
@@ -1521,7 +1560,7 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting the workflow locally (outlook sub): %s", err)
+		log.Printf("[WARNING] Failed getting the workflow locally (gmail sub): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1529,7 +1568,7 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in outlook deploy: %s", err)
+		log.Printf("[WARNING] Api authentication failed in gmail deploy: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1611,6 +1650,7 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	trigger.AssociatedUser = userProfile.EmailAddress
+	trigger.Folders = curTrigger.Folders
 
 	//notificationURL := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", project.CloudUrl, trigger.Id)
 	//log.Printf("[DEBUG] Starting with notificationURL %s", notificationURL)
@@ -1918,6 +1958,8 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	subCalled := false
+
 	for _, item := range history.History {
 		for _, addedMsg := range item.MessagesAdded {
 			message := addedMsg.Message
@@ -2025,6 +2067,11 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if !subCalled {
+		makeGmailSubscription(gmailClient, trigger.Folders)
+		subCalled = true
+	}
+
 	resp.WriteHeader(200)
 }
 
@@ -2076,7 +2123,7 @@ func GetGmailClient(ctx context.Context, code string, accessToken OauthToken, re
 	if len(code) > 0 {
 		access_token, err := conf.Exchange(ctx, code)
 		if err != nil {
-			log.Printf("Access_token issue: %s", err)
+			log.Printf("[WARNING] Access_token issue for Gmail: %s", err)
 			return &http.Client{}, access_token, err
 		}
 
@@ -2114,7 +2161,7 @@ func GetOutlookClient(ctx context.Context, code string, accessToken OauthToken, 
 	if len(code) > 0 {
 		access_token, err := conf.Exchange(ctx, code)
 		if err != nil {
-			log.Printf("Access_token issue: %s", err)
+			log.Printf("[WARNING] Access_token issue for gmail: %s", err)
 			return &http.Client{}, access_token, err
 		}
 
@@ -2132,4 +2179,292 @@ func GetOutlookClient(ctx context.Context, code string, accessToken OauthToken, 
 
 	client := conf.Client(ctx, access_token)
 	return client, access_token, nil
+}
+
+func getGmailFolders(client *http.Client) (OutlookFolders, error) {
+	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/ec03b4f2-fccf-4c35-b0eb-be85a0f5dd43/mailFolders")
+	requestUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/me/labels")
+
+	ret, err := client.Get(requestUrl)
+	if err != nil {
+		log.Printf("[INFO] FolderErr gmail: %s", err)
+		return OutlookFolders{}, err
+	}
+
+	body, err := ioutil.ReadAll(ret.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed body decoding from mailfolders")
+		return OutlookFolders{}, err
+	}
+
+	//log.Printf("Folders: %s", string(body))
+	//log.Printf("[INFO] Folder Body: %s", string(body))
+	log.Printf("[INFO] Status for GMAIL folders (Labels): %d", ret.StatusCode)
+	if ret.StatusCode != 200 {
+		return OutlookFolders{}, err
+	}
+
+	//log.Printf("Body: %s", string(body))
+
+	labels := GmailLabels{}
+	err = json.Unmarshal(body, &labels)
+	if err != nil {
+		log.Printf("[WARNING] GMAIL Unmarshal: %s", err)
+		return OutlookFolders{}, err
+	}
+
+	// Casting to Outlook for frontend usability reasons
+	log.Printf("[DEBUG] Found %d labels", len(labels.Labels))
+	mailfolders := OutlookFolders{}
+	for _, label := range labels.Labels {
+		if label.MessageListVisibility == "hide" {
+			continue
+		}
+
+		mailfolders.Value = append(mailfolders.Value, OutlookFolder{
+			ID:          label.ID,
+			DisplayName: label.Name,
+		})
+	}
+
+	//fmt.Printf("%#v", mailfolders)
+	// FIXME - recursion for subfolders
+	// Recursive struct
+	// folderEndpoint := fmt.Sprintf("%s/%s/childfolders?$top=40", requestUrl, parentId)
+	//for _, folder := range mailfolders.Value {
+	//	log.Println(folder.DisplayName)
+	//}
+
+	return mailfolders, nil
+}
+
+func getOutlookFolders(client *http.Client) (OutlookFolders, error) {
+	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/ec03b4f2-fccf-4c35-b0eb-be85a0f5dd43/mailFolders")
+	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/mailFolders")
+
+	ret, err := client.Get(requestUrl)
+	if err != nil {
+		log.Printf("[INFO] FolderErr: %s", err)
+		return OutlookFolders{}, err
+	}
+
+	body, err := ioutil.ReadAll(ret.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed body decoding from mailfolders")
+		return OutlookFolders{}, err
+	}
+
+	//log.Printf("[INFO] Folder Body: %s", string(body))
+	log.Printf("[INFO] Status folders: %d", ret.StatusCode)
+	if ret.StatusCode != 200 {
+		return OutlookFolders{}, err
+	}
+
+	//log.Printf("Body: %s", string(body))
+
+	mailfolders := OutlookFolders{}
+	err = json.Unmarshal(body, &mailfolders)
+	if err != nil {
+		log.Printf("Unmarshal: %s", err)
+		return OutlookFolders{}, err
+	}
+
+	//fmt.Printf("%#v", mailfolders)
+	// FIXME - recursion for subfolders
+	// Recursive struct
+	// folderEndpoint := fmt.Sprintf("%s/%s/childfolders?$top=40", requestUrl, parentId)
+	//for _, folder := range mailfolders.Value {
+	//	log.Println(folder.DisplayName)
+	//}
+
+	return mailfolders, nil
+}
+
+func HandleGetGmailFolders(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Api authentication failed in getting gmail folders: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Exchange every time hmm
+	// FIXME
+	// Should really just get the code from the trigger that's being used OR the user
+	//log.Printf("[DEBUG] In gmail folders")
+	triggerId := request.URL.Query().Get("trigger_id")
+	if len(triggerId) == 0 {
+		log.Println("[WARNING] No trigger_id supplied")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "No trigger ID supplied"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	trigger, err := GetTriggerAuth(ctx, triggerId)
+	if err != nil {
+		log.Printf("[AUDIT] Trigger %s doesn't exist - gmail folders.", triggerId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Trigger doesn't exist."}`))
+		return
+	}
+
+	if trigger.OrgId != user.ActiveOrg.Id {
+		log.Printf("[AUDIT] User %s is accessing trigger %s without permission.", user.ActiveOrg.Id, triggerId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Trigger doesn't exist."}`))
+		return
+	}
+
+	//client, accessToken, err := getOutlookClient(ctx, code, OauthToken{}, url)
+	//if err != nil {
+	//	log.Printf("Oauth client failure - outlook register: %s", err)
+	//	resp.WriteHeader(401)
+	//	return
+	//}
+
+	// FIXME - should be shuffler in literally every case except testing lol
+	//log.Printf("TRIGGER: %#v", trigger)
+	redirectDomain := "localhost:5001"
+	url := fmt.Sprintf("http://%s/api/v1/triggers/gmail/register", redirectDomain)
+	if project.Environment == "cloud" {
+		url = fmt.Sprintf("https://shuffler.io/api/v1/triggers/gmail/register", redirectDomain)
+	}
+	gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, url)
+	if err != nil {
+		log.Printf("[WARNING] Oauth client failure - outlook folders: %s", err)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating outlook client"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	// This should be possible, and will also give the actual username
+	/*
+		profile, err := getOutlookProfile(outlookClient)
+		if err != nil {
+			log.Printf("Outlook profile failure: %s", err)
+			resp.WriteHeader(401)
+			return
+		}
+		log.Printf("PROFILE: %#v", profile)
+	*/
+
+	folders, err := getGmailFolders(gmailClient)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting outlook folders: %s", err)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting outlook folders"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	b, err := json.Marshal(folders.Value)
+	if err != nil {
+		log.Println("[INFO] Failed to marshal folderdata")
+		resp.Write([]byte(`{"success": false, "reason": "Failed decoding JSON"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
+func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Api authentication failed in getting outlook folders: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Exchange every time hmm
+	// FIXME
+	// Should really just get the code from the trigger that's being used OR the user
+	triggerId := request.URL.Query().Get("trigger_id")
+	if len(triggerId) == 0 {
+		log.Println("[WARNING] No trigger_id supplied")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "No trigger ID supplied"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	trigger, err := GetTriggerAuth(ctx, triggerId)
+	if err != nil {
+		log.Printf("[AUDIT] Trigger %s doesn't exist - outlook folders.", triggerId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Trigger doesn't exist."}`))
+		return
+	}
+
+	if trigger.OrgId != user.ActiveOrg.Id {
+		log.Printf("[AUDIT] User %s is accessing trigger %s without permission.", user.ActiveOrg.Id, triggerId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Trigger doesn't exist."}`))
+		return
+	}
+
+	//client, accessToken, err := getOutlookClient(ctx, code, OauthToken{}, url)
+	//if err != nil {
+	//	log.Printf("Oauth client failure - outlook register: %s", err)
+	//	resp.WriteHeader(401)
+	//	return
+	//}
+
+	// FIXME - should be shuffler in literally every case except testing lol
+	//log.Printf("TRIGGER: %#v", trigger)
+	redirectDomain := "localhost:5001"
+	url := fmt.Sprintf("http://%s/api/v1/triggers/gmail/register", redirectDomain)
+	if project.Environment == "cloud" {
+		url = fmt.Sprintf("https://shuffler.io/api/v1/triggers/gmail/register", redirectDomain)
+	}
+	outlookClient, _, err := GetOutlookClient(ctx, "", trigger.OauthToken, url)
+	if err != nil {
+		log.Printf("[WARNING] Oauth client failure - outlook folders: %s", err)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating outlook client"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	// This should be possible, and will also give the actual username
+	/*
+		profile, err := getOutlookProfile(outlookClient)
+		if err != nil {
+			log.Printf("Outlook profile failure: %s", err)
+			resp.WriteHeader(401)
+			return
+		}
+		log.Printf("PROFILE: %#v", profile)
+	*/
+
+	folders, err := getOutlookFolders(outlookClient)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting outlook folders: %s", err)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting outlook folders"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	b, err := json.Marshal(folders.Value)
+	if err != nil {
+		log.Println("[INFO] Failed to marshal folderdata")
+		resp.Write([]byte(`{"success": false, "reason": "Failed decoding JSON"}`))
+		resp.WriteHeader(401)
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
 }

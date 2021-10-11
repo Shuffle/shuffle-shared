@@ -983,6 +983,7 @@ type TriggerAuth struct {
 	Start          string     `json:"start" datastore:"start"`
 	OauthToken     OauthToken `json:"oauth_token,omitempty" datastore:"oauth_token"`
 	AssociatedUser string     `json:"associated_user" yaml:"associated_user" datastore:"associated_user"`
+	Folders        []string   `json:"folders" yaml:"folders" datastore:"folders"`
 }
 
 // This is what the structure should be when it's sent into a workflow
