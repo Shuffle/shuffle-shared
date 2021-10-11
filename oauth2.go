@@ -805,7 +805,7 @@ func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 		return SubResponse{}, err
 	}
 
-	log.Printf("[INFO] Subscription on GMAIL Status: %d", res.StatusCode)
+	log.Printf("[INFO] GMAIL Subscription Status: %d", res.StatusCode)
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] Gmail subscription Body: %s", err)
@@ -1810,6 +1810,49 @@ func GetGmailMessageAttachment(ctx context.Context, gmailClient *http.Client, us
 	return message, nil
 }
 
+func GetGmailThread(ctx context.Context, gmailClient *http.Client, userId, messageId string) (GmailMessageStruct, error) {
+	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/threads/%s?format=full", userId, messageId)
+	//fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/me/messages/%s?format=full", messageId)
+	req, err := http.NewRequest(
+		"GET",
+		fullUrl,
+		nil,
+	)
+	req.Header.Add("Content-Type", "application/json")
+	res, err := gmailClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] GMAIL get msg (4): %s", err)
+		return GmailMessageStruct{}, err
+	}
+
+	log.Printf("[INFO] Get GMAIL msg %#v Status: %d", messageId, res.StatusCode)
+	if res.StatusCode == 404 {
+		return GmailMessageStruct{}, errors.New(fmt.Sprintf("Failed to find mail for %s: %d", messageId, res.StatusCode))
+	}
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[WARNING] Gmail get msg (5): %s", err)
+		return GmailMessageStruct{}, err
+	}
+
+	log.Printf("THREAD: %s", string(body))
+
+	var message GmailMessageStruct
+	err = json.Unmarshal(body, &message)
+	if err != nil {
+		log.Printf("[WARNING] Failed body read unmarshal for gmail msg: %s", err)
+		return GmailMessageStruct{}, err
+	}
+
+	//if len(profile.EmailAddress) == 0 {
+	//	return GmailMessageStruct{}, errors.New("Couldn't find your email profile")
+	//}
+
+	//log.Printf("\n\nUSER BODY: %s", string(body))
+	return message, nil
+}
+
 func GetGmailMessage(ctx context.Context, gmailClient *http.Client, userId, messageId string) (GmailMessageStruct, error) {
 	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/messages/%s?format=full", userId, messageId)
 	//fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/me/messages/%s?format=full", messageId)
@@ -1876,6 +1919,7 @@ func GetGmailHistory(ctx context.Context, gmailClient *http.Client, userId, hist
 		return GmailHistoryStruct{}, err
 	}
 
+	//log.Printf("Body: %s", string(body))
 	var history GmailHistoryStruct
 	err = json.Unmarshal(body, &history)
 	if err != nil {
@@ -1941,7 +1985,6 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[INFO] Trigger %s doesn't exist - message.", subscription.TriggerId)
 		resp.WriteHeader(200)
-		resp.Write([]byte(`{"success": false, "reason": ""}`))
 		return
 	}
 
@@ -1950,24 +1993,27 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - gmail new msg parse: %s", err)
 		resp.WriteHeader(200)
-		resp.Write([]byte(`{"success": false, "reason": ""}`))
 		return
 	}
 
 	//time.Sleep(2 * time.Second)
 	history, err := GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, fmt.Sprintf("%d", findHistory.HistoryId))
 	if err != nil {
-		//log.Printf("[DEBUG] Failed getting history for update: %s", err)
+		log.Printf("[DEBUG] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
 		resp.WriteHeader(200)
-		resp.Write([]byte(`{"success": false, "reason": ""}`))
 		return
 	}
 
-	subCalled := false
-
+	callSub := false
+	handled := []string{}
 	for _, item := range history.History {
+		// New messages
 		for _, addedMsg := range item.MessagesAdded {
 			message := addedMsg.Message
+			if ArrayContains(handled, message.ID) {
+				log.Printf("[DEBUG] Email %s is already handled")
+				continue
+			}
 
 			//if len(item.Messages) == 0 {
 			//	log.Printf("[WARNING] No messages to handle")
@@ -1994,12 +2040,12 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 			folderPath := fmt.Sprintf("%s/%s/%s", basepath, trigger.OrgId, trigger.WorkflowId)
 			for _, part := range mail.Payload.Parts {
 				if len(part.Filename) == 0 {
-					log.Printf("[DEBUG] Skipping part number %s of email", part.PartID)
+					//log.Printf("[DEBUG] Skipping part number %s of email (attachments)", part.PartID)
 					continue
 				}
 
 				if len(part.Body.AttachmentID) == 0 {
-					log.Printf("PART: %#v", part)
+					log.Printf("[WARNING] PART: %#v", part)
 					continue
 				}
 
@@ -2052,6 +2098,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			//if mail.ID == message.ThreadID {
+			mail.Type = "new"
 			mappedData, err := json.Marshal(mail)
 			if err != nil {
 				log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s", err)
@@ -2059,22 +2106,119 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			//webhookUrl := fmt.Sprintf("https://729d-84-214-96-67.ngrok.io/api/v1/hooks/webhook_%s", trigger.Id)
 			webhookUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
 			err = MakeGmailWebhookRequest(ctx, webhookUrl, mappedData)
 			if err != nil {
 				log.Printf("[WARNING] Failed making webhook request to %s: %s", webhookUrl, err)
 			} else {
 				log.Printf("[INFO] Successfully sent webhook request to %s", webhookUrl)
+				callSub = true
 				//break
 			}
-			//}
+		}
+
+		if len(item.Messages) <= 3 {
+
+			for _, message := range item.Messages {
+				if ArrayContains(handled, message.ID) {
+					log.Printf("[DEBUG] Email %s is already handled")
+					continue
+				}
+
+				mail, err := GetGmailMessage(ctx, gmailClient, findHistory.EmailAddress, message.ID)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting thread message %s: %s", message.ID, err)
+					continue
+				}
+
+				timeNow := time.Now().Unix()
+
+				var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
+				if len(basepath) == 0 {
+					basepath = "files"
+				}
+				folderPath := fmt.Sprintf("%s/%s/%s", basepath, trigger.OrgId, trigger.WorkflowId)
+				for _, part := range mail.Payload.Parts {
+					if len(part.Filename) == 0 {
+						//log.Printf("[DEBUG] Skipping part number %s of email (attachments)", part.PartID)
+						continue
+					}
+
+					if len(part.Body.AttachmentID) == 0 {
+						log.Printf("[WARNING] PART: %#v", part)
+						continue
+					}
+
+					attachment, err := GetGmailMessageAttachment(ctx, gmailClient, findHistory.EmailAddress, message.ID, part.Body.AttachmentID)
+					if len(attachment.Data) == 0 {
+						continue
+					}
+
+					fileId := uuid.NewV4().String()
+					downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+					newFile := File{
+						Id:           fileId,
+						CreatedAt:    timeNow,
+						UpdatedAt:    timeNow,
+						Description:  fmt.Sprintf("File found in email message %s with ID %s", message.ID, part.Body.AttachmentID),
+						Status:       "uploading",
+						Filename:     part.Filename,
+						OrgId:        trigger.OrgId,
+						WorkflowId:   trigger.WorkflowId,
+						DownloadPath: downloadPath,
+						Subflows:     []string{},
+						Namespace:    "",
+						StorageArea:  "local",
+					}
+
+					if project.Environment == "cloud" {
+						newFile.StorageArea = "google_storage"
+					}
+
+					err = SetFile(ctx, newFile)
+					if err != nil {
+						log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s", part.Body.AttachmentID, message.ID)
+						continue
+					}
+
+					parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
+					if err != nil {
+						log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s", part.Body.AttachmentID, message.ID)
+						continue
+					}
+
+					err = uploadFile(ctx, &newFile, parsedData, nil)
+					if err != nil {
+						log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s", part.Body.AttachmentID, message.ID)
+						continue
+					}
+
+					log.Printf("[DEBUG] Added file ID %s for attachment %s", newFile.Id, message.ID)
+					mail.FileIds = append(mail.FileIds, newFile.Id)
+				}
+
+				mail.Type = "thread"
+				mappedData, err := json.Marshal(mail)
+				if err != nil {
+					log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s", err)
+					resp.WriteHeader(401)
+					continue
+				}
+
+				webhookUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
+				err = MakeGmailWebhookRequest(ctx, webhookUrl, mappedData)
+				if err != nil {
+					log.Printf("[WARNING] Failed making webhook request to %s: %s", webhookUrl, err)
+				} else {
+					log.Printf("[INFO] Successfully sent webhook request to %s", webhookUrl)
+					callSub = true
+				}
+			}
 		}
 	}
 
-	if !subCalled {
+	if callSub {
 		makeGmailSubscription(gmailClient, trigger.Folders)
-		subCalled = true
 	}
 
 	resp.WriteHeader(200)
