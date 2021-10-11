@@ -2786,7 +2786,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if !workflow.IsValid {
 			oldworkflow, err := GetWorkflow(ctx, fileId)
 			if err != nil {
-				log.Printf("Workflow %s doesn't exist - oldworkflow.", fileId)
+				log.Printf("[WARNING] Workflow %s doesn't exist - oldworkflow.", fileId)
 				if workflow.PreviouslySaved {
 					resp.WriteHeader(401)
 					resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))

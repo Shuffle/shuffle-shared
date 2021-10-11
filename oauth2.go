@@ -869,7 +869,7 @@ func makeOutlookSubscription(client *http.Client, folderIds []string, notificati
 	timeFormat := fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d.0000000Z", t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
 
 	resource := fmt.Sprintf("me/mailfolders('%s')/messages", strings.Join(folderIds, "','"))
-	log.Printf("[INFO] Subscription resource to get(s): %s", resource)
+	log.Printf("[INFO] Subscription resource to get(s): %s with time %s", resource, timeFormat)
 	sub := OutlookSubscription{
 		ChangeType:         "created",
 		ClientState:        "Shuffle subscription",
@@ -959,34 +959,35 @@ func HandleGmailSubRemoval(ctx context.Context, user User, workflowId, triggerId
 		log.Printf("[WARNING] Trigger auth %s doesn't exist - gmail sub removal.", triggerId)
 		return err
 	}
-	// if project.Environment != "cloud" {
-	//	log.Printf("[INFO] SHOULD STOP OUTLOOK SUB ONPREM SYNC WITH CLOUD for workflow ID %s", workflowId)
-	//	org, err := GetOrg(ctx, user.ActiveOrg.Id)
-	//	if err != nil {
-	//		log.Printf("[INFO] Failed finding org %s during outlook removal: %s", org.Id, err)
-	//		return err
-	//	}
 
-	//	log.Printf("[INFO] Stopping cloud configuration for trigger %s in org %s for workflow %s", trigger.Id, org.Id, trigger.WorkflowId)
-	//	action := CloudSyncJob{
-	//		Type:          "outlook",
-	//		Action:        "stop",
-	//		OrgId:         org.Id,
-	//		PrimaryItemId: trigger.Id,
-	//		SecondaryItem: trigger.Start,
-	//		ThirdItem:     trigger.WorkflowId,
-	//	}
+	if project.Environment != "cloud" {
+		log.Printf("[INFO] SHOULD STOP GMAIL SUB ONPREM SYNC WITH CLOUD for workflow ID %s", workflowId)
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[INFO] Failed finding org %s during gmail removal: %s", org.Id, err)
+			return err
+		}
 
-	//	err = executeCloudAction(action, org.SyncConfig.Apikey)
-	//	if err != nil {
-	//		log.Printf("[INFO] Failed cloud action STOP outlook execution: %s", err)
-	//		return err
-	//	} else {
-	//		log.Printf("[INFO] Successfully set STOPPED outlook execution trigger")
-	//	}
-	//} else {
-	//	log.Printf("SHOULD STOP OUTLOOK SUB IN CLOUD")
-	//}
+		log.Printf("[INFO] Stopping cloud configuration for gmail trigger %s in org %s for workflow %s", trigger.Id, org.Id, trigger.WorkflowId)
+		action := CloudSyncJob{
+			Type:          "gmail",
+			Action:        "stop",
+			OrgId:         org.Id,
+			PrimaryItemId: trigger.Id,
+			SecondaryItem: trigger.Start,
+			ThirdItem:     trigger.WorkflowId,
+		}
+
+		err = executeCloudAction(action, org.SyncConfig.Apikey)
+		if err != nil {
+			log.Printf("[INFO] Failed cloud action STOP gmail execution: %s", err)
+			return err
+		} else {
+			log.Printf("[INFO] Successfully set STOPPED gmail execution trigger")
+		}
+	} else {
+		log.Printf("SHOULD STOP OUTLOOK SUB IN CLOUD")
+	}
 
 	// Actually delete the thing
 	redirectDomain := "localhost:5001"
@@ -1358,7 +1359,7 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 	// First - lets regenerate an oauth token for outlook.office.com from the original items
 	trigger, err := GetTriggerAuth(ctx, curTrigger.ID)
 	if err != nil {
-		log.Printf("[INFO] Trigger %s doesn't exist - gmail sub.", curTrigger.ID)
+		log.Printf("[INFO] Trigger %s doesn't exist - outlook sub.", curTrigger.ID)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": ""}`))
 		return
@@ -1478,7 +1479,7 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 
 			time.Sleep(5 * time.Second)
 			if failCnt == maxFails {
-				log.Printf("Failed to set up subscription %d times.", maxFails)
+				log.Printf("[WARNING] Failed to set up subscription %d times.", maxFails)
 				resp.WriteHeader(401)
 				return
 			}
@@ -1657,27 +1658,13 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 	trigger.AssociatedUser = userProfile.EmailAddress
 	trigger.Folders = curTrigger.Folders
 
-	//notificationURL := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", project.CloudUrl, trigger.Id)
-	//log.Printf("[DEBUG] Starting with notificationURL %s", notificationURL)
-	//log.Println("[INFO] Folders: %#v", curTrigger.Folders)
 	for {
 		sub, err := makeGmailSubscription(gmailClient, curTrigger.Folders)
 		if err != nil {
-			//failCnt += 1
-
-			log.Printf("[WARNING] Failed making oauth subscription for gmail, retrying in 5 seconds: %s", err)
+			log.Printf("[WARNING] Failed making oauth subscription for gmail - cancelling request: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
-
-			//time.Sleep(5 * time.Second)
-			//if failCnt == maxFails {
-			//	log.Printf("Failed to set up subscription %d times.", maxFails)
-			//	resp.WriteHeader(401)
-			//	return
-			//}
-
-			//continue
 		}
 
 		// May not need a new one; could just do this in triggerId with search tbh
@@ -1708,10 +1695,6 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 
 		// Set the ID somewhere here
 		trigger.SubscriptionId = sub.HistoryId
-		err = SetTriggerAuth(ctx, *trigger)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting triggerauth (gmail): %s", err)
-		}
 
 		returnUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
 		hook := Hook{
@@ -1742,6 +1725,41 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 
 		if project.Environment == "cloud" {
 			hook.Environment = "cloud"
+		} else {
+
+			log.Printf("[INFO] Starting cloud configuration TO START gmail trigger %s in org %s for workflow %s", trigger.Id, user.ActiveOrg.Id, trigger.WorkflowId)
+
+			action := CloudSyncJob{
+				Type:          "gmail",
+				Action:        "start",
+				OrgId:         user.ActiveOrg.Id,
+				PrimaryItemId: trigger.Id,
+				SecondaryItem: trigger.Start,
+				ThirdItem:     workflowId,
+			}
+
+			org, err := GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[INFO] Failed finding org %s during gmail setup: %s", org.Id, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting org"}`)))
+				return
+			}
+
+			err = executeCloudAction(action, org.SyncConfig.Apikey)
+			if err != nil {
+				log.Printf("[INFO] Failed cloud action START gmail execution: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+				return
+			} else {
+				log.Printf("[INFO] Successfully set up cloud (Hybrid) action trigger for gmail")
+			}
+		}
+
+		err = SetTriggerAuth(ctx, *trigger)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting triggerauth (gmail): %s", err)
 		}
 
 		log.Printf("[DEBUG] Setting hook with ID %s with URL %s", trigger.Id, returnUrl)
