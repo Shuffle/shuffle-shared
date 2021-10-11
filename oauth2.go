@@ -1,5 +1,7 @@
 package shuffle
 
+// Shuffle is an automation platform for security and IT. This app and the associated scopes enables us to get information about a user, their mailbox and eventually subscribing them to send pub/sub requests to our platform to handle their emails in real-time, before controlling how to handle the data themselves.
+
 import (
 	"bytes"
 	"context"
@@ -322,10 +324,15 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	url := fmt.Sprintf("http://%s%s", request.Host, request.URL.EscapedPath())
+	if project.Environment == "cloud" {
+		url = fmt.Sprintf("https://shuffler.io%s", request.Host, request.URL.EscapedPath())
+	}
+
+	log.Printf("[DEBUG] Redirect URI: %s", url)
 	ctx := getContext(request)
 	_, accessToken, err := GetGmailClient(ctx, code, OauthToken{}, url)
 	if err != nil {
-		log.Printf("Oauth client failure - outlook register: %s", err)
+		log.Printf("[WARNING] Oauth client failure - gmail register: %s", err)
 		resp.WriteHeader(401)
 		return
 	}
@@ -500,7 +507,7 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	_, accessToken, err := GetOutlookClient(ctx, code, OauthToken{}, url)
 	if err != nil {
-		log.Printf("Oauth client failure - outlook register: %s", err)
+		log.Printf("[WARNING] Oauth client failure - outlook register: %s", err)
 		resp.WriteHeader(401)
 		return
 	}
