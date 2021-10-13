@@ -500,7 +500,7 @@ func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		GrantType: "authorization_code",
 	}
 
-	//q := req.URL.Query()
+	oauthUrl := ""
 	for _, field := range appAuth.Fields {
 		if field.Key == "code" {
 			requestData.Code = field.Value
@@ -523,6 +523,11 @@ func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		if field.Key == "redirect_uri" {
 			//q.Add("redirect_uri", field.Value)
 			requestData.RedirectUri = field.Value
+		}
+
+		if field.Key == "oauth_url" {
+			log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
+			oauthUrl = field.Value
 		}
 	}
 
@@ -584,6 +589,16 @@ func runOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		Value: oauthResp.RefreshToken,
 	})
 
+	if len(oauthUrl) > 0 {
+		log.Printf("[DEBUG] Appending Oauth2 URL %s", oauthUrl)
+		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+			Key:   "url",
+			Value: oauthUrl,
+		})
+	} else {
+		log.Printf("[DEBUG] No URL to attach to Oauth2 auth?")
+	}
+
 	// FIXME: Does this work with string?
 	//https://stackoverflow.com/questions/43870554/microsoft-oauth2-authentication-not-returning-refresh-token
 	parsedTime := strconv.FormatInt(int64(time.Now().Unix())+int64(oauthResp.ExpiresIn), 10)
@@ -614,15 +629,17 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in add app auth: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
+	log.Printf("[AUDIT] Setting new authentication for user %s (%s)", user.Username, user.Id)
+
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Printf("Error with body read: %s", err)
+		log.Printf("[WARNING] Error with body read in new app auth: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2602,7 +2619,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if len(param.Value) == 0 && param.Name != "argument" {
-					//log.Printf("Param: %#v", param)
 					if param.Name == "user_apikey" {
 						apikey := ""
 						if len(user.ApiKey) > 0 {

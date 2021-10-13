@@ -261,7 +261,7 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 // This function generates the python code that's being used.
 // This is really meta when you program it. Handling parameters is hard here.
-func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string) (string, string) {
+func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string, api WorkflowApp) (string, string) {
 	method = strings.ToLower(method)
 	queryString := ""
 	queryData := ""
@@ -347,6 +347,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 				authenticationSetup = fmt.Sprintf("if apikey != \" \": url+=f\"%s%s={apikey}\"", key, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
 			}
+		} else if swagger.Components.SecuritySchemes["Oauth2"] != nil {
+			//log.Printf("[DEBUG] Appending Oauth2 code")
+			authenticationParameter = ", access_token, refresh_token"
+			authenticationSetup = fmt.Sprintf("if access_token != \" \": request_headers[\"Authorization\"] = f\"Bearer {access_token}\"\n        request_headers[\"Content-Type\"] = \"application/json\"\n        print(\"RUN REFRESH CYCLE HERE WITH URL %s?\")\n        print(f\"ACCESS_TOKEN={access_token}\")", api.Authentication.RefreshUri)
 		}
 	}
 
@@ -576,7 +580,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "test") {
+	if strings.Contains(functionname, "projects") {
 		//log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
@@ -754,11 +758,41 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			})
 		} else if securitySchemes["Oauth2"] != nil {
 			api.Authentication.Type = "oauth2"
+			if val, ok := securitySchemes["Oauth2"].Value.ExtensionProps.Extensions["flow"]; ok {
+				//log.Printf("VAL:: %#v", val.(json.RawMessage))
+				newValue := string(fmt.Sprintf("%s", string(val.(json.RawMessage))))
+				//log.Printf("DATA: %s", newValue)
 
-			//securitySchemes["Oauth2"].Value.Flows = openapi3.OauthFlows{}
-			//api.Authentication.RedirectUri =
-			//log.Printf("%#v", securitySchemes["Oauth2"].Value.Flows.AuthorizationCode)
-			log.Printf("%#v", securitySchemes["Oauth2"].Value.Flows)
+				var parsed Oauth2Openapi
+				err := json.Unmarshal([]byte(newValue), &parsed)
+				if err != nil {
+					log.Printf("[WARNING] Failed to unmarshal Oauth2 data for app %s", api.Name)
+				} else {
+					log.Printf("[DEBUG] Set up Oauth2 config for app %s during generation", api.Name)
+					api.Authentication.Type = "oauth2"
+					api.Authentication.RedirectUri = parsed.AuthorizationCode.AuthorizationUrl
+					api.Authentication.TokenUri = parsed.AuthorizationCode.TokenUrl
+					api.Authentication.RefreshUri = parsed.AuthorizationCode.RefreshUrl
+					api.Authentication.Scope = parsed.AuthorizationCode.Scopes
+				}
+			} else {
+				log.Printf("[ERROR] No Oauth2 data to parse for app %s - bad parsing?", api.Name)
+				return swagger, WorkflowApp{}, []string{}, errors.New("Missing Oauth2 refreshUrl, scope, authorization URL or Token URL")
+			}
+
+			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+				Name:        "client_id",
+				Value:       "",
+				Example:     "client_id",
+				Description: securitySchemes["Oauth2"].Value.Description,
+				In:          securitySchemes["Oauth2"].Value.In,
+				Scheme:      securitySchemes["Oauth2"].Value.Scheme,
+				Schema: SchemaDefinition{
+					Type: securitySchemes["Oauth2"].Value.Scheme,
+				},
+			})
+
+			//if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 			//.AuthorizationUrl
 			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 				Name:        "client_id",
@@ -1442,7 +1476,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "connect", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "connect", parameters, optionalQueries, headersFound, "", api)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1610,7 +1644,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "get", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "get", parameters, optionalQueries, headersFound, "", api)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1776,7 +1810,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "head", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "head", parameters, optionalQueries, headersFound, "", api)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1944,7 +1978,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "delete", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "delete", parameters, optionalQueries, headersFound, "", api)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1978,9 +2012,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 
 	fileField := ""
 	if path.Post.RequestBody != nil {
-		//log.Printf("DATA: %#v",
 		value := path.Post.RequestBody.Value
-		//log.Printf("VAL: %#v", value.Content)
 		if val, ok := value.Content["multipart/form-data"]; ok {
 			if val.Schema.Value != nil {
 				if innerval, ok := val.Schema.Value.Properties["fieldname"]; ok {
@@ -2145,7 +2177,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "post", parameters, optionalQueries, headersFound, fileField)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "post", parameters, optionalQueries, headersFound, fileField, api)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -2317,7 +2349,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "patch", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "patch", parameters, optionalQueries, headersFound, "", api)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -2485,7 +2517,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "put", parameters, optionalQueries, headersFound, "")
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "put", parameters, optionalQueries, headersFound, "", api)
 
 	if len(functionname) > 0 {
 		action.Name = functionname

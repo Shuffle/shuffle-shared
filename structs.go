@@ -150,12 +150,13 @@ type WorkflowAppAction struct {
 }
 
 type Authentication struct {
-	Required     bool                   `json:"required" datastore:"required" yaml:"required" `
 	Type         string                 `json:"type" datastore:"type" yaml:"type"`
+	Required     bool                   `json:"required" datastore:"required" yaml:"required" `
+	Parameters   []AuthenticationParams `json:"parameters" datastore:"parameters" yaml:"parameters"`
 	RedirectUri  string                 `json:"redirect_uri" datastore:"redirect_uri" yaml:"redirect_uri"`
 	TokenUri     string                 `json:"token_uri" datastore:"token_uri" yaml:"token_uri"`
+	RefreshUri   string                 `json:"refresh_uri" datastore:"refresh_uri" yaml:"refresh_uri"`
 	Scope        []string               `json:"scope" datastore:"scope" yaml:"scope"`
-	Parameters   []AuthenticationParams `json:"parameters" datastore:"parameters" yaml:"parameters"`
 	ClientId     string                 `json:"client_id" datastore:"client_id"`
 	ClientSecret string                 `json:"client_secret" datastore:"client_secret"`
 }
@@ -1754,6 +1755,17 @@ type Oauth2Resp struct {
 	Scope        string `json:"scope"`
 	ExpiresIn    int    `json:"expires_in"`
 	ExtExpiresIn int    `json:"ext_expires_in"`
+}
+
+type AuthorizationCode struct {
+	AuthorizationUrl string   `json:"authorizationUrl"`
+	RefreshUrl       string   `json:"refreshUrl"`
+	Scopes           []string `json:"scopes"`
+	TokenUrl         string   `json:"tokenUrl"`
+}
+
+type Oauth2Openapi struct {
+	AuthorizationCode AuthorizationCode `json:"authorizationCode"`
 }
 
 // The data to be parsed

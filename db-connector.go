@@ -864,7 +864,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	}
 
 	if project.CacheDb {
-		log.Printf("[DEBUG] Setting cache for sub %s", cacheKey)
+		//log.Printf("[DEBUG] Setting cache for sub %s", cacheKey)
 		data, err := json.Marshal(sub)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getsub: %s", err)
@@ -938,7 +938,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	}
 
 	if project.CacheDb {
-		log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
@@ -5206,7 +5206,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 	}
 
 	if project.CacheDb {
-		log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(cacheData)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getcachekey: %s", err)
