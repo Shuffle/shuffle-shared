@@ -959,13 +959,15 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	}
 	folderPath := fmt.Sprintf("%s/%s/%s", basepath, curfile.OrgId, curfile.WorkflowId)
 
-	// Try to make the full file location
-	err = os.MkdirAll(folderPath, os.ModePerm)
-	if err != nil {
-		log.Printf("[ERROR] Writing issue for file location creation: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed creating upload location"}`))
-		return
+	if project.Environment != "cloud" {
+		// Try to make the full file location
+		err = os.MkdirAll(folderPath, os.ModePerm)
+		if err != nil {
+			log.Printf("[ERROR] Writing issue for file location creation: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed creating upload location"}`))
+			return
+		}
 	}
 
 	filename := curfile.Filename

@@ -7282,16 +7282,36 @@ func GetExecutionbody(body []byte) string {
 		newItem := strings.Replace(item, ".", "_", -1)
 		parsedBody = strings.Replace(parsedBody, item, newItem, -1)
 	}
-	//log.Printf("FOUND: %s", found)
-	//s := pattern.ReplaceAllString(parsedBody, `"$0_$1":`)
-	//log.Printf("NEWS: %s", s)
 
-	//parsedBody = strings.Replace(parsedBody, "\"", "\\\"", -1)
-	//if len(parsedBody) > 0 {
-	//	if string(parsedBody[0]) == `"` && string(parsedBody[len(parsedBody)-1]) == "\"" {
-	//		parsedBody = parsedBody[1 : len(parsedBody)-1]
-	//	}
-	//}
+	if !strings.HasPrefix(parsedBody, "{") && !strings.HasPrefix(parsedBody, "[") && strings.Contains(parsedBody, "=") {
+		log.Printf("[DEBUG] Trying to make string %s to json", parsedBody)
+
+		newbody := map[string]string{}
+		for _, item := range strings.Split(parsedBody, "&") {
+			//log.Printf("Handling item: %s", item)
+
+			if !strings.Contains(item, "=") {
+				newbody[item] = ""
+				continue
+			}
+
+			bodySplit := strings.Split(item, "=")
+			if len(bodySplit) == 2 {
+				newbody[bodySplit[0]] = bodySplit[1]
+			} else {
+				newbody[item] = ""
+			}
+		}
+
+		jsonString, err := json.Marshal(newbody)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshaling queries: %#v: %s", newbody, err)
+		} else {
+			parsedBody = string(jsonString)
+		}
+		//fmt.Println(err)
+		//log.Printf("BODY: %#v", newbody)
+	}
 
 	return parsedBody
 }
