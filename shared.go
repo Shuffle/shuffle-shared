@@ -1495,6 +1495,11 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	newWorkflows := []Workflow{}
 	for _, workflow := range workflows {
+		if workflow.OrgId != user.ActiveOrg.Id {
+			log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
+			continue
+		}
+
 		newActions := []Action{}
 		for _, action := range workflow.Actions {
 			//log.Printf("Image: %s", action.LargeImage)
@@ -1705,12 +1710,19 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 
 	if config.Action == "assign_everywhere" {
 		log.Printf("[INFO] Should set authentication config")
-		workflows, err := GetAllWorkflowsByQuery(ctx, user)
-		if err != nil && len(workflows) == 0 {
+		baseWorkflows, err := GetAllWorkflowsByQuery(ctx, user)
+		if err != nil && len(baseWorkflows) == 0 {
 			log.Printf("Getall error in auth update: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed getting workflows to update"}`))
 			return
+		}
+
+		workflows := []Workflow{}
+		for _, workflow := range baseWorkflows {
+			if workflow.OrgId == user.ActiveOrg.Id {
+				workflows = append(workflows, workflow)
+			}
 		}
 
 		// FIXME: Add function to remove auth from other auth's
