@@ -1906,6 +1906,31 @@ func GetGmailMessage(ctx context.Context, gmailClient *http.Client, userId, mess
 		return GmailMessageStruct{}, err
 	}
 
+	for _, header := range message.Payload.Headers {
+		if header.Name == "Subject" {
+			message.Payload.Subject = header.Value
+		}
+		if header.Name == "To" {
+			message.Payload.Recipient = header.Value
+		}
+		if header.Name == "From" {
+			message.Payload.Sender = header.Value
+		}
+	}
+
+	for _, payload := range message.Payload.Parts {
+		//parsedBody = mess
+		if payload.MimeType == "text/plain" {
+			parsedData, err := base64.StdEncoding.DecodeString(payload.Body.Data)
+			if err != nil {
+				log.Printf("[WARNING] Failed base64 decode of parsedbody (text/plain): %s", err)
+				continue
+			}
+
+			message.Payload.ParsedBody = string(parsedData)
+		}
+	}
+
 	//if len(profile.EmailAddress) == 0 {
 	//	return GmailMessageStruct{}, errors.New("Couldn't find your email profile")
 	//}

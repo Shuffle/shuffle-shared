@@ -1991,10 +1991,14 @@ type GmailMessageStruct struct {
 	LabelIds []string `json:"labelIds"`
 	Snippet  string   `json:"snippet"`
 	Payload  struct {
-		PartID   string `json:"partId"`
-		MimeType string `json:"mimeType"`
-		Filename string `json:"filename"`
-		Headers  []struct {
+		PartID     string `json:"partId"`
+		MimeType   string `json:"mimeType"`
+		Filename   string `json:"filename"`
+		Sender     string `json:"sender"`
+		Subject    string `json:"subject"`
+		Recipient  string `json:"recipient"`
+		ParsedBody string `json:"parsed_body"`
+		Headers    []struct {
 			Name  string `json:"name"`
 			Value string `json:"value"`
 		} `json:"headers"`
