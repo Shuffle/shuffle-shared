@@ -3565,6 +3565,11 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if request.Body == nil {
+		resp.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Println("[WARNING] Failed reading body")
@@ -5817,7 +5822,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(loginData))
 }
 
-func parseLoginParameters(resp http.ResponseWriter, request *http.Request) (loginStruct, error) {
+func ParseLoginParameters(resp http.ResponseWriter, request *http.Request) (loginStruct, error) {
+	if request.Body == nil {
+		return loginStruct{}, errors.New("Failed to parse loing params, body is empty")
+	}
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
