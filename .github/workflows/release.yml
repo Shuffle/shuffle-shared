@@ -19,9 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
       - name: Semver
+        id: semver
         uses: paulhatch/semantic-version@v4.0.2
         with:
           # The prefix to use to identify tags
@@ -33,6 +32,7 @@ jobs:
           minor_pattern: "(MINOR)"
           # A string to determine the format of the version output
           format: "${major}.${minor}.${patch}"
+          # #-${increment}"
           # Optional path to check for changes. If any changes are detected in the path the
           # 'changed' output will true. Enter multiple paths separated by spaces.
           change_path: ""
@@ -43,3 +43,20 @@ jobs:
           short_tags: false
           # If this is set to true, *every* commit will be treated as a new version.
           bump_each_commit: true
+        #outputs:
+        #  version: 
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        needs: semver
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_SECRET }} # This token is provided by Actions, you do not need to create your own token
+        with:
+          tag_name: ${{ needs.semver.outputs.version_tag }}
+          release_name: ${{ needs.semver.outputs.version_tag }}
+          body: |
+            Changes in this Release
+            - First Change
+            - Second Change
+          draft: true
+          prerelease: true 
