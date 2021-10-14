@@ -28,7 +28,6 @@ jobs:
           git config user.name "name"
           git config user.email "<>"
           git config push.default "current"
-          ./run
 
       - name: semver
         id: semver
