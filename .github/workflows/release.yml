@@ -52,9 +52,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GH_SECRET }} # This token is provided by Actions, you do not need to create your own token
         with:
-          tag_name: 0.1.15
-          release_name: 0.1.15 
+          tag_name: v0.1.15
+          release_name: v0.1.15 
           body: |
             **Full Changelog**: https://github.com/Shuffle/shuffle-shared/compare/v0.1.14...v0.1.15
-          draft: true
+          draft: false
           prerelease: true 
