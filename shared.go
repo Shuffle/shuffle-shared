@@ -2,7 +2,6 @@ package shuffle
 
 import (
 	"bytes"
-
 	"context"
 	"encoding/base64"
 	"encoding/hex"

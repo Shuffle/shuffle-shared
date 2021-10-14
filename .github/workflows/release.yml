@@ -1,12 +1,13 @@
-# This is a basic workflow to help you get started with Actions
+# Attempt at trying to run a workflow for releasing new versions and to learn actions 
+# Seems to be a recent checkout issue: https://github.com/actions/checkout/issues/417
 
 name: Release
 
 # Controls when the workflow will run
 on:
   # Triggers the workflow on push or pull request events but only for the main branch
-  push:
-    branches: [ main ]
+  #push:
+  #  branches: [ main ]
     #paths:
     #  - "**.go"
 
@@ -26,12 +27,6 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_SECRET }}
 
-      - shell: bash
-        run: |
-          git config user.name "name"
-          git config user.email "<>"
-          git config push.default "current"
-
       - name: semver
         id: semver
         uses: paulhatch/semantic-version@v4.0.2
@@ -48,7 +43,7 @@ jobs:
           # #-${increment}"
           # Optional path to check for changes. If any changes are detected in the path the
           # 'changed' output will true. Enter multiple paths separated by spaces.
-          change_path: "/"
+          change_path: "."
           # Named version, will be used as suffix for name version tag
           namespace: ""
           # Indicate whether short tags like 'v1' should be supported. If false only full
