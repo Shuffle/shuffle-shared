@@ -43,8 +43,6 @@ jobs:
           short_tags: false
           # If this is set to true, *every* commit will be treated as a new version.
           bump_each_commit: true
-        #outputs:
-        #  version: 
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -52,8 +50,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GH_SECRET }} # This token is provided by Actions, you do not need to create your own token
         with:
-          tag_name: ${{ needs.semver.outputs.version_tag }}
-          release_name: ${{ needs.semver.outputs.version_tag }}
+          tag_name: ${{ semver.outputs.version_tag }}
+          release_name: ${{ semver.outputs.version_tag }}
           body: |
             Changes in this Release
             - First Change
