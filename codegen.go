@@ -268,7 +268,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	extraHeaders := ""
 	extraQueries := ""
-	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth"}
+	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth", "JWT"}
 
 	if swagger.Components.SecuritySchemes != nil {
 		for key, value := range swagger.Components.SecuritySchemes {
@@ -290,7 +290,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				}
 				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, key, key, key)
 			} else {
-				log.Printf("[WARNING] Can't handle type %s", value.Value.In)
+				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
 			}
 		}
 	}
@@ -351,6 +351,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			//log.Printf("[DEBUG] Appending Oauth2 code")
 			authenticationParameter = ", access_token, refresh_token"
 			authenticationSetup = fmt.Sprintf("if access_token != \" \": request_headers[\"Authorization\"] = f\"Bearer {access_token}\"\n        request_headers[\"Content-Type\"] = \"application/json\"\n        print(\"RUN REFRESH CYCLE HERE WITH URL %s?\")\n        print(f\"ACCESS_TOKEN={access_token}\")", api.Authentication.RefreshUri)
+		} else if swagger.Components.SecuritySchemes["jwt"] != nil {
+			//log.Printf("[DEBUG] Appending Oauth2 code")
+			authenticationParameter = ", username_basic, password_basic"
+			//api.Authentication.TokenUri = securitySchemes["jwt"].Value.In
+			authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"{authret.text}\")", api.Authentication.TokenUri)
 		}
 	}
 
@@ -580,8 +585,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "projects") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(functionname, "command") {
+		log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
 		//log.Printf("Queries: %s", queryString)
@@ -694,7 +699,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 	}
 
 	securitySchemes := swagger.Components.SecuritySchemes
-	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth"}
+	reservedKeys := []string{"BearerAuth", "ApiKeyAuth", "Oauth2", "BasicAuth", "jwt"}
 
 	if securitySchemes != nil {
 		//log.Printf("%#v", securitySchemes)
@@ -814,6 +819,57 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				Scheme:      securitySchemes["Oauth2"].Value.Scheme,
 				Schema: SchemaDefinition{
 					Type: securitySchemes["Oauth2"].Value.Scheme,
+				},
+			})
+		} else if securitySchemes["jwt"] != nil {
+			if len(securitySchemes["jwt"].Value.In) > 0 {
+				api.Authentication.TokenUri = securitySchemes["jwt"].Value.In
+			}
+
+			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+				Name:        "username_basic",
+				Value:       "",
+				Example:     "username",
+				Description: "",
+				In:          "",
+				Scheme:      "",
+				Schema: SchemaDefinition{
+					Type: securitySchemes["jwt"].Value.Scheme,
+				},
+			})
+
+			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+				Name:        "password_basic",
+				Value:       "",
+				Example:     "*****",
+				Description: "",
+				In:          "",
+				Scheme:      "",
+				Schema: SchemaDefinition{
+					Type: securitySchemes["jwt"].Value.Scheme,
+				},
+			})
+
+			extraParameters = append(extraParameters, WorkflowAppActionParameter{
+				Name:          "username_basic",
+				Description:   "The username to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "The username to use",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
+				},
+			})
+			extraParameters = append(extraParameters, WorkflowAppActionParameter{
+				Name:          "password_basic",
+				Description:   "The password to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "***********",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
 				},
 			})
 		} else if securitySchemes["BasicAuth"] != nil {
