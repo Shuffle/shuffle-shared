@@ -34,7 +34,7 @@ jobs:
           # Same as above except indicating a minor change, supports regular expressions wrapped with '/'
           minor_pattern: "(MINOR)"
           # A string to determine the format of the version output
-          format: "${major}.${minor}.${patch}"
+          format: "${major}.${minor}.${patch}-${increment}"
           # #-${increment}"
           # Optional path to check for changes. If any changes are detected in the path the
           # 'changed' output will true. Enter multiple paths separated by spaces.
@@ -46,15 +46,15 @@ jobs:
           short_tags: false
           # If this is set to true, *every* commit will be treated as a new version.
           bump_each_commit: true
-      - name: create release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_SECRET }} # This token is provided by Actions, you do not need to create your own token
-        with:
-          tag_name: v0.1.15
-          release_name: v0.1.15 
-          body: |
-            **Full Changelog**: https://github.com/Shuffle/shuffle-shared/compare/v0.1.14...v0.1.15
-          draft: false
-          prerelease: true 
+      #- name: create release
+      #  id: create_release
+      #  uses: actions/create-release@v1
+      #  env:
+      #    GITHUB_TOKEN: ${{ secrets.GH_SECRET }} # This token is provided by Actions, you do not need to create your own token
+      #  with:
+      #    tag_name: v0.2.0-1
+      #    release_name: v0.2.0-1
+      #    body: |
+      #      **Full Changelog**: https://github.com/Shuffle/shuffle-shared/compare/v0.1.14...v0.1.15
+      #    draft: true 
+      #    prerelease: true 
