@@ -1,4 +1,4 @@
-module github.com/frikky/shuffle-shared
+module github.com/shuffle/shuffle-shared
 
 go 1.11
 
