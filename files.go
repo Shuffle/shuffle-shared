@@ -152,6 +152,24 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// 1. Check user directly
+	// 2. Check workflow execution authorization
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] INITIAL Api authentication failed in file deletion: %s", err)
+
+		orgId, err := fileAuthentication(request)
+		if err != nil {
+			log.Printf("[ERROR] Bad file authentication in get: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		user.ActiveOrg.Id = orgId
+		user.Username = "Execution File API"
+	}
+
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -177,24 +195,6 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("\n\n[INFO] User is trying to GET File Meta for %s\n\n", fileId)
-
-	// 1. Check user directly
-	// 2. Check workflow execution authorization
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[INFO] INITIAL Api authentication failed in file deletion: %s", err)
-
-		orgId, err := fileAuthentication(request)
-		if err != nil {
-			log.Printf("[ERROR] Bad file authentication in get: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		user.ActiveOrg.Id = orgId
-		user.Username = "Execution File API"
-	}
 
 	// 1. Verify if the user has access to the file: org_id and workflow
 	log.Printf("[INFO] Should GET FILE META for %s if user has access", fileId)

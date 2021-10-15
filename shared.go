@@ -322,12 +322,6 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//FIXME - shouldn't return everything :)
-	returnData := fmt.Sprintf(`{"success": true, "reason": []}`)
-	resp.WriteHeader(200)
-	resp.Write([]byte(returnData))
-	return
-
 	// Just need to be logged in
 	// FIXME - should have some permissions?
 	user, err := HandleApiAuthentication(resp, request)
@@ -337,6 +331,13 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	// FIXME - shouldn't return everything :)
+	// Used for searching
+	returnData := fmt.Sprintf(`{"success": true, "reason": []}`)
+	resp.WriteHeader(200)
+	resp.Write([]byte(returnData))
+	return
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -3424,6 +3425,11 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 		userInfo = newUserInfo
 		log.Printf("[INFO] Updated apikey for user %s", userInfo.Username)
 	} else if request.Method == "POST" {
+		if request.Body == nil {
+			resp.WriteHeader(http.StatusBadRequest)
+			return
+		}
+
 		body, err := ioutil.ReadAll(request.Body)
 		if err != nil {
 			log.Println("Failed reading body")
@@ -5698,7 +5704,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Gets a struct of Username, password
-	data, err := parseLoginParameters(resp, request)
+	data, err := ParseLoginParameters(resp, request)
 	if err != nil {
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
