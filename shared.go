@@ -3555,7 +3555,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 	newjson, err := json.Marshal(newUsers)
 	if err != nil {
-		log.Printf("Failed unmarshal: %s", err)
+		log.Printf("[WARNING] Failed unmarshal in getusers: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
 		return
