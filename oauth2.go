@@ -815,7 +815,7 @@ func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 	//log.Printf("GMAIL RESP: %s", string(body))
 
 	if res.StatusCode != 200 && res.StatusCode != 201 {
-		log.Printf("[ERROR] WATCH ERROR: %s", body)
+		//log.Printf("[ERROR] WATCH ERROR: %s", body)
 		return SubResponse{}, errors.New(fmt.Sprintf("Subscription failed: %s", string(body)))
 	}
 
@@ -949,6 +949,49 @@ func removeOutlookSubscription(outlookClient *http.Client, subscriptionId string
 	return nil
 }
 
+func cancelGmailSubscription(ctx context.Context, gmailClient *http.Client) error {
+	// bytes.NewBuffer(data)
+	fullUrl := "https://www.googleapis.com/gmail/v1/users/me/stop"
+	req, err := http.NewRequest(
+		"POST",
+		fullUrl,
+		nil,
+	)
+	req.Header.Add("Content-Type", "application/json")
+	res, err := gmailClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] GMAIL Client (2): %s", err)
+		return err
+	}
+
+	log.Printf("[INFO] Stop subscription on GMAIL Status: %d", res.StatusCode)
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[WARNING] Gmail subscription Body (2): %s", err)
+		return err
+	}
+
+	//log.Printf("GMAIL RESP (%d): %s", res.StatusCode, string(body))
+
+	if res.StatusCode != 200 && res.StatusCode != 201 && res.StatusCode != 204 {
+		return errors.New(fmt.Sprintf("Subscription failed: %s", string(body)))
+	}
+	//notificationURL := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", project.CloudUrl, trigger.Id)
+	//curSubscriptions, err := getOutlookSubscriptions(outlookClient)
+	//if err == nil {
+	//	for _, sub := range curSubscriptions.Value {
+	//		if sub.NotificationURL == notificationURL {
+	//			log.Printf("[INFO] Removing subscription %s from gmail for %s", sub.Id, workflowId)
+	//			removeOutlookSubscription(outlookClient, sub.Id)
+	//		}
+	//	}
+	//} else {
+	//	log.Printf("Failed to get subscriptions - need to overwrite")
+	//}
+
+	return nil
+}
+
 func HandleGmailSubRemoval(ctx context.Context, user User, workflowId, triggerId string) error {
 	// 1. Get the auth for trigger
 	// 2. Stop the subscription
@@ -998,46 +1041,7 @@ func HandleGmailSubRemoval(ctx context.Context, user User, workflowId, triggerId
 		return err
 	}
 
-	// bytes.NewBuffer(data)
-	fullUrl := "https://www.googleapis.com/gmail/v1/users/me/stop"
-	req, err := http.NewRequest(
-		"POST",
-		fullUrl,
-		nil,
-	)
-	req.Header.Add("Content-Type", "application/json")
-	res, err := gmailClient.Do(req)
-	if err != nil {
-		log.Printf("[WARNING] GMAIL Client (2): %s", err)
-		return err
-	}
-
-	log.Printf("[INFO] Stop subscription on GMAIL Status: %d", res.StatusCode)
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		log.Printf("[WARNING] Gmail subscription Body (2): %s", err)
-		return err
-	}
-
-	//log.Printf("GMAIL RESP (%d): %s", res.StatusCode, string(body))
-
-	if res.StatusCode != 200 && res.StatusCode != 201 && res.StatusCode != 204 {
-		return errors.New(fmt.Sprintf("Subscription failed: %s", string(body)))
-	}
-	//notificationURL := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", project.CloudUrl, trigger.Id)
-	//curSubscriptions, err := getOutlookSubscriptions(outlookClient)
-	//if err == nil {
-	//	for _, sub := range curSubscriptions.Value {
-	//		if sub.NotificationURL == notificationURL {
-	//			log.Printf("[INFO] Removing subscription %s from gmail for %s", sub.Id, workflowId)
-	//			removeOutlookSubscription(outlookClient, sub.Id)
-	//		}
-	//	}
-	//} else {
-	//	log.Printf("Failed to get subscriptions - need to overwrite")
-	//}
-
-	return nil
+	return cancelGmailSubscription(ctx, gmailClient)
 }
 
 // Remove AUTH
@@ -1972,7 +1976,7 @@ func GetGmailHistory(ctx context.Context, gmailClient *http.Client, userId, hist
 
 	// log.Printf("[DEBUG] HISTORY INFO: %s", string(body))
 	if len(history.History) == 0 {
-		return GmailHistoryStruct{}, errors.New("Couldn't find the history to be mapped. Maybe not consequential data?")
+		return GmailHistoryStruct{}, errors.New(fmt.Sprintf("Couldn't find the history to be mapped. Maybe not consequential data: %s", string(body)))
 	}
 
 	//log.Printf("\n\nUSER BODY: %s", string(body))
@@ -2293,7 +2297,7 @@ func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData 
 		return err
 	}
 
-	log.Printf("[DEBUG] Webhook RESP: %s", string(body))
+	log.Printf("[DEBUG] Webhook RESP (%d): %s", res.StatusCode, string(body))
 	return nil
 }
 

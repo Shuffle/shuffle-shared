@@ -640,12 +640,12 @@ type WorkflowExecution struct {
 	ExecutionArgument   string         `json:"execution_argument" datastore:"execution_argument,noindex"`
 	ExecutionId         string         `json:"execution_id" datastore:"execution_id"`
 	ExecutionOrg        string         `json:"execution_org" datastore:"execution_org"`
+	StartedAt           int64          `json:"started_at" datastore:"started_at"`
+	CompletedAt         int64          `json:"completed_at" datastore:"completed_at"`
 	WorkflowId          string         `json:"workflow_id" datastore:"workflow_id"`
 	LastNode            string         `json:"last_node" datastore:"last_node"`
 	Authorization       string         `json:"authorization" datastore:"authorization"`
 	Result              string         `json:"result" datastore:"result,noindex"`
-	StartedAt           int64          `json:"started_at" datastore:"started_at"`
-	CompletedAt         int64          `json:"completed_at" datastore:"completed_at"`
 	ProjectId           string         `json:"project_id" datastore:"project_id"`
 	Locations           []string       `json:"locations" datastore:"locations"`
 	Workflow            Workflow       `json:"workflow" datastore:"workflow,noindex"`
@@ -784,7 +784,8 @@ type Workflow struct {
 		Name string `json:"name" datastore:"name" yaml:"name"`
 		Url  string `json:"url" datastore:"url" yaml:"url"`
 	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
-	PublishedId string `json:"published_id" yaml:"published_id"`
+	PublishedId string     `json:"published_id" yaml:"published_id"`
+	Subflows    []Workflow `json:"subflows,omitempty" yaml:"subflows"`
 }
 
 type Category struct {
@@ -2109,4 +2110,11 @@ type MessageDataModel struct {
 	Sender      MdmSender       `json:"sender"`
 	Subject     MdmSubject      `json:"subject"`
 	Type        MdmType         `json:"type"`
+}
+
+type ExecInfo struct {
+	OnpremExecution bool
+	CloudExec       bool
+	Environments    []string
+	ImageNames      []string
 }

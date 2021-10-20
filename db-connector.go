@@ -4717,9 +4717,10 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
+		log.Printf("[WARNING] Getting workflows from datastore")
 		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
-		max := 50
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
+		max := 50
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)
@@ -4728,7 +4729,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
-					//log.Printf("Error: %s", err)
+					//log.Printf("[WARNING] Error: %s", err)
 					break
 					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					//} else {
