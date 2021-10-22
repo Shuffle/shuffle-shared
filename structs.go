@@ -2118,3 +2118,8 @@ type ExecInfo struct {
 	Environments    []string
 	ImageNames      []string
 }
+
+type ResultChecker struct {
+	Success bool   `json:"success"`
+	Reason  string `json:"reason"`
+}

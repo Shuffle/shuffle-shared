@@ -5943,6 +5943,7 @@ func checkUsername(Username string) error {
 func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
 	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, VALUE: %s", executionParent, parentAuth, parentNode, returnValue)
 
+	// Was an error here. Now defined to run with http://shuffle-backend:5001 by default
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
@@ -5989,7 +5990,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 
 	newresp, err := topClient.Do(req)
 	if err != nil {
-		log.Printf("[ERROR] Failed making parent request: %s", err)
+		log.Printf("[ERROR] Failed making parent request: %s. Is URL valid: %s", err, backendUrl)
 		return err
 	}
 
@@ -6864,10 +6865,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	if actionResult.Status == "SUCCESS" && workflowExecution.Workflow.Configuration.SkipNotifications == false {
 		// Marshal default failures
-		type ResultChecker struct {
-			Success bool   `json:"success"`
-			Reason  string `json:"reason"`
-		}
 		resultCheck := ResultChecker{}
 		err = json.Unmarshal([]byte(actionResult.Result), &resultCheck)
 		if err == nil {
@@ -6882,6 +6879,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					true,
 				)
 			}
+		} else {
+			log.Printf("[ERROR] Failed unmarshaling result into resultChecker (%s): %#v", err, actionResult)
 		}
 
 		//log.Printf("[DEBUG] Ran marshal on silent failure")
