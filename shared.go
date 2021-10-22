@@ -6347,6 +6347,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//					}
 
 		//					// Have to get from backend IF no environment (worker, onprem)
+		//					// "worker"
 		//					if project.Environment == "" {
 		//						data, err := json.Marshal(subflowResult)
 		//						if err != nil {

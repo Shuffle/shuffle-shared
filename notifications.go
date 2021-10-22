@@ -273,13 +273,18 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
 	if newresp.StatusCode != 200 {
-		return errors.New("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId)
+		return errors.New(fmt.Sprintf("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId))
 	}
 
 	return nil
 }
 
 func createOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
+	if project.Environment == "" || project.Environment == "worker" {
+		log.Printf("[INFO] Not generating notification, as worker environment has been detected: %#v", project.Environment)
+		return nil
+	}
+
 	notifications, err := GetOrgNotifications(ctx, orgId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org notifications for %s: %s", orgId, err)
