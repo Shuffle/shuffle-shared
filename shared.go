@@ -2702,44 +2702,47 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				if len(param.Value) == 0 && param.Name != "argument" {
-					if param.Name == "user_apikey" {
-						apikey := ""
-						if len(user.ApiKey) > 0 {
-							apikey = user.ApiKey
-						} else {
-							user, err = GenerateApikey(ctx, user)
-							if err != nil {
-								workflow.IsValid = false
-								workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
-
-								log.Printf("No type specified for user input node")
-
-								if workflow.PreviouslySaved {
-									resp.WriteHeader(401)
-									resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
-									return
-								}
-							}
-
-							apikey = user.ApiKey
-						}
-
-						log.Printf("[INFO] Set apikey in subflow trigger for user during save")
-						trigger.Parameters[index].Value = apikey
+				//if len(param.Value) == 0 && param.Name != "argument" {
+				if param.Name == "user_apikey" {
+					apikey := ""
+					if len(user.ApiKey) > 0 {
+						apikey = user.ApiKey
 					} else {
+						user, err = GenerateApikey(ctx, user)
+						if err != nil {
+							workflow.IsValid = false
+							workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
 
-						workflow.IsValid = false
-						workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
+							log.Printf("[DEBUG] No type specified for subflow node")
 
-						log.Printf("[WARNING] No type specified for user input node")
-						if workflow.PreviouslySaved {
-							resp.WriteHeader(401)
-							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
-							return
+							if workflow.PreviouslySaved {
+								resp.WriteHeader(401)
+								resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
+								return
+							}
 						}
+
+						apikey = user.ApiKey
+					}
+
+					log.Printf("[INFO] Set apikey in subflow trigger for user during save")
+					if len(apikey) > 0 {
+						trigger.Parameters[index].Value = apikey
 					}
 				}
+				//} else {
+
+				//	workflow.IsValid = false
+				//	workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
+
+				//	log.Printf("[WARNING] No type specified for user input node")
+				//	if workflow.PreviouslySaved {
+				//		resp.WriteHeader(401)
+				//		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
+				//		return
+				//	}
+				//}
+				//}
 			}
 		} else if trigger.TriggerType == "WEBHOOK" {
 			if trigger.Status != "uninitialized" && trigger.Status != "stopped" {
@@ -6863,6 +6866,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
+	// Related to notifications
 	if actionResult.Status == "SUCCESS" && workflowExecution.Workflow.Configuration.SkipNotifications == false {
 		// Marshal default failures
 		resultCheck := ResultChecker{}
@@ -6878,9 +6882,13 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					workflowExecution.ExecutionOrg,
 					true,
 				)
+
+				if err != nil {
+					log.Printf("[WARNING] Failed making org notification for %s: %s", workflowExecution.ExecutionOrg, err)
+				}
 			}
 		} else {
-			log.Printf("[ERROR] Failed unmarshaling result into resultChecker (%s): %#v", err, actionResult)
+			//log.Printf("[ERROR] Failed unmarshaling result into resultChecker (%s): %#v", err, actionResult)
 		}
 
 		//log.Printf("[DEBUG] Ran marshal on silent failure")
