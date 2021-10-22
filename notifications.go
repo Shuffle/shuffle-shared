@@ -1,12 +1,16 @@
 package shuffle
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/satori/go.uuid"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 )
@@ -217,6 +221,64 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(newBody))
 }
 
+func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string) error {
+	log.Printf("[DEBUG] Should send notifications to workflow %s", workflowId)
+
+	backendUrl := os.Getenv("BASE_URL")
+	if project.Environment == "cloud" {
+		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
+		backendUrl = "https://shuffler.io"
+	}
+
+	// Callback to itself
+	if len(backendUrl) == 0 {
+		backendUrl = "http://localhost:5001"
+	}
+
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow with ID %s: %s", workflowId, err)
+		return err
+	}
+
+	if workflow.OrgId != notification.OrgId {
+		log.Printf("[WARNING] Can't access workflow %s with org ID %s (%s): %s", workflowId, notification.OrgId, workflow.Org)
+		return errors.New(fmt.Sprintf("Org %s does not have access to workflow with ID %s", notification.OrgId, workflowId))
+	}
+
+	b, err := json.Marshal(notification)
+	if err != nil {
+		log.Printf("[DEBUG] Failed marshaling notification: %s", err)
+		return err
+	}
+
+	executionUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, workflowId)
+	client := &http.Client{}
+	req, err := http.NewRequest(
+		"POST",
+		executionUrl,
+		bytes.NewBuffer(b),
+	)
+
+	req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, userApikey))
+	newresp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	respBody, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
+	if newresp.StatusCode != 200 {
+		return errors.New("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId)
+	}
+
+	return nil
+}
+
 func createOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
 	notifications, err := GetOrgNotifications(ctx, orgId)
 	if err != nil {
@@ -295,6 +357,8 @@ func createOrgNotification(ctx context.Context, title, description, referenceUrl
 			return err
 		}
 
+		//NotificationWorkflow   string `json:"notification_workflow" datastore:"notification_workflow"`
+
 		filteredUsers := []User{}
 		if adminsOnly == false {
 			filteredUsers = org.Users
@@ -306,7 +370,12 @@ func createOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 		}
 
+		selectedApikey := ""
 		for _, user := range filteredUsers {
+			if user.Role == "admin" && len(user.ApiKey) > 0 && len(selectedApikey) == 0 {
+				selectedApikey = user.ApiKey
+			}
+
 			log.Printf("[DEBUG] Made notification for user %s (%s)", user.Username, user.Id)
 			newNotification := mainNotification
 			newNotification.Id = uuid.NewV4().String()
@@ -317,6 +386,17 @@ func createOrgNotification(ctx context.Context, title, description, referenceUrl
 			err = SetNotification(ctx, newNotification)
 			if err != nil {
 				log.Printf("[WARNING] Failed making USER notification with title %#v for user %s in org %s", title, user.Id, orgId)
+			}
+		}
+
+		if len(org.Defaults.NotificationWorkflow) > 0 {
+			if len(selectedApikey) == 0 {
+				log.Printf("[ERROR] Didn't find an apikey to use when sending notifications for org %s to workflow %s", org.Id, org.Defaults.NotificationWorkflow)
+			}
+
+			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow)
+			if err != nil {
+				log.Printf("[ERROR] Failed sending notification to workflowId %s: %s", org.Defaults.NotificationWorkflow, err)
 			}
 		}
 	}

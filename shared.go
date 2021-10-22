@@ -1475,7 +1475,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] Got %d executions", len(workflowExecutions))
+	//log.Printf("[DEBUG] Got %d executions", len(workflowExecutions))
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
@@ -4770,7 +4770,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated user"}`)))
 
 }
 
@@ -5047,6 +5047,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	org.SSOConfig = tmpData.SSOConfig
 	org.SSOConfig.SSOCertificate = savedCert
+
+	if len(org.Defaults.NotificationWorkflow) > 0 && len(org.Defaults.NotificationWorkflow) != 36 {
+		log.Printf("[WARNING] Notification Workflow ID %s is not valid.", org.Defaults.NotificationWorkflow)
+	}
 
 	// if requestdata.Environment == "cloud" && project.Environment != "cloud" {
 	if project.Environment != "cloud" && len(org.SSOConfig.SSOEntrypoint) > 0 && len(org.ManagerOrgs) == 0 {
@@ -5951,6 +5955,11 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	if project.Environment == "cloud" {
 		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
 		backendUrl = "https://shuffler.io"
+	}
+
+	// Callback to itself
+	if len(backendUrl) == 0 {
+		backendUrl = "http://localhost:5001"
 	}
 
 	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
@@ -7949,7 +7958,7 @@ func HandleKeyDecryption(data string, passphrase string) (string, error) {
 
 	parsedData, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		log.Printf("[WARNING] Failed base64 decode for an auth key: %s", err)
+		log.Printf("[ERROR] Failed base64 decode for an auth key: %s", err)
 		return "", err
 	}
 
@@ -9430,7 +9439,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			newParams := []WorkflowAppActionParameter{}
 			if strings.ToLower(curAuth.Type) == "oauth2" {
-				log.Printf("[DEBUG] Should replace auth parameters (Oauth2)")
+				//log.Printf("[DEBUG] Should replace auth parameters (Oauth2)")
 
 				runRefresh := false
 				refreshUrl := ""
@@ -9438,7 +9447,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					if param.Key == "expiration" {
 						val, err := strconv.Atoi(param.Value)
 						timeNow := int64(time.Now().Unix())
-						log.Printf("PARAM: %d, %d", val, timeNow)
+						//log.Printf("PARAM: %d, %d", val, timeNow)
 						if err == nil {
 
 							// FIXMe - Remove this
@@ -9446,7 +9455,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 							// Comparing to time + 120 seconds
 							if timeNow <= int64(val)+120 {
-								log.Printf("Refresh!!")
+								log.Printf("[DEBUG] Should run refresh of Oauth2 for %s!!", curAuth.Id)
 								runRefresh = true
 							}
 
