@@ -275,6 +275,7 @@ type User struct {
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
 	Session           string        `datastore:"session,noindex" json:"session"`
 	Verified          bool          `datastore:"verified,noindex" json:"verified"`
+	SupportAccess     bool          `datastore:"support_access" json:"support_access"`
 	PrivateApps       []WorkflowApp `datastore:"privateapps" json:"privateapps":`
 	Role              string        `datastore:"role" json:"role"`
 	Roles             []string      `datastore:"roles" json:"roles"`

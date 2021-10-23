@@ -1927,6 +1927,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
 		Role     string `json:"role"`
 		Username string `json:"username"`
@@ -2439,9 +2440,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Resetting subflows as they shouldn't be entirely saved.
-	// Used just for imports/exports
+	// Resetting subflows as they shouldn't be entirely saved. Used just for imports/exports
 	log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
+
 	workflow.Subflows = []Workflow{}
 	if len(workflow.DefaultReturnValue) > 0 && len(workflow.DefaultReturnValue) < 200 {
 		log.Printf("[INFO] Set default return value to on failure to (%s): %s", workflow.ID, workflow.DefaultReturnValue)
@@ -3969,12 +3970,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
-		//resp.WriteHeader(401)
-		//resp.Write([]byte(`{"success": false}`))
-		//return
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
 	}
 
 	location := strings.Split(request.URL.String(), "/")
@@ -4019,6 +4018,8 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
+		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
@@ -6187,7 +6188,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	//log.Printf("ACTIONRESULT: %#v", actionResult)
 
 	dbSave := false
-	_, _, _, _, visited, executed, nextActions, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
+	startAction, extra, children, parents, visited, executed, nextActions, environments := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
 
 	//log.Printf("RESULT: %#v", actionResult.Action.ExecutionVariable)
 	// Shitty workaround as it may be missing it at times
@@ -6689,13 +6690,18 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							Action:        curAction,
 							ExecutionId:   actionResult.ExecutionId,
 							Authorization: actionResult.Authorization,
-							Result:        "Skipped because of previous node",
+							Result:        "Skipped because of previous node - 2",
 							StartedAt:     0,
 							CompletedAt:   0,
 							Status:        "SKIPPED",
 						}
 
 						newResults = append(newResults, newResult)
+
+						visited = append(visited, curAction.ID)
+						executed = append(executed, curAction.ID)
+
+						UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, startAction, children, parents, visited, executed, nextActions, environments, extra)
 					} else {
 						//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
 						//var visited []string
@@ -6788,22 +6794,56 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
+			// Finds sub-nodes to be skipped if a parent node condition fails
+			skipIdCheck := false
 			if !resultExists {
 				// Check parents are done here. Only add it IF all parents are skipped
 				skipNodeAdd := false
+
+				// Find parent nodes that are also a child node of SKIPPED
+				parentNodes := []string{}
 				for _, branch := range workflowExecution.Workflow.Branches {
-					if branch.SourceID == actionResult.Action.ID {
+					if branch.DestinationID == curAction.ID {
+
+						for _, childnode := range childNodes {
+							if childnode == branch.SourceID {
+								parentNodes = append(parentNodes, branch.SourceID)
+								break
+							}
+						}
+					}
+				}
+
+				//log.Printf("Parents: %#v", parentNodes)
+
+				for _, branch := range workflowExecution.Workflow.Branches {
+
+					// FIXME: Make this dynamic to curAction.ID's parent that we're checking from
+					//if branch.SourceID == actionResult.Action.ID {
+					if ArrayContains(parentNodes, branch.SourceID) {
 						// Check if the node has more destinations
+						// branch = old branch (original?)
 						ids := []string{}
 						for _, innerbranch := range workflowExecution.Workflow.Branches {
 							if innerbranch.DestinationID == branch.DestinationID {
 								ids = append(ids, innerbranch.SourceID)
 							}
+
+							//if innerbranch.ID == "70104246-45cf-4fa3-8b03-323d3cdf6434" {
+							//	log.Printf("Branch: %#v", innerbranch)
+							//}
 						}
+
+						//if curAction.Label == "Shuffle Tools_4" {
+						//}
 
 						foundIds := []string{actionResult.Action.ID}
 						foundSuccess := []string{}
 						foundSkipped := []string{actionResult.Action.ID}
+
+						//log.Printf("\n\nAction: %s (%s). Branches: %d\n\n", curAction.Label, curAction.ID, len(ids))
+						// If more than one source branch for the target is found;
+						// Look for the result of the parent
 						if len(ids) > 1 {
 							for _, thisId := range ids {
 								if thisId == actionResult.Action.ID {
@@ -6812,7 +6852,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 								for _, result := range workflowExecution.Results {
 									if result.Action.ID == thisId {
-										log.Printf("Found result for %s (%s): %s", result.Action.Label, thisId, result.Status)
+										log.Printf("[DEBUG] Found result for %s (%s): %s", result.Action.Label, thisId, result.Status)
 
 										foundIds = append(foundIds, thisId)
 										if result.Status == "SUCCESS" {
@@ -6823,12 +6863,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 									}
 								}
 							}
+						} else {
+							appendBadResults = true
+							skipIdCheck = true
 						}
 
-						//log.Printf("Base length: %d, other length: %d, skipped: %d, success: %d", len(ids), len(foundIds), len(foundSkipped), len(foundSuccess))
-						// Appending skipped IF:
-						// 1. All sources have results
-						if (len(foundSkipped) == len(foundIds)) && len(foundSkipped) == len(ids) {
+						if skipIdCheck {
+							// Pass here, as it's just here to skip the next part
+						} else if (len(foundSkipped) == len(foundIds)) && len(foundSkipped) == len(ids) {
 							appendBadResults = true
 						} else {
 							appendBadResults = false
@@ -6847,11 +6889,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 
 				if !skipNodeAdd {
+					log.Printf("[DEBUG] Appending skip for node %s (%s)", curAction.Name, curAction.Label)
 					newResult := ActionResult{
 						Action:        curAction,
 						ExecutionId:   actionResult.ExecutionId,
 						Authorization: actionResult.Authorization,
-						Result:        "Skipped because of previous node",
+						Result:        "Skipped because of previous node - 1",
 						StartedAt:     0,
 						CompletedAt:   0,
 						Status:        "SKIPPED",
@@ -6868,7 +6911,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		//log.Printf("Append skipped results: %#v", appendBadResults)
-		if appendBadResults {
+		if len(appendResults) > 0 {
 			dbSave = true
 			for _, res := range appendResults {
 				workflowExecution.Results = append(workflowExecution.Results, res)
@@ -6925,7 +6968,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		if skip {
-			//log.Printf("Both are %s. Skipping this node", item.Status)
+			//log.Printf("[DEBUG] Both results are %s. Skipping this node", item.Status)
 		} else if found {
 			// If result exists and execution variable exists, update execution value
 			//log.Printf("Exec var backend: %s", workflowExecution.Results[outerindex].Action.ExecutionVariable.Name)
@@ -6945,12 +6988,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[INFO] Updating %s in workflow %s from %s to %s", actionResult.Action.ID, workflowExecution.ExecutionId, workflowExecution.Results[outerindex].Status, actionResult.Status)
 			workflowExecution.Results[outerindex] = actionResult
 		} else {
-			log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
+			log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
 			workflowExecution.Results = append(workflowExecution.Results, actionResult)
 			//if subresult.Status == "SKIPPED" subresult.Status != "FAILURE" {
 		}
 	} else {
-		log.Printf("[INFO] Setting value of %s (INIT - %s) in workflow %s to %s", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status)
+		log.Printf("[INFO] Setting value of %s (INIT - %s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
 		workflowExecution.Results = append(workflowExecution.Results, actionResult)
 	}
 
