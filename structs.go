@@ -247,6 +247,10 @@ type Environment struct {
 	Archived   bool   `datastore:"archived" json:"archived"`
 	Id         string `datastore:"id" json:"id"`
 	OrgId      string `datastore:"org_id" json:"org_id"`
+	Created    int64  `json:"created" datastore:"created"`
+	Edited     int64  `json:"edited" datastore:"edited"`
+	RunningIp  string `json:"running_ip" datastore:"running_ip"`
+	Checkin    int64  `json:"checkin" datastore:"checkin"`
 }
 
 // Saves some data, not sure what to have here lol
@@ -1222,6 +1226,31 @@ type NewValueSearchWrapper struct {
 	} `json:"hits"`
 }
 
+type EnvironentSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string      `json:"_index"`
+			Type   string      `json:"_type"`
+			ID     string      `json:"_id"`
+			Score  float64     `json:"_score"`
+			Source Environment `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type ExecutionSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -1542,6 +1571,17 @@ type SubWrapper struct {
 	PrimaryTerm int                   `json:"_primary_term"`
 	Found       bool                  `json:"found"`
 	Source      SubscriptionRecipient `json:"_source"`
+}
+
+type EnvWrapper struct {
+	Index       string      `json:"_index"`
+	Type        string      `json:"_type"`
+	ID          string      `json:"_id"`
+	Version     int         `json:"_version"`
+	SeqNo       int         `json:"_seq_no"`
+	PrimaryTerm int         `json:"_primary_term"`
+	Found       bool        `json:"found"`
+	Source      Environment `json:"_source"`
 }
 
 type WorkflowWrapper struct {
