@@ -4884,9 +4884,9 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
-		log.Printf("[WARNING] Getting workflows from datastore")
-		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
-		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
+		log.Printf("[WARNING] Getting executions from datastore")
+		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
+		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
 		max := 50
 		cursorStr := ""
 		for {

@@ -21,6 +21,8 @@ import (
 	"golang.org/x/oauth2"
 )
 
+var handledIds []string
+
 func GetOutlookAttachmentList(client *http.Client, emailId string) (MailDataOutlookList, error) {
 	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/messages/%s/attachments", emailId)
 	//log.Printf("Outlook email URL: %#v", requestUrl)
@@ -1952,6 +1954,7 @@ func GetGmailHistory(ctx context.Context, gmailClient *http.Client, userId, hist
 		fullUrl,
 		nil,
 	)
+
 	req.Header.Add("Content-Type", "application/json")
 	res, err := gmailClient.Do(req)
 	if err != nil {
@@ -1995,7 +1998,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	parsedMessage := Inputdata{}
 	err = json.Unmarshal(body, &parsedMessage)
 	if err != nil {
-		log.Printf("[WARNING] Unmarshal error for gmail message: %s", err)
+		log.Printf("[ERROR] Unmarshal error for gmail message %s: %s", string(body), err)
 		resp.WriteHeader(200)
 		return
 	}
@@ -2043,10 +2046,41 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//time.Sleep(2 * time.Second)
-	history, err := GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, fmt.Sprintf("%d", findHistory.HistoryId))
+	// Grabbing the last ID of the user
+	//log.Printf("ID: %s:%d", findHistory.EmailAddress, findHistory.HistoryId)
+	gmailUserInfo := fmt.Sprintf("gmail_%s", findHistory.EmailAddress)
+
+	newHistoryId := ""
+	cache, err := GetCache(ctx, gmailUserInfo)
+	if err == nil {
+		newHistoryId = string(cache.([]uint8))
+	} else {
+		log.Printf("[DEBUG] Failed getting cache for %s - setting to %d", gmailUserInfo, findHistory.HistoryId)
+		newHistoryId = fmt.Sprintf("%d", findHistory.HistoryId)
+	}
+
+	//log.Printf("Found new history ID %s", newHistoryId)
+	err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)))
 	if err != nil {
-		log.Printf("[DEBUG] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
+		log.Printf("[WARNING] Failed updating gmail user %s cache: %s", gmailUserInfo, err)
+	}
+
+	history := GmailHistoryStruct{}
+	if !ArrayContains(handledIds, newHistoryId) {
+		if len(handledIds) >= 1000 || len(handledIds) == 0 {
+			handledIds = []string{}
+		}
+
+		handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
+		history, err = GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, newHistoryId)
+
+		if err != nil {
+			log.Printf("[DEBUG] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
+			resp.WriteHeader(200)
+			return
+		}
+	} else {
+		log.Printf("[DEBUG] Email HistoryID %d for %s has already been handled", findHistory.HistoryId, findHistory.EmailAddress)
 		resp.WriteHeader(200)
 		return
 	}

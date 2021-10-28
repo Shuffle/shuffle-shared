@@ -2140,6 +2140,7 @@ type MdmLink struct {
 	DisplayUrl  MdmDisplayUrl `json:"ip"`
 }
 
+/*
 type MessageDataModel struct {
 	Errors      []string        `json:"_errors"`
 	Meta        MdmMeta         `json:"attachments"`
@@ -2153,6 +2154,7 @@ type MessageDataModel struct {
 	Subject     MdmSubject      `json:"subject"`
 	Type        MdmType         `json:"type"`
 }
+*/
 
 type ExecInfo struct {
 	OnpremExecution bool
@@ -2164,4 +2166,194 @@ type ExecInfo struct {
 type ResultChecker struct {
 	Success bool   `json:"success"`
 	Reason  string `json:"reason"`
+}
+
+type Metadata struct {
+	ID            string    `description:"Message ID" json:"id" format:"uuid4" validate:"required,uuid4"`
+	CanonicalID   string    `description:"An ID that can be used to group similar messages/campaigns together" json:"canonical_id" validate:"required"`
+	CreatedAt     time.Time `description:"Creation time of the data model" json:"created_at" format:"date-time" validate:"required"`
+	SchemaVersion string    `description:"Schema version number" json:"schema_version" validate:"required"`
+}
+
+type MessageDataModel struct {
+	Attachments []Attachment        `description:"Attachments" json:"attachments,omitempty" validate:"omitempty"`
+	Body        *Body               `description:"Body of the email" json:"body,omitempty" validate:"omitempty"`
+	External    *External           `description:"Cloud API provider or other external source metadata" json:"external,omitempty" validate:"omitempty"`
+	Headers     Headers             `description:"The message headers" json:"headers" validate:"required"`
+	Type        MessageType         `description:"The types of the message from the perspective of the message source" json:"type" validate:"required"`
+	Mailbox     *Mailbox            `description:"The mailbox we retrieved the message from" json:"mailbox,omitempty" validate:"omitempty"`
+	Recipients  Recipients          `description:"Recipient objects" json:"recipients" validate:"required"`
+	Sender      Mailbox             `description:"Sender object" json:"sender" validate:"required"`
+	Subject     *Subject            `description:"Subject object" json:"subject,omitempty" validate:"omitempty"`
+	Meta        Metadata            `description:"Metadata" json:"_meta" validate:"required"`
+	Errors      []map[string]string `description:"Non-fatal errors while parsing MDM" json:"_errors,omitempty"`
+}
+
+type Attachment struct {
+	ContentTransferEncoding string  `description:"Content-Transfer-Encoding extracted from the MIME payload" json:"content_transfer_encoding,omitempty" validate:"omitempty"`
+	ContentType             string  `description:"Content-Type extracted from the MIME payload" json:"content_type,omitempty" validate:"omitempty"`
+	FileExtension           string  `description:"File extension" json:"file_extension,omitempty" validate:"omitempty,isdefault"`
+	FileName                string  `description:"File name" json:"file_name,omitempty" validate:"omitempty"`
+	FileType                string  `description:"File type (determined by looking at the magic bytes in the file)" json:"file_type,omitempty" validate:"omitempty,isdefault"`
+	Size                    *int64  `description:"Size of the attachment in bytes" json:"size,omitempty" validate:"omitempty,isdefault"`
+	Raw                     *string `description:"Base64 encoded source of the attachment" json:"raw,omitempty" validate:"omitempty"`
+}
+
+type Body struct {
+	HTML  *BodyText `description:"The body part containing content-type text/html" json:"html,omitempty" validate:"omitempty"`
+	Plain *BodyText `description:"The body part containing content-type text/plain" json:"plain,omitempty" validate:"omitempty"`
+	IPs   []IP      `description:"IP Addresses located in the body" json:"ips,omitempty" validate:"omitempty"`
+	Links []Link    `description:"All links (including standalone URLs) found in the body of the message" json:"links,omitempty" validate:"omitempty"`
+}
+
+type BodyText struct {
+	Raw                     *string `description:"Decoded raw content of a body text type (text/[subtype] section)" json:"raw,omitempty" validate:"omitempty"`
+	Charset                 string  `description:"charset of the text/[subtype]" json:"charset,omitempty" validate:"omitempty"`
+	ContentTransferEncoding string  `description:"Content-Transfer-Encoding of the text/[subtype]" json:"content_transfer_encoding,omitempty" validate:"omitempty"`
+}
+
+type Domain struct {
+	Domain     string `description:"The fully qualified domain name (FQDN). This may not *always* be routable, e.g. when an email address contains a domain that is just a TLD with no SLD, e.g. foo@WIN-bar" json:"domain" validate:"required"`
+	RootDomain string `description:"The root domain, including the TLD" json:"root_domain,omitempty" validate:"omitempty"`
+	Sld        string `description:"Second-level domain, e.g. 'windows' for the domain 'windows.net'" json:"sld,omitempty" validate:"omitempty"`
+	Subdomain  string `description:"Subdomain, e.g. 'drive' for the domain 'drive.google.com'" json:"subdomain,omitempty" validate:"omitempty"`
+	Tld        string `description:"The domain's top-level domain. E.g. the TLD of google.com is 'com'" json:"tld,omitempty" validate:"omitempty"`
+	Valid      bool   `description:"Whether the domain is valid" json:"valid,omitempty" validate:"omitempty"`
+}
+
+type EmailAddress struct {
+	Email     string `description:"Full email address" json:"email" validate:"required"`
+	LocalPart string `description:"Local-part, i.e. before the @" json:"local_part" validate:"required"`
+	Domain    Domain `description:"Domain of the email address" json:"domain,omitempty" validate:"omitempty"`
+}
+
+type External struct {
+	CreatedAt  *time.Time `description:"The created time of the message as provided by the cloud API (G Suite or Office 365) or other external source. This is typically the time the external source received the message" format:"date-time" json:"created_at,omitempty" validate:"omitempty"`
+	MessageID  string     `description:"The message ID as provided by the cloud API (G Suite or Office 365) or other external source" json:"message_id,omitempty" validate:"omitempty"`
+	RouteType  string     `description:"whether the message was sent or" json:"route_type,omitempty" validate:"omitempty" enum:"sent,received"`
+	Spam       *bool      `description:"The upstream mail gateway determined the message to be spam. For cloud API providers, this will be the same as spam_folder. For other implementation methods like transport rules, this will be determined by message header values (e.g. X-SPAM) if supported" json:"spam,omitempty" validate:"omitempty"`
+	SpamFolder *bool      `description:"The message arrived in the user's spam folder. This only applies to cloud APIs (G Suite or Office 365)" json:"spam_folder,omitempty" validate:"omitempty"`
+	ThreadID   string     `description:"The thread/conversation's unique ID as provided by the cloud API (G Suite or Office 365)" json:"thread_id,omitempty" validate:"omitempty"`
+}
+
+type IP struct {
+	IP string `description:"The raw IP" json:"ip" validate:"required"`
+}
+
+type Mailbox struct {
+	DisplayName string       `description:"Display name" json:"display_name,omitempty" validate:"omitempty"`
+	Email       EmailAddress `description:"Email address object" json:"email" validate:"required"`
+}
+
+type MessageType struct {
+	Inbound  bool `description:"Message was sent from someone outside your organization, to *at least one* recipient inside your organization" json:"inbound,omitempty" validate:"omitempty"`
+	Internal bool `description:"Message was sent between two or more participants inside your organization" json:"internal,omitempty" validate:"omitempty"`
+	Outbound bool `description:"Message was sent from someone inside your organization, to *at least one* recipient outside your organization" json:"outbound,omitempty" validate:"omitempty"`
+}
+
+type Recipients struct {
+	Bcc []Mailbox `description:"List of 'bcc' Mailbox objects" json:"bcc,omitempty" validate:"omitempty"`
+	Cc  []Mailbox `description:"List of 'cc' Mailbox objects" json:"cc,omitempty" validate:"omitempty"`
+	To  []Mailbox `description:"List of 'to' Mailbox objects" json:"to,omitempty" validate:"omitempty"`
+}
+
+type Subject struct {
+	Subject string `description:"Subject of the email" json:"subject" validate:"required"`
+}
+
+type Link struct {
+	DisplayText string `description:"The text of a hyperlink, if it's not a URL" json:"display_text,omitempty" validate:"omitempty"`
+	DisplayURL  *URL   `description:"URL the user sees when viewing the message" json:"display_url,omitempty" validate:"omitempty"`
+	HrefURL     *URL   `description:"Target URL in a hyperlink. This differs from the display_url when there is a mismatched URL" json:"href_url,omitempty" validate:"omitempty"`
+	Mismatched  *bool  `description:"Whether the display URL and href URL root domains are mismatched" json:"mismatched,omitempty" validate:"omitempty"`
+}
+
+type URL struct {
+	URL         string  `description:"Full URL" json:"url" validate:"required"`
+	Domain      *Domain `description:"Target domain of URL" json:"domain,omitempty" validate:"omitempty"`
+	Fragment    string  `description:"Fragment identifier; the text following the # in the href_url (also called the anchor tag)" json:"fragment,omitempty" validate:"omitempty"`
+	Password    string  `description:"The password specified before the domain name" json:"password,omitempty" validate:"omitempty"`
+	Path        string  `description:"Everything after the TLD and before the query parameters" json:"path,omitempty" validate:"omitempty"`
+	Port        *int    `description:"The port used for the href_url. If no explicit port is set, the port will be inferred from the protocol" json:"port,omitempty" validate:"omitempty"`
+	QueryParams string  `description:"The query parameters of the href_url" json:"query_params,omitempty" validate:"omitempty"`
+	Scheme      string  `description:"Protocol for the href_url request, e.g. http" json:"scheme,omitempty" validate:"omitempty"`
+	Username    string  `description:"The username specified before the domain name of the href_url" json:"username,omitempty" validate:"omitempty"`
+}
+
+type Headers struct {
+	Date               *time.Time    `description:"Date the email was sent in UTC." json:"date,omitempty" validate:"omitempty"`
+	DateOriginalOffset *string       `description:"UTC timezone offset of the sender" json:"date_original_offset,omitempty" validate:"omitempty"`
+	Domains            []Domain      `description:"All domains found in the Received headers" json:"domains,omitempty" validate:"omitempty"`
+	DeliveredTo        *EmailAddress `description:"Delivered-to header value" json:"delivered_to,omitempty" validate:"omitempty"`
+	IPs                []IP          `description:"All IP addresses found in the Received headers" json:"ips,omitempty" validate:"omitempty"`
+	Mailer             *string       `description:"X-Mailer or User-Agent extracted from headers" json:"mailer,omitempty" validate:"omitempty"`
+	MessageID          *string       `description:"Message-ID extracted from the header" json:"message_id,omitempty" validate:"omitempty"`
+	References         []string      `description:"The Message-IDs of the other messages within this chain" json:"references,omitempty" validate:"omitempty"`
+	ReplyTo            []Mailbox     `description:"Where replies should be delivered to" json:"reply_to,omitempty" validate:"omitempty"`
+	ReturnPath         *EmailAddress `description:"RFC 5321 envelope FROM (SMTP MAIL FROM). This is also where bounces are delivered" json:"return_path,omitempty" validate:"omitempty" `
+	XOriginatingIP     *IP           `description:"X-Originating-IP header, which identifies the originating IP address of the sender client" json:"x_originating_ip,omitempty" validate:"omitempty"`
+	Hops               []Hop         `description:"List of hops the message took from Sender to Recipient" json:"hops" validate:"required"`
+}
+
+type Hop struct {
+	Index       int          `description:"Index indicates the order in which a hop occurred from sender to recipient" json:"index" validate:"required"`
+	AuthResults *AuthResults `description:"Results of authentication. Supported fields include 'Authentication-Results', 'X-Original-Authentication-Results', 'X-MS-Exchange-Authentication-Results', 'X-Agari-Authentication-Results' and 'ARC-Authentication-Results'. Specification details can be found at https://tools.ietf.org/html/rfc8601" json:"authentication_results,omitempty" validate:"omitempty"`
+	Signature   *Signature   `description:"Details of a message signature. Supported fields include 'DKIM-Signature', 'DomainKey-Signature', 'X-Google-DKIM-Signature' and 'ARC-Message-Signature'" json:"signature,omitempty" validate:"omitempty"`
+	SPF         *SPF         `description:"Details of the Sender Policy Framework check. Supported fields include 'Received-SPF' and 'X-Received-SPF'" json:"received_spf,omitempty" validate:"omitempty"`
+	Fields      []HopField   `description:"List of all raw header fields contained within this hop" json:"fields" validate:"required"`
+}
+
+type HopField struct {
+	Name     string `description:"The name of the field" json:"name" validate:"required"`
+	Value    string `description:"The value contained within the field" json:"value" validate:"required"`
+	Position int    `description:"This field's position along the entire list of header fields" json:"position" validate:"required"`
+}
+
+type AuthResults struct {
+	Type         string      `description:"The type of authentication result, derived from the field name" json:"type,omitempty" validate:"omitempty"`
+	Instance     string      `description:"Instance number of this auth result (if ARC)" json:"instance,omitempty" validate:"omitempty"`
+	CompAuth     *CompAuth   `description:"Composite Authentication result, used by Microsoft O365" json:"compauth,omitempty" validate:"omitempty"`
+	DKIM         string      `description:"Verdict of the Domain Keys Identified Mail check" enum:"none,pass,fail,policy,neutral,temperror,permerror" json:"dkim,omitempty" validate:"omitempty"`
+	DKIMDetails  []Signature `description:"List of details of the Domain Keys Identified Mail checks" json:"dkim_details,omitempty" validate:"omitempty"`
+	DMARC        string      `description:"Verdict of the Domain-based Message Authentication, Reporting & Conformance check" json:"dmarc,omitempty" enum:"none,pass,fail,reject,bestguesspass,temperror,permerror" validate:"omitempty"`
+	DMARCDetails *DMARC      `description:"Details of the Domain-based Message Authentication, Reporting & Conformance check" json:"dmarc_details,omitempty" validate:"omitempty"`
+	SPF          string      `description:"Verdict of the Sender Policy Framework" enum:"none,pass,fail,softfail,policy,neutral,temperror,permerror" json:"spf,omitempty" validate:"omitempty"`
+	SPFDetails   *SPF        `description:"Details of the Sender Policy Framework" json:"spf_details,omitempty" validate:"omitempty"`
+	Server       *Domain     `description:"The domain of the verifying mail server" json:"server,omitempty" validate:"omitempty"`
+}
+
+type CompAuth struct {
+	Verdict string `description:"Verdict of the compauth" json:"verdict" validate:"required"`
+	Reason  string `description:"Reason for the verdict" json:"reason" validate:"required"`
+}
+
+type Signature struct {
+	Type      string `description:"The type of signature, derived from the field name" json:"type,omitempty" validate:"omitempty"`
+	Instance  string `description:"Instance number of this signature (if ARC)" json:"instance,omitempty" validate:"omitempty"`
+	Version   string `description:"Version" json:"version,omitempty" validate:"omitempty"`
+	Algorithm string `description:"Signing algorithm" json:"algorithm,omitempty" validate:"omitempty"`
+	Selector  string `description:"Selector" json:"selector,omitempty" validate:"omitempty"`
+	Signature string `description:"Signature of headers and body" json:"signature,omitempty" validate:"omitempty"`
+	BodyHash  string `description:"Body Hash" json:"body_hash,omitempty" validate:"omitempty"`
+	Domain    string `description:"Domain" json:"domain,omitempty" validate:"omitempty"`
+	Headers   string `description:"Header fields signed by the algorithm" json:"headers,omitempty" validate:"omitempty"`
+}
+
+type DMARC struct {
+	Version     *string `description:"DMARC version" json:"version" validate:"omitempty"`
+	Verdict     *string `description:"Verdict of the DMARC" json:"verdict" validate:"omitempty"`
+	Action      *string `description:"Action" json:"action" validate:"omitempty"`
+	Policy      *string `description:"Policy for the organizational domain" json:"policy,omitempty" validate:"omitempty"`
+	SubPolicy   *string `description:"Policy for the subdomain of the organizational domain" json:"sub_policy,omitempty" validate:"omitempty"`
+	Disposition *string `description:"Gmail-applied policy" json:"disposition,omitempty" validate:"omitempty"`
+	From        *Domain `description:"Domain of the server that checked the SPF" json:"from,omitempty" validate:"omitempty"`
+}
+
+type SPF struct {
+	Verdict     *string `description:"Verdict of the SPF" json:"verdict" validate:"omitempty"`
+	Server      *Domain `description:"Domain of the server that checked the SPF" json:"server,omitempty" validate:"omitempty"`
+	ClientIP    *IP     `description:"IP of the client the email originated from" json:"client_ip,omitempty" validate:"omitempty"`
+	Designator  *string `description:"Email or domain of the designating body" json:"designator,omitempty" validate:"omitempty"`
+	Helo        *Domain `description:"Domain of the previous server this message hopped from" json:"helo,omitempty" validate:"omitempty"`
+	Description *string `description:"Verbose description of the SPF verdict" json:"description,omitempty" validate:"omitempty"`
 }

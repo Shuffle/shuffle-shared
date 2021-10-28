@@ -604,7 +604,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 
 		respBody = body
-		log.Printf("BODY: %s", string(body))
 
 		if newresp.StatusCode >= 300 {
 			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh: %d. Message: %s", newresp.StatusCode, respBody))
@@ -647,6 +646,18 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	if len(oauthUrl) > 0 {
 		log.Printf("[DEBUG] Appending Oauth2 API URL %s", oauthUrl)
+
+		newAuth := []AuthenticationStore{}
+		for _, item := range appAuth.Fields {
+			if item.Key == "url" || item.Key == "expiration" {
+				continue
+			}
+
+			newAuth = append(newAuth, item)
+		}
+
+		appAuth.Fields = newAuth
+
 		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
 			Key:   "url",
 			Value: oauthUrl,
@@ -2359,8 +2370,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-
-	//log.Printf("BODY: %s", body)
 
 	err = json.Unmarshal([]byte(body), &workflow)
 	if err != nil {
@@ -8859,9 +8868,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("BODY: %s", string(body))
-	//log.Printf("BODY2: %s", request.FormValue("SAMLResponse"))
-
 	// Parsing out without using Field
 	parsedSAML := ""
 	for _, item := range strings.Split(string(body), "&") {
@@ -9461,7 +9467,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption(field.Value, parsedKey)
 					if err != nil {
-						log.Printf("[WARNING] Failed decryption for %s: %s", field.Key, err)
+						log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
 						setField = false
 						break
 					}
@@ -9491,14 +9497,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					if param.Key == "expiration" {
 						val, err := strconv.Atoi(param.Value)
 						timeNow := int64(time.Now().Unix())
-						//log.Printf("PARAM: %d, %d", val, timeNow)
 						if err == nil {
-
-							// FIXMe - Remove this
-							//val = int(timeNow)
-
-							// Comparing to time + 120 seconds
-							if timeNow <= int64(val)+120 {
+							//log.Printf("Checking expiration vs timenow: %d %d. Err: %s", timeNow, int64(val)+120, err)
+							if timeNow >= int64(val)+120 {
 								log.Printf("[DEBUG] Should run refresh of Oauth2 for %s!!", curAuth.Id)
 								runRefresh = true
 							}
