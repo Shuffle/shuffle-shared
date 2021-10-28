@@ -9869,7 +9869,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Check if the app exists?
 		newName := action.AppName
-		newName = strings.ReplaceAll(newName, " ", "-")
+		newName = strings.Replace(newName, " ", "-", -1)
 		imageNames = append(imageNames, fmt.Sprintf("%s:%s_%s", baseDockerName, newName, action.AppVersion))
 
 		if !found {
