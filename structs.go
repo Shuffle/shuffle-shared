@@ -2386,14 +2386,16 @@ type GeneratedMitre struct {
 // BaseUrl = Backend URL
 // Url = Worker URL
 type OrborusExecutionRequest struct {
-	ExecutionId           string `json:"execution_id"`
-	Authorization         string `json:"authorization"`
-	HTTPProxy             string `json:"http_proxy"`
-	HTTPSProxy            string `json:"https_proxy"`
-	BaseUrl               string `json:"base_url"`
-	Url                   string `json:"url"`
-	EnvironmentName       string `json:"environment_name"`
-	Timezone              string `json:"timezone"`
-	Cleanup               string `json:"cleanup"`
-	ShufflePassProxyToApp string `json:"shuffle_pass_proxy_to_app"`
+	ExecutionId           string            `json:"execution_id"`
+	Authorization         string            `json:"authorization"`
+	HTTPProxy             string            `json:"http_proxy"`
+	HTTPSProxy            string            `json:"https_proxy"`
+	BaseUrl               string            `json:"base_url"`
+	Url                   string            `json:"url"`
+	EnvironmentName       string            `json:"environment_name"`
+	Timezone              string            `json:"timezone"`
+	Cleanup               string            `json:"cleanup"`
+	ShufflePassProxyToApp string            `json:"shuffle_pass_proxy_to_app"`
+	Action                Action            `json:"action"`
+	FullExecution         WorkflowExecution `json:"workflow_execution"`
 }
