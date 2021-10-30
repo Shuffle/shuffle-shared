@@ -812,13 +812,15 @@ type Categories struct {
 }
 
 type ActionResult struct {
-	Action        Action `json:"action" datastore:"action"`
-	ExecutionId   string `json:"execution_id" datastore:"execution_id"`
-	Authorization string `json:"authorization" datastore:"authorization"`
-	Result        string `json:"result" datastore:"result,noindex"`
-	StartedAt     int64  `json:"started_at" datastore:"started_at"`
-	CompletedAt   int64  `json:"completed_at" datastore:"completed_at"`
-	Status        string `json:"status" datastore:"status"`
+	Action           Action   `json:"action" datastore:"action"`
+	ExecutionId      string   `json:"execution_id" datastore:"execution_id"`
+	Authorization    string   `json:"authorization" datastore:"authorization"`
+	Result           string   `json:"result" datastore:"result,noindex"`
+	StartedAt        int64    `json:"started_at" datastore:"started_at"`
+	CompletedAt      int64    `json:"completed_at" datastore:"completed_at"`
+	Status           string   `json:"status" datastore:"status"`
+	AttackTechniques []string `json:"attack_techniques" datastore:"attack_techniques"`
+	AttackTactics    []string `json:"attack_tactics" datastore:"attack_tactics"`
 }
 
 type AuthenticationUsage struct {
@@ -2356,4 +2358,42 @@ type SPF struct {
 	Designator  *string `description:"Email or domain of the designating body" json:"designator,omitempty" validate:"omitempty"`
 	Helo        *Domain `description:"Domain of the previous server this message hopped from" json:"helo,omitempty" validate:"omitempty"`
 	Description *string `description:"Verbose description of the SPF verdict" json:"description,omitempty" validate:"omitempty"`
+}
+
+type GeneratedMitre struct {
+	Success bool `json:"success"`
+	Timing  struct {
+		AnalysisTime float64 `json:"analysis_time"`
+		TimeVariant  string  `json:"time_variant"`
+	} `json:"timing"`
+	InputLength       int `json:"input_length"`
+	TacticsChecked    int `json:"tactics_checked"`
+	TechniquesChecked int `json:"techniques_checked"`
+	Tactics           []struct {
+		Code              string  `json:"code"`
+		Confidence        float64 `json:"confidence"`
+		ConfidenceVariant string  `json:"confidence_variant"`
+	} `json:"tactics"`
+	Techniques []struct {
+		Code              string  `json:"code"`
+		Confidence        float64 `json:"confidence"`
+		ConfidenceVariant string  `json:"confidence_variant"`
+	} `json:"techniques"`
+	AnalysisID string `json:"analysis_id"`
+	Reason     string `json:"reason"`
+}
+
+// BaseUrl = Backend URL
+// Url = Worker URL
+type OrborusExecutionRequest struct {
+	ExecutionId           string `json:"execution_id"`
+	Authorization         string `json:"authorization"`
+	HTTPProxy             string `json:"http_proxy"`
+	HTTPSProxy            string `json:"https_proxy"`
+	BaseUrl               string `json:"base_url"`
+	Url                   string `json:"url"`
+	EnvironmentName       string `json:"environment_name"`
+	Timezone              string `json:"timezone"`
+	Cleanup               string `json:"cleanup"`
+	ShufflePassProxyToApp string `json:"shuffle_pass_proxy_to_app"`
 }
