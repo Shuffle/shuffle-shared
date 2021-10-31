@@ -537,7 +537,7 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 
 }
 
-func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) {
+func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) error {
 	cacheKey := fmt.Sprintf("%s-actions", executionId)
 	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s\n\n", executionId)
 	_ = cacheKey
@@ -556,15 +556,17 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 	variableWrapperData, err := json.Marshal(newVariableWrapper)
 	if err != nil {
 		log.Printf("[WARNING] Failed marshalling execution: %s", err)
-		return
+		return err
 	}
 
 	err = SetCache(ctx, cacheKey, variableWrapperData)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating execution: %s", err)
+		return err
 	}
 
 	log.Printf("[INFO] Successfully set cache for execution variables %s\n\n", cacheKey)
+	return nil
 }
 
 func GetExecutionVariables(ctx context.Context, executionId string) (string, int, map[string][]string, map[string][]string, []string, []string, []string, []string) {
