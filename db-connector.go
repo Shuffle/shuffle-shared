@@ -206,6 +206,8 @@ func DeleteCache(ctx context.Context, name string) error {
 		requestCache.Delete(name)
 		return nil
 	} else {
+		requestCache.Delete(name)
+		return nil
 		return errors.New(fmt.Sprintf("No cache handler for environment %s yet WHILE DELETING", project.Environment))
 	}
 
@@ -257,7 +259,12 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", name))
 		}
 	} else {
-		return "", errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
+		if value, found := requestCache.Get(name); found {
+			return value, nil
+		} else {
+			return "", errors.New(fmt.Sprintf("Failed getting ONPREM cache for %s", name))
+		}
+		//return "", errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
 
 	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
@@ -337,7 +344,9 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
 		requestCache.Set(name, data, cache.DefaultExpiration)
 	} else {
-		return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
+		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
+		requestCache.Set(name, data, cache.DefaultExpiration)
+		//return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
 
 	return nil
