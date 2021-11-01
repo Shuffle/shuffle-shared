@@ -501,7 +501,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	//log.Printf("PARSED: %s", parsedParameters)
 
 	// Use spaces while in here!
-	data := fmt.Sprintf(`    async def %s(self%s):
+	//data := fmt.Sprintf(`    async def %s(self%s):
+	data := fmt.Sprintf(`    def %s(self%s):
         params={}
         %s
         url=f"%s%s"
@@ -1115,7 +1116,8 @@ class %s(AppBase):
 %s
 
 if __name__ == "__main__":
-    asyncio.run(%s.run(), debug=True)
+    #asyncio.run(%s.run(), debug=True)
+    %s.run()
 `
 	return baseString
 
