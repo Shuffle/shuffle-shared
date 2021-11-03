@@ -438,7 +438,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	} else {
 		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-			log.Printf("Error adding workflow_execution: %s", err)
+			log.Printf("[WARNING] Error adding workflow_execution: %s", err)
 			return err
 		}
 	}
@@ -599,6 +599,40 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
 }
 
+func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecution, action ActionResult) (string, error) {
+	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, action.Action.ID)
+
+	cacheKey := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, action.Action.ID)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := string(cache.([]uint8))
+			return cacheData, nil
+		}
+	}
+
+	bucket := project.StorageClient.Bucket("shuffler.appspot.com")
+	obj := bucket.Object(fullParsedPath)
+	fileReader, err := obj.NewReader(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	data, err := ioutil.ReadAll(fileReader)
+	if err != nil {
+		return "", err
+	}
+
+	if project.CacheDb {
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating execution file value: %s", err)
+		}
+	}
+
+	return string(data), nil
+}
+
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
@@ -648,6 +682,21 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
 			return &WorkflowExecution{}, err
+		}
+
+		// Parsing as file.
+		log.Printf("[DEBUG] Getting execution %s", id)
+		for valueIndex, value := range workflowExecution.Results {
+			if strings.Contains(value.Result, "Result too large to handle") {
+				log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
+				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
+				if err != nil {
+					log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
+					continue
+				}
+
+				workflowExecution.Results[valueIndex].Result = newValue
+			}
 		}
 	}
 
@@ -3469,7 +3518,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	} else {
 		key := datastore.NameKey(nameKey, executionRequest.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &executionRequest); err != nil {
-			log.Printf("Error adding workflow queue: %s", err)
+			log.Printf("[WARNING] Error adding workflow queue: %s", err)
 			return err
 		}
 	}
@@ -3650,7 +3699,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflow); err != nil {
-			log.Printf("Error adding workflow: %s", err)
+			log.Printf("[WARNING] Error adding workflow: %s", err)
 			return err
 		}
 	}
@@ -4895,7 +4944,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
-		log.Printf("[WARNING] Getting executions from datastore")
+		//log.Printf("[WARNING] Getting executions from datastore")
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
 		max := 50
@@ -5304,7 +5353,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("Error adding workflow: %s", err)
+			log.Printf("[WARNING] Error adding workflow: %s", err)
 			return err
 		}
 	}

@@ -7240,17 +7240,57 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
 		if project.DbType != "elasticsearch" {
-			if len(tmpJson) >= 1048487 {
+			if len(tmpJson) >= 1000000 {
 				dbSave = true
-				log.Printf("[ERROR] Result length is too long! Need to reduce result size")
+				log.Printf("[ERROR] Result length is too long (%d)! Need to reduce result size", len(tmpJson))
+
+				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
 
 				// Result        string `json:"result" datastore:"result,noindex"`
 				// Arbitrary reduction size
 				maxSize := 500000
 				newResults := []ActionResult{}
+				bucketName := "shuffler.appspot.com"
+				//shuffle-large-executions
 				for _, item := range workflowExecution.Results {
 					if len(item.Result) > maxSize {
-						item.Result = "[ERROR] Result too large to handle (https://github.com/frikky/shuffle/issues/171)"
+						itemSize := len(item.Result)
+						baseResult := fmt.Sprintf(`{
+							"success": False,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171)."
+							"size": %d
+						}`, itemSize)
+
+						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
+						log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
+						bucket := project.StorageClient.Bucket(bucketName)
+						obj := bucket.Object(fullParsedPath)
+						w := obj.NewWriter(ctx)
+						if _, err := fmt.Fprintf(w, item.Result); err != nil {
+							log.Printf("[WARNING] Failed writing new exec file: %s", err)
+							item.Result = baseResult
+							newResults = append(newResults, item)
+							continue
+						}
+
+						// Close, just like writing a file.
+						if err := w.Close(); err != nil {
+							log.Printf("[WARNING] Failed closing new exec file: %s", err)
+							item.Result = baseResult
+							newResults = append(newResults, item)
+							continue
+						}
+
+						item.Result = fmt.Sprintf(`{
+							"success": False,
+							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+							"size": %d,
+							"extra": "replace"
+						}`, itemSize)
+						// Setting an arbitrary decisionpoint to get it
+						// Backend will use this ID + action ID to get the data back
+						//item.Result = fmt.Sprintf("EXECUTION=%s", workflowExecution.ExecutionId)
 					}
 
 					newResults = append(newResults, item)
