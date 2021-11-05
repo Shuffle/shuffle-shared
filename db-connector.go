@@ -405,6 +405,21 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("ExecutionId can't be empty.")
 	}
 
+	/*
+	   for valueIndex, value := range workflowExecution.Results {
+	   			if strings.Contains(value.Result, "Result too large to handle") {
+	   				log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
+	   				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
+	   				if err != nil {
+	   					log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
+	   					continue
+	   				}
+
+	   				workflowExecution.Results[valueIndex].Result = newValue
+	   			}
+	   		}
+	*/
+
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
@@ -574,7 +589,7 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 		return err
 	}
 
-	log.Printf("[INFO] Successfully set cache for execution variables %s\n\n", cacheKey)
+	log.Printf("[INFO] Successfully set cache for execution variables %s. Extra: %d\n\n", extra, cacheKey)
 	return nil
 }
 
@@ -939,6 +954,8 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	return sub, nil
 }
 
+// FIXME: Not necessarily functional sadly.
+// Unused for the most part.
 func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error) {
 	env := &Environment{}
 	environments := []Environment{}
@@ -961,6 +978,9 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
+
+		// FIXME: Don't do name = here, but ID
+		// Or search?
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
@@ -1025,14 +1045,19 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 {
 			env = &wrapped.Hits.Hits[0].Source
 		} else {
-			environments = []Environment{}
+			//environments = []Environment{}
 			for _, hit := range wrapped.Hits.Hits {
+				//log.Printf("[DEBUG] Hit: %#v", hit)
+				//if hit.ID == id {
+				//	env = &hit.Source
+				//	break
+				//}
 				if hit.Source.OrgId == orgId {
 					env = &hit.Source
 					break
 				}
 
-				environments = append(environments, hit.Source)
+				//environments = append(environments, hit.Source)
 			}
 
 			//if len(environments) != 1 {
@@ -1050,6 +1075,9 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			}
 		}
 	}
+
+	_ = environments
+	//log.Printf("[DEBUG] Got hit: %#v", env)
 
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
@@ -3526,12 +3554,12 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	return nil
 }
 
-func GetWorkflowQueue(ctx context.Context, id string) (ExecutionRequestWrapper, error) {
+func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionRequestWrapper, error) {
 	nameKey := fmt.Sprintf("workflowqueue-%s", id)
 	q := datastore.NewQuery(nameKey).Limit(10)
 	executions := []ExecutionRequest{}
 
-	amount := 100
+	amount := limit
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -4862,6 +4890,159 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 	}
 
 	return users, nil
+}
+
+func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {
+	index := "workflowexecution"
+	var executions []WorkflowExecution
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"sort": map[string]interface{}{
+				"started_at": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"workflow_id": workflowId,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"owner": "EXECUTING",
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("Error encoding query: %s", err)
+			return executions, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get workflow executions): %s", err)
+			return executions, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return executions, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return executions, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return executions, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return executions, err
+		}
+
+		wrapped := ExecutionSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return executions, err
+		}
+
+		executions = []WorkflowExecution{}
+		for _, hit := range wrapped.Hits.Hits {
+			executions = append(executions, hit.Source)
+		}
+
+		return executions, nil
+	} else {
+		// FIXME: Sorting doesn't seem to work...
+		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
+		//log.Printf("[WARNING] Getting executions from datastore")
+		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
+		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
+		max := 50
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := WorkflowExecution{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					//log.Printf("[WARNING] Error: %s", err)
+					break
+					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					//} else {
+					//	//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					//	break
+					//}
+				}
+
+				executions = append(executions, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			if len(executions) >= max {
+				break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[WARNING] Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
+			}
+		}
+
+		//log.Printf("Got %d executions", len(executions))
+		slice.Sort(executions[:], func(i, j int) bool {
+			return executions[i].StartedAt > executions[j].StartedAt
+		})
+	}
+
+	return executions, nil
 }
 
 func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {

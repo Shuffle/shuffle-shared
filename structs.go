@@ -298,6 +298,14 @@ type User struct {
 	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
 	LoginType         string        `datastore:"login_type" json:"login_type"`
 	GeneratedUsername string        `datastore:"generated_username" json:"generated_username"`
+
+	// Starting web3 integration
+	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
+}
+
+type EthInfo struct {
+	Account string `datastore:"account" json:"account"`
+	Balance string `datastore:"balance" json:"balance"`
 }
 
 type Session struct {
@@ -1776,6 +1784,7 @@ type HandleInfo struct {
 	Orgs       []OrgMini       `json:"orgs"`
 	ActiveOrg  OrgMini         `json:"active_org"`
 	Cookies    []SessionCookie `json:"session_cookie"`
+	EthInfo    EthInfo         `json:"eth_info"`
 }
 
 type BuildLaterStruct struct {

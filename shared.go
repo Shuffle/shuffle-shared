@@ -1124,6 +1124,182 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in stop executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during stop executions")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	ctx := getContext(request)
+	//env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
+	//if err != nil {
+	//	log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
+	//	resp.WriteHeader(401)
+	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
+	//	return
+	//}
+
+	//log.Printf("%#v", env)
+	//if env.OrgId != user.ActiveOrg.Id {
+	//	log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
+	//	resp.WriteHeader(401)
+	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
+	//	return
+	//}
+
+	// 1: Loop all workflows
+	// 2: Stop all running executions (manually abort)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	total := 0
+	for _, workflow := range workflows {
+		if workflow.OrgId != user.ActiveOrg.Id {
+			//log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
+			continue
+		}
+
+		cnt, _ := CleanupExecutions(ctx, fileId, workflow)
+		total += cnt
+	}
+
+	log.Printf("[DEBUG] Total stopped %d executions for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	resp.WriteHeader(200)
+	//resp.Write(newjson)
+}
+
+func CleanupExecutions(ctx context.Context, environment string, workflow Workflow) (int, error) {
+	executions, err := GetUnfinishedExecutions(ctx, workflow.ID)
+	if err != nil {
+		log.Printf("[DEBUG] Failed getting executions for workflow %s", workflow.ID)
+		return 0, err
+	}
+
+	if len(executions) == 0 {
+		return 0, nil
+	}
+
+	log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
+	//log.Printf("[DEBUG] Found %d unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
+
+	backendUrl := os.Getenv("BASE_URL")
+	if project.Environment == "cloud" {
+		backendUrl = "https://shuffler.io"
+	}
+	if len(backendUrl) == 0 {
+		backendUrl = "http://127.0.0.1:5001"
+	}
+
+	topClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+
+	//StartedAt           int64          `json:"started_at" datastore:"started_at"`
+	timeNow := int64(time.Now().Unix())
+	cnt := 0
+	for _, execution := range executions {
+		if timeNow < execution.StartedAt+1800 {
+			//log.Printf("Bad timing: %d", execution.StartedAt)
+			continue
+		}
+
+		if execution.Status != "EXECUTING" {
+			//log.Printf("Bad status: %s", execution.Status)
+			continue
+		}
+
+		found := false
+		environments := []string{}
+		for _, action := range execution.Workflow.Actions {
+			if action.Environment == environment {
+				environments = append(environments, action.Environment)
+				found = true
+				break
+			}
+		}
+
+		if len(environments) == 0 {
+			found = true
+		}
+
+		if !found {
+			continue
+		}
+
+		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
+
+		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort", backendUrl, execution.Workflow.ID, execution.ExecutionId)
+		req, err := http.NewRequest(
+			"GET",
+			streamUrl,
+			nil,
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error in auto-abort request: %s", err)
+			continue
+		}
+
+		req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, execution.Authorization))
+		newresp, err := topClient.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Error auto-aborting workflow: %s", err)
+			continue
+		}
+
+		body, err := ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading parent body: %s", err)
+			continue
+		}
+		//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
+
+		if newresp.StatusCode != 200 {
+			log.Printf("[ERROR] Bad statuscode in abort: %d, %s", newresp.StatusCode, string(body))
+			continue
+		}
+
+		cnt += 1
+		log.Printf("[DEBUG] Result from aborting %s: %s", execution.ExecutionId, string(body))
+	}
+
+	return cnt, nil
+}
+
 func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1940,9 +2116,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
-		Role     string `json:"role"`
-		Username string `json:"username"`
-		UserId   string `json:"user_id"`
+		Role     string  `json:"role"`
+		Username string  `json:"username"`
+		UserId   string  `json:"user_id"`
+		EthInfo  EthInfo `json:"eth_info"`
 	}
 
 	ctx := getContext(request)
@@ -1957,8 +2134,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// Should this role reflect the users' org access?
 	// When you change org -> change user role
-	if userInfo.Role != "admin" {
-		log.Printf("[WARNING] %s tried to update user %s", userInfo.Username, t.UserId)
+	if userInfo.Role != "admin" && userInfo.Id != t.UserId {
+		log.Printf("[WARNING] User %s tried to update user %s. Role: %s", userInfo.Username, t.UserId, userInfo.Role)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change other users"}`)))
 		return
@@ -1994,16 +2171,18 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to role user and admin"}`)))
 		return
 	} else {
-		// Same user - can't edit yourself
-		if userInfo.Id == t.UserId || userInfo.Username == t.UserId {
+		// Same user - can't edit yourself?
+		if len(t.Role) > 0 && (userInfo.Id == t.UserId || userInfo.Username == t.UserId) {
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't update the role of your own user"}`)))
 			return
 		}
 
 		log.Printf("[INFO] Updated user %s from %s to %s", foundUser.Username, foundUser.Role, t.Role)
-		foundUser.Role = t.Role
-		foundUser.Roles = []string{t.Role}
+		if len(t.Role) > 0 {
+			foundUser.Role = t.Role
+			foundUser.Roles = []string{t.Role}
+		}
 	}
 
 	if len(t.Username) > 0 && project.Environment != "cloud" {
@@ -2033,6 +2212,11 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		if foundUser.Role == "" {
 			foundUser.Role = defaultRole
 		}
+	}
+
+	if len(t.EthInfo.Account) > 0 {
+		log.Printf("[DEBUG] Should set ethinfo to %#v", t.EthInfo)
+		foundUser.EthInfo = t.EthInfo
 	}
 
 	err = SetUser(ctx, foundUser, true)
@@ -2547,6 +2731,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				action.IsValid = true
 			}
 		} else {
+			warned := []string{}
 			for _, env := range environments {
 				found := false
 				if env.Name == action.Environment {
@@ -2560,7 +2745,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if !found {
-					log.Printf("[DEBUG] Environment %s isn't available. Changing to default.", action.Environment)
+					if ArrayContains(warned, action.Environment) {
+						log.Printf("[DEBUG] Environment %s isn't available. Changing to default.", action.Environment)
+						warned = append(warned, action.Environment)
+					}
+
 					action.Environment = defaultEnv
 				}
 			}
@@ -3538,7 +3727,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Handling post for APIKEY gen FROM user %s. Userchange: %s!", userInfo.Username, t.UserId)
 
 		if userInfo.Role != "admin" {
-			log.Printf("[INFO] %s tried and failed to change apikey for %s", userInfo.Username, t.UserId)
+			log.Printf("[AUDIT] %s tried and failed to change apikey for %s", userInfo.Username, t.UserId)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change others' apikey"}`)))
 			return
@@ -3549,6 +3738,14 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Can't find user %s (apikey gen): %s", t.UserId, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+			return
+		}
+
+		// FIXME: May not be good due to different roles in different organizations.
+		if foundUser.Role == "admin" {
+			log.Printf("[AUDIT] %s tried and failed to change apikey for %s. Skipping because users' role is admin", userInfo.Username, t.UserId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change the apikey of another admin"}`)))
 			return
 		}
 
@@ -3629,10 +3826,19 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		//	if tmpUser.Name
 		//}
 
+		if item.Username != user.Username && (len(item.Orgs) > 1 || item.Role == "admin") {
+			//log.Printf("[DEBUG] Orgs for the user: %#v", item.Orgs)
+			item.ApiKey = ""
+		}
+
 		item.Password = ""
 		item.Session = ""
 		item.VerificationToken = ""
 		item.Orgs = []string{}
+		item.EthInfo = EthInfo{}
+
+		//if item.Username != user.Username && item.Admin {
+		//}
 
 		newUsers = append(newUsers, item)
 	}
@@ -5278,22 +5484,33 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 				ID: nodeId,
 			}
 
-			for _, action := range workflowExecution.Workflow.Actions {
-				if action.ID == nodeId {
-					newaction = action
+			// Check if result exists first
+			found := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.ID == nodeId {
+					found = true
 					break
 				}
 			}
 
-			workflowExecution.Results = append(workflowExecution.Results, ActionResult{
-				Action:        newaction,
-				ExecutionId:   workflowExecution.ExecutionId,
-				Authorization: workflowExecution.Authorization,
-				Result:        parsedReason,
-				StartedAt:     workflowExecution.StartedAt,
-				CompletedAt:   workflowExecution.StartedAt,
-				Status:        "FAILURE",
-			})
+			if !found {
+				for _, action := range workflowExecution.Workflow.Actions {
+					if action.ID == nodeId {
+						newaction = action
+						break
+					}
+				}
+
+				workflowExecution.Results = append(workflowExecution.Results, ActionResult{
+					Action:        newaction,
+					ExecutionId:   workflowExecution.ExecutionId,
+					Authorization: workflowExecution.Authorization,
+					Result:        parsedReason,
+					StartedAt:     workflowExecution.StartedAt,
+					CompletedAt:   workflowExecution.StartedAt,
+					Status:        "FAILURE",
+				})
+			}
 		}
 	}
 
@@ -8777,7 +8994,8 @@ func ValidateNewWorkerExecution(body []byte) error {
 		return errors.New(fmt.Sprintf("Bad length of trigger: %d (probably normal app)", len(execution.Workflow.Triggers)))
 	}
 
-	if len(baseExecution.Results) >= len(execution.Results) {
+	//if len(baseExecution.Results) >= len(execution.Results) {
+	if len(baseExecution.Results) > len(execution.Results) {
 		return errors.New(fmt.Sprintf("Can't have less actions in a full execution than what exists: %d (old) vs %d (new)", len(baseExecution.Results), len(execution.Results)))
 	}
 

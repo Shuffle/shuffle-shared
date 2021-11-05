@@ -1116,9 +1116,9 @@ class %s(AppBase):
 %s
 
 if __name__ == "__main__":
-    #asyncio.run(%s.run(), debug=True)
     %s.run()
 `
+	//#asyncio.run(%s.run(), debug=True)
 	return baseString
 
 }
