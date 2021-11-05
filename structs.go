@@ -760,12 +760,29 @@ type Schedule struct {
 	Environment       string `json:"environment" datastore:"environment"`
 }
 
+type Comment struct {
+	ID              string `json:"id" datastore:"id"`
+	Label           string `json:"label" datastore:"label"`
+	Type            string `json:"type" datastore:"type"`
+	IsValid         bool   `json:"is_valid" datastore:"is_valid"`
+	Decorator       bool   `json:"decorator" datastore:"decorator"`
+	Width           int64  `json:"width" datastore:"width"`
+	Height          int64  `json:"height" datastore:"height"`
+	Color           string `json:"color" datastore:"color"`
+	BackgroundColor string `json:"backgroundcolor" datastore:"backgroundcolor"`
+	Position        struct {
+		X float64 `json:"x" datastore:"x"`
+		Y float64 `json:"y" datastore:"y"`
+	} `json:"position"`
+}
+
 type Workflow struct {
 	Actions        []Action   `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch   `json:"branches" datastore:"branches,noindex"`
 	VisualBranches []Branch   `json:"visual_branches" datastore:"visual_branches,noindex"`
 	Triggers       []Trigger  `json:"triggers" datastore:"triggers,noindex"`
 	Schedules      []Schedule `json:"schedules" datastore:"schedules,noindex"`
+	Comments       []Comment  `json:"comments" datastore:"comments,noindex"`
 	Configuration  struct {
 		ExitOnError       bool `json:"exit_on_error" datastore:"exit_on_error"`
 		StartFromTop      bool `json:"start_from_top" datastore:"start_from_top"`

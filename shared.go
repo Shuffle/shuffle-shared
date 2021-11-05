@@ -2349,14 +2349,21 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			for _, item := range workflowapps {
-				if item.Name == "Testing" && item.AppVersion == "1.0.0" {
-					nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
+				if item.Name == "Shuffle-Tools" && item.AppVersion == "1.1.0" {
+					//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
+					nodeId := uuid.NewV4().String()
 					workflow.Start = nodeId
 					newActions = append(newActions, Action{
-						Label:       "Start node",
-						Name:        "hello_world",
+						Label:       "Change Me",
+						Name:        "repeat_back_to_me",
 						Environment: envName,
-						Parameters:  []WorkflowAppActionParameter{},
+						Parameters: []WorkflowAppActionParameter{
+							WorkflowAppActionParameter{
+								Name:    "call",
+								Value:   "Hello world",
+								Example: "Repeating: Hello World",
+							},
+						},
 						Position: struct {
 							X float64 "json:\"x,omitempty\" datastore:\"x\""
 							Y float64 "json:\"y,omitempty\" datastore:\"y\""
@@ -2374,6 +2381,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 						AppID:       item.ID,
 						LargeImage:  item.LargeImage,
 					})
+
 					break
 				}
 			}
@@ -3031,6 +3039,28 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		newTriggers = append(newTriggers, trigger)
 	}
 
+	newComments := []Comment{}
+	for _, comment := range workflow.Comments {
+		if comment.Height < 50 {
+			comment.Height = 150
+		}
+
+		if comment.Width < 50 {
+			comment.Height = 150
+		}
+
+		if len(comment.BackgroundColor) == 0 {
+			comment.BackgroundColor = "#1f2023"
+		}
+
+		if len(comment.Color) == 0 {
+			comment.Color = "#ffffff"
+		}
+
+		newComments = append(newComments, comment)
+	}
+
+	workflow.Comments = newComments
 	workflow.Triggers = newTriggers
 
 	if len(workflow.Actions) == 0 {
@@ -3044,6 +3074,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 	if len(workflow.Errors) == 0 {
 		workflow.Errors = []string{}
+	}
+	if len(workflow.Comments) == 0 {
+		workflow.Comments = []Comment{}
 	}
 
 	//log.Printf("PRE VARIABLES")

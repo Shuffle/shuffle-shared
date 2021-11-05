@@ -589,7 +589,7 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 		return err
 	}
 
-	log.Printf("[INFO] Successfully set cache for execution variables %s. Extra: %d\n\n", extra, cacheKey)
+	log.Printf("[INFO] Successfully set cache for execution variables %s. Extra: %d\n\n", cacheKey, extra)
 	return nil
 }
 
@@ -607,8 +607,10 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for execution variables data %s: %s", executionId, err)
+			log.Printf("[ERROR] Failed getting cache for execution variables data %s: %s", executionId, err)
 		}
+	} else {
+		log.Printf("[ERROR] CacheDB is being skipped - can we handle execution?")
 	}
 
 	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
