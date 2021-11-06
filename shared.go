@@ -1124,6 +1124,82 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in stop executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during stop executions")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	ctx := getContext(request)
+	//env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
+	//if err != nil {
+	//	log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
+	//	resp.WriteHeader(401)
+	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
+	//	return
+	//}
+
+	//log.Printf("%#v", env)
+	//if env.OrgId != user.ActiveOrg.Id {
+	//	log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
+	//	resp.WriteHeader(401)
+	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
+	//	return
+	//}
+
+	// 1: Loop all workflows
+	// 2: Stop all running executions (manually abort)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	total := 0
+	for _, workflow := range workflows {
+		if workflow.OrgId != user.ActiveOrg.Id {
+			//log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
+			continue
+		}
+
+		cnt, _ := RerunExecutions(ctx, fileId, workflow)
+		total += cnt
+	}
+
+	log.Printf("[DEBUG] Total stopped %d executions for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	resp.WriteHeader(200)
+	//resp.Write(newjson)
+}
+
 func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1198,6 +1274,112 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[DEBUG] Total stopped %d executions for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
 	//resp.Write(newjson)
+}
+
+func RerunExecution(ctx context.Context, environment string, workflow Workflow) (int, error) {
+	executions, err := GetUnfinishedExecutions(ctx, workflow.ID)
+	if err != nil {
+		log.Printf("[DEBUG] Failed getting executions for workflow %s", workflow.ID)
+		return 0, err
+	}
+
+	if len(executions) == 0 {
+		return 0, nil
+	}
+
+	log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
+	//log.Printf("[DEBUG] Found %d unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
+
+	backendUrl := os.Getenv("BASE_URL")
+	if project.Environment == "cloud" {
+		backendUrl = "https://shuffler.io"
+	}
+	if len(backendUrl) == 0 {
+		backendUrl = "http://127.0.0.1:5001"
+	}
+
+	topClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+
+	//StartedAt           int64          `json:"started_at" datastore:"started_at"`
+	timeNow := int64(time.Now().Unix())
+	cnt := 0
+	for _, execution := range executions {
+		if timeNow < execution.StartedAt+1800 {
+			//log.Printf("Bad timing: %d", execution.StartedAt)
+			continue
+		}
+
+		if execution.Status != "EXECUTING" {
+			//log.Printf("Bad status: %s", execution.Status)
+			continue
+		}
+
+		found := false
+		environments := []string{}
+		for _, action := range execution.Workflow.Actions {
+			if action.Environment == environment {
+				environments = append(environments, action.Environment)
+				found = true
+				break
+			}
+		}
+
+		if len(environments) == 0 {
+			found = true
+		}
+
+		if !found {
+			continue
+		}
+
+		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
+		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort", backendUrl, execution.Workflow.ID, execution.ExecutionId)
+		/*
+			data = {
+				"start": execution.Start,
+				"execution_argument": execution.ExecutionArgument,
+			}
+		*/
+		resultData := ""
+		req, err := http.NewRequest(
+			"GET",
+			streamUrl,
+			bytes.NewBuffer([]byte(resultData)),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error in auto-abort request: %s", err)
+			continue
+		}
+
+		req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, execution.Authorization))
+		newresp, err := topClient.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Error auto-aborting workflow: %s", err)
+			continue
+		}
+
+		body, err := ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading parent body: %s", err)
+			continue
+		}
+		//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
+
+		if newresp.StatusCode != 200 {
+			log.Printf("[ERROR] Bad statuscode in abort: %d, %s", newresp.StatusCode, string(body))
+			continue
+		}
+
+		cnt += 1
+		log.Printf("[DEBUG] Result from aborting %s: %s", execution.ExecutionId, string(body))
+	}
+
+	return cnt, nil
 }
 
 func CleanupExecutions(ctx context.Context, environment string, workflow Workflow) (int, error) {
@@ -6217,6 +6399,13 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 		backendUrl = "https://shuffler.io"
 	}
 
+	// FIXME: This MAY fail at scale due to not being able to get the right worker
+	// Maybe we need to pass the worker's real id, and not its VIP?
+	if swarmConfig == "run" && (project.Environment == "" || project.Environment == "worker") {
+		backendUrl = "http://shuffle-workers:33333"
+		log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
+	}
+
 	// Callback to itself
 	if len(backendUrl) == 0 {
 		backendUrl = "http://localhost:5001"
@@ -6248,6 +6437,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 		Authorization: parentAuth,
 		ExecutionId:   executionParent,
 	}
+
 	data, err := json.Marshal(requestData)
 	if err != nil {
 		log.Printf("[WARNING] Failed parent init marshal: %s", err)
@@ -7416,6 +7606,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
+		//if runCheck && project.Environment != "" && project.Environment != "worker" {
 		if runCheck {
 			log.Printf("[WARNING] Sinkholing request of %#v IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
 			var subflowData SubflowData
@@ -10182,4 +10373,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
+}
+
+func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
+	fmt.Fprint(resp, "OK")
 }
