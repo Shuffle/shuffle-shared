@@ -1191,7 +1191,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		cnt, _ := RerunExecutions(ctx, fileId, workflow)
+		cnt, _ := RerunExecution(ctx, fileId, workflow)
 		total += cnt
 	}
 
@@ -6401,7 +6401,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
 	// Maybe we need to pass the worker's real id, and not its VIP?
-	if swarmConfig == "run" && (project.Environment == "" || project.Environment == "worker") {
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 		backendUrl = "http://shuffle-workers:33333"
 		log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
 	}
