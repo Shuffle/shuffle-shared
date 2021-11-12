@@ -132,6 +132,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 			log.Printf("[ERROR] Failed setting cache for key %s: %s", orgId, err)
 		}
 	} else {
+		if item.Value == nil {
+			item.Value = []byte(string(1))
+		}
+
 		if len(item.Value) == 1 {
 			num := item.Value[0]
 			//log.Printf("Item: %#v", num)
