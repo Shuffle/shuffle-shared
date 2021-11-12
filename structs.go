@@ -274,6 +274,12 @@ type UserMini struct {
 	Role     string `datastore:"role" json:"role"`
 }
 
+type MFAInfo struct {
+	Active       bool   `datastore:"active" json:"active"`
+	ActiveCode   string `datastore:"active_code" json:"active_code"`
+	PreviousCode string `datastore:"previous_code" json:"previous_code"`
+}
+
 type User struct {
 	Username          string        `datastore:"Username" json:"username"`
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -288,6 +294,7 @@ type User struct {
 	ResetReference    string        `datastore:"reset_reference" json:"reset_reference"`
 	Executions        ExecutionInfo `datastore:"executions" json:"executions"`
 	Limits            UserLimits    `datastore:"limits" json:"limits"`
+	MFA               MFAInfo       `datastore:"mfa_info,noindex" json:"mfa_info"`
 	Authentication    []UserAuth    `datastore:"authentication,noindex" json:"authentication"`
 	ResetTimeout      int64         `datastore:"reset_timeout,noindex" json:"reset_timeout"`
 	Id                string        `datastore:"id" json:"id"`
@@ -944,6 +951,7 @@ type CloudSyncJob struct {
 type loginStruct struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+	MFACode  string `json:"mfa_code"`
 }
 
 type ExecutionVariableWrapper struct {
@@ -2194,6 +2202,7 @@ type ExecInfo struct {
 type ResultChecker struct {
 	Success bool   `json:"success"`
 	Reason  string `json:"reason"`
+	Extra   string `json:"extra,omitempty"`
 }
 
 type Metadata struct {

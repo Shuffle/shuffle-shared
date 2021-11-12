@@ -3,10 +3,6 @@ package shuffle
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
-	"encoding/xml"
 	"errors"
 	"fmt"
 	"gopkg.in/yaml.v3"
@@ -21,10 +17,21 @@ import (
 	"strings"
 	"time"
 
+	"encoding/base32"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/xml"
+
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/md5"
 	"crypto/rand"
+	"crypto/sha1"
+
+	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
@@ -94,6 +101,286 @@ func Md5sumfile(filepath string) string {
 	return newmd5
 }
 
+func randStr(strSize int, randType string) string {
+
+	var dictionary string
+
+	if randType == "alphanum" {
+		dictionary = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	}
+
+	if randType == "alpha" {
+		dictionary = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+	}
+
+	if randType == "number" {
+		dictionary = "0123456789"
+	}
+
+	var bytes = make([]byte, strSize)
+	rand.Read(bytes)
+	for k, v := range bytes {
+		bytes[k] = dictionary[v%byte(len(dictionary))]
+	}
+
+	return string(bytes)
+}
+
+func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[ERROR] Api authentication failed in get 2fa: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("[ERROR] Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type parsedValue struct {
+		Code   string `json:"code"`
+		UserId string `json:"user_id"`
+	}
+
+	var tmpBody parsedValue
+	err = json.Unmarshal(body, &tmpBody)
+	if err != nil {
+		log.Printf("[WARNING] Error with unmarshal tmpBody in verify 2fa: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(tmpBody.Code) != 6 {
+		log.Printf("[WARNING] Length of code isn't 6: %s", tmpBody.Code)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Length of code must be 6"}`)))
+		return
+	}
+
+	// FIXME: Everything should match?
+	// || user.Id != tmpBody.UserId
+	if user.Id != fileId {
+		log.Printf("[WARNING] Bad ID: %s vs %s", user.Id, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only set 2fa for your own user. Pass field user_id in JSON."}`)))
+		return
+	}
+
+	ctx := getContext(request)
+	foundUser, err := GetUser(ctx, user.Id)
+	if err != nil {
+		log.Printf("[ERROR] Can't find user %s (set 2fa): %s", user.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting your user."}`)))
+		return
+	}
+
+	//https://www.gojek.io/blog/a-diy-two-factor-authenticator-in-golang
+	interval := time.Now().Unix() / 30
+	HOTP, err := getHOTPToken(foundUser.MFA.PreviousCode, interval)
+	if err != nil {
+		log.Printf("[ERROR] Failed generating a HOTP token: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if HOTP != tmpBody.Code {
+		log.Printf("[DEBUG] Bad code sent for user %s (%s). Sent: %s, Want: %s", user.Username, user.Id, tmpBody.Code, HOTP)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Wrong code. Try again"}`))
+		return
+	}
+
+	foundUser.MFA.Active = true
+	foundUser.MFA.ActiveCode = foundUser.MFA.PreviousCode
+	foundUser.MFA.PreviousCode = ""
+	err = SetUser(ctx, foundUser, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed SETTING MFA for user %s (%s): %s", foundUser.Username, foundUser.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed updating your user. Please try again."}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Successfully enabled 2FA for user %s (%s)", foundUser.Username, foundUser.Id)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "reason": "Correct code. MFA is now required for this user."}`))
+}
+
+func getHOTPToken(secret string, interval int64) (string, error) {
+
+	//Converts secret to base32 Encoding. Base32 encoding desires a 32-character
+	//subset of the twenty-six letters A–Z and ten digits 0–9
+	key, err := base32.StdEncoding.DecodeString(strings.ToUpper(secret))
+	if err != nil {
+		return "", err
+	}
+
+	bs := make([]byte, 8)
+	binary.BigEndian.PutUint64(bs, uint64(interval))
+
+	//Signing the value using HMAC-SHA1 Algorithm
+	hash := hmac.New(sha1.New, key)
+	hash.Write(bs)
+	h := hash.Sum(nil)
+
+	// We're going to use a subset of the generated hash.
+	// Using the last nibble (half-byte) to choose the index to start from.
+	// This number is always appropriate as it's maximum decimal 15, the hash will
+	// have the maximum index 19 (20 bytes of SHA1) and we need 4 bytes.
+	o := (h[19] & 15)
+
+	var header uint32
+	//Get 32 bit chunk from hash starting at the o
+	r := bytes.NewReader(h[o : o+4])
+	err = binary.Read(r, binary.BigEndian, &header)
+	if err != nil {
+		return "", err
+	}
+
+	//Ignore most significant bits as per RFC 4226.
+	//Takes division from one million to generate a remainder less than < 7 digits
+	h12 := (int(header) & 0x7fffffff) % 1000000
+
+	//Converts number as a string
+	otp := strconv.Itoa(int(h12))
+
+	// Dumb solutions <3
+	// This works well, as the numbers are small ^_^
+	if len(otp) == 0 {
+		otp = "000000"
+	} else if len(otp) == 1 {
+		otp = fmt.Sprintf("00000%s", otp)
+	} else if len(otp) == 2 {
+		otp = fmt.Sprintf("0000%s", otp)
+	} else if len(otp) == 3 {
+		otp = fmt.Sprintf("000%s", otp)
+	} else if len(otp) == 4 {
+		otp = fmt.Sprintf("00%s", otp)
+	} else if len(otp) == 5 {
+		otp = fmt.Sprintf("0%s", otp)
+	}
+
+	return otp, nil
+}
+
+func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[ERROR] Api authentication failed in get 2fa: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("[ERROR] Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if user.Id != fileId {
+		log.Printf("[WARNING] Bad ID: %s vs %s", user.Id, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only set 2fa for your own user"}`)))
+		return
+	}
+
+	// https://socketloop.com/tutorials/golang-generate-qr-codes-for-google-authenticator-app-and-fix-cannot-interpret-qr-code-error
+
+	// generate a random string - preferably 6 or 8 characters
+	randomStr := randStr(8, "alphanum")
+	//fmt.Println(randomStr)
+
+	// For Google Authenticator purpose
+	// for more details see
+	// https://github.com/google/google-authenticator/wiki/Key-Uri-Format
+	secret := base32.StdEncoding.EncodeToString([]byte(randomStr))
+
+	// authentication link. Remember to replace SocketLoop with yours.
+	// for more details see
+	// https://github.com/google/google-authenticator/wiki/Key-Uri-Format
+	authLink := fmt.Sprintf("otpauth://totp/%s?secret=%s&issuer=Shuffle", user.Username, secret)
+	png, err := qrcode.Encode(authLink, qrcode.Medium, 256)
+	if err != nil {
+		log.Printf("[ERROR] Failed PNG encoding: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed image encoding"}`)))
+		return
+	}
+
+	dataURI := fmt.Sprintf("data:image/png;base64,%s", base64.StdEncoding.EncodeToString([]byte(png)))
+	newres := ResultChecker{
+		Success: true,
+		Reason:  dataURI,
+		Extra:   randomStr,
+	}
+
+	newjson, err := json.Marshal(newres)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshal in get OTP: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
+		return
+	}
+
+	ctx := getContext(request)
+	//user.MFA.PreviousCode = authLink
+	user.MFA.PreviousCode = secret
+	err = SetUser(ctx, &user, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating MFA for user: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed updating your user"}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Sent new MFA update for user %s (%s)", user.Username, user.Id)
+	//log.Printf("%s", newjson)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(newjson))
+}
+
 func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -127,7 +414,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 
 		newjson, err := json.Marshal(orgs)
 		if err != nil {
-			log.Printf("[WARNING] Failed unmarshal in get orgs: %s", err)
+			log.Printf("[WARNING] Failed marshal in get orgs: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
 			return
@@ -4529,6 +4816,13 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if userId == userInfo.Id {
+		log.Printf("[WARNING] Can't change activation of your own user %s (%s)", userInfo.Username, userInfo.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change activation of your own user"}`)))
+		return
+	}
+
 	foundUser, err := GetUser(ctx, userId)
 	if err != nil {
 		log.Printf("[WARNING] Can't find user %s (delete user): %s", userId, err)
@@ -6289,6 +6583,33 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 	*/
+
+	if userdata.MFA.Active && len(data.MFACode) == 0 {
+		log.Printf(`[DEBUG] Username %s (%s) has MFA activated. Redirecting.`, userdata.Username, userdata.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "MFA_REDIRECT"}`)))
+		return
+	}
+
+	if len(data.MFACode) > 0 && userdata.MFA.Active {
+		interval := time.Now().Unix() / 30
+		HOTP, err := getHOTPToken(userdata.MFA.ActiveCode, interval)
+		if err != nil {
+			log.Printf("[ERROR] Failed generating a HOTP token: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed generating token. Please try again."}`))
+			return
+		}
+
+		if HOTP != data.MFACode {
+			log.Printf("[DEBUG] Bad code sent for user %s (%s). Sent: %s, Want: %s", userdata.Username, userdata.Id, data.MFACode, HOTP)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Wrong 2-factor code (%s). Please try again with a 6-digit code. If this persists, please contact support."}`, data.MFACode)))
+			return
+		}
+
+		log.Printf("[DEBUG] MFA login for user %s (%s)!", userdata.Username, userdata.Id)
+	}
 
 	loginData := `{"success": true}`
 	if len(userdata.Session) != 0 {
@@ -9335,12 +9656,30 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	// Serialize
 
 	// SAML
-	entryPoint := "https://dev-23367303.okta.com/app/dev-23367303_shuffletest_1/exk1vg1j7bYUYEG0k5d7/sso/saml"
+	//entryPoint := "https://dev-23367303.okta.com/app/dev-23367303_shuffletest_1/exk1vg1j7bYUYEG0k5d7/sso/saml"
 	redirectUrl := "http://localhost:3001/workflows"
+	backendUrl := os.Getenv("BASE_URL")
+	if len(backendUrl) > 0 {
+		redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
+	}
+
+	if project.Environment == "cloud" {
+		redirectUrl = "https://shuffler.io/workflows"
+	}
+
+	log.Printf("[DEBUG] Using %s as redirectUrl in SSO", backendUrl)
+
+	//backendUrl := os.Getenv("BASE_URL")
+	//if project.Environment == "cloud" {
+	//	backendUrl = "https://shuffler.io"
+	//}
+	//if len(backendUrl) == 0 {
+	//	backendUrl = "http://127.0.0.1:5001"
+	//}
 
 	//log.Printf("URL: %#v", request.URL)
 	//log.Printf("REDIRECT: %s", redirectUrl)
-	_ = entryPoint
+	//_ = entryPoint
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
