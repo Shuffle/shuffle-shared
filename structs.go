@@ -627,6 +627,7 @@ type SyncFeatures struct {
 	Updates            SyncData `json:"updates" datastore:"updates"`
 	Notifications      SyncData `json:"notifications" datastore:"notifications"`
 	EmailTrigger       SyncData `json:"email_trigger" datastore:"email_trigger"`
+	MultiTenant        SyncData `json:"multi_tenant" datastore:"multi_tenant"`
 	AppExecutions      SyncData `json:"app_executions" datastore:"app_executions"`
 	WorkflowExecutions SyncData `json:"workflow_executions" datastore:"workflow_executions"`
 	Apps               SyncData `json:"apps" datastore:"apps"`
@@ -1286,6 +1287,31 @@ type EnvironentSearchWrapper struct {
 	} `json:"hits"`
 }
 
+type OpenseaAssetSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string       `json:"_index"`
+			Type   string       `json:"_type"`
+			ID     string       `json:"_id"`
+			Score  float64      `json:"_score"`
+			Source OpenseaAsset `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type ExecutionSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -1639,6 +1665,17 @@ type AppWrapper struct {
 	PrimaryTerm int         `json:"_primary_term"`
 	Found       bool        `json:"found"`
 	Source      WorkflowApp `json:"_source"`
+}
+
+type OpenseaAssetWrapper struct {
+	Index       string       `json:"_index"`
+	Type        string       `json:"_type"`
+	ID          string       `json:"_id"`
+	Version     int          `json:"_version"`
+	SeqNo       int          `json:"_seq_no"`
+	PrimaryTerm int          `json:"_primary_term"`
+	Found       bool         `json:"found"`
+	Source      OpenseaAsset `json:"_source"`
 }
 
 type ExecWrapper struct {
@@ -2434,3 +2471,538 @@ type OrborusExecutionRequest struct {
 	Action                Action            `json:"action"`
 	FullExecution         WorkflowExecution `json:"workflow_execution"`
 }
+
+type OpenseaAsset struct {
+	ID                   int         `json:"id"`
+	TokenID              string      `json:"token_id"`
+	NumSales             int         `json:"num_sales"`
+	BackgroundColor      interface{} `json:"background_color"`
+	ImageURL             string      `json:"image_url"`
+	ImagePreviewURL      string      `json:"image_preview_url"`
+	ImageThumbnailURL    string      `json:"image_thumbnail_url"`
+	ImageOriginalURL     interface{} `json:"image_original_url"`
+	AnimationURL         interface{} `json:"animation_url"`
+	AnimationOriginalURL interface{} `json:"animation_original_url"`
+	Name                 string      `json:"name"`
+	Description          interface{} `json:"description"`
+	ExternalLink         interface{} `json:"external_link"`
+	AssetContract        struct {
+		Address                     string      `json:"address"`
+		AssetContractType           string      `json:"asset_contract_type"`
+		CreatedDate                 string      `json:"created_date"`
+		Name                        string      `json:"name"`
+		NftVersion                  interface{} `json:"nft_version"`
+		OpenseaVersion              string      `json:"opensea_version"`
+		Owner                       int         `json:"owner"`
+		SchemaName                  string      `json:"schema_name"`
+		Symbol                      string      `json:"symbol"`
+		TotalSupply                 interface{} `json:"total_supply"`
+		Description                 string      `json:"description"`
+		ExternalLink                interface{} `json:"external_link"`
+		ImageURL                    interface{} `json:"image_url"`
+		DefaultToFiat               bool        `json:"default_to_fiat"`
+		DevBuyerFeeBasisPoints      int         `json:"dev_buyer_fee_basis_points"`
+		DevSellerFeeBasisPoints     int         `json:"dev_seller_fee_basis_points"`
+		OnlyProxiedTransfers        bool        `json:"only_proxied_transfers"`
+		OpenseaBuyerFeeBasisPoints  int         `json:"opensea_buyer_fee_basis_points"`
+		OpenseaSellerFeeBasisPoints int         `json:"opensea_seller_fee_basis_points"`
+		BuyerFeeBasisPoints         int         `json:"buyer_fee_basis_points"`
+		SellerFeeBasisPoints        int         `json:"seller_fee_basis_points"`
+		PayoutAddress               interface{} `json:"payout_address"`
+	} `json:"asset_contract"`
+	Permalink  string `json:"permalink"`
+	Collection struct {
+		PaymentTokens []struct {
+			ID       int     `json:"id"`
+			Symbol   string  `json:"symbol"`
+			Address  string  `json:"address"`
+			ImageURL string  `json:"image_url"`
+			Name     string  `json:"name"`
+			Decimals int     `json:"decimals"`
+			EthPrice float64 `json:"eth_price"`
+			UsdPrice float64 `json:"usd_price"`
+		} `json:"payment_tokens"`
+		PrimaryAssetContracts []interface{} `json:"primary_asset_contracts"`
+		Traits                struct {
+		} `json:"traits"`
+		Stats struct {
+			OneDayVolume          float64 `json:"one_day_volume"`
+			OneDayChange          float64 `json:"one_day_change"`
+			OneDaySales           float64 `json:"one_day_sales"`
+			OneDayAveragePrice    float64 `json:"one_day_average_price"`
+			SevenDayVolume        float64 `json:"seven_day_volume"`
+			SevenDayChange        float64 `json:"seven_day_change"`
+			SevenDaySales         float64 `json:"seven_day_sales"`
+			SevenDayAveragePrice  float64 `json:"seven_day_average_price"`
+			ThirtyDayVolume       float64 `json:"thirty_day_volume"`
+			ThirtyDayChange       float64 `json:"thirty_day_change"`
+			ThirtyDaySales        float64 `json:"thirty_day_sales"`
+			ThirtyDayAveragePrice float64 `json:"thirty_day_average_price"`
+			TotalVolume           float64 `json:"total_volume"`
+			TotalSales            float64 `json:"total_sales"`
+			TotalSupply           float64 `json:"total_supply"`
+			Count                 float64 `json:"count"`
+			NumOwners             int     `json:"num_owners"`
+			AveragePrice          float64 `json:"average_price"`
+			NumReports            int     `json:"num_reports"`
+			MarketCap             float64 `json:"market_cap"`
+			FloorPrice            int     `json:"floor_price"`
+		} `json:"stats"`
+		BannerImageURL          interface{} `json:"banner_image_url"`
+		ChatURL                 interface{} `json:"chat_url"`
+		CreatedDate             string      `json:"created_date"`
+		DefaultToFiat           bool        `json:"default_to_fiat"`
+		Description             interface{} `json:"description"`
+		DevBuyerFeeBasisPoints  string      `json:"dev_buyer_fee_basis_points"`
+		DevSellerFeeBasisPoints string      `json:"dev_seller_fee_basis_points"`
+		DiscordURL              interface{} `json:"discord_url"`
+		DisplayData             struct {
+			CardDisplayStyle string        `json:"card_display_style"`
+			Images           []interface{} `json:"images"`
+		} `json:"display_data"`
+		ExternalURL                 interface{} `json:"external_url"`
+		Featured                    bool        `json:"featured"`
+		FeaturedImageURL            interface{} `json:"featured_image_url"`
+		Hidden                      bool        `json:"hidden"`
+		SafelistRequestStatus       string      `json:"safelist_request_status"`
+		ImageURL                    interface{} `json:"image_url"`
+		IsSubjectToWhitelist        bool        `json:"is_subject_to_whitelist"`
+		LargeImageURL               interface{} `json:"large_image_url"`
+		MediumUsername              interface{} `json:"medium_username"`
+		Name                        string      `json:"name"`
+		OnlyProxiedTransfers        bool        `json:"only_proxied_transfers"`
+		OpenseaBuyerFeeBasisPoints  string      `json:"opensea_buyer_fee_basis_points"`
+		OpenseaSellerFeeBasisPoints string      `json:"opensea_seller_fee_basis_points"`
+		PayoutAddress               interface{} `json:"payout_address"`
+		RequireEmail                bool        `json:"require_email"`
+		ShortDescription            interface{} `json:"short_description"`
+		Slug                        string      `json:"slug"`
+		TelegramURL                 interface{} `json:"telegram_url"`
+		TwitterUsername             interface{} `json:"twitter_username"`
+		InstagramUsername           interface{} `json:"instagram_username"`
+		WikiURL                     interface{} `json:"wiki_url"`
+	} `json:"collection"`
+	Decimals      interface{} `json:"decimals"`
+	TokenMetadata interface{} `json:"token_metadata"`
+	Owner         struct {
+		User struct {
+			Username string `json:"username"`
+		} `json:"user"`
+		ProfileImgURL string `json:"profile_img_url"`
+		Address       string `json:"address"`
+		Config        string `json:"config"`
+	} `json:"owner"`
+	SellOrders interface{} `json:"sell_orders"`
+	Creator    struct {
+		User struct {
+			Username string `json:"username"`
+		} `json:"user"`
+		ProfileImgURL string `json:"profile_img_url"`
+		Address       string `json:"address"`
+		Config        string `json:"config"`
+	} `json:"creator"`
+	Traits                  []interface{} `json:"traits"`
+	LastSale                interface{}   `json:"last_sale"`
+	TopBid                  interface{}   `json:"top_bid"`
+	ListingDate             interface{}   `json:"listing_date"`
+	IsPresale               bool          `json:"is_presale"`
+	TransferFeePaymentToken interface{}   `json:"transfer_fee_payment_token"`
+	TransferFee             interface{}   `json:"transfer_fee"`
+	RelatedAssets           []interface{} `json:"related_assets"`
+	Orders                  []interface{} `json:"orders"`
+	Auctions                []interface{} `json:"auctions"`
+	SupportsWyvern          bool          `json:"supports_wyvern"`
+	TopOwnerships           []struct {
+		Owner struct {
+			User struct {
+				Username string `json:"username"`
+			} `json:"user"`
+			ProfileImgURL string `json:"profile_img_url"`
+			Address       string `json:"address"`
+			Config        string `json:"config"`
+		} `json:"owner"`
+		Quantity string `json:"quantity"`
+	} `json:"top_ownerships"`
+	Ownership              interface{} `json:"ownership"`
+	HighestBuyerCommitment interface{} `json:"highest_buyer_commitment"`
+	Created                int64       `json:"created" datastore:"created"`
+	Edited                 int64       `json:"edited" datastore:"edited"`
+}
+
+/*
+type OpenseaAsset struct {
+	Created    int64 `json:"created" datastore:"created"`
+	Edited     int64 `json:"edited" datastore:"edited"`
+	Collection struct {
+		Editors       []string `json:"editors"`
+		PaymentTokens []struct {
+			ID       int     `json:"id"`
+			Symbol   string  `json:"symbol"`
+			Address  string  `json:"address"`
+			ImageURL string  `json:"image_url"`
+			Name     string  `json:"name"`
+			Decimals int     `json:"decimals"`
+			EthPrice int     `json:"eth_price"`
+			UsdPrice float64 `json:"usd_price"`
+		} `json:"payment_tokens"`
+		PrimaryAssetContracts []struct {
+			Address                     string      `json:"address"`
+			AssetContractType           string      `json:"asset_contract_type"`
+			CreatedDate                 string      `json:"created_date"`
+			Name                        string      `json:"name"`
+			NftVersion                  string      `json:"nft_version"`
+			OpenseaVersion              interface{} `json:"opensea_version"`
+			Owner                       int         `json:"owner"`
+			SchemaName                  string      `json:"schema_name"`
+			Symbol                      string      `json:"symbol"`
+			TotalSupply                 string      `json:"total_supply"`
+			Description                 string      `json:"description"`
+			ExternalLink                string      `json:"external_link"`
+			ImageURL                    string      `json:"image_url"`
+			DefaultToFiat               bool        `json:"default_to_fiat"`
+			DevBuyerFeeBasisPoints      int         `json:"dev_buyer_fee_basis_points"`
+			DevSellerFeeBasisPoints     int         `json:"dev_seller_fee_basis_points"`
+			OnlyProxiedTransfers        bool        `json:"only_proxied_transfers"`
+			OpenseaBuyerFeeBasisPoints  int         `json:"opensea_buyer_fee_basis_points"`
+			OpenseaSellerFeeBasisPoints int         `json:"opensea_seller_fee_basis_points"`
+			BuyerFeeBasisPoints         int         `json:"buyer_fee_basis_points"`
+			SellerFeeBasisPoints        int         `json:"seller_fee_basis_points"`
+			PayoutAddress               string      `json:"payout_address"`
+		} `json:"primary_asset_contracts"`
+		Traits struct {
+			Head struct {
+				PurpleAlien        int `json:"purple alien"`
+				BrittleBonesSkelly int `json:"brittle bones skelly"`
+				GoldAlien          int `json:"gold alien"`
+				PinkAlien          int `json:"pink alien"`
+				BlueAlien          int `json:"blue alien"`
+				GreenApe           int `json:"green ape"`
+				Orange             int `json:"orange"`
+				BlueApe            int `json:"blue ape"`
+				Pale               int `json:"pale"`
+				Lit                int `json:"lit"`
+				Holographic        int `json:"holographic"`
+				Pickle             int `json:"pickle"`
+				HolographicCat     int `json:"holographic cat"`
+				Icecream           int `json:"icecream"`
+				Green              int `json:"green"`
+				HolographicApe     int `json:"holographic ape"`
+				Gold               int `json:"gold"`
+				GreenCat           int `json:"green cat"`
+				Pink               int `json:"pink"`
+				Balloon            int `json:"balloon"`
+				Stellar            int `json:"stellar"`
+				Devil              int `json:"devil"`
+				Rainbow            int `json:"rainbow"`
+				GoldApe            int `json:"gold ape"`
+				Purple             int `json:"purple"`
+				PinkApe            int `json:"pink ape"`
+				Skelly             int `json:"skelly"`
+				Cat                int `json:"cat"`
+				DevilCat           int `json:"devil cat"`
+				Tan                int `json:"tan"`
+				Ape                int `json:"ape"`
+				Gradient1          int `json:"gradient 1"`
+				Flower             int `json:"flower"`
+				Med                int `json:"med"`
+				Coffee             int `json:"coffee"`
+				GreyAlien          int `json:"grey alien"`
+				IridescentAlien    int `json:"iridescent alien"`
+				CalicoCat          int `json:"calico cat"`
+				Popsicle           int `json:"popsicle"`
+				Yellow             int `json:"yellow"`
+				Blue               int `json:"blue"`
+				Bubblegum          int `json:"bubblegum"`
+				GreenAlien         int `json:"green alien"`
+				Gradient2          int `json:"gradient 2"`
+				HolographicAlien   int `json:"holographic alien"`
+			} `json:"head"`
+			Hair struct {
+				BlueAlfalfa              int `json:"blue alfalfa"`
+				HolographicMohawk        int `json:"holographic mohawk"`
+				GreenAlien               int `json:"green alien"`
+				HolographicBrushcut      int `json:"holographic brushcut"`
+				WhiteBucketCap           int `json:"white bucket cap"`
+				BlueApe                  int `json:"blue ape"`
+				PinkAlien                int `json:"pink alien"`
+				RainbowMohawk            int `json:"rainbow mohawk"`
+				BubblegumBedHead         int `json:"bubblegum bed head"`
+				GreenApe                 int `json:"green ape"`
+				BedHead                  int `json:"bed head"`
+				HolographicCrown         int `json:"holographic crown"`
+				YellowToque              int `json:"yellow toque"`
+				Viking                   int `json:"viking"`
+				PinkToque                int `json:"pink toque"`
+				GreenBrushcut            int `json:"green brushcut"`
+				CrownWithHolographicLong int `json:"crown with holographic long"`
+				PurpleLong               int `json:"purple long"`
+				HolographicBedHead       int `json:"holographic bed head"`
+				PurpleAlien              int `json:"purple alien"`
+				Poopie                   int `json:"poopie"`
+				Harley                   int `json:"harley"`
+				HolographicApe           int `json:"holographic ape"`
+				Wizard                   int `json:"wizard"`
+				PurpleCap                int `json:"purple cap"`
+				DevilCat                 int `json:"devil cat"`
+				PinkHeadband             int `json:"pink headband"`
+				GreenMullet              int `json:"green mullet"`
+				PinkTidy                 int `json:"pink tidy"`
+				YellowBackwardsCap       int `json:"yellow backwards cap"`
+				GoldBedHead              int `json:"gold bed head"`
+				GreenPuffballs           int `json:"green puffballs"`
+				YellowBowlcut            int `json:"yellow bowlcut"`
+				HolographicAfro          int `json:"holographic afro"`
+				Shaved                   int `json:"shaved"`
+				BlueBucketCap            int `json:"blue bucket cap"`
+				Crown                    int `json:"crown"`
+				HolographicPoopie        int `json:"holographic poopie"`
+				GoldAlien                int `json:"gold alien"`
+				Ape                      int `json:"ape"`
+				PurpleAlfalfa            int `json:"purple alfalfa"`
+				PinkApe                  int `json:"pink ape"`
+				BlueToque                int `json:"blue toque"`
+				BrownMullet              int `json:"brown mullet"`
+				Halo                     int `json:"halo"`
+				BrownBrushcut            int `json:"brown brushcut"`
+				PrivateSkelly            int `json:"private skelly"`
+				IridescentAlien          int `json:"iridescent alien"`
+				BlueMohawk               int `json:"blue mohawk"`
+				YellowHeadband           int `json:"yellow headband"`
+				Pink                     int `json:"pink"`
+				PinkLong                 int `json:"pink long"`
+				PurplePuffballs          int `json:"purple puffballs"`
+				GreyAlien                int `json:"grey alien"`
+				Cowboy                   int `json:"cowboy"`
+				BlueAfro                 int `json:"blue afro"`
+				PinkBucketCap            int `json:"pink bucket cap"`
+				Helmet                   int `json:"helmet"`
+				HolographicCat           int `json:"holographic cat"`
+				Sailor                   int `json:"sailor"`
+				BlueBrushcut             int `json:"blue brushcut"`
+				BlueNerd                 int `json:"blue nerd"`
+				BeigeBucketCap           int `json:"beige bucket cap"`
+				GreenCat                 int `json:"green cat"`
+				GreenBowlcut             int `json:"green bowlcut"`
+				HolographicBob           int `json:"holographic bob"`
+				BluePuffballs            int `json:"blue puffballs"`
+				PurpleBrushcut           int `json:"purple brushcut"`
+				BlueMessy                int `json:"blue messy"`
+				Cat                      int `json:"cat"`
+				BlueAlien                int `json:"blue alien"`
+				StellarBedHead           int `json:"stellar bed head"`
+				HolographicAlien         int `json:"holographic alien"`
+			} `json:"hair"`
+			Body struct {
+				GreenHoodie              int `json:"green hoodie"`
+				BlueAndYellowJacket      int `json:"blue and yellow jacket"`
+				GoldChain                int `json:"gold chain"`
+				NavySweater              int `json:"navy sweater"`
+				BrittleBonesSkelly       int `json:"brittle bones skelly"`
+				PinkFleece               int `json:"pink fleece"`
+				StellarSweater           int `json:"stellar sweater"`
+				PinkAndWhiteJacket       int `json:"pink and white jacket"`
+				PinkSweaterWithSatchel   int `json:"pink sweater with satchel"`
+				GoldSweater              int `json:"gold sweater"`
+				SpottedSweater           int `json:"spotted sweater"`
+				BlueFleece               int `json:"blue fleece"`
+				OrangePuffer             int `json:"orange puffer"`
+				GreenBlazer              int `json:"green blazer"`
+				WhiteTurtleneck          int `json:"white turtleneck"`
+				GoldBoneSkelly           int `json:"gold bone skelly"`
+				PurpleBackpack           int `json:"purple backpack"`
+				SpottedHoodie            int `json:"spotted hoodie"`
+				OrangeCollar             int `json:"orange collar"`
+				YellowTurtleneck         int `json:"yellow turtleneck"`
+				WhitePuffer              int `json:"white puffer"`
+				DevilCat                 int `json:"devil cat"`
+				PurpleChain              int `json:"purple chain"`
+				Combo2Puffer             int `json:"combo 2 puffer"`
+				RainbowStripedSweater    int `json:"rainbow striped sweater"`
+				Cat                      int `json:"cat"`
+				PinkAndGreenJacket       int `json:"pink and green jacket"`
+				WhiteCollar              int `json:"white collar"`
+				GoldApe                  int `json:"gold ape"`
+				BlueBackpack             int `json:"blue backpack"`
+				LeopardHoodie            int `json:"leopard hoodie"`
+				BlueBlazer               int `json:"blue blazer"`
+				GreyHoodie               int `json:"grey hoodie"`
+				Alien                    int `json:"alien"`
+				YellowPuffer             int `json:"yellow puffer"`
+				BubblegumSweater         int `json:"bubblegum sweater"`
+				GoldAlien                int `json:"gold alien"`
+				LightBluePuffer          int `json:"light blue puffer"`
+				PinkHoodie               int `json:"pink hoodie"`
+				GreenCat                 int `json:"green cat"`
+				HolographicBoneSkelly    int `json:"holographic bone skelly"`
+				BlueTurtleneck           int `json:"blue turtleneck"`
+				HolographicCat           int `json:"holographic cat"`
+				Combo1Puffer             int `json:"combo 1 puffer"`
+				PinkBackpack             int `json:"pink backpack"`
+				HolographicHoodie        int `json:"holographic hoodie"`
+				HolographicAlien         int `json:"holographic alien"`
+				PinkPuffer               int `json:"pink puffer"`
+				YellowBackpack           int `json:"yellow backpack"`
+				Combo3Puffer             int `json:"combo 3 puffer"`
+				PurpleSweaterWithSatchel int `json:"purple sweater with satchel"`
+				WhiteSweater             int `json:"white sweater"`
+				StripedSweater           int `json:"striped sweater"`
+				Skelly                   int `json:"skelly"`
+				HolographicSweater       int `json:"holographic sweater"`
+			} `json:"body"`
+			Face struct {
+				ThreeDGlassesWithCig int `json:"3d glasses with cig"`
+				SatisfiedApe         int `json:"satisfied ape"`
+				ChillCig             int `json:"chill cig"`
+				Stellar              int `json:"stellar"`
+				Duck                 int `json:"duck"`
+				HolographicApe       int `json:"holographic ape"`
+				SadNote              int `json:"sad note"`
+				CatNote              int `json:"cat note"`
+				AviatorsWithMustache int `json:"aviators with mustache"`
+				HolographicVisor     int `json:"holographic visor"`
+				Skeleton             int `json:"skeleton"`
+				BlueBeard            int `json:"blue beard"`
+				HolographicDino      int `json:"holographic dino"`
+				Skelly               int `json:"skelly"`
+				PufferUp             int `json:"puffer up"`
+				Mustache             int `json:"mustache"`
+				MadNote              int `json:"mad note"`
+				GoldApe              int `json:"gold ape"`
+				Bandana              int `json:"bandana"`
+				Holographic          int `json:"holographic"`
+				InLove               int `json:"in love"`
+				Ape                  int `json:"ape"`
+				Shark                int `json:"shark"`
+				DevilCat             int `json:"devil cat"`
+				Cat                  int `json:"cat"`
+				HappyNote            int `json:"happy note"`
+				NeutralNote          int `json:"neutral note"`
+				Grumpy               int `json:"grumpy"`
+				Catnip               int `json:"catnip"`
+				Dino                 int `json:"dino"`
+				BlueCheck            int `json:"blue check"`
+				HolographicAlien     int `json:"holographic alien"`
+				RainbowPuke          int `json:"rainbow puke"`
+				Default              int `json:"default"`
+				PirateSkelly         int `json:"pirate skelly"`
+				DesignerGlasses      int `json:"designer glasses"`
+				AviatorsWithCig      int `json:"aviators with cig"`
+				Sunglasses           int `json:"sunglasses"`
+				PinkBeard            int `json:"pink beard"`
+				Whale                int `json:"whale"`
+				Surprised            int `json:"surprised"`
+				Six0SGlasses         int `json:"60s glasses"`
+				GoldAlien            int `json:"gold alien"`
+				SkellyCig            int `json:"skelly cig"`
+				HolographicBeard     int `json:"holographic beard"`
+				ThreeDGlasses        int `json:"3d glasses"`
+				Straw                int `json:"straw"`
+				Bubblegum            int `json:"bubblegum"`
+				PufferUpVisor        int `json:"puffer up visor"`
+				Alien                int `json:"alien"`
+				Content              int `json:"content"`
+				CobainGlasses        int `json:"cobain glasses"`
+				Mad                  int `json:"mad"`
+				Happy                int `json:"happy"`
+				GreenBeard           int `json:"green beard"`
+				HolographicCat       int `json:"holographic cat"`
+			} `json:"face"`
+			Background struct {
+				LightBlue        int `json:"light blue"`
+				DeeperSpace      int `json:"deeper space"`
+				DarkPurple       int `json:"dark purple"`
+				Sky              int `json:"sky"`
+				Yellow           int `json:"yellow"`
+				Gold             int `json:"gold"`
+				GradientSpace    int `json:"gradient space"`
+				BlueSpace        int `json:"blue space"`
+				GreenSpace       int `json:"green space"`
+				GreySpace        int `json:"grey space"`
+				Gradient4        int `json:"gradient 4"`
+				ReverseGradient1 int `json:"reverse gradient 1"`
+				Blue             int `json:"blue"`
+				Holographic      int `json:"holographic"`
+				DeepSpace        int `json:"deep space"`
+				HolographicSpace int `json:"holographic space"`
+				Bubblegum        int `json:"bubblegum"`
+				Gradient1        int `json:"gradient 1"`
+				Iridescent       int `json:"iridescent"`
+				Purple           int `json:"purple"`
+				Space            int `json:"space"`
+				Gradient3        int `json:"gradient 3"`
+				GoldSpace        int `json:"gold space"`
+				StarryPurple     int `json:"starry purple"`
+				Fire             int `json:"fire"`
+				Grey             int `json:"grey"`
+				Pink             int `json:"pink"`
+				PinkSpace        int `json:"pink space"`
+				Gradient2        int `json:"gradient 2"`
+				DarkGrey         int `json:"dark grey"`
+				Green            int `json:"green"`
+				StarryBlue       int `json:"starry blue"`
+				Orange           int `json:"orange"`
+			} `json:"background"`
+			Piercing struct {
+				Airpod int `json:"airpod"`
+				Pearl  int `json:"pearl"`
+				Hoop   int `json:"hoop"`
+			} `json:"piercing"`
+		} `json:"traits"`
+		Stats struct {
+			OneDayVolume          float64 `json:"one_day_volume"`
+			OneDayChange          float64 `json:"one_day_change"`
+			OneDaySales           int     `json:"one_day_sales"`
+			OneDayAveragePrice    float64 `json:"one_day_average_price"`
+			SevenDayVolume        float64 `json:"seven_day_volume"`
+			SevenDayChange        float64 `json:"seven_day_change"`
+			SevenDaySales         int     `json:"seven_day_sales"`
+			SevenDayAveragePrice  float64 `json:"seven_day_average_price"`
+			ThirtyDayVolume       float64 `json:"thirty_day_volume"`
+			ThirtyDayChange       int     `json:"thirty_day_change"`
+			ThirtyDaySales        int     `json:"thirty_day_sales"`
+			ThirtyDayAveragePrice float64 `json:"thirty_day_average_price"`
+			TotalVolume           float64 `json:"total_volume"`
+			TotalSales            int     `json:"total_sales"`
+			TotalSupply           int     `json:"total_supply"`
+			Count                 int     `json:"count"`
+			NumOwners             int     `json:"num_owners"`
+			AveragePrice          float64 `json:"average_price"`
+			NumReports            int     `json:"num_reports"`
+			MarketCap             float64 `json:"market_cap"`
+			FloorPrice            float64 `json:"floor_price"`
+		} `json:"stats"`
+		BannerImageURL          string      `json:"banner_image_url"`
+		ChatURL                 interface{} `json:"chat_url"`
+		CreatedDate             string      `json:"created_date"`
+		DefaultToFiat           bool        `json:"default_to_fiat"`
+		Description             string      `json:"description"`
+		DevBuyerFeeBasisPoints  string      `json:"dev_buyer_fee_basis_points"`
+		DevSellerFeeBasisPoints string      `json:"dev_seller_fee_basis_points"`
+		DiscordURL              string      `json:"discord_url"`
+		DisplayData             struct {
+			CardDisplayStyle string `json:"card_display_style"`
+		} `json:"display_data"`
+		ExternalURL                 string      `json:"external_url"`
+		Featured                    bool        `json:"featured"`
+		FeaturedImageURL            string      `json:"featured_image_url"`
+		Hidden                      bool        `json:"hidden"`
+		SafelistRequestStatus       string      `json:"safelist_request_status"`
+		ImageURL                    string      `json:"image_url"`
+		IsSubjectToWhitelist        bool        `json:"is_subject_to_whitelist"`
+		LargeImageURL               string      `json:"large_image_url"`
+		MediumUsername              interface{} `json:"medium_username"`
+		Name                        string      `json:"name"`
+		OnlyProxiedTransfers        bool        `json:"only_proxied_transfers"`
+		OpenseaBuyerFeeBasisPoints  string      `json:"opensea_buyer_fee_basis_points"`
+		OpenseaSellerFeeBasisPoints string      `json:"opensea_seller_fee_basis_points"`
+		PayoutAddress               string      `json:"payout_address"`
+		RequireEmail                bool        `json:"require_email"`
+		ShortDescription            interface{} `json:"short_description"`
+		Slug                        string      `json:"slug"`
+		TelegramURL                 interface{} `json:"telegram_url"`
+		TwitterUsername             string      `json:"twitter_username"`
+		InstagramUsername           interface{} `json:"instagram_username"`
+		WikiURL                     interface{} `json:"wiki_url"`
+	} `json:"collection"`
+}
+*/

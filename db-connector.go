@@ -3707,6 +3707,267 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 	return nil
 }
 
+func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
+	nameKey := "openseacollection"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	workflowExecution := &OpenseaAsset{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &workflowExecution)
+			if err == nil {
+				return workflowExecution, nil
+			} else {
+				log.Printf("[WARNING] Failed getting opensea collection: %s", err)
+			}
+		} else {
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return workflowExecution, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return workflowExecution, errors.New("Collection doesn't exist")
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflowExecution, err
+		}
+
+		wrapped := OpenseaAssetWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflowExecution, err
+		}
+
+		workflowExecution = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
+			return workflowExecution, err
+		}
+	}
+
+	if project.CacheDb {
+		newexecution, err := json.Marshal(workflowExecution)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling collection: %s", err)
+			return workflowExecution, nil
+		}
+
+		err = SetCache(ctx, id, newexecution)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating collection: %s", err)
+		}
+	}
+
+	return workflowExecution, nil
+}
+
+func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsset, error) {
+	index := "openseacollection"
+
+	var executions []OpenseaAsset
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		newCollection := strings.Replace(collectionName, "-", " ", -1)
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"collection.name": newCollection,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("Error encoding query: %s", err)
+			return executions, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get workflow assets): %s", err)
+			return executions, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return executions, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return executions, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return executions, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return executions, err
+		}
+
+		wrapped := OpenseaAssetSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return executions, err
+		}
+
+		executions = []OpenseaAsset{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.ID == 0 || len(hit.Source.Name) == 0 {
+				continue
+			}
+
+			newName := strings.ToLower(strings.Replace(strings.Replace(hit.Source.Collection.Name, "#", "", -1), " ", "-", -1))
+
+			if newName == strings.ToLower(collectionName) {
+				executions = append(executions, hit.Source)
+			} else {
+				log.Printf("[DEBUG] Skipping %#v vs. %#v", newName, collectionName)
+			}
+		}
+
+		return executions, nil
+	} else {
+		// FIXME: Sorting doesn't seem to work...
+		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
+		//log.Printf("[WARNING] Getting executions from datastore")
+		query := datastore.NewQuery(index).Limit(5)
+		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
+		max := 50
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := OpenseaAsset{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					//log.Printf("[WARNING] Error: %s", err)
+					break
+					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					//} else {
+					//	//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					//	break
+					//}
+				}
+
+				executions = append(executions, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			if len(executions) >= max {
+				break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[WARNING] Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
+			}
+		}
+
+		//log.Printf("Got %d executions", len(executions))
+		slice.Sort(executions[:], func(i, j int) bool {
+			return executions[i].Edited > executions[j].Edited
+		})
+	}
+
+	return executions, nil
+}
+
+func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, optionalEditedSecondsOffset ...int) error {
+	nameKey := "openseacollection"
+	timeNow := int64(time.Now().Unix())
+	collection.Edited = timeNow
+	if collection.Created == 0 {
+		collection.Created = timeNow
+	}
+
+	if len(optionalEditedSecondsOffset) > 0 {
+		collection.Edited += int64(optionalEditedSecondsOffset[0])
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(collection)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set collection: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &collection); err != nil {
+			log.Printf("[WARNING] Error adding workflow: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+		}
+	}
+
+	return nil
+}
+
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 	nameKey := "workflow"
 	timeNow := int64(time.Now().Unix())

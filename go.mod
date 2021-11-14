@@ -16,6 +16,7 @@ require (
 	github.com/google/go-querystring v1.0.0
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/satori/go.uuid v1.2.0
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9
 	golang.org/x/oauth2 v0.0.0-20210113160501-8b1d76fa0423
 	google.golang.org/api v0.36.0

@@ -6577,12 +6577,19 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	/*
 		// FIXME: Reenable activation?
 			if !userdata.Active {
-				log.Printf("%s is not active, but tried to login. Error: %v", data.Username, err)
+				log.Printf("[DEBUG] %s is not active, but tried to login. Error: %v", data.Username, err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "This user is deactivated"}`))
 				return
 			}
 	*/
+
+	if userdata.LoginType == "SSO" {
+		log.Printf(`[WARNING] Username %s (%s) has login type set to SSO (single sign-on).`, userdata.Username, userdata.Id)
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false, "reason": "This user can only log in with SSO"}`))
+		//return
+	}
 
 	if userdata.MFA.Active && len(data.MFACode) == 0 {
 		log.Printf(`[DEBUG] Username %s (%s) has MFA activated. Redirecting.`, userdata.Username, userdata.Id)
