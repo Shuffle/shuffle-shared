@@ -2806,6 +2806,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 			envName = "Shuffle"
 		}
 
+		//log.Printf("[DEBUG] Got %d apps. Err: %s", len(workflowapps), err)
 		if err == nil {
 			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 			if err == nil {
@@ -2818,7 +2819,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			for _, item := range workflowapps {
-				if item.Name == "Shuffle-Tools" && item.AppVersion == "1.1.0" {
+				//log.Printf("NAME: %s", item.Name)
+				if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.1.0" {
 					//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
 					nodeId := uuid.NewV4().String()
 					workflow.Start = nodeId
@@ -2828,9 +2830,10 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 						Environment: envName,
 						Parameters: []WorkflowAppActionParameter{
 							WorkflowAppActionParameter{
-								Name:    "call",
-								Value:   "Hello world",
-								Example: "Repeating: Hello World",
+								Name:      "call",
+								Value:     "Hello world",
+								Example:   "Repeating: Hello World",
+								Multiline: true,
 							},
 						},
 						Position: struct {
