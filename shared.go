@@ -1482,7 +1482,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 		total += cnt
 	}
 
-	log.Printf("[DEBUG] Total stopped %d executions for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	log.Printf("[DEBUG] Stopped %d executions in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
 	//resp.Write(newjson)
 }
@@ -1558,7 +1558,9 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		total += cnt
 	}
 
-	log.Printf("[DEBUG] Total stopped %d executions for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	if total > 0 {
+		log.Printf("[DEBUG] Stopped %d executions in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	}
 	resp.WriteHeader(200)
 	//resp.Write(newjson)
 }
@@ -1574,14 +1576,13 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 		return 0, nil
 	}
 
-	log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
+	//log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
 	//log.Printf("[DEBUG] Found %d unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
 
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		backendUrl = "https://shuffler.io"
-	}
-	if len(backendUrl) == 0 {
+	} else {
 		backendUrl = "http://127.0.0.1:5001"
 	}
 
@@ -1646,7 +1647,7 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 		req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, execution.Authorization))
 		newresp, err := topClient.Do(req)
 		if err != nil {
-			log.Printf("[ERROR] Error auto-aborting workflow: %s", err)
+			log.Printf("[ERROR] Error auto-running workflow: %s", err)
 			continue
 		}
 
@@ -1680,14 +1681,14 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 		return 0, nil
 	}
 
-	log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
+	//log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
 	//log.Printf("[DEBUG] Found %d unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
 
 	backendUrl := os.Getenv("BASE_URL")
+	// Redundant, but working ;)
 	if project.Environment == "cloud" {
 		backendUrl = "https://shuffler.io"
-	}
-	if len(backendUrl) == 0 {
+	} else {
 		backendUrl = "http://127.0.0.1:5001"
 	}
 
@@ -1731,7 +1732,7 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 
 		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
 
-		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort", backendUrl, execution.Workflow.ID, execution.ExecutionId)
+		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=Cleanup-crew stopped this execution (runs every hour)", backendUrl, execution.Workflow.ID, execution.ExecutionId)
 		req, err := http.NewRequest(
 			"GET",
 			streamUrl,
