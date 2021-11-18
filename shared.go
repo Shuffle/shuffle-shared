@@ -5581,10 +5581,37 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(parentOrg.ManagerOrgs) > 0 {
+		log.Printf("[WARNING] Organization %s can't have suborgs, as it's as suborg: %s", tmpData.OrgId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Can't make suborg of suborg."}`))
+		return
+	}
+
+	if project.Environment == "cloud" {
+		if !parentOrg.SyncFeatures.MultiTenant.Active {
+			log.Printf("[WARNING] Org %s is not allowed to make a sub-organization: %s", tmpData.OrgId, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription with access to multi-tenancy. Contact support to try it out."}`))
+			return
+		}
+
+		if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit || len(parentOrg.ChildOrgs) > int(parentOrg.SyncFeatures.MultiTenant.Limit) {
+			log.Printf("[WARNING] Org %s is not allowed to make ANOTHER sub-organization. Limit reached!: %s", tmpData.OrgId, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Your limit of sub-organizations has been reached. Contact support to increase."}`))
+			return
+		}
+
+		parentOrg.SyncUsage.MultiTenant.Counter += 1
+		log.Printf("[DEBUG] Allowing suborg for %s because they have %d vs %d limit", parentOrg.Id, len(parentOrg.ChildOrgs), parentOrg.SyncFeatures.MultiTenant.Limit)
+	}
+
 	orgId := uuid.NewV4().String()
 	newOrg := Org{
 		Name:        tmpData.Name,
 		Description: fmt.Sprintf("Sub-org by user %s in parent-org %s", user.Username, parentOrg.Name),
+		Image:       parentOrg.Image,
 		Id:          orgId,
 		Org:         tmpData.Name,
 		Users: []User{

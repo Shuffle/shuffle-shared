@@ -519,6 +519,7 @@ type OrgMini struct {
 	Role       string     `json:"role" datastore:"role"`
 	CreatorOrg string     `json:"creator_org" datastore:"creator_org"`
 	Image      string     `json:"image" datastore:"image,noindex"`
+	ChildOrgs  []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
 }
 
 type Org struct {
@@ -545,6 +546,7 @@ type Org struct {
 	ManagerOrgs     []OrgMini             `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
 	CreatorOrg      string                `json:"creator_org" datastore:"creator_org"`
 	SSOConfig       SSOConfig             `json:"sso_config" datastore:"sso_config"`
+	Disabled        bool                  `json:"disabled" datastore:"disabled"`
 }
 
 type Defaults struct {
@@ -599,6 +601,7 @@ type SyncUsage struct {
 	Schedule           SyncDataUsage `json:"schedule" datastore:"schedule"`
 	AppExecutions      SyncDataUsage `json:"app_executions" datastore:"app_executions"`
 	Workflows          SyncDataUsage `json:"workflows" datastore:"workflows"`
+	MultiTenant        SyncDataUsage `json:"multi_tenant" datastore:"multi_tenant"`
 }
 
 type SyncDataUsage struct {
