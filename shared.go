@@ -1653,18 +1653,18 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 
 		body, err := ioutil.ReadAll(newresp.Body)
 		if err != nil {
-			log.Printf("[ERROR] Failed reading parent body: %s", err)
+			log.Printf("[ERROR] Failed reading parent body (rerun exec): %s", err)
 			continue
 		}
 		//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
 
 		if newresp.StatusCode != 200 {
-			log.Printf("[ERROR] Bad statuscode in abort: %d, %s", newresp.StatusCode, string(body))
+			log.Printf("[ERROR] Bad statuscode in rerun exec: %d, %s", newresp.StatusCode, string(body))
 			continue
 		}
 
 		cnt += 1
-		log.Printf("[DEBUG] Result from aborting %s: %s", execution.ExecutionId, string(body))
+		log.Printf("[DEBUG] Result from rerunning %s: %s", execution.ExecutionId, string(body))
 	}
 
 	return cnt, nil
@@ -8824,7 +8824,7 @@ func HandleKeyDecryption(data string, passphrase string) (string, error) {
 
 	parsedData, err := base64.StdEncoding.DecodeString(data)
 	if err != nil {
-		log.Printf("[ERROR] Failed base64 decode for an auth key: %s", err)
+		log.Printf("[ERROR] Failed base64 decode for an auth key %s: %s", data, err)
 		return "", err
 	}
 
@@ -10686,8 +10686,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if !found {
-			log.Printf("[ERROR] Couldn't find environment %s. Maybe it's inactive?", action.Environment)
-			return WorkflowExecution{}, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env %s in org %s", action.Environment, workflowExecution.ExecutionOrg))
+			if action.Environment == "cloud" && project.Environment == "cloud" {
+				log.Printf("[DEBUG] Couldn't find environment cloud in cloud for some reason.")
+			} else {
+				log.Printf("[ERROR] Couldn't find environment %s. Maybe it's inactive?", action.Environment)
+				return WorkflowExecution{}, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env %s in org %s", action.Environment, workflowExecution.ExecutionOrg))
+			}
 		}
 
 		found = false
