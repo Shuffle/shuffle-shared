@@ -665,6 +665,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			//log.Printf("CACHEDATA: %#v", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
+				//log.Printf("[DEBUG] Returned execution %s", id)
 				return workflowExecution, nil
 			} else {
 				log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
@@ -5366,6 +5367,22 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 					//	//log.Printf("[WARNING] Workflow iterator issue: %s", err)
 					//	break
 					//}
+				}
+
+				//log.Printf("[DEBUG] Appending %s", innerWorkflow.ExecutionId)
+
+				// Partly scalable due to caching of the values being fetched
+				for valueIndex, value := range innerWorkflow.Results {
+					if strings.Contains(value.Result, "Result too large to handle") {
+						//log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
+						newValue, err := getExecutionFileValue(ctx, innerWorkflow, value)
+						if err != nil {
+							log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
+							continue
+						}
+
+						innerWorkflow.Results[valueIndex].Result = newValue
+					}
 				}
 
 				executions = append(executions, innerWorkflow)

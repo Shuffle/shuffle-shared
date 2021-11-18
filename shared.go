@@ -2221,7 +2221,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	newWorkflows := []Workflow{}
 	for _, workflow := range workflows {
 		if workflow.OrgId != user.ActiveOrg.Id {
-			log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
+			//log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
 			continue
 		}
 
@@ -3115,7 +3115,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Resetting subflows as they shouldn't be entirely saved. Used just for imports/exports
-	log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
+	if len(workflow.Subflows) > 0 {
+		log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
+	}
 
 	workflow.Subflows = []Workflow{}
 	if len(workflow.DefaultReturnValue) > 0 && len(workflow.DefaultReturnValue) < 200 {
@@ -7734,7 +7736,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		err = json.Unmarshal([]byte(actionResult.Result), &resultCheck)
 		if err == nil {
 			//log.Printf("Unmarshal success!")
-			if resultCheck.Success == false {
+			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") {
 				err = createOrgNotification(
 					ctx,
 					fmt.Sprintf("Potential error in Workflow %#v", workflowExecution.Workflow.Name),
@@ -8059,8 +8061,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						baseResult := fmt.Sprintf(`{
 							"success": False,
 							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171)."
-							"size": %d
-						}`, itemSize)
+							"size": %d,
+							"extra": "",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
 						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
 						log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
@@ -8086,8 +8090,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							"success": False,
 							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
 							"size": %d,
-							"extra": "replace"
-						}`, itemSize)
+							"extra": "replace",
+							"id": "%s_%s"
+						}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 						// Setting an arbitrary decisionpoint to get it
 						// Backend will use this ID + action ID to get the data back
 						//item.Result = fmt.Sprintf("EXECUTION=%s", workflowExecution.ExecutionId)
