@@ -241,6 +241,7 @@ func HandleGetCollection(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
+		log.Printf("[DEBUG] Running grab of assets due to them not existing")
 		runLoadCollections(ctx, topClient)
 
 		returnAssets, err = GetOpenseaAssets(ctx, collectionName)

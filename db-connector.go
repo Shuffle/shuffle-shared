@@ -3866,62 +3866,17 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
 		//log.Printf("[WARNING] Getting executions from datastore")
-		query := datastore.NewQuery(index).Limit(5)
-		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
-		max := 50
-		cursorStr := ""
-		for {
-			it := project.Dbclient.Run(ctx, query)
-
-			for {
-				innerWorkflow := OpenseaAsset{}
-				_, err := it.Next(&innerWorkflow)
-				if err != nil {
-					//log.Printf("[WARNING] Error: %s", err)
-					break
-					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					//} else {
-					//	//log.Printf("[WARNING] Workflow iterator issue: %s", err)
-					//	break
-					//}
-				}
-
-				executions = append(executions, innerWorkflow)
-			}
-
-			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching results: %v", err)
-				//break
-			}
-
-			if len(executions) >= max {
-				break
-			}
-
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("[WARNING] Cursorerror: %s", err)
-				break
-			} else {
-				//log.Printf("NEXTCURSOR: %s", nextCursor)
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					break
-				}
-
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
-				//cursorStr = nextCursor
-				//break
-			}
+		q := datastore.NewQuery(index).Limit(24)
+		_, err = project.Dbclient.GetAll(ctx, q, &executions)
+		if err != nil {
+			log.Printf("[WARNING] Error getting opensea items: %s", err)
+			return executions, err
 		}
-
-		//log.Printf("Got %d executions", len(executions))
-		slice.Sort(executions[:], func(i, j int) bool {
-			return executions[i].Edited > executions[j].Edited
-		})
 	}
+
+	slice.Sort(executions[:], func(i, j int) bool {
+		return executions[i].Edited > executions[j].Edited
+	})
 
 	return executions, nil
 }
