@@ -870,6 +870,7 @@ func makeOutlookSubscription(client *http.Client, folderIds []string, notificati
 	t := time.Now().Local().Add(time.Minute * time.Duration(4200))
 	timeFormat := fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d.0000000Z", t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
 
+	//resource := fmt.Sprintf("me/mailfolders('%s')/messages", strings.Join(folderIds, "','"))
 	resource := fmt.Sprintf("me/mailfolders('%s')/messages", strings.Join(folderIds, "','"))
 	log.Printf("[INFO] Subscription resource to get(s): %s with time %s", resource, timeFormat)
 	sub := OutlookSubscription{
