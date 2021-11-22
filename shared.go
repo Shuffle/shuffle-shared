@@ -1072,7 +1072,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	app, err := GetApp(ctx, appAuth.App.ID, user)
+	app, err := GetApp(ctx, appAuth.App.ID, user, false)
 	if err != nil {
 		log.Printf("[DEBUG] Failed finding app %s (%s) while setting auth. Finding it by looping apps.", appAuth.App.Name, appAuth.App.ID)
 		workflowapps, err := GetPrioritizedApps(ctx, user)
@@ -3287,7 +3287,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					appid, err := handleAlgoliaAppSearch(ctx, action.AppName)
 					if err == nil && len(appid) > 0 {
 						//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
-						tmpApp, err := GetApp(ctx, appid, user)
+						tmpApp, err := GetApp(ctx, appid, user, false)
 						if err == nil {
 							handled = true
 							action.AppID = tmpApp.ID
@@ -3742,7 +3742,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 							if item.Version == action.AppVersion {
 								//log.Printf("Should get app %s - %s", item.Version, item.ID)
 
-								tmpApp, err := GetApp(ctx, item.ID, user)
+								tmpApp, err := GetApp(ctx, item.ID, user, false)
 								if err != nil && tmpApp.ID == "" {
 									log.Printf("[WARNING] Failed getting app %s (%s): %s", app.Name, item.ID, err)
 								}
@@ -4907,7 +4907,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	app, err := GetApp(ctx, fileId, user)
+	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app (update app): %s", fileId)
 		resp.WriteHeader(401)
@@ -5062,7 +5062,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	app, err := GetApp(ctx, fileId, user)
+	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app %s: %s", app.Name, err)
 		resp.WriteHeader(401)
@@ -6398,7 +6398,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	app, err := GetApp(ctx, fileId, User{})
+	app, err := GetApp(ctx, fileId, User{}, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
 		resp.WriteHeader(401)
@@ -8186,7 +8186,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	app, err := GetApp(ctx, fileId, user)
+	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
 		appName := request.URL.Query().Get("app_name")
 		appVersion := request.URL.Query().Get("app_version")
@@ -9193,7 +9193,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		action.ID = uuid.NewV4().String()
 	}
 
-	app, err := GetApp(ctx, fileId, user)
+	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app (execute SINGLE workflow): %s", fileId)
 		return workflowExecution, err
