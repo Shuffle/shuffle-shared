@@ -999,6 +999,13 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to set new workflowapp: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	log.Printf("[AUDIT] Setting new authentication for user %s (%s)", user.Username, user.Id)
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -2586,10 +2593,11 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
-		Role     string  `json:"role"`
-		Username string  `json:"username"`
-		UserId   string  `json:"user_id"`
-		EthInfo  EthInfo `json:"eth_info"`
+		Role     string   `json:"role"`
+		Username string   `json:"username"`
+		UserId   string   `json:"user_id"`
+		EthInfo  EthInfo  `json:"eth_info"`
+		Suborgs  []string `json:"suborgs"`
 	}
 
 	ctx := getContext(request)
@@ -2635,10 +2643,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if t.Role != "admin" && t.Role != "user" && t.Role != "" {
+	if t.Role != "admin" && t.Role != "user" && t.Role != "org-reader" {
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to role user and admin"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to roles user and admin"}`)))
 		return
 	} else {
 		// Same user - can't edit yourself?
@@ -2648,8 +2656,8 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("[INFO] Updated user %s from %s to %s", foundUser.Username, foundUser.Role, t.Role)
 		if len(t.Role) > 0 {
+			log.Printf("[INFO] Updated user %s from %s to %#v. If role is empty, not updating", foundUser.Username, foundUser.Role, t.Role)
 			foundUser.Role = t.Role
 			foundUser.Roles = []string{t.Role}
 		}
@@ -2687,6 +2695,124 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	if len(t.EthInfo.Account) > 0 {
 		log.Printf("[DEBUG] Should set ethinfo to %#v", t.EthInfo)
 		foundUser.EthInfo = t.EthInfo
+	}
+
+	if len(t.Suborgs) > 0 && foundUser.Id != userInfo.Id {
+		log.Printf("[DEBUG] Got suborg change: %#v", t.Suborgs)
+		// 1. Check if current users' active org is admin in same parent org as user
+		// 2. Make sure the user should have access to suborg
+		// 3. Make sure it's ONLY changing orgs based on parent org
+		addedOrgs := []string{}
+		for _, suborg := range t.Suborgs {
+			if suborg == "REMOVE" {
+				continue
+			}
+
+			if ArrayContains(foundUser.Orgs, suborg) {
+				log.Printf("[DEBUG] Skipping %s as it already exists", suborg)
+				continue
+			}
+
+			if !ArrayContains(userInfo.Orgs, suborg) {
+				log.Printf("[ERROR] Skipping org %s as user %s (%s) can't edit this one. Should never happen unless direct API usage.", suborg, userInfo.Username, userInfo.Id)
+				continue
+			}
+
+			foundOrg, err := GetOrg(ctx, suborg)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get suborg in user edit for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+				continue
+			}
+
+			// Slower but easier :)
+			parsedOrgs := []string{}
+			for _, item := range foundOrg.ManagerOrgs {
+				parsedOrgs = append(parsedOrgs, item.Id)
+			}
+
+			if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
+				log.Printf("[ERROR] The Org %s SHOULD NOT BE ADDED for %s (%s): %s. This may indicate a test of the API, as the frontend shouldn't allow it.", suborg, foundUser.Username, foundUser.Id, err)
+				continue
+			}
+
+			addedOrgs = append(addedOrgs, suborg)
+		}
+
+		// After done, check if ANY of the users' orgs are suborgs of active parent org. If they are, remove.
+		// Update: This piece runs anyway, in case the job is to REMOVE any suborg
+		//if len(addedOrgs) > 0 {
+		log.Printf("orgs to be added: %#v", addedOrgs)
+		newUserOrgs := []string{}
+		for _, suborg := range foundUser.Orgs {
+			if suborg == userInfo.ActiveOrg.Id {
+				newUserOrgs = append(newUserOrgs, suborg)
+				continue
+			}
+
+			foundOrg, err := GetOrg(ctx, suborg)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get suborg in user edit (2) for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+				newUserOrgs = append(newUserOrgs, suborg)
+				continue
+			}
+
+			// Slower but easier :)
+			parsedOrgs := []string{}
+			for _, item := range foundOrg.ManagerOrgs {
+				parsedOrgs = append(parsedOrgs, item.Id)
+			}
+
+			if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
+				log.Printf("[DEBUG] Reappending org %s", suborg)
+				newUserOrgs = append(newUserOrgs, suborg)
+				continue
+			}
+
+			log.Printf("[DEBUG] Should remove user %s (%s) from org %s if it doesn't exist in t.Suborgs", foundUser.Username, foundUser.Id, suborg)
+			newUsers := []User{}
+			for _, user := range foundOrg.Users {
+				if user.Id == foundUser.Id {
+					continue
+				}
+
+				newUsers = append(newUsers, user)
+			}
+
+			foundOrg.Users = newUsers
+			err = SetOrg(ctx, *foundOrg, foundOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org when changing user access: %s", err)
+			}
+
+		}
+
+		foundUser.Orgs = append(newUserOrgs, addedOrgs...)
+		log.Printf("[DEBUG] New orgs for %s (%s) is %#v", foundUser.Username, foundUser.Id, foundUser.Orgs)
+		/*
+			for _, suborg := range addedOrgs {
+				foundOrg, err := GetOrg(ctx, suborg)
+				if err != nil {
+					continue
+				}
+
+				found := false
+				for _, user := range foundOrg.Users {
+					if user.Id == foundUser.Id {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					// FIXME: Use the same roles as in parent
+					foundOrg.Users = append(foundorg.Users, UserMini{
+						Username: foundUser.Username,
+						Id:       foundUser.Id,
+						Role:     foundUser.Role,
+					})
+				}
+			}
+		*/
 	}
 
 	err = SetUser(ctx, foundUser, true)
@@ -2733,6 +2859,13 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Api authentication failed in set new workflow: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to set new workflow: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
@@ -2990,6 +3123,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Api authentication failed in save workflow: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to save workflow (2): %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
@@ -4345,8 +4485,38 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		item.Orgs = []string{}
 		item.EthInfo = EthInfo{}
 
-		//if item.Username != user.Username && item.Admin {
-		//}
+		// Will get from cache 2nd time so this is fine.
+		if user.Id == item.Id {
+			item.Orgs = user.Orgs
+		} else {
+			foundUser, err := GetUser(ctx, item.Id)
+			if err == nil {
+				// Only add IF the admin querying it has access, meaning only show what you yourself have access to
+				allOrgs := []string{}
+				for _, orgname := range foundUser.Orgs {
+					found := false
+
+					for _, userOrg := range user.Orgs {
+						if userOrg == orgname {
+							found = true
+							break
+						}
+					}
+
+					if found {
+						allOrgs = append(allOrgs, orgname)
+					}
+				}
+
+				//log.Printf("[DEBUG] Added %d org(s) for user %s (%s) - get users", len(allOrgs), foundUser.Username, foundUser.Id)
+
+				item.Orgs = allOrgs
+			}
+		}
+
+		if len(item.Orgs) == 0 {
+			item.Orgs = append(item.Orgs, user.ActiveOrg.Id)
+		}
 
 		newUsers = append(newUsers, item)
 	}
@@ -4737,7 +4907,8 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// FIXME - add org check too, and not just owner
 	// Check workflow.Sharing == private / public / org  too
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+		// Added org-reader as the user should be able to read everything in an org
+		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
@@ -4894,6 +5065,13 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to edit apps")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
 	if location[1] == "api" {
@@ -5046,6 +5224,13 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Api authentication failed in delete app: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to delete apps: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
@@ -5378,6 +5563,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
+// Used for swapping your own organization to a new one IF it's eligible
 func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -5627,7 +5813,9 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 				Name: parentOrg.Name,
 			},
 		},
-		CreatorOrg: tmpData.OrgId,
+		SyncFeatures:    parentOrg.SyncFeatures,
+		CloudSyncActive: parentOrg.CloudSyncActive,
+		CreatorOrg:      tmpData.OrgId,
 	}
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
@@ -6127,6 +6315,13 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to make new hook: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	type requestData struct {
 		Type        string `json:"type"`
 		Description string `json:"description"`
@@ -6275,6 +6470,13 @@ func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Api authentication failed in delete hook: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to delete hook: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
@@ -8322,11 +8524,18 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just here to verify that the user is logged in
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("Api authentication failed in validate swagger: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to validate swagger (shared): %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 

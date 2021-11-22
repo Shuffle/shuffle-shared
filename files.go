@@ -288,6 +288,13 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to delete files: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	// 1. Verify if the user has access to the file: org_id and workflow
 	log.Printf("[INFO] Should DELETE file %s if user has access", fileId)
 	ctx := getContext(request)
@@ -702,6 +709,13 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to upload file: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
 	ctx := getContext(request)
 	file, err := GetFile(ctx, fileId)
@@ -863,6 +877,13 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 
 		user.ActiveOrg.Id = orgId
 		user.Username = "Execution File API"
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to edit files: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
 	}
 
 	body, err := ioutil.ReadAll(request.Body)

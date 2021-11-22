@@ -283,7 +283,7 @@ type MFAInfo struct {
 type User struct {
 	Username          string        `datastore:"Username" json:"username"`
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
-	Session           string        `datastore:"session,noindex" json:"session"`
+	Session           string        `datastore:"session,noindex" json:"session,omitempty"`
 	Verified          bool          `datastore:"verified,noindex" json:"verified"`
 	SupportAccess     bool          `datastore:"support_access" json:"support_access"`
 	PrivateApps       []WorkflowApp `datastore:"privateapps" json:"privateapps":`
@@ -293,7 +293,7 @@ type User struct {
 	ApiKey            string        `datastore:"apikey" json:"apikey"`
 	ResetReference    string        `datastore:"reset_reference" json:"reset_reference"`
 	Executions        ExecutionInfo `datastore:"executions" json:"executions"`
-	Limits            UserLimits    `datastore:"limits" json:"limits"`
+	Limits            UserLimits    `datastore:"limits" json:"limits,omitempty"`
 	MFA               MFAInfo       `datastore:"mfa_info,noindex" json:"mfa_info"`
 	Authentication    []UserAuth    `datastore:"authentication,noindex" json:"authentication"`
 	ResetTimeout      int64         `datastore:"reset_timeout,noindex" json:"reset_timeout"`
@@ -535,7 +535,7 @@ type Org struct {
 	CloudSync       bool                  `json:"cloud_sync" datastore:"CloudSync"`
 	CloudSyncActive bool                  `json:"cloud_sync_active" datastore:"CloudSyncActive"`
 	SyncConfig      SyncConfig            `json:"sync_config" datastore:"sync_config"`
-	SyncFeatures    SyncFeatures          `json:"sync_features" datastore:"sync_features"`
+	SyncFeatures    SyncFeatures          `json:"sync_features,omitempty" datastore:"sync_features"`
 	Subscriptions   []PaymentSubscription `json:"subscriptions" datastore:"subscriptions"`
 	SyncUsage       SyncUsage             `json:"sync_usage" datastore:"sync_usage"`
 	Created         int64                 `json:"created" datastore:"created"`

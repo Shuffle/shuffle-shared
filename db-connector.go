@@ -1201,6 +1201,11 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	var workflows []Workflow
 	limit := 30
 
+	if user.Role == "org-reader" {
+		log.Printf("[DEBUG] Giving org-reader %s (%s) access to all workflows in their active org.", user.Username, user.Id)
+		user.Role = "admin"
+	}
+
 	// Appending the users' workflows
 	nameKey := "workflow"
 	log.Printf("[AUDIT] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
@@ -3156,7 +3161,7 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 
 	for appIndex, loopedApp := range allApps {
 		if strings.ToLower(loopedApp.Name) == "shuffle tools" {
-			log.Printf("%s vs %s - %s vs %s", loopedApp.Name, innerApp.Name, loopedApp.AppVersion, innerApp.AppVersion)
+			//log.Printf("%s vs %s - %s vs %s", loopedApp.Name, innerApp.Name, loopedApp.AppVersion, innerApp.AppVersion)
 		}
 		if loopedApp.Name == innerApp.Name {
 

@@ -320,6 +320,13 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to register gmail: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	code := request.URL.Query().Get("code")
 	if len(code) == 0 {
 		log.Println("No code")
@@ -497,6 +504,13 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Api authentication failed in getting specific trigger: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to register outlook: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
@@ -1159,6 +1173,13 @@ func HandleDeleteGmailSub(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access delete gmail sub: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 			log.Printf("[INFO] User %s is accessing %s as admin (delete gmail sub)", user.Username, workflow.ID)
@@ -1242,9 +1263,16 @@ func HandleDeleteOutlookSub(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in outlook deploy: %s", err)
+		log.Printf("[WARNING] Api authentication failed in outlook delete: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to delete outlook (shared): %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
@@ -1310,6 +1338,13 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("Api authentication failed in outlook deploy: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to create outlook sub (shared): %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
@@ -1584,6 +1619,13 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Api authentication failed in gmail deploy: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access create gmail sub: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
 
