@@ -2643,10 +2643,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if t.Role != "admin" && t.Role != "user" && t.Role != "org-reader" {
+	if len(t.Role) > 0 && (t.Role != "admin" && t.Role != "user" && t.Role != "org-reader") {
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to roles user and admin"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to roles user, admin and org-reader"}`)))
 		return
 	} else {
 		// Same user - can't edit yourself?
@@ -4375,7 +4375,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Handling post for APIKEY gen FROM user %s. Userchange: %s!", userInfo.Username, t.UserId)
 
 		if userInfo.Role != "admin" {
-			log.Printf("[AUDIT] %s tried and failed to change apikey for %s", userInfo.Username, t.UserId)
+			log.Printf("[AUDIT] %s tried and failed to change apikey for %s (2)", userInfo.Username, t.UserId)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change others' apikey"}`)))
 			return
