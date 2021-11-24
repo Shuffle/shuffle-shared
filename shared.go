@@ -2118,8 +2118,8 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME - have a check for org etc too..
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[AUDIT] User %s is accessing %s executions as admin (get executions)", user.Username, workflow.ID)
+		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+			log.Printf("[AUDIT] User %s is accessing %s executions as %s (get executions)", user.Username, workflow.ID, user.Role)
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
 			resp.WriteHeader(401)

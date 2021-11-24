@@ -409,6 +409,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("ExecutionId can't be empty.")
 	}
 
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
+
 	/*
 	   for valueIndex, value := range workflowExecution.Results {
 	   			if strings.Contains(value.Result, "Result too large to handle") {
@@ -593,7 +595,7 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 		return err
 	}
 
-	log.Printf("[INFO] Successfully set cache for execution variables %s. Extra: %d\n\n", cacheKey, extra)
+	//log.Printf("[INFO] Successfully set cache for execution variables %s. Extra: %d\n\n", cacheKey, extra)
 	return nil
 }
 
@@ -5153,7 +5155,26 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 
 func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {
 	index := "workflowexecution"
+
+	cacheKey := fmt.Sprintf("%s_%s", index, workflowId)
 	var executions []WorkflowExecution
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &executions)
+			if err == nil {
+				log.Printf("[DEBUG] Returned %d executions for workflow %s", len(executions), workflowId)
+				return executions, nil
+			} else {
+				log.Printf("[WARNING] Failed getting workflowexecutions for %s: %s", workflowId, err)
+			}
+		} else {
+			log.Printf("[WARNING] Failed getting execution cache for workflow %s", workflowId)
+		}
+	}
+
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -5170,7 +5191,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 			},
 		}
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
-			log.Printf("Error encoding query: %s", err)
+			log.Printf("[WARNING] Error encoding executions query: %s", err)
 			return executions, err
 		}
 
@@ -5227,7 +5248,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 			executions = append(executions, hit.Source)
 		}
 
-		return executions, nil
+		//return executions, nil
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
@@ -5303,6 +5324,20 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 		slice.Sort(executions[:], func(i, j int) bool {
 			return executions[i].StartedAt > executions[j].StartedAt
 		})
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(executions)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling update execution cache: %s", err)
+			return executions, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache executions (%s): %s", workflowId, err)
+			return executions, nil
+		}
 	}
 
 	return executions, nil
@@ -5479,6 +5514,7 @@ func SetSchedule(ctx context.Context, schedule ScheduleOld) error {
 			log.Printf("[WARNING] Failed marshalling in setschedule: %s", err)
 			return nil
 		}
+
 		err = indexEs(ctx, nameKey, strings.ToLower(schedule.Id), data)
 		if err != nil {
 			return err
