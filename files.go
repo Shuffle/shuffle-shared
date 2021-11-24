@@ -923,7 +923,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	if user.ActiveOrg.Id != curfile.OrgId {
 		log.Printf("[ERROR] User can't access org %s", curfile.OrgId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Error with organization"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Not allowed to access this organization ID"}`))
 		return
 	}
 

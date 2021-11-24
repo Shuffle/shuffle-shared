@@ -191,6 +191,7 @@ type AppExecutionExample struct {
 
 type SchemaDefinition struct {
 	Type string `json:"type" datastore:"type"`
+	Name string `json:"name,omitempty" datastore:"name"`
 }
 
 type Userapi struct {
@@ -1002,6 +1003,7 @@ type AlgoliaSearchApp struct {
 	Generated    bool     `json:"generated"`
 	Invalid      bool     `json:"invalid"`
 	Creator      string   `json:"creator"`
+	AppVersion   string   `json:"app_version"`
 }
 
 type ExecutionStruct struct {

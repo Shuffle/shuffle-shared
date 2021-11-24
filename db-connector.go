@@ -741,7 +741,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (WorkflowApp, error) {
 	internalBucket := "shuffler.appspot.com"
 	fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", id)
-	log.Printf("[DEBUG] Couldn't find working app for %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
+	log.Printf("[DEBUG] Couldn't find working app for app with ID %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
 	//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
 
 	client, err := storage.NewClient(ctx)
@@ -2849,9 +2849,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	maxLen := 100
+	maxLen := 200
+	queryLimit := 50
 	cursorStr := ""
-	limit := 100
 	allApps = user.PrivateApps
 	org, orgErr := GetOrg(ctx, user.ActiveOrg.Id)
 	if len(user.PrivateApps) > 0 {
@@ -2881,7 +2881,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		log.Printf("[WARNING] Failed to create client (storage - prioritizedapps): %s", err)
 	}
 
-	query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(limit)
+	query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
 	for {
 		it := project.Dbclient.Run(ctx, query)
 
@@ -2972,7 +2972,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	if len(publicApps) == 0 {
-		query = datastore.NewQuery(nameKey).Filter("public =", true).Limit(limit)
+		query = datastore.NewQuery(nameKey).Filter("public =", true).Limit(queryLimit)
 		for {
 			it := project.Dbclient.Run(ctx, query)
 
@@ -3063,8 +3063,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	allApps = append(allApps, publicApps...)
 
+	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	if orgErr == nil && len(org.ActiveApps) > 0 {
-		//log.Printf("[INFO] Should append ORG APPS: %#v", org.ActiveApps)
+		log.Printf("[INFO] Should append ORG APPS: %#v", org.ActiveApps)
 
 		allKeys := []*datastore.Key{}
 		for _, appId := range org.ActiveApps {
@@ -3086,15 +3087,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		if err != nil {
 			log.Printf("[DEBUG] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
 		}
+		log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
 
 		// IF the app doesn't have actions, check OpenAPI
 		// 1. Get the app directly
 		// 2. Parse OpenAPI for it to get the actions
 		for appIndex, app := range newApps {
-			//if strings.ToLower(loopedApp.Name) == "thehive" {
-			//	log.Printf("%s:%s", loopedApp.Name, loopedApp.AppVersion)
-			//}
-
 			if len(app.Actions) == 0 && len(app.Name) > 0 {
 				log.Printf("[WARNING] %s has %d actions (%s). Getting directly.", app.Name, len(app.Actions), app.ID)
 

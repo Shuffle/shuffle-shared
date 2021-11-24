@@ -8375,6 +8375,13 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to activate workflow app (shared): %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
 	ctx := getContext(request)
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
@@ -8392,6 +8399,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		appName := request.URL.Query().Get("app_name")
 		appVersion := request.URL.Query().Get("app_version")
+
 		if len(appName) > 0 && len(appVersion) > 0 {
 			apps, err := FindWorkflowAppByName(ctx, appName)
 			//log.Printf("[INFO] Found %d apps for %s", len(apps), appName)
@@ -8452,6 +8460,8 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s", app.Name, app.ID, user.ActiveOrg.Id, user.Username)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
