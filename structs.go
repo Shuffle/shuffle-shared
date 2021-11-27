@@ -2478,6 +2478,25 @@ type OrborusExecutionRequest struct {
 }
 
 type OpenseaAsset struct {
+	Name              string `json:"name" datastore:"name"`
+	Collection        string `json:"collection" datastore:"collection"`
+	CollectionURL     string `json:"collection_url" datastore:"collection_url"`
+	Image             string `json:"image" datastore:"image"`
+	Asset             string `json:"asset" datastore:"asset"`
+	AssetLink         string `json:"asset_link" datastore:"asset_link"`
+	Polygon           bool   `json:"polygon" datastore:"polygon"`
+	WorkflowReference string `json:"workflow_reference" datastore:"workflow_reference"`
+	Workflow          string `json:"workflow" datastore:"workflow"`
+	Creator           string `json:"creator" datastore:"creator"`
+	OwnerUsername     string `json:"owner_username" datastore:"owner_username"`
+	Owner             string `json:"owner" datastore:"owner"`
+	ID                string `json:"id" datastore:"id"`
+	Created           int64  `json:"created" datastore:"created"`
+	Edited            int64  `json:"edited" datastore:"edited"`
+}
+
+/*
+type OpenseaAsset struct {
 	ID                int    `json:"id"`
 	TokenID           string `json:"token_id"`
 	NumSales          int    `json:"num_sales"`
@@ -2591,6 +2610,7 @@ type OpenseaAsset struct {
 	Created int64 `json:"created" datastore:"created"`
 	Edited  int64 `json:"edited" datastore:"edited"`
 }
+*/
 
 /*
 type OpenseaAsset struct {
@@ -2969,3 +2989,18 @@ type OpenseaAsset struct {
 	} `json:"collection"`
 }
 */
+
+type PrizedrawSubmitter struct {
+	IP             string   `json:"ip"`
+	ID             string   `json:"id"`
+	Username       string   `json:"username"`
+	UserId         string   `json:"user_id""`
+	Email          string   `json:"email"`
+	Firstname      string   `json:"firstname"`
+	Lastname       string   `json:"lastname"`
+	Address        string   `json:"address"`
+	WinningIds     []string `json:"winning_ids"`
+	PreviousWinner bool     `json:"previous_winner"`
+	Created        int64    `json:"created"`
+	Edited         int64    `json:"edited"`
+}

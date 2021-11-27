@@ -3734,11 +3734,11 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 
 		executions = []OpenseaAsset{}
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.ID == 0 || len(hit.Source.Name) == 0 {
+			if len(hit.Source.ID) == 0 || len(hit.Source.Name) == 0 {
 				continue
 			}
 
-			newName := strings.ToLower(strings.Replace(strings.Replace(hit.Source.Collection.Name, "#", "", -1), " ", "-", -1))
+			newName := strings.ToLower(strings.Replace(strings.Replace(hit.Source.Collection, "#", "", -1), " ", "-", -1))
 
 			if newName == strings.ToLower(collectionName) {
 				executions = append(executions, hit.Source)
@@ -5917,4 +5917,25 @@ func GetEsConfig() *elasticsearch.Client {
 	}
 
 	return es
+}
+
+func SetJoinPrizedraw2021(ctx context.Context, inputItem PrizedrawSubmitter) error {
+	nameKey := "prizedraw_season1"
+	timeNow := int64(time.Now().Unix())
+	inputItem.Edited = timeNow
+	if inputItem.Created == 0 {
+		inputItem.Created = timeNow
+	}
+
+	if project.DbType == "elasticsearch" {
+		return errors.New("No elasticsearch handler for this API ")
+	} else {
+		key := datastore.NameKey(nameKey, inputItem.ID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &inputItem); err != nil {
+			log.Printf("[WARNING] Error adding prizedraw: %s", err)
+			return err
+		}
+	}
+
+	return nil
 }

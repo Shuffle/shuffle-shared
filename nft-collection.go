@@ -114,7 +114,7 @@ func runLoadCollections(ctx context.Context, topClient *http.Client) {
 			continue
 		}
 
-		log.Printf("[DEBUG] Reloaded asset %s in collection %s. Err: %#v", assetString, asset.Collection.Name, assetErr)
+		log.Printf("[DEBUG] Reloaded asset %s in collection %s. Err: %#v", assetString, asset.Collection, assetErr)
 	}
 }
 
@@ -190,9 +190,9 @@ func HandleGetCollection(resp http.ResponseWriter, request *http.Request) {
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get collection: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
 	}
 
 	var fileId string
@@ -257,7 +257,7 @@ func HandleGetCollection(resp http.ResponseWriter, request *http.Request) {
 	//	log.Printf("Got assets: %#v", asset)
 	//}
 
-	log.Printf("[DEBUG] Assets: %d", len(returnAssets))
+	//log.Printf("[DEBUG] Assets: %d", len(returnAssets))
 	b, err := json.Marshal(returnAssets)
 	if err != nil {
 		log.Printf("[WARNING] Failed to GET collection %s", err)
