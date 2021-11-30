@@ -5146,7 +5146,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetWorkflowAppDatastore(ctx, *app, app.ID)
 	if err != nil {
-		log.Printf("Failed patching workflowapp: %s", err)
+		log.Printf("[WARNING] Failed patching workflowapp: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -6685,6 +6685,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		resp.Write(appdata)
 		return
 	}
+	log.Printf("3")
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
@@ -6704,6 +6705,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+	log.Printf("4")
 
 	if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
 		//log.Printf("Should return WITHOUT openapi")
@@ -6733,6 +6735,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 		appReturn.OpenAPI = openapidata
 	}
+	log.Printf("5")
 
 	appdata, err = json.Marshal(appReturn)
 	if err != nil {
@@ -7901,7 +7904,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 
 				if !skipNodeAdd {
-					log.Printf("[DEBUG] Appending skip for node %s (%s)", curAction.Name, curAction.Label)
+					//log.Printf("[DEBUG] Appending skip for node %s (%s)", curAction.Name, curAction.Label)
 					newResult := ActionResult{
 						Action:        curAction,
 						ExecutionId:   actionResult.ExecutionId,
@@ -10937,10 +10940,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if !found {
-			if action.Environment == "cloud" && project.Environment == "cloud" {
-				log.Printf("[DEBUG] Couldn't find environment cloud in cloud for some reason.")
+			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
+				log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
-				log.Printf("[ERROR] Couldn't find environment %s. Maybe it's inactive?", action.Environment)
+				log.Printf("[WARNING] Couldn't find environment %s. Maybe it's inactive?", action.Environment)
 				return WorkflowExecution{}, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env %s in org %s", action.Environment, workflowExecution.ExecutionOrg))
 			}
 		}

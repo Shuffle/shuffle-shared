@@ -2998,6 +2998,7 @@ type PrizedrawSubmitter struct {
 	Email          string   `json:"email"`
 	Firstname      string   `json:"firstname"`
 	Lastname       string   `json:"lastname"`
+	Twitter        string   `json:"twitter"`
 	Address        string   `json:"address"`
 	WinningIds     []string `json:"winning_ids"`
 	PreviousWinner bool     `json:"previous_winner"`

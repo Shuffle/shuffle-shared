@@ -253,10 +253,6 @@ func HandleGetCollection(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//for _, asset := range assets {
-	//	log.Printf("Got assets: %#v", asset)
-	//}
-
 	//log.Printf("[DEBUG] Assets: %d", len(returnAssets))
 	b, err := json.Marshal(returnAssets)
 	if err != nil {
