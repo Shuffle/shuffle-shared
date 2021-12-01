@@ -1860,14 +1860,14 @@ func GetGmailMessageAttachment(ctx context.Context, gmailClient *http.Client, us
 		return GmailAttachment{}, err
 	}
 
-	log.Printf("ATTACHMENT MAIL: %s", string(body))
-
 	var message GmailAttachment
 	err = json.Unmarshal(body, &message)
 	if err != nil {
 		log.Printf("[WARNING] Failed body read unmarshal for gmail msg: %s", err)
 		return GmailAttachment{}, err
 	}
+
+	log.Printf("ATTACHMENT MAIL WITH SIZE %d", message.Size)
 
 	//if len(profile.EmailAddress) == 0 {
 	//	return GmailMessageStruct{}, errors.New("Couldn't find your email profile")
@@ -1965,24 +1965,56 @@ func GetGmailMessage(ctx context.Context, gmailClient *http.Client, userId, mess
 		if header.Name == "From" {
 			message.Payload.Sender = header.Value
 		}
+		if header.Name == "Message-ID" {
+			message.Payload.MessageID = header.Value
+
+			if len(message.Payload.PartID) == 0 {
+				message.Payload.PartID = header.Value
+			}
+		}
 	}
 
+	message.Payload.Sender = strings.Replace(message.Payload.Sender, "\"", `\'`, -1)
+	message.Payload.Subject = strings.Replace(message.Payload.Subject, "'", `\'`, -1)
+
+	// Finding a parsed payload
 	for _, payload := range message.Payload.Parts {
 		//parsedBody = mess
-		if payload.MimeType == "text/plain" {
+		log.Printf("[DEBUG] Data to be decoded (%s): %d", payload.MimeType, len(payload.Body.Data))
+		if payload.MimeType == "text/plain" && payload.Filename == "" {
+			payload.Body.Data = strings.Replace(payload.Body.Data, "-", "+", -1)
+			payload.Body.Data = strings.Replace(payload.Body.Data, "_", "/", -1)
+
 			parsedData, err := base64.StdEncoding.DecodeString(payload.Body.Data)
 			if err != nil {
-				log.Printf("[WARNING] Failed base64 decode of parsedbody (text/plain): %s", err)
+				log.Printf("[WARNING] Failed base64 decode of parsedbody (text/plain): %s. New data length: %d. Using it anyway.", err, len(parsedData))
+				if len(parsedData) > 0 {
+					message.Payload.ParsedBody = string(parsedData)
+					continue
+					//break
+				}
+
+				if len(message.Payload.ParsedBody) == 0 {
+					message.Payload.ParsedBody = string(parsedData)
+				}
+
 				continue
 			}
 
 			message.Payload.ParsedBody = string(parsedData)
+		} else {
+			if len(payload.Filename) > 0 {
+				message.Payload.Filename = payload.Filename
+				message.Payload.FileMimeType = payload.MimeType
+			} else if len(message.Payload.ParsedBody) == 0 {
+				message.Payload.ParsedBody = string(payload.Body.Data)
+			}
+		}
+
+		if len(message.Payload.ParsedBody) > 0 && message.Payload.FileMimeType == "" {
+			message.Payload.FileMimeType = payload.MimeType
 		}
 	}
-
-	//if len(profile.EmailAddress) == 0 {
-	//	return GmailMessageStruct{}, errors.New("Couldn't find your email profile")
-	//}
 
 	//log.Printf("\n\nUSER BODY: %s", string(body))
 	return message, nil
@@ -2134,10 +2166,19 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		// New messages
 		for _, addedMsg := range item.MessagesAdded {
 			message := addedMsg.Message
+
+			// FIXME: Could this have an overlap for each user?
+			// Hurr, may lose some?
 			if ArrayContains(handled, message.ID) {
-				log.Printf("[DEBUG] Email %s is already handled")
+				//log.Printf("[DEBUG] Email %s is already handled", message.ID)
 				continue
 			}
+
+			// Suboptimal, but ok for now
+			if len(handled) > 500 {
+				handled = []string{}
+			}
+			handled = append(handled, message.ID)
 
 			//if len(item.Messages) == 0 {
 			//	log.Printf("[WARNING] No messages to handle")
@@ -2201,24 +2242,30 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 
 				err = SetFile(ctx, newFile)
 				if err != nil {
-					log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s", part.Body.AttachmentID, message.ID)
+					log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s (1)", part.Body.AttachmentID, message.ID)
 					continue
 				}
 
 				parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
 				if err != nil {
-					log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s", part.Body.AttachmentID, message.ID)
-					continue
+					log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s (1)", part.Body.AttachmentID, message.ID)
+					if len(parsedData) == 0 {
+						continue
+					}
 				}
 
 				err = uploadFile(ctx, &newFile, parsedData, nil)
 				if err != nil {
-					log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s", part.Body.AttachmentID, message.ID)
+					log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s (1)", part.Body.AttachmentID, message.ID)
 					continue
 				}
 
 				log.Printf("[DEBUG] Added file ID %s for attachment %s", newFile.Id, message.ID)
 				mail.FileIds = append(mail.FileIds, newFile.Id)
+			}
+
+			if len(mail.FileIds) == 0 {
+				mail.FileIds = []string{}
 			}
 
 			//if mail.ID == message.ThreadID {
@@ -2242,12 +2289,16 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(item.Messages) <= 3 {
-
 			for _, message := range item.Messages {
 				if ArrayContains(handled, message.ID) {
-					log.Printf("[DEBUG] Email %s is already handled")
+					//log.Printf("[DEBUG] Email %s is already handled", message.ID)
 					continue
 				}
+
+				if len(handled) > 500 {
+					handled = []string{}
+				}
+				handled = append(handled, message.ID)
 
 				mail, err := GetGmailMessage(ctx, gmailClient, findHistory.EmailAddress, message.ID)
 				if err != nil {
@@ -2301,19 +2352,21 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 
 					err = SetFile(ctx, newFile)
 					if err != nil {
-						log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s", part.Body.AttachmentID, message.ID)
+						log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s (2)", part.Body.AttachmentID, message.ID)
 						continue
 					}
 
 					parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
 					if err != nil {
-						log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s", part.Body.AttachmentID, message.ID)
-						continue
+						log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s: %s. Continuing anyway (2)", part.Body.AttachmentID, message.ID, err)
+						if len(parsedData) == 0 {
+							continue
+						}
 					}
 
 					err = uploadFile(ctx, &newFile, parsedData, nil)
 					if err != nil {
-						log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s", part.Body.AttachmentID, message.ID)
+						log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s (2)", part.Body.AttachmentID, message.ID)
 						continue
 					}
 
@@ -2321,10 +2374,14 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 					mail.FileIds = append(mail.FileIds, newFile.Id)
 				}
 
+				if len(mail.FileIds) == 0 {
+					mail.FileIds = []string{}
+				}
+
 				mail.Type = "thread"
 				mappedData, err := json.Marshal(mail)
 				if err != nil {
-					log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s", err)
+					log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s (2)", err)
 					resp.WriteHeader(401)
 					continue
 				}

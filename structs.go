@@ -2112,14 +2112,16 @@ type GmailMessageStruct struct {
 	LabelIds []string `json:"labelIds"`
 	Snippet  string   `json:"snippet"`
 	Payload  struct {
-		PartID     string `json:"partId"`
-		MimeType   string `json:"mimeType"`
-		Filename   string `json:"filename"`
-		Sender     string `json:"sender"`
-		Subject    string `json:"subject"`
-		Recipient  string `json:"recipient"`
-		ParsedBody string `json:"parsed_body"`
-		Headers    []struct {
+		PartID       string `json:"partId"`
+		MessageID    string `json:"message_id"`
+		MimeType     string `json:"mimeType"`
+		Filename     string `json:"filename"`
+		FileMimeType string `json:"file_mimetype"`
+		Sender       string `json:"sender"`
+		Subject      string `json:"subject"`
+		Recipient    string `json:"recipient"`
+		ParsedBody   string `json:"parsed_body"`
+		Headers      []struct {
 			Name  string `json:"name"`
 			Value string `json:"value"`
 		} `json:"headers"`

@@ -3067,7 +3067,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	if orgErr == nil && len(org.ActiveApps) > 0 {
-		log.Printf("[INFO] Should append ORG APPS: %#v", org.ActiveApps)
+		//log.Printf("[INFO] Should append ORG APPS: %#v", org.ActiveApps)
 
 		allKeys := []*datastore.Key{}
 		for _, appId := range org.ActiveApps {
