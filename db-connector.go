@@ -3761,7 +3761,7 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 	}
 
 	slice.Sort(executions[:], func(i, j int) bool {
-		return executions[i].Edited > executions[j].Edited
+		return executions[i].Created < executions[j].Created
 	})
 
 	return executions, nil

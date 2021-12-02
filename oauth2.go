@@ -821,12 +821,13 @@ func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 		return SubResponse{}, err
 	}
 
-	log.Printf("[INFO] GMAIL Subscription Status: %d", res.StatusCode)
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] Gmail subscription Body: %s", err)
 		return SubResponse{}, err
 	}
+
+	log.Printf("[INFO] GMAIL Subscription Status: %d. Body: %s", res.StatusCode, string(body))
 
 	//log.Printf("GMAIL RESP: %s", string(body))
 
@@ -1892,7 +1893,7 @@ func GetGmailThread(ctx context.Context, gmailClient *http.Client, userId, messa
 		return GmailMessageStruct{}, err
 	}
 
-	log.Printf("[INFO] Get GMAIL msg %#v Status: %d", messageId, res.StatusCode)
+	log.Printf("[INFO] Get GMAIL thread %#v Status: %d", messageId, res.StatusCode)
 	if res.StatusCode == 404 {
 		return GmailMessageStruct{}, errors.New(fmt.Sprintf("Failed to find mail for %s: %d", messageId, res.StatusCode))
 	}
@@ -1935,7 +1936,7 @@ func GetGmailMessage(ctx context.Context, gmailClient *http.Client, userId, mess
 		return GmailMessageStruct{}, err
 	}
 
-	log.Printf("[INFO] Get GMAIL msg %#v Status: %d", messageId, res.StatusCode)
+	log.Printf("[INFO] Get GMAIL msg %#v Status: %d. User: %s", messageId, res.StatusCode, userId)
 	if res.StatusCode == 404 {
 		return GmailMessageStruct{}, errors.New(fmt.Sprintf("Failed to find mail for %s: %d", messageId, res.StatusCode))
 	}
@@ -1974,13 +1975,13 @@ func GetGmailMessage(ctx context.Context, gmailClient *http.Client, userId, mess
 		}
 	}
 
-	message.Payload.Sender = strings.Replace(message.Payload.Sender, "\"", `\'`, -1)
-	message.Payload.Subject = strings.Replace(message.Payload.Subject, "'", `\'`, -1)
+	message.Payload.Sender = strings.Replace(message.Payload.Sender, "\"", `'`, -1)
+	message.Payload.Subject = strings.Replace(message.Payload.Subject, "'", `'`, -1)
 
 	// Finding a parsed payload
 	for _, payload := range message.Payload.Parts {
 		//parsedBody = mess
-		log.Printf("[DEBUG] Data to be decoded (%s): %d", payload.MimeType, len(payload.Body.Data))
+		//log.Printf("[DEBUG] Data to be decoded (%s): %d", payload.MimeType, len(payload.Body.Data))
 		if payload.MimeType == "text/plain" && payload.Filename == "" {
 			payload.Body.Data = strings.Replace(payload.Body.Data, "-", "+", -1)
 			payload.Body.Data = strings.Replace(payload.Body.Data, "_", "/", -1)
@@ -2146,13 +2147,14 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 			handledIds = []string{}
 		}
 
-		handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
 		history, err = GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, newHistoryId)
 
 		if err != nil {
-			log.Printf("[DEBUG] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
+			log.Printf("[WARNING] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
 			resp.WriteHeader(200)
 			return
+		} else {
+			handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
 		}
 	} else {
 		log.Printf("[DEBUG] Email HistoryID %d for %s has already been handled", findHistory.HistoryId, findHistory.EmailAddress)
