@@ -3613,7 +3613,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if len(triggerType) == 0 {
-				log.Printf("No type specified for user input node")
+				log.Printf("[DEBUG] No type specified for user input node")
 				if workflow.PreviouslySaved {
 					resp.WriteHeader(401)
 					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No contact option specified in user input"}`)))
@@ -3633,7 +3633,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				log.Printf("Should send email to %s during execution.", email)
+				log.Printf("[DEBUG] Should send email to %s during execution.", email)
 			}
 			if strings.Contains(triggerType, "sms") {
 				if sms == "0000000" {
@@ -3645,7 +3645,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				log.Printf("Should send SMS to %s during execution.", sms)
+				log.Printf("[DEBUG] Should send SMS to %s during execution.", sms)
 			}
 		}
 
@@ -5519,7 +5519,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 	appended := 0
 	if tmpData.Append {
-		log.Printf("[INFO] Should append %d values!", len(notFound))
+		log.Printf("[INFO] Should append %d value(s) in K:V for %s_%s!", len(notFound), org.Id, workflowExecution.ExecutionId)
 
 		//parameterNames := strings.Join(value.ParameterNames, "_")
 		for _, notFoundValue := range notFound {
@@ -7139,7 +7139,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 
 			sendRequest = true
 		} else {
-			log.Printf("[DEBUG] Should UPDATE parentResult: %s", string(parsedActionValue))
+			//log.Printf("[DEBUG] Should UPDATE parentResult: %s", string(parsedActionValue))
 			foundResult.Result = string(parsedActionValue)
 			resultData, err = json.Marshal(foundResult)
 			if err != nil {
@@ -7573,7 +7573,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// Add an else for HTTP request errors with success "false"
 			// These could be "silent" issues
 			if actionResult.Status == "FAILURE" {
-				log.Printf("[DEBUG] Result is failure. Making notification.")
+				log.Printf("[DEBUG] Result is %s. Making notification.", actionResult.Status)
 				err = createOrgNotification(
 					ctx,
 					fmt.Sprintf("Error in Workflow %#v", workflowExecution.Workflow.Name),
@@ -10305,7 +10305,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			//return WorkflowExecution{}, "", err
 		}
 
-		if execution.Start == "" && len(body) > 0 {
+		// Ensuring it works even if startpoint isn't defined
+		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 {
 			execution.ExecutionArgument = string(body)
 		}
 

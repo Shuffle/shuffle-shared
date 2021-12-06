@@ -118,7 +118,7 @@ type WorkflowAppActionParameter struct {
 
 type Valuereplace struct {
 	Key   string `json:"key" datastore:"key" yaml:"key"`
-	Value string `json:"value" datastore:"value" yaml:"value"`
+	Value string `json:"value" datastore:"value,noindex" yaml:"value"`
 }
 
 type WorkflowAppAction struct {
@@ -265,7 +265,7 @@ type UserAuth struct {
 
 type UserAuthField struct {
 	Key   string `json:"key" datastore:"key"`
-	Value string `json:"value" datastore:"value"`
+	Value string `json:"value" datastore:"value,noindex"`
 }
 
 // Used to contain users in miniOrg
@@ -336,7 +336,7 @@ type Contact struct {
 type Translator struct {
 	Src struct {
 		Name        string `json:"name" datastore:"name"`
-		Value       string `json:"value" datastore:"value"`
+		Value       string `json:"value" datastore:"value,noindex"`
 		Description string `json:"description" datastore:"description"`
 		Required    string `json:"required" datastore:"required"`
 		Type        string `json:"type" datastore:"type"`
@@ -346,7 +346,7 @@ type Translator struct {
 	} `json:"src" datastore:"src"`
 	Dst struct {
 		Name        string `json:"name" datastore:"name"`
-		Value       string `json:"value" datastore:"value"`
+		Value       string `json:"value" datastore:"value,noindex"`
 		Type        string `json:"type" datastore:"type"`
 		Description string `json:"description" datastore:"description"`
 		Required    string `json:"required" datastore:"required"`
@@ -358,7 +358,7 @@ type Translator struct {
 
 type Appconfig struct {
 	Key   string `json:"key" datastore:"key"`
-	Value string `json:"value" datastore:"value"`
+	Value string `json:"value" datastore:"value,noindex"`
 }
 
 type ScheduleApp struct {
@@ -559,14 +559,14 @@ type Defaults struct {
 }
 
 type CacheKeyData struct {
-	Success       bool   `json:"success"`
-	WorkflowId    string `json:"workflow_id,"`
-	ExecutionId   string `json:"execution_id,omityempty"`
-	Authorization string `json:"authorization,omitempty"`
-	OrgId         string `json:"org_id,omitempty"`
-	Key           string `json:"key"`
-	Value         string `json:"value"`
-	Edited        int64  `json:"edited"`
+	Success       bool   `json:"success" datastore:"Success"`
+	WorkflowId    string `json:"workflow_id," datastore:"WorkflowId"`
+	ExecutionId   string `json:"execution_id,omityempty" datastore:"ExecutionId"`
+	Authorization string `json:"authorization,omitempty" datastore:"Authorization"`
+	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
+	Key           string `json:"key" datastore:"Key"`
+	Value         string `json:"value" datastore:"Value,noindex"`
+	Edited        int64  `json:"edited" datastore:"Edited"`
 }
 
 type SyncConfig struct {
@@ -617,7 +617,7 @@ type NewValue struct {
 	WorkflowId          string `json:"workflow_id" datastore:"workflow_id"`
 	WorkflowExecutionId string `json:"workflow_execution_id" datastore:"workflow_execution_id"`
 	ParameterName       string `json:"parameter_name" datastore:"parameter_name"`
-	Value               string `json:"value" datastore:"value"`
+	Value               string `json:"value" datastore:"value,noindex"`
 	Created             int64  `json:"created" datastore:"created"`
 	Id                  string `json:"id" datastore:"id"`
 }
@@ -822,7 +822,7 @@ type Workflow struct {
 	Categories           Categories `json:"categories" datastore:"categories"`
 	ExampleArgument      string     `json:"example_argument" datastore:"example_argument,noindex"`
 	Public               bool       `json:"public" datastore:"public"`
-	DefaultReturnValue   string     `json:"default_return_value" datastore:"default_return_value"`
+	DefaultReturnValue   string     `json:"default_return_value" datastore:"default_return_value,noindex"`
 	ContactInfo          struct {
 		Name string `json:"name" datastore:"name" yaml:"name"`
 		Url  string `json:"url" datastore:"url" yaml:"url"`

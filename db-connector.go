@@ -134,6 +134,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 	} else {
 		if item.Value == nil {
 			item.Value = []byte(string(1))
+			log.Printf("[ERROR] Value in DB is nil.")
 		}
 
 		if len(item.Value) == 1 {
@@ -3793,7 +3794,7 @@ func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, op
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &collection); err != nil {
-			log.Printf("[WARNING] Error adding workflow: %s", err)
+			log.Printf("[WARNING] Error adding opensea asset: %s", err)
 			return err
 		}
 	}
@@ -5681,7 +5682,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(cacheData)
 	if err != nil {
-		log.Printf("[WARNING] Failed marshalling in set cache key: %s", err)
+		log.Printf("[ERROR] Failed marshalling in set cache key: %s", err)
 		return nil
 	}
 	if project.DbType == "elasticsearch" {
@@ -5692,7 +5693,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	} else {
 		key := datastore.NameKey(nameKey, cacheId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &cacheData); err != nil {
-			log.Printf("[WARNING] Error adding workflow: %s", err)
+			log.Printf("[ERROR] Error setting org cache: %s", err)
 			return err
 		}
 	}
@@ -5701,7 +5702,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for set cache key: %s", err)
+			log.Printf("[ERROR] Failed setting cache for set cache key: %s", err)
 		}
 	}
 
