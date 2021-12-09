@@ -4209,7 +4209,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	//cacheKey = fmt.Sprintf("workflowapps-sorted-500")
 	//requestCache.Delete(cacheKey)
 
-	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s", workflow.Name, fileId, workflow.OrgId)
+	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s. Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, len(workflow.Actions), len(workflow.Triggers))
 	resp.WriteHeader(200)
 	newBody, err := json.Marshal(returndata)
 	if err != nil {
@@ -8256,7 +8256,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				// Result        string `json:"result" datastore:"result,noindex"`
 				// Arbitrary reduction size
-				maxSize := 500000
+				maxSize := 250000
 				newResults := []ActionResult{}
 				bucketName := "shuffler.appspot.com"
 				//shuffle-large-executions
@@ -10986,4 +10986,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 	fmt.Fprint(resp, "OK")
+}
+
+func GetAppRequirements() string {
+	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.2\nMarkupSafe==2.0.1\nflask[async]==2.0.2\n"
 }

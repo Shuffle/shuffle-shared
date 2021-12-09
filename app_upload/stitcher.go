@@ -1,5 +1,9 @@
 package main
 
+// This is intended to upload apps from https://github.com/Shuffle/python-apps to the cloud instance of shuffle (https://shuffler.io). It does so by looping and finding all the apps, building the code with the SDK, and serving it as a Cloud Function.
+
+// This can be used to update normal apps, but app-creator apps should be updated by the shaffuru/functions/cloud_scripts/update_functions.go script in case there is a new App SDK.
+
 import (
 	"github.com/frikky/shuffle-shared"
 
@@ -250,7 +254,7 @@ func addRequirements(filelocation string) {
 		return
 	}
 
-	filedata := "\nrequests==2.25.1\nliquidpy==0.7.2\nMarkupSafe==2.0.1\nflask[async]==2.0.2\n" + string(data)
+	filedata := shuffle.GetAppRequirements() + string(data)
 	err = ioutil.WriteFile(filelocation, []byte(filedata), os.ModePerm)
 	if err != nil {
 		log.Panicf("[WARNING] failed writing data to file: %s", err)
@@ -808,11 +812,11 @@ func main() {
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
 	log.Printf("\n\n============================= \n[INFO] Running with: \nUrl: %s\nApikey: %s\n============================= \n\n", baseUrl, apikey)
-	deployAll()
-	return
+	//deployAll()
+	//return
 
-	appname := "thehive"
-	appversion := "1.1.2"
+	appname := "email"
+	appversion := "1.0.1"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)
