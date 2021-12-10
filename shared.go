@@ -3598,6 +3598,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Validating USERINPUT during SAVING")
 			sms := ""
 			email := ""
+			subflow := ""
 			triggerType := ""
 			triggerInformation := ""
 			for _, item := range trigger.Parameters {
@@ -3609,6 +3610,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					email = item.Value
 				} else if item.Name == "sms" {
 					sms = item.Value
+				} else if item.Name == "subflow" {
+					subflow = item.Value
 				}
 			}
 
@@ -3641,6 +3644,18 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					if workflow.PreviouslySaved {
 						resp.WriteHeader(401)
 						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SMS field in user input can't be empty"}`)))
+						return
+					}
+				}
+
+				log.Printf("[DEBUG] Should send SMS to %s during execution.", sms)
+			}
+			if strings.Contains(triggerType, "subflow") {
+				if len(subflow) != 36 {
+					log.Printf("[WARNING] Subflow isn't specified!")
+					if workflow.PreviouslySaved {
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Subflow in User Input Trigger isn't specified"}`)))
 						return
 					}
 				}
@@ -6641,7 +6656,11 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	user, userErr := HandleApiAuthentication(resp, request)
+	log.Printf("USER: %s", user.Id)
+
 	openapi, openapiok := request.URL.Query()["openapi"]
+	//if app.Sharing || app.Public || (project.Environment == "cloud" && user.Id == "what") {
 	if app.Sharing || app.Public {
 		if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
 			//log.Printf("Should return WITHOUT openapi")
@@ -6685,9 +6704,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		resp.Write(appdata)
 		return
 	}
-	log.Printf("3")
 
-	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
 		log.Printf("[WARNING] Api authentication failed in get app: %s", userErr)
 		resp.WriteHeader(401)
@@ -6705,7 +6722,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	log.Printf("4")
 
 	if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
 		//log.Printf("Should return WITHOUT openapi")
@@ -7574,7 +7590,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// These could be "silent" issues
 			if actionResult.Status == "FAILURE" {
 				log.Printf("[DEBUG] Result is %s. Making notification.", actionResult.Status)
-				err = createOrgNotification(
+				err = CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Error in Workflow %#v", workflowExecution.Workflow.Name),
 					fmt.Sprintf("Node %s in Workflow %s was found to have an error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
@@ -7942,7 +7958,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if err == nil {
 			//log.Printf("Unmarshal success!")
 			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") {
-				err = createOrgNotification(
+				err = CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Potential error in Workflow %#v", workflowExecution.Workflow.Name),
 					fmt.Sprintf("Node %s in Workflow %s failed silently. Click to see more. Reason: %#v", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason),
@@ -10989,5 +11005,5 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetAppRequirements() string {
-	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.2\nMarkupSafe==2.0.1\nflask[async]==2.0.2\n"
+	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.3\nMarkupSafe==2.0.1\nflask[async]==2.0.2\n"
 }

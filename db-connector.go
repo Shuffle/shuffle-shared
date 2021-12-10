@@ -132,7 +132,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 			log.Printf("[ERROR] Failed setting cache for key %s: %s", orgId, err)
 		}
 	} else {
-		if item.Value == nil {
+		if item == nil || item.Value == nil {
 			item.Value = []byte(string(1))
 			log.Printf("[ERROR] Value in DB is nil.")
 		}

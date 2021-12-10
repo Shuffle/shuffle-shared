@@ -147,6 +147,8 @@ type WorkflowAppAction struct {
 	Example          string `json:"example,noindex" datastore:"example" yaml:"example"`
 	AuthNotRequired  bool   `json:"auth_not_required" datastore:"auth_not_required" yaml:"auth_not_required"`
 	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	RunMagicOutput   bool   `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
+	RunMagicInput    bool   `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
 }
 
 type Authentication struct {

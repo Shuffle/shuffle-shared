@@ -279,7 +279,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	return nil
 }
 
-func createOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
+func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
 	if project.Environment == "" || project.Environment == "worker" {
 		log.Printf("[INFO] Not generating notification, as worker environment has been detected: %#v", project.Environment)
 		return nil
