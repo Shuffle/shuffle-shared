@@ -719,6 +719,8 @@ type Action struct {
 	ReferenceUrl     string `json:"reference_url" datastore:"reference_url"`
 	SubAction        bool   `json:"sub_action" datastore:"sub_action"`
 	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	RunMagicOutput   bool   `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
+	RunMagicInput    bool   `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
 }
 
 // Added environment for location to execute

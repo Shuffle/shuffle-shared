@@ -11007,3 +11007,64 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 func GetAppRequirements() string {
 	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.3\nMarkupSafe==2.0.1\nflask[async]==2.0.2\n"
 }
+
+// Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth
+func RunExecuteAccessValidation(request *http.Request) bool {
+	log.Printf("[DEBUG] Inside execute validation!")
+
+	if request.Method == "POST" {
+		body, err := ioutil.ReadAll(request.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed request POST read: %s", err)
+			return false
+		}
+
+		// This one doesn't really matter.
+		//log.Printf("[INFO] Running POST execution with body of length %d for workflow %s", len(string(body)), workflowExecution.Workflow.ID)
+
+		if len(body) >= 4 {
+			if body[0] == 34 && body[len(body)-1] == 34 {
+				body = body[1 : len(body)-1]
+			}
+			if body[0] == 34 && body[len(body)-1] == 34 {
+				body = body[1 : len(body)-1]
+			}
+		}
+
+		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
+		if sourceExecutionOk {
+			//log.Printf("[INFO] Got source execution%s", sourceExecution)
+			//workflowExecution.ExecutionParent = sourceExecution[0]
+			log.Printf("[DEBUG] Got source exec %s", sourceExecution)
+		} else {
+			//log.Printf("Did NOT get source execution")
+		}
+
+		sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
+		if sourceAuthOk {
+			log.Printf("[DEBUG] Got auth %s", sourceAuth)
+			//workflowExecution.ExecutionSourceAuth = sourceAuth[0]
+		} else {
+			//log.Printf("Did NOT get source workflow")
+		}
+
+		sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
+		if sourceNodeOk {
+			log.Printf("[DEBUG] Got source node %s", sourceNode)
+			//workflowExecution.ExecutionSourceNode = sourceNode[0]
+		} else {
+			//log.Printf("Did NOT get source workflow")
+		}
+
+		//workflowExecution.ExecutionSource = "default"
+		sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
+		if sourceWorkflowOk {
+			log.Printf("[DEBUG] Got source workflow %s", sourceWorkflow)
+		} else {
+			//log.Printf("Did NOT get source workflow")
+		}
+
+	}
+
+	return false
+}
