@@ -10311,7 +10311,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			//log.Println(body)
 
 			//if string(body)[0] == "\"" && string(body)[string(body)
-			log.Printf("[DEBUG] Body: %s", string(body))
+			log.Printf("[DEBUG] Body: %#v", string(body))
 		}
 
 		var execution ExecutionRequest
@@ -11009,14 +11009,19 @@ func GetAppRequirements() string {
 }
 
 // Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth
-func RunExecuteAccessValidation(request *http.Request) bool {
+
+// Check if the execution data has correct info in it! Happens based on subflows.
+// 1. Parent workflow contains this workflow ID in the source trigger?
+// 2. Parent workflow's owner is same org?
+// 3. Parent execution auth is correct
+func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool, string) {
 	log.Printf("[DEBUG] Inside execute validation!")
 
 	if request.Method == "POST" {
 		body, err := ioutil.ReadAll(request.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed request POST read: %s", err)
-			return false
+			return false, ""
 		}
 
 		// This one doesn't really matter.
@@ -11031,40 +11036,81 @@ func RunExecuteAccessValidation(request *http.Request) bool {
 			}
 		}
 
+		ctx := getContext(request)
+		workflowExecution := &WorkflowExecution{}
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
 		if sourceExecutionOk {
-			//log.Printf("[INFO] Got source execution%s", sourceExecution)
-			//workflowExecution.ExecutionParent = sourceExecution[0]
 			log.Printf("[DEBUG] Got source exec %s", sourceExecution)
+			workflowExecution, err = GetWorkflowExecution(ctx, sourceExecution[0])
+			if err != nil {
+				log.Printf("[INFO] Failed getting source_execution in test validation based on %#v", sourceExecution[0])
+				return false, ""
+			}
+
 		} else {
-			//log.Printf("Did NOT get source execution")
+			return false, ""
+		}
+
+		if workflowExecution.ExecutionId == "" {
+			log.Printf("[WARNING] No execution ID found. Bad auth.")
+			return false, ""
 		}
 
 		sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
 		if sourceAuthOk {
 			log.Printf("[DEBUG] Got auth %s", sourceAuth)
-			//workflowExecution.ExecutionSourceAuth = sourceAuth[0]
+
+			if sourceAuth[0] != workflowExecution.Authorization {
+				log.Printf("[WARNING] Bad authorization for workflowexecution defined.")
+				return false, ""
+			}
+		} else {
+			return false, ""
+		}
+
+		// When reaching here, authentication is done, but not authorization.
+		// Need to verify the workflow, and whether it SHOULD have access to execute it.
+		sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
+		if sourceWorkflowOk {
+			log.Printf("[DEBUG] Got source workflow %s", sourceWorkflow)
+
+			// Source workflow = parent
+			// This workflow = child
+
+			//if sourceWorkflow[0] != workflow.ID {
+			//	log.Printf("[DEBUG] Bad workflow in execution.")
+			//	return false, ""
+			//}
+
 		} else {
 			//log.Printf("Did NOT get source workflow")
+			return false, ""
 		}
+
+		if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
+			//e9274e37e53631a2321747b1be088f4d2631a6300a309eec9b4515c8528c35f4
+			return false, ""
+		}
+
+		// 1. Parent workflow contains this workflow ID in the source trigger?
+		// 2. Parent workflow's owner is same org?
+		// 3. Parent execution auth is correct
 
 		sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
 		if sourceNodeOk {
 			log.Printf("[DEBUG] Got source node %s", sourceNode)
 			//workflowExecution.ExecutionSourceNode = sourceNode[0]
 		} else {
-			//log.Printf("Did NOT get source workflow")
+			return false, ""
 		}
 
-		//workflowExecution.ExecutionSource = "default"
-		sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
-		if sourceWorkflowOk {
-			log.Printf("[DEBUG] Got source workflow %s", sourceWorkflow)
-		} else {
-			//log.Printf("Did NOT get source workflow")
+		// SHOULD be executed by a trigger in the parent.
+		for _, trigger := range workflowExecution.Workflow.Triggers {
+			if sourceNode[0] == trigger.ID {
+				return true, workflowExecution.ExecutionOrg
+			}
 		}
-
 	}
 
-	return false
+	return false, ""
 }
