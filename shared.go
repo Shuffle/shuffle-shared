@@ -1209,7 +1209,19 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed setting up app auth %s: %s", appAuth.Id, err)
 		resp.WriteHeader(409)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+
+		resultData := ResultChecker{
+			Success: false,
+			Reason:  fmt.Sprintf("%s", err),
+		}
+
+		newjson, err := json.Marshal(resultData)
+		if err != nil {
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		} else {
+			resp.Write(newjson)
+		}
+
 		return
 	}
 
@@ -6661,11 +6673,12 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	openapi, openapiok := request.URL.Query()["openapi"]
 	//if app.Sharing || app.Public || (project.Environment == "cloud" && user.Id == "what") {
+	log.Printf("SHARING: %#v - %#v", app.Sharing, app.Public)
 	if app.Sharing || app.Public {
 		if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
-			//log.Printf("Should return WITHOUT openapi")
+			log.Printf("Should return WITHOUT openapi")
 		} else {
-			//log.Printf("CAN SHARE APP!")
+			log.Printf("CAN SHARE APP!")
 			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
 			if err != nil {
 				log.Printf("[WARNING] OpenApi doesn't exist for (0): %s - err: %s. Returning basic app", fileId, err)
@@ -9542,7 +9555,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	// VERY short sleeptime here on purpose
-	maxSeconds := 5
+	maxSeconds := 10
 	sleeptime := 25
 	for {
 		time.Sleep(25 * time.Millisecond)
@@ -9560,10 +9573,14 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 
 		cnt += 1
-		log.Println(cnt)
+		//log.Println("Cnt: %d", cnt)
 		if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
 			break
 		}
+	}
+
+	if len(returnBody.Result) == 0 {
+		returnBody.Success = false
 	}
 
 	returnBytes, err := json.Marshal(returnBody)

@@ -815,8 +815,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "email"
-	appversion := "1.0.1"
+	appname := "microsoft-teams-system-access"
+	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

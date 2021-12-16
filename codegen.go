@@ -481,7 +481,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 		// This indentation is confusing (but correct) ROFL
 		fileAdder = fmt.Sprintf(`if not filedata["success"]:
-            return file_id+" is not a valid File ID"
+            return {"success": False, "reason": f"{file_id} is not a valid File ID"}
+
         files = {"%s": (filedata["filename"], filedata["data"])}`, fileField)
 		fileBalance = ", files=files"
 	}

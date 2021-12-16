@@ -242,6 +242,7 @@ type UserLimits struct {
 	MaxWorkflows            int64 `json:"max_workflows" datastore:"max_workflows"`
 }
 
+// FIXME: DONT FIX ME! If you add JSON object handling, it will break frontend.
 type Environment struct {
 	Name       string `datastore:"name"`
 	Type       string `datastore:"type"`
@@ -691,6 +692,7 @@ type WorkflowExecution struct {
 type Action struct {
 	AppName           string                       `json:"app_name" datastore:"app_name"`
 	AppVersion        string                       `json:"app_version" datastore:"app_version"`
+	Description       string                       `json:"description" datastore:"description,noindex"`
 	AppID             string                       `json:"app_id" datastore:"app_id"`
 	Errors            []string                     `json:"errors" datastore:"errors"`
 	ID                string                       `json:"id" datastore:"id"`
