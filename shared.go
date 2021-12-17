@@ -1506,6 +1506,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 	//resp.Write(newjson)
 }
 
+// Send in deleteall=true to delete ALL executions for the environment ID
 func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1530,6 +1531,9 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		fileId = location[4]
+		if strings.Contains(fileId, "?") {
+			fileId = strings.Split(fileId, "?")[0]
+		}
 	}
 
 	if user.Role != "admin" {
@@ -1540,21 +1544,69 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	//env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
-	//if err != nil {
-	//	log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
-	//	resp.WriteHeader(401)
-	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
-	//	return
-	//}
+	cleanAll := false
+	deleteAll, ok := request.URL.Query()["deleteall"]
+	if ok {
+		if deleteAll[0] == "true" {
+			cleanAll = true
 
-	//log.Printf("%#v", env)
-	//if env.OrgId != user.ActiveOrg.Id {
-	//	log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
-	//	resp.WriteHeader(401)
-	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
-	//	return
-	//}
+			if project.Environment != "cloud" {
+				log.Printf("[DEBUG] Deleting and aborting ALL executions for this environment and org %s!", user.ActiveOrg.Id)
+
+				env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
+					return
+				}
+
+				if env.OrgId != user.ActiveOrg.Id {
+					log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
+					return
+				}
+
+				// If here, it should DEFINITELY clean up all executions
+				// Runs on 10.000 workflows max
+				maxAmount := 1000
+				for i := 0; i < 10; i++ {
+					executionRequests, err := GetWorkflowQueue(ctx, env.Name, maxAmount)
+					if err != nil {
+						log.Printf("[WARNING] Jumping out of workflowqueue delete handler: %s", err)
+						break
+					}
+
+					if len(executionRequests.Data) == 0 {
+						break
+					}
+
+					ids := []string{}
+					for _, execution := range executionRequests.Data {
+						if !ArrayContains(execution.Environments, env.Name) {
+							continue
+						}
+
+						ids = append(ids, execution.ExecutionId)
+					}
+
+					parsedId := fmt.Sprintf("workflowqueue-%s", env.Name)
+					err = DeleteKeys(ctx, parsedId, ids)
+					if err != nil {
+						log.Printf("[ERROR] Failed deleting %d execution keys for org %s during force stop: %s", len(ids), env.Name, err)
+					} else {
+						log.Printf("[INFO] Deleted %d keys from org %s during force stop", len(ids), parsedId)
+					}
+
+					if len(executionRequests.Data) != maxAmount {
+						log.Printf("[DEBUG] Less than 1000 in queue. Not querying more")
+						break
+					}
+				}
+			}
+		}
+	}
 
 	// 1: Loop all workflows
 	// 2: Stop all running executions (manually abort)
@@ -1573,15 +1625,16 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		cnt, _ := CleanupExecutions(ctx, fileId, workflow)
+		cnt, _ := CleanupExecutions(ctx, fileId, workflow, cleanAll)
 		total += cnt
 	}
 
 	if total > 0 {
 		log.Printf("[DEBUG] Stopped %d executions in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	}
+
 	resp.WriteHeader(200)
-	//resp.Write(newjson)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully deleted and stopped %d executions"}`, total)))
 }
 
 func RerunExecution(ctx context.Context, environment string, workflow Workflow) (int, error) {
@@ -1689,7 +1742,7 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 	return cnt, nil
 }
 
-func CleanupExecutions(ctx context.Context, environment string, workflow Workflow) (int, error) {
+func CleanupExecutions(ctx context.Context, environment string, workflow Workflow, cleanAll bool) (int, error) {
 	executions, err := GetUnfinishedExecutions(ctx, workflow.ID)
 	if err != nil {
 		log.Printf("[DEBUG] Failed getting executions for workflow %s", workflow.ID)
@@ -1721,7 +1774,8 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 	timeNow := int64(time.Now().Unix())
 	cnt := 0
 	for _, execution := range executions {
-		if timeNow < execution.StartedAt+1800 {
+		if cleanAll {
+		} else if timeNow < execution.StartedAt+1800 {
 			//log.Printf("Bad timing: %d", execution.StartedAt)
 			continue
 		}
@@ -1751,7 +1805,8 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 
 		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
 
-		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=Cleanup-crew stopped this execution (runs every hour)", backendUrl, execution.Workflow.ID, execution.ExecutionId)
+		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape("Cleanup-crew stopped this execution"))
+		//log.Printf("Url: %s", streamUrl)
 		req, err := http.NewRequest(
 			"GET",
 			streamUrl,
@@ -1778,7 +1833,7 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 		//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
 
 		if newresp.StatusCode != 200 {
-			log.Printf("[ERROR] Bad statuscode in abort: %d, %s", newresp.StatusCode, string(body))
+			log.Printf("[ERROR] Bad statuscode in auto-abort: %d, %s", newresp.StatusCode, string(body))
 			continue
 		}
 
@@ -10253,7 +10308,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 }
 
 //// New execution with firestore
-func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *http.Request) (WorkflowExecution, ExecInfo, string, error) {
+func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *http.Request, maxExecutionDepth int64) (WorkflowExecution, ExecInfo, string, error) {
+
 	workflowBytes, err := json.Marshal(workflow)
 	if err != nil {
 		log.Printf("Failed workflow unmarshal in execution: %s", err)
@@ -10318,6 +10374,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if sourceExecutionOk {
 			//log.Printf("[INFO] Got source execution%s", sourceExecution)
 			workflowExecution.ExecutionParent = sourceExecution[0]
+
+			// FIXME: Get the execution and check count
+			//workflowExecution.SubExecutionCount += 1
+
+			log.Printf("\n\n[INFO] PARENT!!: %#v\n\n", workflowExecution.ExecutionParent)
+			parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
+			if err == nil {
+				workflowExecution.SubExecutionCount = parentExecution.SubExecutionCount + 1
+			}
+
+			// Subflow are JUST lower than manual executions
+			if workflowExecution.Priority == 0 {
+				workflowExecution.Priority = 9
+			}
 		} else {
 			//log.Printf("Did NOT get source execution")
 		}
@@ -10351,6 +10421,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		if len(execution.ExecutionSource) > 0 {
 			workflowExecution.ExecutionSource = execution.ExecutionSource
+
+			if workflowExecution.Priority == 0 {
+				workflowExecution.Priority = 5
+			}
 		}
 
 		//log.Printf("Execution data: %#v", execution)
@@ -10450,6 +10524,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			workflowExecution = *oldExecution
+
+			// A previously stopped workflow. Same priority as subflow.
+			workflowExecution.Priority = 9
 		}
 
 		if len(workflowExecution.ExecutionId) == 0 {
@@ -10461,6 +10538,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		// Don't override workflow defaults
+	}
+
+	if workflowExecution.SubExecutionCount == 0 {
+		workflowExecution.SubExecutionCount = 1
+	}
+
+	//log.Printf("\n\nExecution count: %d", workflowExecution.SubExecutionCount)
+	if workflowExecution.SubExecutionCount >= maxExecutionDepth {
+		return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Max subflow of %d reached"), err
+	}
+
+	if workflowExecution.Priority == 0 {
+		//log.Printf("\n\n[DEBUG] Set priority to 10 as it's manual?\n\n")
+		workflowExecution.Priority = 10
 	}
 
 	if startok {

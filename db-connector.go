@@ -1014,8 +1014,19 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"Name": id,
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"Name": id,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"id": id,
+							},
+						},
+					},
 				},
 			},
 		}
@@ -3546,6 +3557,8 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 
 		executions = []ExecutionRequest{}
 		for _, hit := range wrapped.Hits.Hits {
+			//log.Printf("[DEBUG] Priority: %d", hit.Source.Priority)
+
 			executions = append(executions, hit.Source)
 		}
 	} else {
@@ -3555,6 +3568,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 		}
 	}
 
+	//log.Printf("[DEBUG] Returning %d executions", len(executions))
 	return ExecutionRequestWrapper{
 		Data: executions,
 	}, nil

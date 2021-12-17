@@ -33,6 +33,7 @@ type ExecutionRequest struct {
 	Status            string   `json:"status"`
 	Start             string   `json:"start"`
 	Type              string   `json:"type"`
+	Priority          int64    `json:"priority" datastore:"priority" yaml:"priority"` // Mapped back to workflowexecutions' priority
 }
 
 type RetStruct struct {
@@ -205,7 +206,8 @@ type Userapi struct {
 // Not directly, but being updated by org actions
 type ExecutionInfo struct {
 	// These have been configured for cache updates in db-connector.go with 5 hour (300 minutes) timeouts before dumping
-	LastCleared                     int64 `json:"last_cleared" datastore:"last_cleared"`
+	LastCleared int64 `json:"last_cleared" datastore:"last_cleared"`
+
 	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
 	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
 	TotalSubflowExecutions          int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
@@ -215,6 +217,26 @@ type ExecutionInfo struct {
 	TotalOrgSyncActions             int64 `json:"total_org_sync_actions" datastore:"total_org_sync_actions"`
 	TotalCloudExecutions            int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
 	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
+
+	MonthlyAppExecutions              int64 `json:"monthly_app_executions" datastore:"monthly_app_executions"`
+	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed" datastore:"monthly_app_executions_failed"`
+	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions" datastore:"monthly_subflow_executions"`
+	MonthlyWorkflowExecutions         int64 `json:"monthly_workflow_executions" datastore:"monthly_workflow_executions"`
+	MonthlyWorkflowExecutionsFinished int64 `json:"monthly_workflow_executions_finished" datastore:"monthly_workflow_executions_finished"`
+	MonthlyWorkflowExecutionsFailed   int64 `json:"monthly_workflow_executions_failed" datastore:"monthly_workflow_executions_failed"`
+	MonthlyOrgSyncActions             int64 `json:"monthly_org_sync_actions" datastore:"monthly_org_sync_actions"`
+	MonthlyCloudExecutions            int64 `json:"monthly_cloud_executions" datastore:"monthly_cloud_executions"`
+	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions" datastore:"monthly_onprem_executions"`
+
+	WeeklyAppExecutions              int64 `json:"weekly_app_executions" datastore:"weekly_app_executions"`
+	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed" datastore:"weekly_app_executions_failed"`
+	WeeklySubflowExecutions          int64 `json:"weekly_subflow_executions" datastore:"weekly_subflow_executions"`
+	WeeklyWorkflowExecutions         int64 `json:"weekly_workflow_executions" datastore:"weekly_workflow_executions"`
+	WeeklyWorkflowExecutionsFinished int64 `json:"weekly_workflow_executions_finished" datastore:"weekly_workflow_executions_finished"`
+	WeeklyWorkflowExecutionsFailed   int64 `json:"weekly_workflow_executions_failed" datastore:"weekly_workflow_executions_failed"`
+	WeeklyOrgSyncActions             int64 `json:"weekly_org_sync_actions" datastore:"weekly_org_sync_actions"`
+	WeeklyCloudExecutions            int64 `json:"weekly_cloud_executions" datastore:"weekly_cloud_executions"`
+	WeeklyOnpremExecutions           int64 `json:"weekly_onprem_executions" datastore:"weekly_onprem_executions"`
 
 	// These are just here in case we get use of them
 	TotalApiUsage           int64 `json:"total_api_usage" datastore:"total_api_usage"`
@@ -681,11 +703,12 @@ type WorkflowExecution struct {
 	Results             []ActionResult `json:"results" datastore:"results,noindex"`
 	ExecutionVariables  []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
 	OrgId               string         `json:"org_id" datastore:"org_id"`
-	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"`
 	ExecutionSource     string         `json:"execution_source" datastore:"execution_source"`
 	ExecutionParent     string         `json:"execution_parent" datastore:"execution_parent"`
 	ExecutionSourceNode string         `json:"execution_source_node" yaml:"execution_source_node"`
 	ExecutionSourceAuth string         `json:"execution_source_auth" yaml:"execution_source_auth"`
+	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"` // Max depth to execute subflows in infinite loops (10 by default)
+	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
 }
 
 // This is for the nodes in a workflow, NOT the app action itself.
