@@ -1591,7 +1591,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 						ids = append(ids, execution.ExecutionId)
 					}
 
-					parsedId := fmt.Sprintf("workflowqueue-%s", env.Name)
+					parsedId := fmt.Sprintf("workflowqueue-%s", strings.ToLower(env.Name))
 					err = DeleteKeys(ctx, parsedId, ids)
 					if err != nil {
 						log.Printf("[ERROR] Failed deleting %d execution keys for org %s during force stop: %s", len(ids), env.Name, err)
@@ -6724,16 +6724,16 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	user, userErr := HandleApiAuthentication(resp, request)
-	log.Printf("USER: %s", user.Id)
+	//log.Printf("USER: %s", user.Id)
 
 	openapi, openapiok := request.URL.Query()["openapi"]
 	//if app.Sharing || app.Public || (project.Environment == "cloud" && user.Id == "what") {
-	log.Printf("SHARING: %#v - %#v", app.Sharing, app.Public)
+	//log.Printf("SHARING: %#v. PUBLIC: %#v", app.Sharing, app.Public)
 	if app.Sharing || app.Public {
 		if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
 			log.Printf("Should return WITHOUT openapi")
 		} else {
-			log.Printf("CAN SHARE APP!")
+			//log.Printf("CAN SHARE APP!")
 			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
 			if err != nil {
 				log.Printf("[WARNING] OpenApi doesn't exist for (0): %s - err: %s. Returning basic app", fileId, err)
@@ -8796,7 +8796,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		ctx := context.Background()
 		err = SetOpenApiDatastore(ctx, idstring, parsed)
 		if err != nil {
-			log.Printf("Failed uploading openapi2 to datastore: %s", err)
+			log.Printf("[WARNING] Failed uploading openapi2 to datastore: %s", err)
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
 			return
@@ -9552,19 +9552,21 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 	for _, param := range action.Parameters {
 		if param.Required && len(param.Value) == 0 {
+			log.Printf("Param: %#v", param)
+
 			value := fmt.Sprintf("Param %s can't be empty. Fill all required parameters.", param.Name)
 			log.Printf("[WARNING] During single exec: %s", value)
-			return workflowExecution, err
+			return workflowExecution, errors.New(value)
 		}
 
 		newParams = append(newParams, param)
 	}
 
-	//log.Printf("Sharing: %#v, Public: %#v, Generated: %#v", action.Sharing, action.Public, action.Generated)
 	action.Sharing = app.Sharing
 	action.Public = app.Public
 	action.Generated = app.Generated
 	action.Parameters = newParams
+
 	workflow := Workflow{
 		Actions: []Action{
 			action,
@@ -9572,6 +9574,8 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		Start: action.ID,
 		ID:    uuid.NewV4().String(),
 	}
+
+	//log.Printf("Sharing: %#v, Public: %#v, Generated: %#v. Start: %#v", action.Sharing, action.Public, action.Generated, workflow.Start)
 
 	workflowExecution = WorkflowExecution{
 		Workflow:      workflow,
@@ -9582,6 +9586,12 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		CompletedAt:   0,
 		Authorization: uuid.NewV4().String(),
 		Status:        "EXECUTING",
+	}
+
+	if user.ActiveOrg.Id != "" {
+		workflow.ExecutingOrg = user.ActiveOrg
+		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
+		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
 	err = SetWorkflowExecution(ctx, workflowExecution, true)
@@ -10305,6 +10315,59 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 	return
+}
+
+// Downloads documentation from Github to be placed in an app/workflow as markdown
+// Caching no matter what, with no retries
+func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
+	cacheKey := fmt.Sprintf("docs_%s", url)
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		return cacheData, nil
+	}
+
+	httpClient := &http.Client{}
+	req, err := http.NewRequest(
+		"GET",
+		url,
+		nil,
+	)
+
+	if err != nil {
+		SetCache(ctx, cacheKey, []byte{})
+		return []byte{}, err
+	}
+
+	newresp, err := httpClient.Do(req)
+	if err != nil {
+		return []byte{}, err
+	}
+
+	log.Printf("URL %#v, RESP: %d", url, newresp.StatusCode)
+	if newresp.StatusCode != 200 {
+		SetCache(ctx, cacheKey, []byte{})
+
+		return []byte{}, errors.New(fmt.Sprintf("No body to handle for %#v. Status: %d", url, newresp.StatusCode))
+	}
+
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		SetCache(ctx, cacheKey, []byte{})
+		return []byte{}, err
+	}
+
+	//log.Printf("Documentation: %#v", string(body))
+	if len(body) > 0 {
+		err = SetCache(ctx, cacheKey, body)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for workflow/app doc %s: %s", url, err)
+		}
+		return body, nil
+	}
+
+	SetCache(ctx, cacheKey, []byte{})
+	return []byte{}, errors.New(fmt.Sprintf("No body to handle for %#v", url))
 }
 
 //// New execution with firestore
@@ -11221,4 +11284,50 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	}
 
 	return false, ""
+}
+
+func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []WorkflowApp {
+	newApps := []WorkflowApp{}
+	for _, app := range allApps {
+		if len(app.ReferenceInfo.DocumentationUrl) > 0 && strings.HasPrefix(app.ReferenceInfo.DocumentationUrl, "https://raw.githubusercontent.com/Shuffle") && strings.Contains(app.ReferenceInfo.DocumentationUrl, ".md") {
+			// Should find documentation from the github (only if github?) and add it to app.Documentation before caching
+			log.Printf("DOCS: %#v", app.ReferenceInfo.DocumentationUrl)
+			documentationData, err := DownloadFromUrl(ctx, app.ReferenceInfo.DocumentationUrl)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting data: %#v", err)
+			} else {
+				app.Documentation = string(documentationData)
+			}
+		}
+
+		if app.Documentation == "" && strings.ToLower(app.Name) == "discord" {
+			log.Printf("Trying to find documentation for %#v", app.Name)
+			referenceUrl := ""
+
+			if app.Generated {
+				log.Printf("[DEBUG] Should look in the OpenAPI folder")
+				baseUrl := "https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs"
+
+				newName := strings.ToLower(strings.Replace(strings.Replace(app.Name, " ", "_", -1), "-", "_", -1))
+				referenceUrl = fmt.Sprintf("%s/%s.md", baseUrl, newName)
+			} else {
+				log.Printf("[DEBUG] Should look in the Python-apps folder")
+			}
+
+			if len(referenceUrl) > 0 {
+				log.Printf("REF: %#v", referenceUrl)
+
+				documentationData, err := DownloadFromUrl(ctx, referenceUrl)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting data for app %#v: %#v", app.Name, err)
+				} else {
+					app.Documentation = string(documentationData)
+				}
+			}
+		}
+
+		newApps = append(newApps, app)
+	}
+
+	return newApps
 }

@@ -90,7 +90,7 @@ type WorkflowApp struct {
 	ReferenceOrg   string              `json:"reference_org" datastore:"reference_org"`
 	ReferenceUrl   string              `json:"reference_url" datastore:"reference_url"`
 	ActionFilePath string              `json:"action_file_path" datastore:"action_file_path"`
-	Documentation  string              `json:"documentation" datastore:"documentation"`
+	Documentation  string              `json:"documentation" datastore:"documentation,noindex"`
 }
 
 type AppVersion struct {

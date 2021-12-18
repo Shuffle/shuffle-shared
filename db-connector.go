@@ -21,6 +21,7 @@ import (
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
 	"github.com/frikky/go-elasticsearch/v8/esapi"
+	"github.com/frikky/kin-openapi/openapi3"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
@@ -830,7 +831,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
 		if err != nil || len(workflowApp.Actions) == 0 {
-			log.Printf("[WARNING] Failed getting app in GetApp: %s. Actions: %d. Getting if EITHER is bad or 0", err, len(workflowApp.Actions))
+			log.Printf("[WARNING] Failed getting app in GetApp with ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", id, err, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
 				if app.ID == id {
 					workflowApp = &app
@@ -1928,8 +1929,67 @@ func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) 
 	} else {
 		k := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, &openapi); err != nil {
-			log.Println(err)
+			log.Printf("[WARNING] Failed setting openapi for ID %s in datastore: %s", id, err)
 			return err
+		}
+
+		/*
+			swagger, err := openapi3.NewSwaggerLoader().LoadSwaggerFromData([]byte(openapi.Body))
+			if err != nil {
+				log.Printf("[DEBUG] Failed preloading swagger: %s", err)
+				return err
+			}
+
+			curName := fmt.Sprintf("%s_%s", strings.Replace(strings.Replace(swagger.Info.Title, " ", "_", -1), "-", "_", -1), id)
+			client, err := storage.NewClient(ctx)
+			if err != nil {
+				log.Printf("[WARNING] Failed to create client (storage - set openapi datastore): %s", err)
+				return err
+			}
+
+			bucket := client.Bucket("shuffler.appspot.com")
+			basePath := fmt.Sprintf("generated_apps/%s", curName)
+			obj := bucket.Object(fmt.Sprintf("%s/openapi.yaml", basePath))
+			w := obj.NewWriter(ctx)
+			if _, err := fmt.Fprintln(w, openapi.Body); err != nil {
+				return err
+			}
+			// Close, just like writing a file.
+			if err := w.Close(); err != nil {
+				return err
+			}
+
+			//err = json.Unmarshal(data, &api)
+			//	if err != nil {
+			//		log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
+			//		return *api, err
+			//	}
+
+			//bucket := client.Bucket("shuffler.appspot.com")
+			//basePath := fmt.Sprintf("generated_apps/%s", curName)
+			obj = bucket.Object(fmt.Sprintf("extra_specs/%s/openapi.json", id))
+			w = obj.NewWriter(ctx)
+			if _, err := fmt.Fprintln(w, openapi.Body); err != nil {
+				return err
+			}
+			// Close, just like writing a file.
+			if err := w.Close(); err != nil {
+				return err
+			}
+		*/
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(openapi)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling openapi3 in set: %s", err)
+			return nil
+		}
+
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating openapi cache in set: %s", err)
 		}
 	}
 
@@ -3150,6 +3210,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	if len(allApps) > 0 {
+		// Finds references
+		allApps = findReferenceAppDocs(ctx, allApps)
+
 		newbody, err := json.Marshal(allApps)
 		if err != nil {
 			return allApps, nil
