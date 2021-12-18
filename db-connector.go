@@ -21,7 +21,7 @@ import (
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
 	"github.com/frikky/go-elasticsearch/v8/esapi"
-	"github.com/frikky/kin-openapi/openapi3"
+	//"github.com/frikky/kin-openapi/openapi3"
 	"github.com/patrickmn/go-cache"
 	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
