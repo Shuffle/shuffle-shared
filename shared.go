@@ -1464,21 +1464,33 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	//env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
-	//if err != nil {
-	//	log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
-	//	resp.WriteHeader(401)
-	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
-	//	return
-	//}
+	environmentName := fileId
+	if len(fileId) != 36 {
+		log.Printf("[DEBUG] Environment length %d for %s is not good for reruns. Attempting to find the actual ID for it", len(fileId), fileId)
 
-	//log.Printf("%#v", env)
-	//if env.OrgId != user.ActiveOrg.Id {
-	//	log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
-	//	resp.WriteHeader(401)
-	//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
-	//	return
-	//}
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting environments to validate: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to validate environment"}`))
+			return
+		}
+
+		for _, environment := range environments {
+			if environment.Name == fileId && len(environment.Id) > 0 {
+				environmentName = fileId
+				fileId = environment.Id
+				break
+			}
+		}
+
+		if len(fileId) != 36 {
+			log.Printf("[WARNING] Failed getting environments to validate. New FileId: %s", fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed updating environment"}`))
+			return
+		}
+	}
 
 	// 1: Loop all workflows
 	// 2: Stop all running executions (manually abort)
@@ -1490,6 +1502,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	maxTotalReruns := 100
 	total := 0
 	for _, workflow := range workflows {
 		if workflow.OrgId != user.ActiveOrg.Id {
@@ -1497,13 +1510,18 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		cnt, _ := RerunExecution(ctx, fileId, workflow)
+		if total > maxTotalReruns {
+			log.Printf("[DEBUG] Stopping because more than %d (%d) executions are pending. Checking reruns again on next iteration", maxTotalReruns, total)
+			break
+		}
+
+		cnt, _ := RerunExecution(ctx, environmentName, workflow)
 		total += cnt
 	}
 
-	log.Printf("[DEBUG] Stopped %d executions in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	log.Printf("[DEBUG] RERAN %d executions in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
-	//resp.Write(newjson)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully RERAN and stopped %d executions"}`, total)))
 }
 
 // Send in deleteall=true to delete ALL executions for the environment ID
@@ -1544,6 +1562,34 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
+	environmentName := fileId
+	if len(fileId) != 36 {
+		log.Printf("[DEBUG] Environment length %d for %s is not good for executions aborts. Attempting to find the actual ID for it", len(fileId), fileId)
+
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting environments to validate: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to validate environment"}`))
+			return
+		}
+
+		for _, environment := range environments {
+			if environment.Name == fileId && len(environment.Id) > 0 {
+				environmentName = fileId
+				fileId = environment.Id
+				break
+			}
+		}
+
+		if len(fileId) != 36 {
+			log.Printf("[WARNING] Failed getting environments to validate. New FileId: %s", fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed updating environment"}`))
+			return
+		}
+	}
+
 	cleanAll := false
 	deleteAll, ok := request.URL.Query()["deleteall"]
 	if ok {
@@ -1625,7 +1671,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		cnt, _ := CleanupExecutions(ctx, fileId, workflow, cleanAll)
+		cnt, _ := CleanupExecutions(ctx, environmentName, workflow, cleanAll)
 		total += cnt
 	}
 
@@ -1638,6 +1684,8 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 }
 
 func RerunExecution(ctx context.Context, environment string, workflow Workflow) (int, error) {
+	maxReruns := 100
+	//log.Printf("[DEBUG] Finding executions for %s", workflow.ID)
 	executions, err := GetUnfinishedExecutions(ctx, workflow.ID)
 	if err != nil {
 		log.Printf("[DEBUG] Failed getting executions for workflow %s", workflow.ID)
@@ -1651,24 +1699,32 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 	//log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
 	//log.Printf("[DEBUG] Found %d unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
 
-	backendUrl := os.Getenv("BASE_URL")
-	if project.Environment == "cloud" {
-		backendUrl = "https://shuffler.io"
-	} else {
-		backendUrl = "http://127.0.0.1:5001"
-	}
+	//backendUrl := os.Getenv("BASE_URL")
+	//if project.Environment == "cloud" {
+	//	backendUrl = "https://shuffler.io"
+	//} else {
+	//	backendUrl = "http://127.0.0.1:5001"
+	//}
 
-	topClient := &http.Client{
-		Transport: &http.Transport{
-			Proxy: nil,
-		},
-	}
+	//topClient := &http.Client{
+	//	Transport: &http.Transport{
+	//		Proxy: nil,
+	//	},
+	//}
+	//_ = backendUrl
+	//_ = topClient
 
 	//StartedAt           int64          `json:"started_at" datastore:"started_at"`
 	timeNow := int64(time.Now().Unix())
 	cnt := 0
+
+	// Rerun after 570 seconds (9.5 minutes), ensuring it can check 3 times before
+	// automated aborting of the execution happens
+	waitTime := 570
+	//waitTime := 0
+	executed := []string{}
 	for _, execution := range executions {
-		if timeNow < execution.StartedAt+1800 {
+		if timeNow < execution.StartedAt+int64(waitTime) {
 			//log.Printf("Bad timing: %d", execution.StartedAt)
 			continue
 		}
@@ -1677,6 +1733,12 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 			//log.Printf("Bad status: %s", execution.Status)
 			continue
 		}
+
+		if ArrayContains(executed, execution.ExecutionId) {
+			continue
+		}
+
+		executed = append(executed, execution.ExecutionId)
 
 		found := false
 		environments := []string{}
@@ -1696,47 +1758,31 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 			continue
 		}
 
-		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
-		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort", backendUrl, execution.Workflow.ID, execution.ExecutionId)
-		/*
-			data = {
-				"start": execution.Start,
-				"execution_argument": execution.ExecutionArgument,
+		if cnt > maxReruns {
+			log.Printf("[DEBUG] Breaking because more than 100 executions are executing")
+			break
+		}
+
+		if project.Environment != "cloud" {
+			executionRequest := ExecutionRequest{
+				ExecutionId:   execution.ExecutionId,
+				WorkflowId:    execution.Workflow.ID,
+				Authorization: execution.Authorization,
+				Environments:  environments,
 			}
-		*/
-		resultData := ""
-		req, err := http.NewRequest(
-			"GET",
-			streamUrl,
-			bytes.NewBuffer([]byte(resultData)),
-		)
 
-		if err != nil {
-			log.Printf("[ERROR] Error in auto-abort request: %s", err)
-			continue
-		}
-
-		req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, execution.Authorization))
-		newresp, err := topClient.Do(req)
-		if err != nil {
-			log.Printf("[ERROR] Error auto-running workflow: %s", err)
-			continue
-		}
-
-		body, err := ioutil.ReadAll(newresp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading parent body (rerun exec): %s", err)
-			continue
-		}
-		//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
-
-		if newresp.StatusCode != 200 {
-			log.Printf("[ERROR] Bad statuscode in rerun exec: %d, %s", newresp.StatusCode, string(body))
-			continue
+			executionRequest.Priority = execution.Priority
+			err = SetWorkflowQueue(ctx, executionRequest, environment)
+			if err != nil {
+				log.Printf("[ERROR] Failed re-adding execution to db: %s", err)
+			}
+		} else {
+			log.Printf("[DEBUG] Rerunning executions is not available in cloud yet.")
 		}
 
 		cnt += 1
-		log.Printf("[DEBUG] Result from rerunning %s: %s", execution.ExecutionId, string(body))
+		log.Printf("[DEBUG] Should rerun execution %s (%s - Workflow: %s) with environments %#v", execution.ExecutionId, execution.Status, execution.Workflow.ID, environments)
+		//log.Printf("[DEBUG] Result from rerunning %s: %s", execution.ExecutionId, string(body))
 	}
 
 	return cnt, nil
@@ -1805,7 +1851,7 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 
 		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
 
-		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape("Cleanup-crew stopped this execution"))
+		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape(`{"success": False, "reason": "Shuffle's automated cleanup-crew stopped this execution as it didn't finish"}`))
 		//log.Printf("Url: %s", streamUrl)
 		req, err := http.NewRequest(
 			"GET",
@@ -3580,7 +3626,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				trigger.Status = "stopped"
 			}
 		} else if trigger.TriggerType == "SUBFLOW" {
-			for index, param := range trigger.Parameters {
+			for _, param := range trigger.Parameters {
 				//log.Printf("PARAMS: %#v", param)
 				if param.Name == "workflow" {
 					// Validate workflow exists
@@ -3592,33 +3638,37 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				//if len(param.Value) == 0 && param.Name != "argument" {
-				if param.Name == "user_apikey" {
-					apikey := ""
-					if len(user.ApiKey) > 0 {
-						apikey = user.ApiKey
-					} else {
-						user, err = GenerateApikey(ctx, user)
-						if err != nil {
-							workflow.IsValid = false
-							workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
+				// FIXME: No longer necessary to use the org's users' actual APIkey
+				// Instead, this is replaced during runtime to use the executions' key
+				/*
+					if param.Name == "user_apikey" {
+						apikey := ""
+						if len(user.ApiKey) > 0 {
+							apikey = user.ApiKey
+						} else {
+							user, err = GenerateApikey(ctx, user)
+							if err != nil {
+								workflow.IsValid = false
+								workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
 
-							log.Printf("[DEBUG] No type specified for subflow node")
+								log.Printf("[DEBUG] No type specified for subflow node")
 
-							if workflow.PreviouslySaved {
-								resp.WriteHeader(401)
-								resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
-								return
+								if workflow.PreviouslySaved {
+									resp.WriteHeader(401)
+									resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
+									return
+								}
 							}
+
+							apikey = user.ApiKey
 						}
 
-						apikey = user.ApiKey
+						log.Printf("[INFO] Set apikey in subflow trigger for user during save")
+						if len(apikey) > 0 {
+							trigger.Parameters[index].Value = apikey
+						}
 					}
-
-					log.Printf("[INFO] Set apikey in subflow trigger for user during save")
-					if len(apikey) > 0 {
-						trigger.Parameters[index].Value = apikey
-					}
-				}
+				*/
 				//} else {
 
 				//	workflow.IsValid = false

@@ -615,10 +615,10 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 			}
 		} else {
-			log.Printf("[ERROR] Failed getting cache for execution variables data %s: %s", executionId, err)
+			log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
 		}
 	} else {
-		log.Printf("[ERROR] CacheDB is being skipped - can we handle execution?")
+		log.Printf("[ERROR][%s] CacheDB is being skipped - can we handle execution?", executionId)
 	}
 
 	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
@@ -5092,7 +5092,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			},
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
-					"should": []map[string]interface{}{
+					"must": []map[string]interface{}{
 						map[string]interface{}{
 							"match": map[string]interface{}{
 								"workflow_id": workflowId,
@@ -5100,7 +5100,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 						},
 						map[string]interface{}{
 							"match": map[string]interface{}{
-								"owner": "EXECUTING",
+								"status": "EXECUTING",
 							},
 						},
 					},
