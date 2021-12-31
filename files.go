@@ -332,21 +332,26 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if fileExists(file.DownloadPath) {
-		err = os.Remove(file.DownloadPath)
-		if err != nil {
-			log.Printf("[ERROR] Failed deleting file locally: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed deleting filein path %s"}`, file.DownloadPath)))
+	// FIXME: Actually delete the file.
+	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
+		log.Printf("[DEBUG] Deleted file %s from Google cloud storage", fileId)
+	} else {
+		if fileExists(file.DownloadPath) {
+			err = os.Remove(file.DownloadPath)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting file locally: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed deleting filein path %s"}`, file.DownloadPath)))
+				return
+			}
+
+			log.Printf("[INFO] Deleted file %s locally. Next is database.", file.DownloadPath)
+		} else {
+			log.Printf("[ERROR] File doesn't exist. Can't delete. Should maybe delete file anyway?")
+			resp.WriteHeader(200)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "File in location %s doesn't exist"}`, file.DownloadPath)))
 			return
 		}
-
-		log.Printf("[INFO] Deleted file %s locally. Next is database.", file.DownloadPath)
-	} else {
-		log.Printf("[ERROR] File doesn't exist. Can't delete. Should maybe delete file anyway?")
-		resp.WriteHeader(200)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "File in location %s doesn't exist"}`, file.DownloadPath)))
-		return
 	}
 
 	file.Status = "deleted"
