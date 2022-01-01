@@ -5819,7 +5819,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated user"}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully added new suborg. Refresh to see it."}`)))
 
 }
 
@@ -5902,9 +5902,9 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(parentOrg.ManagerOrgs) > 0 {
-		log.Printf("[WARNING] Organization %s can't have suborgs, as it's as suborg: %s", tmpData.OrgId, err)
+		log.Printf("[WARNING] Organization %s can't have suborgs, as it's as suborg", tmpData.OrgId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Can't make suborg of suborg."}`))
+		resp.Write([]byte(`{"success": false, "reason": "Can't make suborg of suborg. Switch to a parent org to make another."}`))
 		return
 	}
 
