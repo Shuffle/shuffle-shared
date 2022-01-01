@@ -615,7 +615,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 			}
 		} else {
-			log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
+			//log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
 		}
 	} else {
 		log.Printf("[ERROR][%s] CacheDB is being skipped - can we handle execution?", executionId)
@@ -925,7 +925,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 				return sub, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for sub: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for sub: %s", err)
 		}
 	}
 
@@ -1153,7 +1153,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 				return workflow, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
 		}
 	}
 
@@ -2919,7 +2919,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				log.Printf("[ERROR] DATALEN: %d", len(cacheData))
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
+			//log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
 		}
 	}
 
@@ -3041,7 +3041,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				log.Printf("[WARNING] Failed unmarshaling PUBLIC apps: %s", err)
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for PUBLIC apps: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for PUBLIC apps: %s", err)
 		}
 	}
 
@@ -4182,7 +4182,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 				return hook, errors.New(fmt.Sprintf("Bad cache for %s", hookId))
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
 		}
 	}
 	//log.Printf("DBTYPE: %#v", project.DbType)
@@ -5809,7 +5809,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 				return cacheData, nil
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for cache key %s: %s", id, err)
+			//log.Printf("[DEBUG] Failed getting cache for cache key %s: %s", id, err)
 		}
 	}
 
