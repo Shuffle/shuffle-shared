@@ -549,30 +549,31 @@ type OrgMini struct {
 }
 
 type Org struct {
-	Name            string                `json:"name" datastore:"name"`
-	Description     string                `json:"description" datastore:"description"`
-	Image           string                `json:"image" datastore:"image,noindex"`
-	Id              string                `json:"id" datastore:"id"`
-	Org             string                `json:"org" datastore:"org"`
-	Users           []User                `json:"users" datastore:"users"`
-	Role            string                `json:"role" datastore:"role"`
-	Roles           []string              `json:"roles" datastore:"roles"`
-	ActiveApps      []string              `json:"active_apps" datastore:"active_apps"`
-	CloudSync       bool                  `json:"cloud_sync" datastore:"CloudSync"`
-	CloudSyncActive bool                  `json:"cloud_sync_active" datastore:"CloudSyncActive"`
-	SyncConfig      SyncConfig            `json:"sync_config" datastore:"sync_config"`
-	SyncFeatures    SyncFeatures          `json:"sync_features,omitempty" datastore:"sync_features"`
-	Subscriptions   []PaymentSubscription `json:"subscriptions" datastore:"subscriptions"`
-	SyncUsage       SyncUsage             `json:"sync_usage" datastore:"sync_usage"`
-	Created         int64                 `json:"created" datastore:"created"`
-	Edited          int64                 `json:"edited" datastore:"edited"`
-	Defaults        Defaults              `json:"defaults" datastore:"defaults"`
-	Invites         []string              `json:"invites" datastore:"invites"`
-	ChildOrgs       []OrgMini             `json:"child_orgs" datastore:"child_orgs"`
-	ManagerOrgs     []OrgMini             `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
-	CreatorOrg      string                `json:"creator_org" datastore:"creator_org"`
-	SSOConfig       SSOConfig             `json:"sso_config" datastore:"sso_config"`
-	Disabled        bool                  `json:"disabled" datastore:"disabled"`
+	Name              string                `json:"name" datastore:"name"`
+	Description       string                `json:"description" datastore:"description"`
+	Image             string                `json:"image" datastore:"image,noindex"`
+	Id                string                `json:"id" datastore:"id"`
+	Org               string                `json:"org" datastore:"org"`
+	Users             []User                `json:"users" datastore:"users"`
+	Role              string                `json:"role" datastore:"role"`
+	Roles             []string              `json:"roles" datastore:"roles"`
+	ActiveApps        []string              `json:"active_apps" datastore:"active_apps"`
+	CloudSync         bool                  `json:"cloud_sync" datastore:"CloudSync"`
+	CloudSyncActive   bool                  `json:"cloud_sync_active" datastore:"CloudSyncActive"`
+	SyncConfig        SyncConfig            `json:"sync_config" datastore:"sync_config"`
+	SyncFeatures      SyncFeatures          `json:"sync_features,omitempty" datastore:"sync_features"`
+	Subscriptions     []PaymentSubscription `json:"subscriptions" datastore:"subscriptions"`
+	SyncUsage         SyncUsage             `json:"sync_usage" datastore:"sync_usage"`
+	Created           int64                 `json:"created" datastore:"created"`
+	Edited            int64                 `json:"edited" datastore:"edited"`
+	Defaults          Defaults              `json:"defaults" datastore:"defaults"`
+	Invites           []string              `json:"invites" datastore:"invites"`
+	ChildOrgs         []OrgMini             `json:"child_orgs" datastore:"child_orgs"`
+	ManagerOrgs       []OrgMini             `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
+	CreatorOrg        string                `json:"creator_org" datastore:"creator_org"`
+	SSOConfig         SSOConfig             `json:"sso_config" datastore:"sso_config"`
+	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework""`
+	Disabled          bool                  `json:"disabled" datastore:"disabled"`
 }
 
 type Defaults struct {
@@ -862,8 +863,10 @@ type Workflow struct {
 
 type Category struct {
 	Name        string `json:"name" datastore:"name"`
-	Description string `json:"description" datastore:"description"`
 	Count       int64  `json:"count" datastore:"count"`
+	ID          string `json:"id" datastore:"id"`
+	Description string `json:"description" datastore:"description,noindex"`
+	LargeImage  string `json:"large_image,omitempty" datastore:"large_image,noindex"`
 }
 
 type Categories struct {
@@ -874,6 +877,7 @@ type Categories struct {
 	Network       Category `json:"network" datastore:"network"`
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
+	IAM           Category `json:"IAM" datastore:"IAM"`
 	Other         Category `json:"other" datastore:"other"`
 }
 

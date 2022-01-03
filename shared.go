@@ -11476,3 +11476,179 @@ func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(urlbody)
 }
+
+func GetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just here to verify that the user is logged in
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[DEBUG] Api authentication failed in get detection framework: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Error getting org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	org.SecurityFramework.Cases.Name = "TheHive"
+	org.SecurityFramework.Cases.Description = "Some kind of description"
+	org.SecurityFramework.Cases.ID = "THIS IS THe ID"
+	org.SecurityFramework.Cases.LargeImage = "data:image/png;base64,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"
+
+	//log.Printf("Framework: %#v", org.SecurityFramework)
+	newjson, err := json.Marshal(org.SecurityFramework)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshal in get security framework: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking framework. Contact us to get it fixed."}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just here to verify that the user is logged in
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[DEBUG] Api authentication failed in set detection framework: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type parsedValue struct {
+		Type string `json:"type"`
+		Name string `json:"name"`
+		ID   string `json:"id"`
+	}
+
+	var value parsedValue
+	err = json.Unmarshal(body, &value)
+	if err != nil {
+		log.Printf("[WARNING] Error with unmarshal tmpBody in frameworkconfig: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := getContext(request)
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Error getting org in set framework: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	app, err := GetApp(ctx, value.ID, user, false)
+	if err != nil {
+		log.Printf("[WARNING] Error getting app %s in set framework: %s", value.ID, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if !app.Sharing && app.Public {
+		log.Printf("[WARNING] Error setting app %s for org %s as it's not public.", value.ID, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	_ = org
+
+	// 1. Check if the app exists and the user has access to it. If public/sharing ->
+	if strings.ToLower(value.Type) == "siem" {
+		org.SecurityFramework.SIEM.Name = app.Name
+		org.SecurityFramework.SIEM.Description = app.Description
+		org.SecurityFramework.SIEM.ID = app.ID
+		org.SecurityFramework.SIEM.LargeImage = app.LargeImage
+	} else if strings.ToLower(value.Type) == "network" {
+		org.SecurityFramework.Network.Name = app.Name
+		org.SecurityFramework.Network.Description = app.Description
+		org.SecurityFramework.Network.ID = app.ID
+		org.SecurityFramework.Network.LargeImage = app.LargeImage
+	} else if strings.ToLower(value.Type) == "edr" || strings.ToLower(value.Type) == "edr & av" {
+		org.SecurityFramework.EDR.Name = app.Name
+		org.SecurityFramework.EDR.Description = app.Description
+		org.SecurityFramework.EDR.ID = app.ID
+		org.SecurityFramework.EDR.LargeImage = app.LargeImage
+	} else if strings.ToLower(value.Type) == "cases" {
+		org.SecurityFramework.Cases.Name = app.Name
+		org.SecurityFramework.Cases.Description = app.Description
+		org.SecurityFramework.Cases.ID = app.ID
+		org.SecurityFramework.Cases.LargeImage = app.LargeImage
+	} else if strings.ToLower(value.Type) == "iam" {
+		org.SecurityFramework.IAM.Name = app.Name
+		org.SecurityFramework.IAM.Description = app.Description
+		org.SecurityFramework.IAM.ID = app.ID
+		org.SecurityFramework.IAM.LargeImage = app.LargeImage
+	} else if strings.ToLower(value.Type) == "assets" {
+		org.SecurityFramework.Assets.Name = app.Name
+		org.SecurityFramework.Assets.Description = app.Description
+		org.SecurityFramework.Assets.ID = app.ID
+		org.SecurityFramework.Assets.LargeImage = app.LargeImage
+	} else if strings.ToLower(value.Type) == "intel" {
+		org.SecurityFramework.Intel.Name = app.Name
+		org.SecurityFramework.Intel.Description = app.Description
+		org.SecurityFramework.Intel.ID = app.ID
+		org.SecurityFramework.Intel.LargeImage = app.LargeImage
+	} else if strings.ToLower(value.Type) == "comms" {
+		org.SecurityFramework.Communication.Name = app.Name
+		org.SecurityFramework.Communication.Description = app.Description
+		org.SecurityFramework.Communication.ID = app.ID
+		org.SecurityFramework.Communication.LargeImage = app.LargeImage
+	} else {
+		log.Printf("[WARNING] No handler for type %s in sec  framework", value.Type)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Add app as active for org too
+	if !ArrayContains(org.ActiveApps, app.ID) {
+		org.ActiveApps = append(org.ActiveApps, app.ID)
+	}
+
+	err = SetOrg(ctx, *org, org.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting app framework for org %s: %s", org.Name, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed updating organization info"}`))
+		return
+	} else {
+		cacheKey := fmt.Sprintf("apps_%s", user.Id)
+		DeleteCache(ctx, cacheKey)
+	}
+
+	log.Printf("[DEBUG] Successfully updated type %s to app %s (%s) for org %s (%s)!", value.Type, app.Name, app.ID, org.Name, org.Id)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}

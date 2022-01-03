@@ -831,7 +831,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
 		if err != nil || len(workflowApp.Actions) == 0 {
-			log.Printf("[WARNING] Failed getting app in GetApp with ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", id, err, len(workflowApp.Actions), err)
+			log.Printf("[WARNING] Failed getting app in GetApp with ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
 				if app.ID == id {
 					workflowApp = &app
