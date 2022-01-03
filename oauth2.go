@@ -786,7 +786,7 @@ type GmailSubscription struct {
 	LabelFilterAction []string `json:"labelFilterAction"`
 }
 
-func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse, error) {
+func MakeGmailSubscription(client *http.Client, folderIds []string) (SubResponse, error) {
 	fullUrl := "https://www.googleapis.com/gmail/v1/users/me/watch"
 
 	// FIXME - this expires rofl
@@ -794,7 +794,7 @@ func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 	//timeFormat := fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d.0000000Z", t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
 
 	resource := "projects/shuffler/topics/gmail_testing"
-	log.Printf("[INFO] Subscription resource to get(s) for gmail: %s", resource)
+	//log.Printf("[INFO] Subscription resource to get for gmail: %s", resource)
 	sub := GmailSubscription{
 		TopicName: resource,
 		LabelIds:  folderIds,
@@ -827,12 +827,10 @@ func makeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 		return SubResponse{}, err
 	}
 
-	log.Printf("[INFO] GMAIL Subscription Status: %d. Body: %s", res.StatusCode, string(body))
-
 	//log.Printf("GMAIL RESP: %s", string(body))
 
 	if res.StatusCode != 200 && res.StatusCode != 201 {
-		//log.Printf("[ERROR] WATCH ERROR: %s", body)
+		log.Printf("[INFO] GMAIL Subscription Status: %d. Body: %s", res.StatusCode, string(body))
 		return SubResponse{}, errors.New(fmt.Sprintf("Subscription failed: %s", string(body)))
 	}
 
@@ -982,13 +980,13 @@ func cancelGmailSubscription(ctx context.Context, gmailClient *http.Client) erro
 		return err
 	}
 
-	log.Printf("[INFO] Stop subscription on GMAIL Status: %d", res.StatusCode)
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] Gmail subscription Body (2): %s", err)
 		return err
 	}
 
+	log.Printf("[INFO] Stop subscription on GMAIL Status: %d. Resp: %s", res.StatusCode, string(body))
 	//log.Printf("GMAIL RESP (%d): %s", res.StatusCode, string(body))
 
 	if res.StatusCode != 200 && res.StatusCode != 201 && res.StatusCode != 204 {
@@ -1051,9 +1049,10 @@ func HandleGmailSubRemoval(ctx context.Context, user User, workflowId, triggerId
 	}
 
 	// Actually delete the thing
-	redirectDomain := "localhost:5001"
-	url := fmt.Sprintf("http://%s/api/v1/triggers/outlook/register", redirectDomain)
-	gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, url)
+	//redirectDomain := "localhost:5001"
+	//url := fmt.Sprintf("http://%s/api/v1/triggers/outlook/register", redirectDomain)
+	//gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, url)
+	gmailClient, err := RefreshGmailClient(ctx, *trigger)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - gmail delete: %s", err)
 		return err
@@ -1689,7 +1688,8 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, "")
+	//gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, "")
+	gmailClient, err := RefreshGmailClient(ctx, *trigger)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure in gmail - triggerauth: %s", err)
 		resp.Write([]byte(`{"success": false, "reason": ""}`))
@@ -1709,7 +1709,7 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 	trigger.Folders = curTrigger.Folders
 
 	for {
-		sub, err := makeGmailSubscription(gmailClient, curTrigger.Folders)
+		sub, err := MakeGmailSubscription(gmailClient, curTrigger.Folders)
 		if err != nil {
 			log.Printf("[WARNING] Failed making oauth subscription for gmail - cancelling request: %s", err)
 			resp.WriteHeader(401)
@@ -2115,7 +2115,8 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("SUB: %#v", subscription)
-	gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, "")
+	//gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, "")
+	gmailClient, err := RefreshGmailClient(ctx, *trigger)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - gmail new msg parse: %s", err)
 		resp.WriteHeader(200)
@@ -2401,7 +2402,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if callSub {
-		makeGmailSubscription(gmailClient, trigger.Folders)
+		MakeGmailSubscription(gmailClient, trigger.Folders)
 	}
 
 	resp.WriteHeader(200)
@@ -2435,6 +2436,33 @@ func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData 
 
 	log.Printf("[DEBUG] Webhook RESP (%d): %s", res.StatusCode, string(body))
 	return nil
+}
+
+func RefreshGmailClient(ctx context.Context, auth TriggerAuth) (*http.Client, error) {
+	// Manually recreate the oauthtoken
+	conf := &oauth2.Config{
+		ClientID:     os.Getenv("GMAIL_CLIENT_ID"),
+		ClientSecret: os.Getenv("GMAIL_CLIENT_SECRET"),
+		Scopes: []string{
+			"https://www.googleapis.com/auth/gmail.readonly",
+		},
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  "https://accounts.google.com/o/oauth2/auth",
+			TokenURL: "https://accounts.google.com/o/oauth2/token",
+		},
+	}
+
+	token := new(oauth2.Token)
+	token.AccessToken = auth.OauthToken.AccessToken
+	token.RefreshToken = auth.OauthToken.RefreshToken
+	token.Expiry = auth.OauthToken.Expiry
+	token.TokenType = auth.OauthToken.TokenType
+
+	// FIXME: BAD workaround.
+	token.Expiry = time.Now().Add(time.Minute * -1)
+
+	client := conf.Client(ctx, token)
+	return client, nil
 }
 
 // THis all of a sudden became really horrible.. fml
@@ -2531,7 +2559,7 @@ func getGmailFolders(client *http.Client) (OutlookFolders, error) {
 
 	//log.Printf("Folders: %s", string(body))
 	//log.Printf("[INFO] Folder Body: %s", string(body))
-	log.Printf("[INFO] Status for GMAIL folders (Labels): %d", ret.StatusCode)
+	log.Printf("[INFO] Status for GMAIL folders (Labels): %d. Body: %s", ret.StatusCode, string(body))
 	if ret.StatusCode != 200 {
 		return OutlookFolders{}, err
 	}
@@ -2663,12 +2691,15 @@ func HandleGetGmailFolders(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME - should be shuffler in literally every case except testing lol
 	//log.Printf("TRIGGER: %#v", trigger)
-	redirectDomain := "localhost:5001"
-	url := fmt.Sprintf("http://%s/api/v1/triggers/gmail/register", redirectDomain)
-	if project.Environment == "cloud" {
-		url = fmt.Sprintf("https://shuffler.io/api/v1/triggers/gmail/register", redirectDomain)
-	}
-	gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, url)
+	//redirectDomain := "localhost:5001"
+	//url := fmt.Sprintf("http://%s/api/v1/triggers/gmail/register", redirectDomain)
+	//if project.Environment == "cloud" {
+	//	url = fmt.Sprintf("https://shuffler.io/api/v1/triggers/gmail/register", redirectDomain)
+	//}
+
+	/* Fix refresh tokens!! */
+	gmailClient, err := RefreshGmailClient(ctx, *trigger)
+	//gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, url)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - outlook folders: %s", err)
 		resp.Write([]byte(`{"success": false, "reason": "Failed creating outlook client"}`))

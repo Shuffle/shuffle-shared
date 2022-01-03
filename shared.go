@@ -10804,7 +10804,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					curAuth.Fields = newFields
 				}
 			} else {
-				log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
+				//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
 				err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
 				if err != nil {
 					log.Printf("[WARNING] Failed running encryption during execution: %s", err)

@@ -4976,7 +4976,7 @@ func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
 	} else {
 		key1 := datastore.NameKey(nameKey, strings.ToLower(trigger.Id), nil)
 		if _, err := project.Dbclient.Put(ctx, key1, &trigger); err != nil {
-			log.Printf("Error adding trigger auth: %s", err)
+			log.Printf("[ERROR] Error adding trigger auth: %s", err)
 			return err
 		}
 	}
