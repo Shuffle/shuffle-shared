@@ -79,22 +79,40 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 
 		if dataType == "workflow_executions" {
 			orgStatistics.TotalWorkflowExecutions += int64(dumpInterval)
+			orgStatistics.MonthlyWorkflowExecutions += int64(dumpInterval)
+			orgStatistics.WeeklyWorkflowExecutions += int64(dumpInterval)
 		} else if dataType == "workflow_executions_finished" {
 			orgStatistics.TotalWorkflowExecutionsFinished += int64(dumpInterval)
+			orgStatistics.MonthlyWorkflowExecutionsFinished += int64(dumpInterval)
+			orgStatistics.WeeklyWorkflowExecutionsFinished += int64(dumpInterval)
 		} else if dataType == "workflow_executions_failed" {
 			orgStatistics.TotalWorkflowExecutionsFailed += int64(dumpInterval)
+			orgStatistics.MonthlyWorkflowExecutionsFailed += int64(dumpInterval)
+			orgStatistics.WeeklyWorkflowExecutionsFailed += int64(dumpInterval)
 		} else if dataType == "app_executions" {
 			orgStatistics.TotalAppExecutions += int64(dumpInterval)
+			orgStatistics.MonthlyAppExecutions += int64(dumpInterval)
+			orgStatistics.WeeklyAppExecutions += int64(dumpInterval)
 		} else if dataType == "app_executions_failed" {
 			orgStatistics.TotalAppExecutionsFailed += int64(dumpInterval)
+			orgStatistics.MonthlyAppExecutionsFailed += int64(dumpInterval)
+			orgStatistics.WeeklyAppExecutionsFailed += int64(dumpInterval)
 		} else if dataType == "subflow_executions" {
 			orgStatistics.TotalSubflowExecutions += int64(dumpInterval)
+			orgStatistics.MonthlySubflowExecutions += int64(dumpInterval)
+			orgStatistics.WeeklySubflowExecutions += int64(dumpInterval)
 		} else if dataType == "org_sync_actions" {
 			orgStatistics.TotalOrgSyncActions += int64(dumpInterval)
+			orgStatistics.MonthlyOrgSyncActions += int64(dumpInterval)
+			orgStatistics.WeeklyOrgSyncActions += int64(dumpInterval)
 		} else if dataType == "workflow_executions_cloud" {
 			orgStatistics.TotalCloudExecutions += int64(dumpInterval)
+			orgStatistics.MonthlyCloudExecutions += int64(dumpInterval)
+			orgStatistics.WeeklyCloudExecutions += int64(dumpInterval)
 		} else if dataType == "workflow_executions_onprem" {
 			orgStatistics.TotalOnpremExecutions += int64(dumpInterval)
+			orgStatistics.MonthlyOnpremExecutions += int64(dumpInterval)
+			orgStatistics.WeeklyOnpremExecutions += int64(dumpInterval)
 		}
 
 		if _, err := tx.Put(key, orgStatistics); err != nil {
