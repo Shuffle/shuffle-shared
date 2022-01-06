@@ -7101,12 +7101,10 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
 	// Maybe we need to pass the worker's real id, and not its VIP?
-	/*
-		if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-			backendUrl = "http://shuffle-workers:33333"
-			log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
-		}
-	*/
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+		backendUrl = "http://shuffle-workers:33333"
+		log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
+	}
 
 	// Callback to itself
 	if len(backendUrl) == 0 {
@@ -10508,26 +10506,25 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		// Checks whether the subflow has been ran before based on parent execution ID + parent execution node ID (always unique)
-		/*
-			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
-				log.Printf("\n\n[DEBUG] Should check if the parent execution %s with node %s has ran already!\n\n", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
-				newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
-				_, err := GetCache(ctx, newExecId)
-				if err == nil {
-					log.Printf("\n\n[DEBUG] Already found %s - returning\n\n", newExecId)
+		// Used to deduplicate runs
+		if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
+			log.Printf("\n\n[DEBUG] Should check if the parent execution %s with node %s has ran already!\n\n", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
+			newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
+			_, err := GetCache(ctx, newExecId)
+			if err == nil {
+				log.Printf("\n\n[DEBUG] Already found %s - returning\n\n", newExecId)
 
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
-				}
-
-				cacheData := []byte("1")
-				err = SetCache(ctx, newExecId, cacheData)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
-				} else {
-					log.Printf("\n\n[DEBUG] Adding %s to cache.\n\n", newExecId)
-				}
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
 			}
-		*/
+
+			cacheData := []byte("1")
+			err = SetCache(ctx, newExecId, cacheData)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
+			} else {
+				log.Printf("\n\n[DEBUG] Adding %s to cache.\n\n", newExecId)
+			}
+		}
 
 		if len(string(body)) < 50 {
 			log.Printf("[DEBUG] Body: %#v", string(body))
