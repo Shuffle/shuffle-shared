@@ -5669,7 +5669,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 			err = SetNewValue(ctx, newRequest)
 			if err != nil {
-				log.Printf("Error adding %s to appvalue: %s", notFoundValue, err)
+				log.Printf("[ERROR] Error adding %s to appvalue: %s", notFoundValue, err)
 				continue
 			}
 
@@ -8383,14 +8383,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if project.DbType != "elasticsearch" {
 			if len(tmpJson) >= 1000000 {
 				dbSave = true
-				log.Printf("[ERROR] Result length is too long (%d)! Need to reduce result size", len(tmpJson))
+				log.Printf("[ERROR] Result length is too long (%d)! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson))
 
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
 				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
 
 				// Result        string `json:"result" datastore:"result,noindex"`
 				// Arbitrary reduction size
-				maxSize := 250000
+				maxSize := 150000
 				newResults := []ActionResult{}
 				bucketName := "shuffler.appspot.com"
 				//shuffle-large-executions
@@ -10394,7 +10394,7 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 		return []byte{}, err
 	}
 
-	log.Printf("URL %#v, RESP: %d", url, newresp.StatusCode)
+	//log.Printf("URL %#v, RESP: %d", url, newresp.StatusCode)
 	if newresp.StatusCode != 200 {
 		SetCache(ctx, cacheKey, []byte{})
 
@@ -10491,7 +10491,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// FIXME: Get the execution and check count
 			//workflowExecution.SubExecutionCount += 1
 
-			log.Printf("\n\n[INFO] PARENT!!: %#v\n\n", workflowExecution.ExecutionParent)
+			//log.Printf("\n\n[INFO] PARENT!!: %#v\n\n", workflowExecution.ExecutionParent)
 			parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
 			if err == nil {
 				workflowExecution.SubExecutionCount = parentExecution.SubExecutionCount + 1
@@ -10506,18 +10506,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if len(string(body)) < 50 {
-			//log.Println(body)
-			// String in string
-			//log.Println(body)
-
-			//if string(body)[0] == "\"" && string(body)[string(body)
 			log.Printf("[DEBUG] Body: %#v", string(body))
 		}
 
 		var execution ExecutionRequest
 		err = json.Unmarshal(body, &execution)
 		if err != nil {
-			log.Printf("[WARNING] Failed execution POST unmarshaling - continuing anyway: %s", err)
+			//log.Printf("[WARNING] Failed execution POST unmarshaling - continuing anyway: %s", err)
 			//return WorkflowExecution{}, "", err
 		}
 
@@ -11239,24 +11234,6 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	log.Printf("[DEBUG] Inside execute validation!")
 
 	if request.Method == "POST" {
-		body, err := ioutil.ReadAll(request.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed request POST read: %s", err)
-			return false, ""
-		}
-
-		// This one doesn't really matter.
-		//log.Printf("[INFO] Running POST execution with body of length %d for workflow %s", len(string(body)), workflowExecution.Workflow.ID)
-
-		if len(body) >= 4 {
-			if body[0] == 34 && body[len(body)-1] == 34 {
-				body = body[1 : len(body)-1]
-			}
-			if body[0] == 34 && body[len(body)-1] == 34 {
-				body = body[1 : len(body)-1]
-			}
-		}
-
 		ctx := getContext(request)
 		workflowExecution := &WorkflowExecution{}
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
@@ -11341,7 +11318,7 @@ func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []Workflow
 	for _, app := range allApps {
 		if len(app.ReferenceInfo.DocumentationUrl) > 0 && strings.HasPrefix(app.ReferenceInfo.DocumentationUrl, "https://raw.githubusercontent.com/Shuffle") && strings.Contains(app.ReferenceInfo.DocumentationUrl, ".md") {
 			// Should find documentation from the github (only if github?) and add it to app.Documentation before caching
-			log.Printf("DOCS: %#v", app.ReferenceInfo.DocumentationUrl)
+			//log.Printf("DOCS: %#v", app.ReferenceInfo.DocumentationUrl)
 			documentationData, err := DownloadFromUrl(ctx, app.ReferenceInfo.DocumentationUrl)
 			if err != nil {
 				log.Printf("[ERROR] Failed getting data: %#v", err)
@@ -11350,27 +11327,28 @@ func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []Workflow
 			}
 		}
 
-		if app.Documentation == "" && strings.ToLower(app.Name) == "discord" {
-			log.Printf("[DEBUG] Trying to find documentation for %#v", app.Name)
+		//if app.Documentation == "" && strings.ToLower(app.Name) == "discord" {
+		if app.Documentation == "" {
 			referenceUrl := ""
 
 			if app.Generated {
-				log.Printf("[DEBUG] Should look in the OpenAPI folder")
+				//log.Printf("[DEBUG] Should look in the OpenAPI folder")
 				baseUrl := "https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs"
 
 				newName := strings.ToLower(strings.Replace(strings.Replace(app.Name, " ", "_", -1), "-", "_", -1))
 				referenceUrl = fmt.Sprintf("%s/%s.md", baseUrl, newName)
 			} else {
-				log.Printf("[DEBUG] Should look in the Python-apps folder")
+				//log.Printf("[DEBUG] Should look in the Python-apps folder")
 			}
 
 			if len(referenceUrl) > 0 {
-				log.Printf("REF: %#v", referenceUrl)
+				//log.Printf("REF: %#v", referenceUrl)
 
 				documentationData, err := DownloadFromUrl(ctx, referenceUrl)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting data for app %#v: %#v", app.Name, err)
 				} else {
+					log.Printf("[INFO] Added documentation from github for %#v", app.Name)
 					app.Documentation = string(documentationData)
 				}
 			}
