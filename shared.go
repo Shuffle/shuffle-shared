@@ -10508,11 +10508,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Checks whether the subflow has been ran before based on parent execution ID + parent execution node ID (always unique)
 		// Used to deduplicate runs
 		if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
-			log.Printf("\n\n[DEBUG] Should check if the parent execution %s with node %s has ran already!\n\n", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
+			//log.Printf("[DEBUG] Should check if the parent execution %s with node %s has ran already!", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
 			newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
 			_, err := GetCache(ctx, newExecId)
 			if err == nil {
-				log.Printf("\n\n[DEBUG] Already found %s - returning\n\n", newExecId)
+				log.Printf("[ERROR] Subflow already found %s - returning", newExecId)
 
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
 			}
@@ -10522,7 +10522,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if err != nil {
 				log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
 			} else {
-				log.Printf("\n\n[DEBUG] Adding %s to cache.\n\n", newExecId)
+				//log.Printf("\n\n[DEBUG] Adding %s to cache.\n\n", newExecId)
 			}
 		}
 
