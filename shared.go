@@ -9586,16 +9586,42 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 			return workflowExecution, err
 		}
 
-		// Rebuild params with the right data. This is to prevent issues on the frontend
-		for _, auth := range curAuth.Fields {
-			newParam := WorkflowAppActionParameter{
-				Name:  auth.Key,
-				ID:    action.AuthenticationId,
-				Value: auth.Value,
-			}
+		if curAuth.Encrypted {
+			for _, field := range curAuth.Fields {
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+				newValue, err := HandleKeyDecryption(field.Value, parsedKey)
+				if err != nil {
+					log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
+					break
+				}
 
-			newParams = append(newParams, newParam)
+				newParam := WorkflowAppActionParameter{
+					Name:  field.Key,
+					ID:    action.AuthenticationId,
+					Value: newValue,
+				}
+
+				newParams = append(newParams, newParam)
+			}
+		} else {
+			//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
+			//err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
+			//if err != nil {
+			//	log.Printf("[WARNING] Failed running encryption during execution: %s", err)
+			//}
+			for _, auth := range curAuth.Fields {
+
+				newParam := WorkflowAppActionParameter{
+					Name:  auth.Key,
+					ID:    action.AuthenticationId,
+					Value: auth.Value,
+				}
+
+				newParams = append(newParams, newParam)
+			}
 		}
+
+		// Rebuild params with the right data. This is to prevent issues on the frontend
 
 		action.Parameters = newParams
 	}
@@ -11367,9 +11393,9 @@ func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []Workflow
 
 				documentationData, err := DownloadFromUrl(ctx, referenceUrl)
 				if err != nil {
-					log.Printf("[ERROR] Failed getting data for app %#v: %#v", app.Name, err)
+					log.Printf("[ERROR] Failed getting documentation data for app %#v: %#v", app.Name, err)
 				} else {
-					log.Printf("[INFO] Added documentation from github for %#v", app.Name)
+					//log.Printf("[INFO] Added documentation from github for %#v", app.Name)
 					app.Documentation = string(documentationData)
 				}
 			}
