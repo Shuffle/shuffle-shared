@@ -2098,11 +2098,10 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 
 	// This History ID will match the ID that is received when the subscription is configured.
 	findHistory.MessageId = parsedMessage.Message.MessageId
-	//log.Printf("HistoryId: %d. Email: %s", findHistory.HistoryId, findHistory.EmailAddress)
 	ctx := getContext(request)
 	subscription, err := GetSubscriptionRecipient(ctx, findHistory.EmailAddress)
 	if err != nil {
-		log.Printf("[WARNING] Failed finding gmail history for ID %d: %s. Should the subscription be cancelled?", findHistory.HistoryId, err)
+		log.Printf("[WARNING] Failed finding gmail history for email %s: %s. Cancel subscription?", findHistory.EmailAddress, err)
 		resp.WriteHeader(200)
 		return
 	}
@@ -2142,26 +2141,33 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed updating gmail user %s cache: %s", gmailUserInfo, err)
 	}
 
+	if len(handledIds) >= 1000 {
+		log.Printf("[DEBUG] Cleaning up 1000 Ids")
+		handledIds = handledIds[900:999]
+	}
+
+	log.Printf("[DEBUG] HistoryId: %d. Email: %s", findHistory.HistoryId, findHistory.EmailAddress)
+
+	//if !ArrayContains(handledIds, newHistoryId) {
+	//if len(handledIds) >= 1000 || len(handledIds) == 0 {
+
+	// FIXME: Is this necessary? Seems to add a lot of stability
+	//time.Sleep(250 * time.Millisecond)
 	history := GmailHistoryStruct{}
-	if !ArrayContains(handledIds, newHistoryId) {
-		if len(handledIds) >= 1000 || len(handledIds) == 0 {
-			handledIds = []string{}
-		}
+	history, err = GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, newHistoryId)
 
-		history, err = GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, newHistoryId)
-
-		if err != nil {
-			log.Printf("[WARNING] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
-			resp.WriteHeader(200)
-			return
-		} else {
-			handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
-		}
-	} else {
-		log.Printf("[DEBUG] Email HistoryID %d for %s has already been handled", findHistory.HistoryId, findHistory.EmailAddress)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
 		resp.WriteHeader(200)
 		return
+	} else {
+		handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
 	}
+	//} else {
+	//	log.Printf("[DEBUG] Email HistoryID %d for %s has already been handled", findHistory.HistoryId, findHistory.EmailAddress)
+	//	resp.WriteHeader(200)
+	//	return
+	//}
 
 	callSub := false
 	handled := []string{}

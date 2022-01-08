@@ -499,10 +499,12 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		bodyParameter,
 		verifyParam,
 	)
-	//log.Printf("PARSED: %s", parsedParameters)
 
-	// Use spaces while in here!
-	//data := fmt.Sprintf(`    async def %s(self%s):
+	parsedDataCurlParser := ""
+	if method == "post" || method == "patch" || method == "put" {
+		parsedDataCurlParser = "parsed_curl_command += f\" -d '{body}'\""
+	}
+
 	data := fmt.Sprintf(`    def %s(self%s):
         params={}
         %s
@@ -533,11 +535,45 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         except:
             pass
 
-        ret = requests.%s(url, headers=request_headers, params=params%s%s%s%s)
+       	found = False
+       	for key, value in request_headers.items():
+            if key.lower() == "user-agent": 
+               	found = True 
+               	break	
+
+       	if not found:	
+            request_headers["User-Agent"] = "Shuffle Automation"
+
+        try:
+            #parsed_headers = [sys.stdout.write(f" -H \"{key}: {value}\"") for key, value in request_headers.items()]
+            parsed_headers = ""
+            parsed_curl_command = f"curl -X%s {url} {parsed_headers}"
+            %s
+
+            self.action["parameters"].append({
+                "name": "shuffle_request_url",
+                "value": f"{url}",
+            })
+            self.action["parameters"].append({
+                "name": "shuffle_request_curl",
+                "value": f"{parsed_curl_command}",
+            })
+            self.action["parameters"].append({
+                "name": "shuffle_request_headers",
+                "value": f"{json.dumps(parsed_headers)}",
+            })
+
+            self.action_result["action"] = self.action
+            print("[DEBUG] Updated values in self.action_result from OpenAPI app! (1)") 
+        except Exception as e:
+            print(f"[WARNING]Something went wrong when adding extra returns (1). {e}")
+
+        session = requests.Session()
+        ret = session.%s(url, headers=request_headers, params=params%s%s%s%s)
         try:
             found = False
             for item in self.action["parameters"]:
-                if item["name"] == "response_status":
+                if item["name"] == "shuffle_response_status":
                     found = True
                     break
 
@@ -551,13 +587,13 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
                     "value": f"{len(ret.text)}",
                 })
                 self.action["parameters"].append({
-                    "name": "shuffle_request_url",
-                    "value": f"{url}",
+                    "name": "shuffle_request_cookies",
+                    "value": f"{json.dumps(session.cookies.get_dict())}",
                 })
-                self.action_result["action"] = self.action
-                print("Updated values in self.action_result from OpenAPI app!") 
+                print("[DEBUG] Updated values in self.action_result from OpenAPI app! (2)") 
+
         except Exception as e:
-            print(f"Something went wrong when adding extra returns. {e}")
+            print(f"[WARNING] Something went wrong when adding extra returns (2). {e}")
 
         try:
             return ret.json()
@@ -579,6 +615,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		bodyFormatter,
 		fileGrabber,
 		fileAdder,
+		strings.ToUpper(method),
+		parsedDataCurlParser,
 		method,
 		authenticationAddin,
 		bodyAddin,
@@ -587,7 +625,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "command") {
+	if strings.Contains(functionname, "findings_generate_report") {
 		//log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
@@ -987,7 +1025,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 	pythonFunctions := []string{}
 
 	optionalParameters := []WorkflowAppActionParameter{}
-	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
+	headerParam := WorkflowAppActionParameter{
 		Name:        "headers",
 		Description: "Add or edit headers",
 		Multiline:   true,
@@ -996,7 +1034,9 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
-	})
+	}
+
+	optionalParameters = append(optionalParameters, headerParam)
 	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
 		Name:        "queries",
 		Description: "Add or edit queries",
@@ -1674,16 +1714,16 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 				optionalParameters[setIndex].Value = fmt.Sprintf("%s%s\n", optionalParameters[setIndex].Value, header)
 			}
 
-			//log.Printf("What: %#v", optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1])
-			//log.Printf("HI: %s",
-			//optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-2])
-			// Removing newlines at the end
 			if len(optionalParameters[setIndex].Value) > 0 && optionalParameters[setIndex].Value[len(optionalParameters[setIndex].Value)-1] == 0xa {
 				optionalParameters[setIndex].Value = optionalParameters[setIndex].Value[0 : len(optionalParameters[setIndex].Value)-1]
+
+				//optionalParameters[setIndex].Example = optionalParameters[setIndex].Example[0 : len(optionalParameters[setIndex].Example)-1]
 			}
 
 			//log.Printf("%#v", optionalParameters[setIndex].Value)
 		}
+	} else {
+		//log.Printf("No headers found for %s", functionName)
 	}
 
 	// Must be here 'cus they should be last

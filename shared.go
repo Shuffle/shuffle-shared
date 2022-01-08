@@ -1519,7 +1519,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 		total += cnt
 	}
 
-	log.Printf("[DEBUG] RERAN %d executions in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	//log.Printf("[DEBUG] RERAN %d execution(s) in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully RERAN and stopped %d executions"}`, total)))
 }
