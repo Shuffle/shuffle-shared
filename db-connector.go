@@ -294,6 +294,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
 }
 
+// FIXME: Add the option to set cache that expires at longer intervals
 func SetCache(ctx context.Context, name string, data []byte) error {
 	//log.Printf("DATA SIZE: %d", len(data))
 	// Maxsize ish~
@@ -5261,7 +5262,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 			//log.Printf("CACHEDATA: %#v", cacheData)
 			err = json.Unmarshal(cacheData, &executions)
 			if err == nil {
-				log.Printf("[DEBUG] Returned %d executions for workflow %s", len(executions), workflowId)
+				//log.Printf("[DEBUG] Returned %d executions for workflow %s", len(executions), workflowId)
 				return executions, nil
 			} else {
 				log.Printf("[WARNING] Failed getting workflowexecutions for %s: %s", workflowId, err)

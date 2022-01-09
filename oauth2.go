@@ -2126,6 +2126,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("ID: %s:%d", findHistory.EmailAddress, findHistory.HistoryId)
 	gmailUserInfo := fmt.Sprintf("gmail_%s", findHistory.EmailAddress)
 
+	// Uses cache to attempt getting the old one
 	newHistoryId := ""
 	cache, err := GetCache(ctx, gmailUserInfo)
 	if err == nil {
@@ -2133,6 +2134,9 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		log.Printf("[DEBUG] Failed getting cache for %s - setting to %d", gmailUserInfo, findHistory.HistoryId)
 		newHistoryId = fmt.Sprintf("%d", findHistory.HistoryId)
+
+		// Sleeping due to caching catchup for Gmail (weird issue)
+		time.Sleep(1 * time.Second)
 	}
 
 	//log.Printf("Found new history ID %s", newHistoryId)

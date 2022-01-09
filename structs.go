@@ -1899,6 +1899,7 @@ type SubflowData struct {
 	ExecutionId   string `json:"execution_id"`
 	Authorization string `json:"authorization"`
 	Result        string `json:"result"`
+	ResultSet     bool   `json:"result_set,omitempty"`
 }
 
 // AuthenticationStore with oauth2
