@@ -3296,8 +3296,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	err = json.Unmarshal([]byte(body), &workflow)
 	if err != nil {
-		log.Printf(string(body))
-		log.Printf("[ERROR] Failed workflow unmarshaling: %s", err)
+		//log.Printf(string(body))
+		log.Printf("[ERROR] Failed workflow unmarshaling (save): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
@@ -3449,6 +3449,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if len(action.Errors) > 0 || !action.IsValid {
 			action.IsValid = true
 			action.Errors = []string{}
+		}
+
+		if action.ExecutionDelay > 86400 {
+			parsedError := fmt.Sprintf("Max execution delay for an action is 86400 (1 day)")
+			if !ArrayContains(workflow.Errors, parsedError) {
+				workflow.Errors = append(workflow.Errors, parsedError)
+			}
+
+			action.ExecutionDelay = 86400
 		}
 
 		if action.Environment == "" {
@@ -7113,8 +7122,8 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	// Was an error here. Now defined to run with http://shuffle-backend:5001 by default
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
-		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
 		backendUrl = "https://shuffler.io"
+		//backendUrl = "https://69ad-84-214-96-67.ngrok.io"
 	}
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
@@ -7182,7 +7191,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
-		log.Printf("[ERROR] Bad statuscode setting subresult: %d, %s", newresp.StatusCode, string(body))
+		log.Printf("[ERROR] Bad statuscode setting subresult with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
 		return errors.New(fmt.Sprintf("Bad statuscode: %s", newresp.StatusCode))
 	}
 
@@ -8307,32 +8316,35 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			// First: handle it in backend for loops
 			// 2nd: Handle it in worker for normal executions
-			if len(workflowExecution.ExecutionParent) > 0 && (project.Environment == "onprem" || project.Environment == "cloud") {
-				log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", workflowExecution.Result, workflowExecution.ExecutionParent)
+			/*
+				if len(workflowExecution.ExecutionParent) > 0 && (project.Environment == "onprem") {
+					log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", workflowExecution.Result, workflowExecution.ExecutionParent)
 
-				parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
-				if err == nil {
-					isLooping := false
-					for _, trigger := range parentExecution.Workflow.Triggers {
-						if trigger.ID == workflowExecution.ExecutionSourceNode {
-							for _, param := range trigger.Parameters {
-								log.Printf("PARAM: %#v", param)
-								if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
-									isLooping = true
-									break
+					parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
+					if err == nil {
+						isLooping := false
+						for _, trigger := range parentExecution.Workflow.Triggers {
+							if trigger.ID == workflowExecution.ExecutionSourceNode {
+								for _, param := range trigger.Parameters {
+									//log.Printf("PARAM: %#v", param)
+									if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+										isLooping = true
+										break
+									}
 								}
-							}
 
-							break
+								break
+							}
+						}
+
+						if isLooping {
+							log.Printf("[DEBUG] Parentexecutions' subflow IS looping.")
 						}
 					}
 
-					if isLooping {
-						log.Printf("[DEBUG] Parentexecutions' subflow IS looping.")
-					}
-				}
-
-			} else if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
+				} else
+			*/
+			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
 				log.Printf("[DEBUG] Found execution parent %s for workflow %#v", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
 
 				err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
@@ -10136,9 +10148,9 @@ func ValidateNewWorkerExecution(body []byte) error {
 }
 
 func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution) error {
-	log.Printf("IS IT SUBFLOW?")
+	//log.Printf("IS IT SUBFLOW?")
 	if len(execution.ExecutionParent) > 0 && (project.Environment == "onprem" || project.Environment == "cloud") {
-		log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", execution.Result, execution.ExecutionParent)
+		//log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", execution.Result, execution.ExecutionParent)
 
 		parentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
 		if err == nil {
@@ -10167,7 +10179,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 			}
 
 			if isLooping && setExecution && shouldSetValue && parentExecution.Status == "EXECUTING" {
-				log.Printf("[DEBUG] Parentexecutions' subflow IS looping and is correct workflow. Should find correct answer in the node's result. Length of results: %d", len(parentExecution.Results))
+				//log.Printf("[DEBUG] Parentexecutions' subflow IS looping and is correct workflow. Should find correct answer in the node's result. Length of results: %d", len(parentExecution.Results))
 				// 1. Find the action's existing result
 				// 2. ONLY update it if the action status is WAITING and workflow status is EXECUTING
 				// 3. IF all parts of the subflow execution are finished, set it to FINISHED
@@ -10179,7 +10191,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 					if result.Action.ID != execution.ExecutionSourceNode {
 						continue
 					}
-					log.Printf("[DEBUG] Found action %s' results: %s", result.Action.ID, result.Result)
+					//log.Printf("[DEBUG] Found action %s' results: %s", result.Action.ID, result.Result)
 					if result.Status != "WAITING" {
 						break
 					}
@@ -10188,7 +10200,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 					var subflowDataLoop []SubflowData
 					err = json.Unmarshal([]byte(result.Result), &subflowDataLoop)
 					if err != nil {
-						log.Printf("[DEBUG] Failed unmarshaling in set parent data: %s", err)
+						//log.Printf("[DEBUG] Failed unmarshaling in set parent data: %s", err)
 						break
 					}
 
@@ -10197,7 +10209,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 							continue
 						}
 
-						log.Printf("[DEBUG] Found right execution on index %d. Result: %s", subflowIndex, subflowResult.Result)
+						//log.Printf("[DEBUG] Found right execution on index %d. Result: %s", subflowIndex, subflowResult.Result)
 						if len(subflowResult.Result) == 0 {
 							updateIndex = subflowIndex
 						}
@@ -10209,7 +10221,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 
 				// FIXME: MAY cause transaction issues.
 				if updateIndex >= 0 && resultIndex >= 0 {
-					log.Printf("[DEBUG] Should update index %d in resultIndex %d with new result %s", updateIndex, resultIndex, execution.Result)
+					//log.Printf("[DEBUG] Should update index %d in resultIndex %d with new result %s", updateIndex, resultIndex, execution.Result)
 					// FIXME: Are results ordered? Hmmmmm
 					// Again, get the result, just in case, and update that exact value instantly
 					newParentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
@@ -10275,7 +10287,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 
 								err = SetWorkflowExecution(ctx, *newParentExecution, true)
 								if err != nil {
-									log.Printf("[DEBUG] Failed updating setExecution to FINISHED and SUCCESS: %s", err)
+									log.Printf("[ERROR] Failed updating setExecution to FINISHED and SUCCESS: %s", err)
 								}
 							}
 						} else {
@@ -10800,7 +10812,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if allowContinuation == false {
-				newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionSourceNode)
+				newExecId := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
 				_, err := GetCache(ctx, newExecId)
 				if err == nil {
 					log.Printf("[ERROR] Subflow already found %s - returning", newExecId)
@@ -11551,7 +11563,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		workflowExecution := &WorkflowExecution{}
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
 		if sourceExecutionOk {
-			log.Printf("[DEBUG] Got source exec %s", sourceExecution)
+			//log.Printf("[DEBUG] Got source exec %s", sourceExecution)
 			workflowExecution, err = GetWorkflowExecution(ctx, sourceExecution[0])
 			if err != nil {
 				log.Printf("[INFO] Failed getting source_execution in test validation based on %#v", sourceExecution[0])
@@ -11569,7 +11581,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 
 		sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
 		if sourceAuthOk {
-			log.Printf("[DEBUG] Got auth %s", sourceAuth)
+			//log.Printf("[DEBUG] Got auth %s", sourceAuth)
 
 			if sourceAuth[0] != workflowExecution.Authorization {
 				log.Printf("[WARNING] Bad authorization for workflowexecution defined.")
@@ -11583,7 +11595,8 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		// Need to verify the workflow, and whether it SHOULD have access to execute it.
 		sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
 		if sourceWorkflowOk {
-			log.Printf("[DEBUG] Got source workflow %s", sourceWorkflow)
+			//log.Printf("[DEBUG] Got source workflow %s", sourceWorkflow)
+			_ = sourceWorkflow
 
 			// Source workflow = parent
 			// This workflow = child
@@ -11609,7 +11622,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 
 		sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
 		if sourceNodeOk {
-			log.Printf("[DEBUG] Got source node %s", sourceNode)
+			//log.Printf("[DEBUG] Got source node %s", sourceNode)
 			//workflowExecution.ExecutionSourceNode = sourceNode[0]
 		} else {
 			return false, ""

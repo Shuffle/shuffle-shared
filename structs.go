@@ -150,6 +150,7 @@ type WorkflowAppAction struct {
 	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	RunMagicOutput   bool   `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
 	RunMagicInput    bool   `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
+	ExecutionDelay   int64  `json:"execution_delay" datastore:"execution_delay"`
 }
 
 type Authentication struct {
@@ -747,6 +748,7 @@ type Action struct {
 	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	RunMagicOutput   bool   `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
 	RunMagicInput    bool   `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
+	ExecutionDelay   int64  `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 }
 
 // Added environment for location to execute
@@ -774,6 +776,7 @@ type Trigger struct {
 	} `json:"position"`
 	Priority       int    `json:"priority" datastore:"priority"`
 	SourceWorkflow string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	ExecutionDelay int64  `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 }
 
 type Branch struct {
