@@ -8,6 +8,7 @@ require (
 	cloud.google.com/go/datastore v1.4.0
 	cloud.google.com/go/storage v1.12.0
 	github.com/Masterminds/semver v1.5.0
+	github.com/adrg/strutil v0.2.3 // indirect
 	github.com/algolia/algoliasearch-client-go/v3 v3.18.1
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
 	github.com/frikky/go-elasticsearch/v8 v8.13.1
@@ -15,6 +16,7 @@ require (
 	github.com/google/go-github/v28 v28.1.1
 	github.com/google/go-querystring v1.0.0
 	github.com/patrickmn/go-cache v2.1.0+incompatible
+	github.com/rcrowley/go-metrics v0.0.0-20201227073835-cf1acfcdf475 // indirect
 	github.com/satori/go.uuid v1.2.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.0.0-20200622213623-75b288015ac9

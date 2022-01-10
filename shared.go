@@ -10141,16 +10141,16 @@ func ValidateNewWorkerExecution(body []byte) error {
 	// FIXME: May cause errors in worker that runs it all instantly due to
 	// timing issues / non-queues
 	if executionSet {
-		runFixParentWorkflowResult(ctx, execution)
+		RunFixParentWorkflowResult(ctx, execution)
 	}
 
 	return nil
 }
 
-func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution) error {
+func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution) error {
 	//log.Printf("IS IT SUBFLOW?")
-	if len(execution.ExecutionParent) > 0 && (project.Environment == "onprem" || project.Environment == "cloud") {
-		//log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", execution.Result, execution.ExecutionParent)
+	if len(execution.ExecutionParent) > 0 && execution.Status != "EXECUTING" && (project.Environment == "onprem" || project.Environment == "cloud") {
+		log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", execution.Result, execution.ExecutionParent)
 
 		parentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
 		if err == nil {
@@ -10178,8 +10178,11 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 				}
 			}
 
-			if isLooping && setExecution && shouldSetValue && parentExecution.Status == "EXECUTING" {
-				//log.Printf("[DEBUG] Parentexecutions' subflow IS looping and is correct workflow. Should find correct answer in the node's result. Length of results: %d", len(parentExecution.Results))
+			if !isLooping && setExecution && shouldSetValue && parentExecution.Status == "EXECUTING" {
+				log.Printf("[DEBUG] Its NOT looping. Should set?")
+				return nil
+			} else if isLooping && setExecution && shouldSetValue && parentExecution.Status == "EXECUTING" {
+				log.Printf("[DEBUG] Parentexecutions' subflow IS looping and is correct workflow. Should find correct answer in the node's result. Length of results: %d", len(parentExecution.Results))
 				// 1. Find the action's existing result
 				// 2. ONLY update it if the action status is WAITING and workflow status is EXECUTING
 				// 3. IF all parts of the subflow execution are finished, set it to FINISHED
@@ -10191,7 +10194,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 					if result.Action.ID != execution.ExecutionSourceNode {
 						continue
 					}
-					//log.Printf("[DEBUG] Found action %s' results: %s", result.Action.ID, result.Result)
+					log.Printf("[DEBUG] Found action %s' results: %s", result.Action.ID, result.Result)
 					if result.Status != "WAITING" {
 						break
 					}
@@ -10200,7 +10203,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 					var subflowDataLoop []SubflowData
 					err = json.Unmarshal([]byte(result.Result), &subflowDataLoop)
 					if err != nil {
-						//log.Printf("[DEBUG] Failed unmarshaling in set parent data: %s", err)
+						log.Printf("[DEBUG] Failed unmarshaling in set parent data: %s", err)
 						break
 					}
 
@@ -10209,7 +10212,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 							continue
 						}
 
-						//log.Printf("[DEBUG] Found right execution on index %d. Result: %s", subflowIndex, subflowResult.Result)
+						log.Printf("[DEBUG] Found right execution on index %d. Result: %s", subflowIndex, subflowResult.Result)
 						if len(subflowResult.Result) == 0 {
 							updateIndex = subflowIndex
 						}
@@ -10221,7 +10224,7 @@ func runFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 
 				// FIXME: MAY cause transaction issues.
 				if updateIndex >= 0 && resultIndex >= 0 {
-					//log.Printf("[DEBUG] Should update index %d in resultIndex %d with new result %s", updateIndex, resultIndex, execution.Result)
+					log.Printf("[DEBUG] Should update index %d in resultIndex %d with new result %s", updateIndex, resultIndex, execution.Result)
 					// FIXME: Are results ordered? Hmmmmm
 					// Again, get the result, just in case, and update that exact value instantly
 					newParentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)

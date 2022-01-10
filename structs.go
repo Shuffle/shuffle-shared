@@ -884,16 +884,23 @@ type Categories struct {
 	Other         Category `json:"other" datastore:"other"`
 }
 
+type SimilarAction struct {
+	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
+	ExecutionId string `json:"execution_id" datastore:"execution_id"`
+	Similarity  int64  `json:"similarity" datastore:"similarity"`
+}
+
 type ActionResult struct {
-	Action           Action   `json:"action" datastore:"action"`
-	ExecutionId      string   `json:"execution_id" datastore:"execution_id"`
-	Authorization    string   `json:"authorization" datastore:"authorization"`
-	Result           string   `json:"result" datastore:"result,noindex"`
-	StartedAt        int64    `json:"started_at" datastore:"started_at"`
-	CompletedAt      int64    `json:"completed_at" datastore:"completed_at"`
-	Status           string   `json:"status" datastore:"status"`
-	AttackTechniques []string `json:"attack_techniques" datastore:"attack_techniques"`
-	AttackTactics    []string `json:"attack_tactics" datastore:"attack_tactics"`
+	Action           Action          `json:"action" datastore:"action"`
+	ExecutionId      string          `json:"execution_id" datastore:"execution_id"`
+	Authorization    string          `json:"authorization" datastore:"authorization"`
+	Result           string          `json:"result" datastore:"result,noindex"`
+	StartedAt        int64           `json:"started_at" datastore:"started_at"`
+	CompletedAt      int64           `json:"completed_at" datastore:"completed_at"`
+	Status           string          `json:"status" datastore:"status"`
+	AttackTechniques []string        `json:"attack_techniques" datastore:"attack_techniques"`
+	AttackTactics    []string        `json:"attack_tactics" datastore:"attack_tactics"`
+	SimilarActions   []SimilarAction `json:"similar_actions" datastore:"similar_actions"`
 }
 
 type AuthenticationUsage struct {
