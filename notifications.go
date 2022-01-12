@@ -198,17 +198,8 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		Success:       true,
 		Notifications: newNotifications,
 	}
-	//for _, file := range files {
-	//	if file.Namespace != "" && file.Namespace != "default" {
-	//		if !ArrayContains(fileResponse.Namespaces, file.Namespace) {
-	//			fileResponse.Namespaces = append(fileResponse.Namespaces, file.Namespace)
-	//		}
-	//	}
-	//}
 
-	// Shitty way to build it, but works before scale. Need ES search mechanism for namespaces
-
-	log.Printf("[INFO] Got %d notifications for user %s", len(notifications), user.Id)
+	//log.Printf("[DEBUG] Got %d notifications for user %s", len(notifications), user.Id)
 	newBody, err := json.Marshal(notificationResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshaling files: %s", err)

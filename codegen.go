@@ -281,6 +281,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				if len(extraHeaders) > 0 {
 					extraHeaders += "\n        "
 				}
+
 				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, key, key, key)
 			} else if value.Value.In == "query" {
 				log.Printf("Handling extra queries for %#v", value.Value)
@@ -330,14 +331,26 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		if swagger.Components.SecuritySchemes["BearerAuth"] != nil {
 			authenticationParameter = ", apikey"
 			authenticationSetup = "if apikey != \" \" and not apikey.startswith(\"Bearer\"): request_headers[\"Authorization\"] = f\"Bearer {apikey}\""
+
 		} else if swagger.Components.SecuritySchemes["BasicAuth"] != nil {
 			authenticationParameter = ", username_basic, password_basic"
 			authenticationAddin = ", auth=(username_basic, password_basic)"
+
 		} else if swagger.Components.SecuritySchemes["ApiKeyAuth"] != nil {
 			authenticationParameter = ", apikey"
+
+			//if len(securitySchemes["ApiKeyAuth"].Value.Description) > 0 {
+			//	//log.Printf("UPDATING AUTH!")
+			//	extraParam.Description = fmt.Sprintf("Start with %s", securitySchemes["ApiKeyAuth"].Value.Description)
+
 			if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "header" {
 				// This is a way to bypass apikeys by passing " "
 				authenticationSetup = fmt.Sprintf(`if apikey != " ": request_headers["%s"] = apikey`, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+
+				if len(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description) > 0 {
+
+				}
+
 			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
 				// This might suck lol
 				key := "?"
@@ -347,10 +360,12 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 				authenticationSetup = fmt.Sprintf("if apikey != \" \": url+=f\"%s%s={apikey}\"", key, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
 			}
+
 		} else if swagger.Components.SecuritySchemes["Oauth2"] != nil {
 			//log.Printf("[DEBUG] Appending Oauth2 code")
 			authenticationParameter = ", access_token"
 			authenticationSetup = fmt.Sprintf("if access_token != \" \": request_headers[\"Authorization\"] = f\"Bearer {access_token}\"\n        request_headers[\"Content-Type\"] = \"application/json\"")
+
 		} else if swagger.Components.SecuritySchemes["jwt"] != nil {
 			//log.Printf("[DEBUG] Appending Oauth2 code")
 			authenticationParameter = ", username_basic, password_basic"
@@ -458,6 +473,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				if strings.Contains(preparedHeaders, headerSplit[0]) {
 					continue
 				}
+
+				headerSplit[0] = strings.Replace(headerSplit[0], "\"", "", -1)
+				headerSplit[0] = strings.Replace(headerSplit[0], "'", "", -1)
+				headerSplit[1] = strings.Replace(headerSplit[1], "\"", "", -1)
+				headerSplit[1] = strings.Replace(headerSplit[1], "'", "", -1)
 
 				preparedHeaders += fmt.Sprintf(`"%s": "%s"`, headerSplit[0], headerSplit[1])
 				added = true
@@ -777,7 +797,8 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				},
 			})
 		} else if securitySchemes["ApiKeyAuth"] != nil {
-			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
+			log.Printf("AUTH:%#v", securitySchemes["ApiKeyAuth"].Value)
+			newAuthParam := AuthenticationParams{
 				Name:        "apikey",
 				Value:       "",
 				Example:     "******",
@@ -787,10 +808,12 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				Schema: SchemaDefinition{
 					Type: securitySchemes["ApiKeyAuth"].Value.Scheme,
 				},
-			})
+			}
+
+			//Example:     securitySchemes["ApiKeyAuth"].Value.Example,
 
 			//log.Printf("HANDLE APIKEY AUTH")
-			extraParameters = append(extraParameters, WorkflowAppActionParameter{
+			extraParam := WorkflowAppActionParameter{
 				Name:          "apikey",
 				Description:   "The apikey to use",
 				Multiline:     false,
@@ -800,7 +823,16 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				Schema: SchemaDefinition{
 					Type: "string",
 				},
-			})
+			}
+
+			if len(securitySchemes["ApiKeyAuth"].Value.Description) > 0 {
+				//log.Printf("UPDATING AUTH!")
+				extraParam.Description = fmt.Sprintf("Start with %s", securitySchemes["ApiKeyAuth"].Value.Description)
+				newAuthParam.Description = fmt.Sprintf("Start with %s", securitySchemes["ApiKeyAuth"].Value.Description)
+			}
+
+			api.Authentication.Parameters = append(api.Authentication.Parameters, newAuthParam)
+			extraParameters = append(extraParameters, extraParam)
 		} else if securitySchemes["Oauth2"] != nil {
 			api.Authentication.Type = "oauth2"
 			if val, ok := securitySchemes["Oauth2"].Value.ExtensionProps.Extensions["flow"]; ok {
@@ -1047,6 +1079,9 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			Type: "string",
 		},
 	})
+
+	// Not validating by default, due to lots of people having issues with
+	// SSL things
 	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
 		Name:        "ssl_verify",
 		Description: "Check if you want to verify request",
@@ -1054,8 +1089,8 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		Required:    false,
 		Example:     "True",
 		Options: []string{
-			"True",
 			"False",
+			"True",
 		},
 		Schema: SchemaDefinition{
 			Type: "string",
