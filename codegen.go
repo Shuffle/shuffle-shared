@@ -347,8 +347,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				// This is a way to bypass apikeys by passing " "
 				authenticationSetup = fmt.Sprintf(`if apikey != " ": request_headers["%s"] = apikey`, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
 
+				// Fixes token prefixes (e.g. Token.. or SSWS..)
 				if len(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description) > 0 {
+					trimmedDescription := strings.Trim(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, " ")
 
+					authenticationSetup = fmt.Sprintf("if apikey != \" \":\n            if apikey.startswith(\"%s \"):\n                request_headers[\"%s\"] = apikey\n            else:\n                apikey = apikey.replace(\"%s\", \"\", -1).strip()\n                request_headers[\"%s\"] = f\"%s {apikey}\"", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, trimmedDescription)
 				}
 
 			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
@@ -645,8 +648,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "findings_generate_report") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(functionname, "header") {
+		log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
 		//log.Printf("Queries: %s", queryString)
