@@ -2125,6 +2125,25 @@ type NotificationResponse struct {
 	Notifications []Notification `json:"notifications"`
 }
 
+type GmailMessagesStruct struct {
+	Messages []struct {
+		ID       string `json:"id"`
+		ThreadID string `json:"threadId"`
+	} `json:"messages"`
+	NextPageToken      string `json:"nextPageToken"`
+	ResultSizeEstimate int    `json:"resultSizeEstimate"`
+}
+
+type MessageAddedMessage struct {
+	ID       string   `json:"id"`
+	ThreadID string   `json:"threadId"`
+	LabelIds []string `json:"labelIds"`
+}
+
+type MessageAdded struct {
+	Message MessageAddedMessage `json:"message"`
+}
+
 type GmailHistoryStruct struct {
 	History []struct {
 		ID       string `json:"id"`
@@ -2139,15 +2158,15 @@ type GmailHistoryStruct struct {
 				LabelIds []string `json:"labelIds"`
 			} `json:"message"`
 		} `json:"messagesDeleted,omitempty"`
-		MessagesAdded []struct {
-			Message struct {
-				ID       string   `json:"id"`
-				ThreadID string   `json:"threadId"`
-				LabelIds []string `json:"labelIds"`
-			} `json:"message"`
-		} `json:"messagesAdded,omitempty"`
+		MessagesAdded []MessageAdded `json:"messagesAdded,omitempty"`
 	} `json:"history"`
 	HistoryID string `json:"historyId"`
+}
+
+type GmailThreadStruct struct {
+	ID        string               `json:"id"`
+	HistoryID string               `json:"historyId"`
+	Messages  []GmailMessageStruct `json:"messages"`
 }
 
 type GmailMessageStruct struct {

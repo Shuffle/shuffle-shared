@@ -12,6 +12,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"strconv"
 	//"net/url"
 	"os"
 	"strings"
@@ -1878,7 +1879,7 @@ func GetGmailMessageAttachment(ctx context.Context, gmailClient *http.Client, us
 	return message, nil
 }
 
-func GetGmailThread(ctx context.Context, gmailClient *http.Client, userId, messageId string) (GmailMessageStruct, error) {
+func GetGmailThread(ctx context.Context, gmailClient *http.Client, userId, messageId string) (GmailThreadStruct, error) {
 	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/threads/%s?format=full", userId, messageId)
 	//fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/me/messages/%s?format=full", messageId)
 	req, err := http.NewRequest(
@@ -1890,27 +1891,26 @@ func GetGmailThread(ctx context.Context, gmailClient *http.Client, userId, messa
 	res, err := gmailClient.Do(req)
 	if err != nil {
 		log.Printf("[WARNING] GMAIL get msg (4): %s", err)
-		return GmailMessageStruct{}, err
+		return GmailThreadStruct{}, err
 	}
 
 	log.Printf("[INFO] Get GMAIL thread %#v Status: %d", messageId, res.StatusCode)
 	if res.StatusCode == 404 {
-		return GmailMessageStruct{}, errors.New(fmt.Sprintf("Failed to find mail for %s: %d", messageId, res.StatusCode))
+		return GmailThreadStruct{}, errors.New(fmt.Sprintf("Failed to find gmail thread for %s: %d", messageId, res.StatusCode))
 	}
 
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] Gmail get msg (5): %s", err)
-		return GmailMessageStruct{}, err
+		return GmailThreadStruct{}, err
 	}
 
-	log.Printf("THREAD: %s", string(body))
-
-	var message GmailMessageStruct
+	//log.Printf("THREAD: %s", string(body))
+	var message GmailThreadStruct
 	err = json.Unmarshal(body, &message)
 	if err != nil {
 		log.Printf("[WARNING] Failed body read unmarshal for gmail msg: %s", err)
-		return GmailMessageStruct{}, err
+		return GmailThreadStruct{}, err
 	}
 
 	//if len(profile.EmailAddress) == 0 {
@@ -2021,10 +2021,97 @@ func GetGmailMessage(ctx context.Context, gmailClient *http.Client, userId, mess
 	return message, nil
 }
 
+func GetGmailProfile(ctx context.Context, gmailClient *http.Client, userId string) (GmailHistoryStruct, error) {
+
+	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/profile", userId)
+	req, err := http.NewRequest(
+		"GET",
+		fullUrl,
+		nil,
+	)
+
+	req.Header.Add("Content-Type", "application/json")
+	res, err := gmailClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] GMAIL get profile (5): %s", err)
+		return GmailHistoryStruct{}, err
+	}
+
+	//log.Printf("[INFO] Get history status: %d", res.StatusCode)
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[WARNING] Gmail get profile (6): %s", err)
+		return GmailHistoryStruct{}, err
+	}
+
+	//log.Printf("Body: %s", string(body))
+
+	//log.Printf("Body: %s", string(body))
+	var history GmailHistoryStruct
+	err = json.Unmarshal(body, &history)
+	if err != nil {
+		log.Printf("[WARNING] Failed body read unmarshal for gmail history: %s", err)
+		return GmailHistoryStruct{}, err
+	}
+
+	// log.Printf("[DEBUG] HISTORY INFO: %s", string(body))
+	if len(history.History) == 0 {
+		return GmailHistoryStruct{}, errors.New(fmt.Sprintf("Couldn't find the history to be mapped. Maybe not consequential data: %s", string(body)))
+	}
+
+	//log.Printf("\n\nUSER BODY: %s", string(body))
+	return history, nil
+}
+
+func GetGmailMessages(ctx context.Context, gmailClient *http.Client, userId string) (GmailMessagesStruct, error) {
+
+	//&historyType=messageAdded
+	//fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/history?startHistoryId=%s", userId, historyId)
+	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/messages?maxResults=5", userId)
+	req, err := http.NewRequest(
+		"GET",
+		fullUrl,
+		nil,
+	)
+
+	req.Header.Add("Content-Type", "application/json")
+	res, err := gmailClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] GMAIL get messages (5): %s", err)
+		return GmailMessagesStruct{}, err
+	}
+
+	//log.Printf("[INFO] Get history status: %d", res.StatusCode)
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[WARNING] Gmail get messages (6): %s", err)
+		return GmailMessagesStruct{}, err
+	}
+
+	//log.Printf("Messages: %s", string(body))
+	var messages GmailMessagesStruct
+	err = json.Unmarshal(body, &messages)
+	if err != nil {
+		log.Printf("[WARNING] Failed body read unmarshal for gmail messages: %s", err)
+		return GmailMessagesStruct{}, err
+	}
+
+	// log.Printf("[DEBUG] HISTORY INFO: %s", string(body))
+	/*
+		if len(history.History) == 0 {
+			return GmailHistoryStruct{}, errors.New(fmt.Sprintf("Couldn't find the history to be mapped. Maybe not consequential data: %s", string(body)))
+		}
+	*/
+
+	//log.Printf("\n\nUSER BODY: %s", string(body))
+	return messages, nil
+}
+
 func GetGmailHistory(ctx context.Context, gmailClient *http.Client, userId, historyId string) (GmailHistoryStruct, error) {
 
+	//&historyType=messageAdded
 	//fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/history?startHistoryId=%s", userId, historyId)
-	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/history?startHistoryId=%s&historyType=messageAdded", userId, historyId)
+	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/history?startHistoryId=%s", userId, historyId)
 	req, err := http.NewRequest(
 		"GET",
 		fullUrl,
@@ -2060,6 +2147,100 @@ func GetGmailHistory(ctx context.Context, gmailClient *http.Client, userId, hist
 
 	//log.Printf("\n\nUSER BODY: %s", string(body))
 	return history, nil
+}
+
+func handleIndividualEmailUploads(ctx context.Context, gmailClient *http.Client, trigger *TriggerAuth, mail GmailMessageStruct, findHistory ParsedMessage, message MessageAddedMessage) (MessageAddedMessage, error) {
+
+	timeNow := time.Now().Unix()
+	var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
+	if len(basepath) == 0 {
+		basepath = "files"
+	}
+	folderPath := fmt.Sprintf("%s/%s/%s", basepath, trigger.OrgId, trigger.WorkflowId)
+	for _, part := range mail.Payload.Parts {
+		if len(part.Filename) == 0 {
+			//log.Printf("[DEBUG] Skipping part number %s of email (attachments)", part.PartID)
+			continue
+		}
+
+		if len(part.Body.AttachmentID) == 0 {
+			log.Printf("[WARNING] PART: %#v", part)
+			continue
+		}
+
+		attachment, err := GetGmailMessageAttachment(ctx, gmailClient, findHistory.EmailAddress, message.ID, part.Body.AttachmentID)
+		if len(attachment.Data) == 0 {
+			continue
+		}
+
+		fileId := uuid.NewV4().String()
+		downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+		newFile := File{
+			Id:           fileId,
+			CreatedAt:    timeNow,
+			UpdatedAt:    timeNow,
+			Description:  fmt.Sprintf("File found in email message %s with ID %s", message.ID, part.Body.AttachmentID),
+			Status:       "uploading",
+			Filename:     part.Filename,
+			OrgId:        trigger.OrgId,
+			WorkflowId:   trigger.WorkflowId,
+			DownloadPath: downloadPath,
+			Subflows:     []string{},
+			Namespace:    "",
+			StorageArea:  "local",
+		}
+
+		if project.Environment == "cloud" {
+			newFile.StorageArea = "google_storage"
+		}
+
+		err = SetFile(ctx, newFile)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s (1)", part.Body.AttachmentID, message.ID)
+			continue
+		}
+
+		parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
+		if err != nil {
+			log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s (1)", part.Body.AttachmentID, message.ID)
+			if len(parsedData) == 0 {
+				continue
+			}
+		}
+
+		err = uploadFile(ctx, &newFile, parsedData, nil)
+		if err != nil {
+			log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s (1)", part.Body.AttachmentID, message.ID)
+			continue
+		}
+
+		log.Printf("[DEBUG] Added file ID %s for attachment %s", newFile.Id, message.ID)
+		mail.FileIds = append(mail.FileIds, newFile.Id)
+	}
+
+	if len(mail.FileIds) == 0 {
+		mail.FileIds = []string{}
+	}
+
+	//if mail.ID == message.ThreadID {
+	mail.Type = "new"
+	mappedData, err := json.Marshal(mail)
+	if err != nil {
+		log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s", err)
+		return message, err
+	}
+
+	webhookUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
+	err = MakeGmailWebhookRequest(ctx, webhookUrl, mappedData)
+	if err != nil {
+		log.Printf("[WARNING] Failed making webhook request to %s: %s", webhookUrl, err)
+	} else {
+		log.Printf("[INFO] Successfully sent webhook request to %s", webhookUrl)
+		//callSub = true
+		//break
+	}
+
+	return message, nil
 }
 
 // Returns 200 no matter what since these are received by GOOGLE PUB/SUB
@@ -2132,11 +2313,68 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	if err == nil {
 		newHistoryId = string(cache.([]uint8))
 	} else {
-		log.Printf("[DEBUG] Failed getting cache for %s - setting to %d", gmailUserInfo, findHistory.HistoryId)
-		newHistoryId = fmt.Sprintf("%d", findHistory.HistoryId)
+		// Syncing to find the last ID, e.g. related to a thread
+		log.Printf("[DEBUG] No previous history found for %s (%s) - running without cache and finding the last email. Running full sync.", findHistory.EmailAddress, findHistory.HistoryId)
 
-		// Sleeping due to caching catchup for Gmail (weird issue)
-		time.Sleep(1 * time.Second)
+		lastMessage := GmailMessageStruct{}
+		msgParsed, err := GetGmailMessages(ctx, gmailClient, findHistory.EmailAddress)
+		if err == nil {
+			handledThreads := []string{}
+			for _, msg := range msgParsed.Messages {
+				if !ArrayContains(handledThreads, msg.ThreadID) {
+					handledThreads = append(handledThreads, msg.ThreadID)
+					thread, err := GetGmailThread(ctx, gmailClient, findHistory.EmailAddress, msg.ThreadID)
+
+					if err == nil {
+						lastMessageHistory := 0
+						for _, message := range thread.Messages {
+							parsedHistoryId, err := strconv.Atoi(message.HistoryID)
+							if err != nil {
+								continue
+							}
+
+							if parsedHistoryId > lastMessageHistory {
+								lastMessage = message
+								lastMessageHistory = parsedHistoryId
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if lastMessage.HistoryID != "0" && lastMessage.HistoryID != "" {
+			//newHistoryId = fmt.Sprintf(lastMessage.HistoryID)
+			log.Printf("[DEBUG] Got last message: %s with snippet %s!", newHistoryId, lastMessage.Snippet)
+
+			handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
+			err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)))
+			if err != nil {
+				log.Printf("[WARNING] Failed updating gmail user %s cache: %s (2)", gmailUserInfo, err)
+			} else {
+
+			}
+
+			newMail, err := GetGmailMessage(ctx, gmailClient, findHistory.EmailAddress, lastMessage.ID)
+			if err == nil {
+				lastMessage = newMail
+			} else {
+				log.Printf("[ERROR] Failed to find last gmail ID WITHOUT cache: %s", err)
+			}
+
+			message := MessageAddedMessage{}
+			_, err = handleIndividualEmailUploads(ctx, gmailClient, trigger, lastMessage, findHistory, message)
+			if err != nil {
+				log.Printf("[ERROR] Failed to handle individual gmail WITHOUT cache: %s", err)
+			}
+
+			resp.WriteHeader(200)
+			return
+		} else {
+			newHistoryId = fmt.Sprintf("%d", findHistory.HistoryId)
+		}
+
+		log.Printf("[DEBUG] Failed getting cache for %s - setting to %d.", gmailUserInfo, findHistory.HistoryId)
 	}
 
 	//log.Printf("Found new history ID %s", newHistoryId)
@@ -2150,7 +2388,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		handledIds = handledIds[900:999]
 	}
 
-	log.Printf("[DEBUG] HistoryId: %d. Email: %s", findHistory.HistoryId, findHistory.EmailAddress)
+	log.Printf("[DEBUG] HistoryId in request: %d. HistoryId to get: %s. Email: %s", findHistory.HistoryId, newHistoryId, findHistory.EmailAddress)
 
 	//if !ArrayContains(handledIds, newHistoryId) {
 	//if len(handledIds) >= 1000 || len(handledIds) == 0 {
@@ -2161,7 +2399,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	history, err = GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, newHistoryId)
 
 	if err != nil {
-		log.Printf("[WARNING] Failed getting data for history update %d (%s): %s", findHistory.HistoryId, findHistory.EmailAddress, err)
+		log.Printf("[WARNING] Failed getting data for history update %d (%s): %s", newHistoryId, findHistory.EmailAddress, err)
 		resp.WriteHeader(200)
 		return
 	} else {
@@ -2209,95 +2447,9 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			timeNow := time.Now().Unix()
-
-			var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
-			if len(basepath) == 0 {
-				basepath = "files"
-			}
-			folderPath := fmt.Sprintf("%s/%s/%s", basepath, trigger.OrgId, trigger.WorkflowId)
-			for _, part := range mail.Payload.Parts {
-				if len(part.Filename) == 0 {
-					//log.Printf("[DEBUG] Skipping part number %s of email (attachments)", part.PartID)
-					continue
-				}
-
-				if len(part.Body.AttachmentID) == 0 {
-					log.Printf("[WARNING] PART: %#v", part)
-					continue
-				}
-
-				attachment, err := GetGmailMessageAttachment(ctx, gmailClient, findHistory.EmailAddress, message.ID, part.Body.AttachmentID)
-				if len(attachment.Data) == 0 {
-					continue
-				}
-
-				fileId := uuid.NewV4().String()
-				downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
-				newFile := File{
-					Id:           fileId,
-					CreatedAt:    timeNow,
-					UpdatedAt:    timeNow,
-					Description:  fmt.Sprintf("File found in email message %s with ID %s", message.ID, part.Body.AttachmentID),
-					Status:       "uploading",
-					Filename:     part.Filename,
-					OrgId:        trigger.OrgId,
-					WorkflowId:   trigger.WorkflowId,
-					DownloadPath: downloadPath,
-					Subflows:     []string{},
-					Namespace:    "",
-					StorageArea:  "local",
-				}
-
-				if project.Environment == "cloud" {
-					newFile.StorageArea = "google_storage"
-				}
-
-				err = SetFile(ctx, newFile)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s (1)", part.Body.AttachmentID, message.ID)
-					continue
-				}
-
-				parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
-				if err != nil {
-					log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s (1)", part.Body.AttachmentID, message.ID)
-					if len(parsedData) == 0 {
-						continue
-					}
-				}
-
-				err = uploadFile(ctx, &newFile, parsedData, nil)
-				if err != nil {
-					log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s (1)", part.Body.AttachmentID, message.ID)
-					continue
-				}
-
-				log.Printf("[DEBUG] Added file ID %s for attachment %s", newFile.Id, message.ID)
-				mail.FileIds = append(mail.FileIds, newFile.Id)
-			}
-
-			if len(mail.FileIds) == 0 {
-				mail.FileIds = []string{}
-			}
-
-			//if mail.ID == message.ThreadID {
-			mail.Type = "new"
-			mappedData, err := json.Marshal(mail)
+			message, err = handleIndividualEmailUploads(ctx, gmailClient, trigger, mail, findHistory, message)
 			if err != nil {
-				log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s", err)
-				resp.WriteHeader(401)
-				continue
-			}
-
-			webhookUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
-			err = MakeGmailWebhookRequest(ctx, webhookUrl, mappedData)
-			if err != nil {
-				log.Printf("[WARNING] Failed making webhook request to %s: %s", webhookUrl, err)
-			} else {
-				log.Printf("[INFO] Successfully sent webhook request to %s", webhookUrl)
-				callSub = true
-				//break
+				log.Printf("[WARNING] Failed to handle individual message: %s", message)
 			}
 		}
 

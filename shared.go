@@ -7077,7 +7077,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 func ParseLoginParameters(resp http.ResponseWriter, request *http.Request) (loginStruct, error) {
 	if request.Body == nil {
-		return loginStruct{}, errors.New("Failed to parse loing params, body is empty")
+		return loginStruct{}, errors.New("Failed to parse login params, body is empty")
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
