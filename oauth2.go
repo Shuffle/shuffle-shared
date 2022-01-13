@@ -2111,7 +2111,7 @@ func GetGmailHistory(ctx context.Context, gmailClient *http.Client, userId, hist
 
 	//&historyType=messageAdded
 	//fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/history?startHistoryId=%s", userId, historyId)
-	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/history?startHistoryId=%s", userId, historyId)
+	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/history?startHistoryId=%s&historyType=messageAdded&labelId=UNREAD", userId, historyId)
 	req, err := http.NewRequest(
 		"GET",
 		fullUrl,
@@ -2314,28 +2314,42 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		newHistoryId = string(cache.([]uint8))
 	} else {
 		// Syncing to find the last ID, e.g. related to a thread
-		log.Printf("[DEBUG] No previous history found for %s (%s) - running without cache and finding the last email. Running full sync.", findHistory.EmailAddress, findHistory.HistoryId)
+		log.Printf("[DEBUG] No previous history found for %s (%d) - running without cache and finding the last email. Running full sync.", findHistory.EmailAddress, findHistory.HistoryId)
 
 		lastMessage := GmailMessageStruct{}
+		lastMessageHistory := 0
+		time.Sleep(2 * time.Second)
 		msgParsed, err := GetGmailMessages(ctx, gmailClient, findHistory.EmailAddress)
 		if err == nil {
 			handledThreads := []string{}
 			for _, msg := range msgParsed.Messages {
 				if !ArrayContains(handledThreads, msg.ThreadID) {
 					handledThreads = append(handledThreads, msg.ThreadID)
+
 					thread, err := GetGmailThread(ctx, gmailClient, findHistory.EmailAddress, msg.ThreadID)
 
 					if err == nil {
-						lastMessageHistory := 0
 						for _, message := range thread.Messages {
-							parsedHistoryId, err := strconv.Atoi(message.HistoryID)
+							/*
+								parsedHistoryId, err := strconv.Atoi(message.HistoryID)
+								if err != nil {
+									continue
+								}
+
+								if parsedHistoryId > lastMessageHistory {
+									lastMessage = message
+									lastMessageHistory = parsedHistoryId
+								}
+							*/
+
+							parsedTimestamp, err := strconv.Atoi(message.InternalDate)
 							if err != nil {
 								continue
 							}
 
-							if parsedHistoryId > lastMessageHistory {
+							if parsedTimestamp > lastMessageHistory {
 								lastMessage = message
-								lastMessageHistory = parsedHistoryId
+								lastMessageHistory = parsedTimestamp
 							}
 						}
 					}

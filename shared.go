@@ -7357,6 +7357,114 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	//}
 }
 
+// Re-validating whether the workflow is done or not IF a result should be found.
+func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowExecution, executed []string) {
+	//ctx := context.Background()
+	execution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if err != nil {
+		log.Printf("\n\n[WARNING] Failed to get workflow in fix it up: %s\n\n", err)
+		return
+	}
+
+	if execution.Status != "EXECUTING" {
+		log.Printf("\n\n[WARNING] Workflow is finished: %s\n\n", err)
+		return
+	}
+
+	foundNotExecuted := []string{}
+	for _, executedItem := range executed {
+		found := false
+		for _, result := range execution.Results {
+			if result.Action.ID == executedItem {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			foundNotExecuted = append(foundNotExecuted, executedItem)
+		}
+	}
+
+	if len(foundNotExecuted) == 0 {
+		log.Printf("[DEBUG] No result missing that has been executed based on %#v", executed)
+		return
+	}
+
+	//log.Printf("\n\nSTILL NOT FINISHED: %#v - add to results", foundNotExecuted)
+	for _, executionItem := range foundNotExecuted {
+		cacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, executionItem)
+		cache, err := GetCache(ctx, cacheId)
+		if err != nil {
+			//log.Printf("[WARNING] Couldn't find in fix exec %s: %s", cacheId, err)
+			continue
+		}
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("Data: %s", string(cacheData))
+
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err != nil {
+			//log.Printf("[WARNING] Failed unmarshal in fix exec %s: %s", cacheId, err)
+			continue
+		}
+
+		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
+		go ResendActionResult(cacheData)
+	}
+}
+
+func ResendActionResult(actionData []byte) {
+	topClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+
+	backendUrl := os.Getenv("BASE_URL")
+	if project.Environment == "cloud" {
+		backendUrl = "https://shuffler.io"
+		//backendUrl = "https://69ad-84-214-96-67.ngrok.io"
+	}
+
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+		backendUrl = "http://shuffle-workers:33333"
+		log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
+	}
+
+	if len(backendUrl) == 0 {
+		backendUrl = "http://localhost:5001"
+	}
+
+	streamUrl := fmt.Sprintf("%s/api/v1/streams?rerun=true", backendUrl)
+	req, err := http.NewRequest(
+		"POST",
+		streamUrl,
+		bytes.NewBuffer(actionData),
+	)
+
+	if err != nil {
+		log.Printf("[WARNING] Error building resend action request: %s", err)
+		return
+	}
+
+	_, err = topClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Error running resend action request: %s", err)
+		return
+	}
+
+	//body, err := ioutil.ReadAll(newresp.Body)
+	//if err != nil {
+	//	log.Printf("[WARNING] Error getting body from rerun: %s", err)
+	//	return
+	//}
+
+	//log.Printf("[DEBUG] Status %d and Body from rerun: %s", newresp.StatusCode, string(body))
+}
+
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool) (*WorkflowExecution, bool, error) {
 
@@ -7365,7 +7473,19 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		return &workflowExecution, true, err
 	}
 
-	//log.Printf("ACTIONRESULT: %#v", actionResult)
+	// 1. Set cache
+	// 2. Find executed without a result
+	// 3. Ensure the result is NOT set when running an action
+
+	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
+	actionResultBody, err := json.Marshal(actionResult)
+	if err == nil {
+		//log.Printf("[DEBUG] Setting cache for %s", actionCacheId)
+		err = SetCache(ctx, actionCacheId, actionResultBody)
+		if err != nil {
+			log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
+		}
+	}
 
 	dbSave := false
 	startAction, extra, children, parents, visited, executed, nextActions, environments := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
@@ -8203,6 +8323,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 	*/
+	// Auto fixing and ensuring the same isn't ran multiple times?
 
 	extraInputs := 0
 	for _, trigger := range workflowExecution.Workflow.Triggers {
@@ -8511,6 +8632,82 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 
 				workflowExecution.Results = newResults
+			}
+		}
+	}
+
+	// Should only apply a few seconds after execution, otherwise it's bascially spam.
+	//log.Printf("Timestamps: %d vs now: %d", workflowExecution.StartedAt, time.Now().Unix())
+
+	// FIXME: May be better to do this by rerunning the workflow
+	// after 20 seconds to re-check it
+	// Don't want to run from the get-go
+	if time.Now().Unix()-workflowExecution.StartedAt > 5 {
+		_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
+		foundNotExecuted := []string{}
+		for _, executedItem := range newExecuted {
+			if executedItem == actionResult.Action.ID {
+				continue
+			}
+
+			found := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.ID == executedItem {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				foundNotExecuted = append(foundNotExecuted, executedItem)
+			}
+		}
+
+		if len(foundNotExecuted) > 0 {
+			//log.Printf("\n\n[ERROR] Couldnt be found, even when executed: %s. Get it from cache and append as result? Will start a function to validate in 10 seconds.\n\n", foundNotExecuted)
+			//time.AfterFunc(1*time.Second, func() {
+			//})
+			// Running them right away?
+			validateFinishedExecution(ctx, workflowExecution, foundNotExecuted)
+		} else {
+			//log.Printf("\n\n[WARNING] Rerunning checks for whether the execution is done at all.\n\n")
+
+			// FIXME: Doesn't take into accoutn subflows and user input trigger
+			//missingExecuted := []string{}
+
+			for _, action := range workflowExecution.Workflow.Actions {
+				found := false
+				for _, result := range workflowExecution.Results {
+					if result.Action.ID == action.ID {
+						found = true
+						break
+					}
+				}
+
+				if found {
+					continue
+				}
+
+				//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
+				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
+				cache, err := GetCache(ctx, cacheId)
+				if err != nil {
+					//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+					continue
+				}
+
+				actionResult := ActionResult{}
+				cacheData := []byte(cache.([]uint8))
+
+				// Just ensuring the data is good
+				err = json.Unmarshal(cacheData, &actionResult)
+				if err != nil {
+					log.Printf("[WARNING] Failed unmarshal in fix exec %s (2): %s", cacheId, err)
+					continue
+				}
+
+				//log.Printf("\n\n[DEBUG] Should rerun? %s\n\n", action.ID)
+				go ResendActionResult(cacheData)
 			}
 		}
 	}

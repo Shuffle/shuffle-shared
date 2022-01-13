@@ -334,7 +334,9 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 				}
 
 				if err := memcache.Set(ctx, item); err != nil {
-					log.Printf("[WARNING] Failed setting cache for %s: %s", keyname, err)
+					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
+						log.Printf("[WARNING] Failed setting cache for %s (1): %s", keyname, err)
+					}
 					break
 				} else {
 					totalAdded += chunkSize
@@ -360,7 +362,9 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 			}
 
 			if err := memcache.Set(ctx, item); err != nil {
-				log.Printf("[WARNING] Failed setting cache for %s: %s", name, err)
+				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
+					log.Printf("[WARNING] Failed setting cache for %s (2): %s", name, err)
+				}
 			}
 		}
 
@@ -730,7 +734,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 
 		// Parsing as file.
-		log.Printf("[DEBUG] Getting execution %s", id)
+		//log.Printf("[DEBUG] Getting execution %s", id)
 		for valueIndex, value := range workflowExecution.Results {
 			if strings.Contains(value.Result, "Result too large to handle") {
 				log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
