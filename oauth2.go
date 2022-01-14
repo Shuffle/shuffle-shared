@@ -2413,7 +2413,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	history, err = GetGmailHistory(ctx, gmailClient, findHistory.EmailAddress, newHistoryId)
 
 	if err != nil {
-		log.Printf("[WARNING] Failed getting data for history update %d (%s): %s", newHistoryId, findHistory.EmailAddress, err)
+		log.Printf("[WARNING] Failed getting data for history update %s (%s): %s", newHistoryId, findHistory.EmailAddress, err)
 		resp.WriteHeader(200)
 		return
 	} else {

@@ -9062,15 +9062,15 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		return
 	} else { //strings.HasPrefix(version.Swagger, "2.") || strings.HasPrefix(version.OpenAPI, "2.") {
 		// Convert
-		log.Println("Handling v2 API")
+		log.Println("[WARNING] Handling v2 API")
 		swagger := openapi2.Swagger{}
 		//log.Println(string(body))
 		err = json.Unmarshal(body, &swagger)
 		if err != nil {
-			log.Printf("Json error for v2 - trying yaml: %s", err)
+			log.Printf("[WARNING] Json error for v2 - trying yaml next: %s", err)
 			err = yaml.Unmarshal([]byte(body), &swagger)
 			if err != nil {
-				log.Printf("Yaml error (4): %s", err)
+				log.Printf("[WARNING] Yaml error (4): %s", err)
 
 				resp.WriteHeader(422)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
