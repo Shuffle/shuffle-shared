@@ -301,8 +301,9 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 
 	// Splitting into multiple cache items
 	if project.Environment == "cloud" {
-		if len(data) > maxCacheSize*25 {
-			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*10))
+		comparisonNumber := 50
+		if len(data) > maxCacheSize*comparisonNumber {
+			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
 		}
 
 		loop := false
@@ -5354,8 +5355,11 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
 		//log.Printf("[WARNING] Getting executions from datastore")
-		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
+		//totalMaxSize := 33554432
+		//totalMaxSize := 22369621 // Total of App Engine max /3*2
+		totalMaxSize := 11184810
+		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		max := 50
 		cursorStr := ""
 		for {
@@ -5377,18 +5381,22 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 				//log.Printf("[DEBUG] Appending %s", innerWorkflow.ExecutionId)
 
 				// Partly scalable due to caching of the values being fetched
-				for valueIndex, value := range innerWorkflow.Results {
-					if strings.Contains(value.Result, "Result too large to handle") {
-						//log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
-						newValue, err := getExecutionFileValue(ctx, innerWorkflow, value)
-						if err != nil {
-							log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
-							continue
-						}
 
-						innerWorkflow.Results[valueIndex].Result = newValue
-					}
-				}
+				/*
+					// Not fixing for each here. Fixing when clicking individual instead.
+						for valueIndex, value := range innerWorkflow.Results {
+							if strings.Contains(value.Result, "Result too large to handle") {
+								//log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
+								newValue, err := getExecutionFileValue(ctx, innerWorkflow, value)
+								if err != nil {
+									log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
+									continue
+								}
+
+								innerWorkflow.Results[valueIndex].Result = newValue
+							}
+						}
+				*/
 
 				executions = append(executions, innerWorkflow)
 			}
@@ -5396,6 +5404,14 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 			if err != iterator.Done {
 				//log.Printf("[INFO] Failed fetching results: %v", err)
 				//break
+			}
+
+			executionmarshal, err := json.Marshal(executions)
+			if err == nil {
+				log.Printf("LEN: %d", len(executionmarshal))
+				if len(executionmarshal) > totalMaxSize {
+					break
+				}
 			}
 
 			if len(executions) >= max {

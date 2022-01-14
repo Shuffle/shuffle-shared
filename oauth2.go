@@ -307,6 +307,74 @@ func getOutlookProfile(client *http.Client) (OutlookProfile, error) {
 	return profile, nil
 }
 
+func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Api authentication failed in setting gmail: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read in github auth: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("BODY: %s", string(body))
+	type GithubAuth struct {
+		User string `json:"user"`
+		Type string `json:"github"`
+		Code string `json:"code"`
+	}
+
+	var authInfo GithubAuth
+	err = json.Unmarshal(body, &authInfo)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling (githubauth): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Bad data received"}`))
+		return
+	}
+
+	if authInfo.User != user.Id {
+		log.Printf("[WARNING] Bad user - not matching with auth: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Bad user ID - not matching"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	url := fmt.Sprintf("http://%s%s", request.Host, request.URL.EscapedPath())
+	if project.Environment == "cloud" && os.Getenv("CLOUD_ENVIRONMENT") != "local" {
+		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
+	}
+
+	log.Printf("URI: %s", url)
+
+	client, token, err := GetGithubClient(ctx, authInfo.Code, OauthToken{}, url)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting up github client: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	_ = client
+	_ = token
+
+	//if project.Environment == "cloud" && os.Getenv("CLOUD_ENVIRONMENT") != "local" {
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
 func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -2639,6 +2707,43 @@ func RefreshGmailClient(ctx context.Context, auth TriggerAuth) (*http.Client, er
 
 	client := conf.Client(ctx, token)
 	return client, nil
+}
+
+func GetGithubClient(ctx context.Context, code string, accessToken OauthToken, redirectUri string) (*http.Client, *oauth2.Token, error) {
+	conf := &oauth2.Config{
+		ClientID:     os.Getenv("GITHUB_CLIENT"),
+		ClientSecret: os.Getenv("GITHUB_SECRET"),
+		Scopes: []string{
+			"user:email",
+		},
+		RedirectURL: redirectUri,
+		Endpoint: oauth2.Endpoint{
+			AuthURL:  "https://github.com/login/oauth/authorize",
+			TokenURL: "https://github.com/login/oauth/access_token",
+		},
+	}
+
+	if len(code) > 0 {
+		access_token, err := conf.Exchange(ctx, code)
+		if err != nil {
+			log.Printf("[WARNING] Access_token issue for Github: %s", err)
+			return &http.Client{}, access_token, err
+		}
+
+		client := conf.Client(ctx, access_token)
+		return client, access_token, nil
+	}
+
+	// Manually recreate the oauthtoken
+	access_token := &oauth2.Token{
+		AccessToken:  accessToken.AccessToken,
+		TokenType:    accessToken.TokenType,
+		RefreshToken: accessToken.RefreshToken,
+		Expiry:       accessToken.Expiry,
+	}
+
+	client := conf.Client(ctx, access_token)
+	return client, access_token, nil
 }
 
 // THis all of a sudden became really horrible.. fml

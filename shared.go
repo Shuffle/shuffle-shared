@@ -1851,7 +1851,7 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 
 		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
 
-		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape(`{"success": False, "reason": "Shuffle's automated cleanup-crew stopped this execution as it didn't finish"}`))
+		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape(`{"success": False, "reason": "Shuffle's automated cleanup bot stopped this execution as it didn't finish within 30 minutes."}`))
 		//log.Printf("Url: %s", streamUrl)
 		req, err := http.NewRequest(
 			"GET",
