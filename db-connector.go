@@ -396,7 +396,6 @@ func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id string) error {
 	nameKey := "workflowapp"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-	key := datastore.NameKey(nameKey, id, nil)
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflowapp)
@@ -404,12 +403,14 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 		log.Printf("[WARNING] Failed marshalling in setapp: %s", err)
 		return nil
 	}
+
 	if project.DbType == "elasticsearch" {
 		err = indexEs(ctx, nameKey, workflowapp.ID, data)
 		if err != nil {
 			return err
 		}
 	} else {
+		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
 			log.Printf("[WARNING] Error adding workflow app: %s", err)
 			return err
@@ -3421,9 +3422,20 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 
 		allApps = []WorkflowApp{}
-		//log.Printf("Hits: %d", len(wrapped.Hits.Hits))
+		duplicates := map[string][]string{}
 		for _, hit := range wrapped.Hits.Hits {
 			innerApp := hit.Source
+			//if strings.Contains(strings.ToLower(innerApp.Name), "shuffle") {
+			//	log.Printf("APP: %s", innerApp.Name)
+			//}
+
+			_, found := duplicates[innerApp.Name]
+			if found {
+				duplicates[innerApp.Name] = append(duplicates[innerApp.Name], innerApp.ID)
+			} else {
+				duplicates[innerApp.Name] = []string{innerApp.ID}
+				//duplicates[innerApp.Name] = append(duplicates[innerApp.Name], innerApp.ID)
+			}
 
 			if innerApp.Name == "Shuffle Subflow" {
 				continue
@@ -3439,10 +3451,33 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 				continue
 			}
 
-			//newApp := WorkflowApp{}
-
 			allApps, innerApp = fixAppAppend(allApps, innerApp)
 		}
+
+		deletions := false
+		for key, value := range duplicates {
+			if len(value) < 20 {
+				continue
+			}
+
+			log.Printf("Should delete loads of %s", key)
+			err = DeleteKeys(ctx, "workflowapp", value[0:len(value)-20])
+			if err == nil {
+				deletions = true
+			} else {
+				log.Printf("[WARNING] App cleanup failed: %s", err)
+			}
+		}
+
+		if deletions {
+			newAllApps, err := GetAllWorkflowApps(ctx, maxLen)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get subapps after cleanup")
+			} else {
+				allApps = newAllApps
+			}
+		}
+
 	} else {
 		cursorStr := ""
 		query := datastore.NewQuery(nameKey).Order("-edited").Limit(10)

@@ -801,7 +801,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				},
 			})
 		} else if securitySchemes["ApiKeyAuth"] != nil {
-			log.Printf("AUTH:%#v", securitySchemes["ApiKeyAuth"].Value)
+			//log.Printf("AUTH:%#v", securitySchemes["ApiKeyAuth"].Value)
 			newAuthParam := AuthenticationParams{
 				Name:        "apikey",
 				Value:       "",
