@@ -2922,7 +2922,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 // 3. Get PUBLIC apps
 func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	if project.Environment != "cloud" {
-		return GetAllWorkflowApps(ctx, 1000)
+		return GetAllWorkflowApps(ctx, 1000, 0)
 	}
 
 	log.Printf("[AUDIT] Getting apps for user %s with active org %s", user.Username, user.ActiveOrg.Id)
@@ -3343,8 +3343,13 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 	return allApps, innerApp
 }
 
-func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) {
+func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowApp, error) {
 	var allApps []WorkflowApp
+
+	// Used for recursion and autocleanup
+	if depth > 5 {
+		return []WorkflowApp{}, errors.New(fmt.Sprintf("Too deep: max recursion at %d", depth))
+	}
 
 	wrapper := []WorkflowApp{}
 	cacheKey := fmt.Sprintf("workflowapps-sorted-%d", maxLen)
@@ -3456,12 +3461,12 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 
 		deletions := false
 		for key, value := range duplicates {
-			if len(value) < 20 {
+			if len(value) <= 10 {
 				continue
 			}
 
-			log.Printf("Should delete loads of %s", key)
-			err = DeleteKeys(ctx, "workflowapp", value[0:len(value)-20])
+			log.Printf("[WARNING] Should delete loads of %s (%d). Cleanup process starting (max 5 recursions)", key, len(value))
+			err = DeleteKeys(ctx, "workflowapp", value[0:len(value)-10])
 			if err == nil {
 				deletions = true
 			} else {
@@ -3470,7 +3475,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int) ([]WorkflowApp, error) 
 		}
 
 		if deletions {
-			newAllApps, err := GetAllWorkflowApps(ctx, maxLen)
+			newAllApps, err := GetAllWorkflowApps(ctx, maxLen, depth+1)
 			if err != nil {
 				log.Printf("[WARNING] Failed to get subapps after cleanup")
 			} else {

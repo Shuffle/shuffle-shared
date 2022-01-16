@@ -262,7 +262,8 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 // This function generates the python code that's being used.
 // This is really meta when you program it. Handling parameters is hard here.
-func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string, api WorkflowApp) (string, string) {
+func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string, api WorkflowApp, handleFile bool) (string, string) {
+
 	method = strings.ToLower(method)
 	queryString := ""
 	queryData := ""
@@ -524,6 +525,12 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		verifyParam,
 	)
 
+	// Handles default return value
+	handleFileString := "try:\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            return ret.text\n        except Exception as e:\n            return ret.text"
+	if handleFile {
+		handleFileString = fmt.Sprintf("new_file = [{\"filename\": \"%s_generated\", \"data\": ret.text}]\n        return_value = self.set_files(new_file)\n        return json.dumps({\"success\": True, \"file_id\": return_value[0], \"file_size\": len(ret.text)})", swagger.Info.Title)
+	}
+
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" {
 		parsedDataCurlParser = "parsed_curl_command += f\" -d '{body}'\""
@@ -619,10 +626,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         except Exception as e:
             print(f"[WARNING] Something went wrong when adding extra returns (2). {e}")
 
-        try:
-            return ret.json()
-        except json.decoder.JSONDecodeError:
-            return ret.text
+        %s
 		`,
 		functionname,
 		parsedParameters,
@@ -646,10 +650,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		bodyAddin,
 		verifyAddin,
 		fileBalance,
+		handleFileString,
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "qwe") {
+	if strings.Contains(functionname, "attachment") {
 		log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
@@ -1474,6 +1479,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
+	handleFile := false
 
 	//log.Println(path.Parameters)
 
@@ -1619,7 +1625,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "connect", parameters, optionalQueries, headersFound, "", api)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "connect", parameters, optionalQueries, headersFound, "", api, handleFile)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1647,6 +1653,20 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
+	}
+
+	// Check if it should return as file (binary)
+	// FIXME: Don't JUST specif text/plain to allow this.
+	handleFile := false
+	if strings.Contains(path.Get.Summary, "Download") {
+		if defaultInfo, ok := path.Get.Responses["default"]; ok {
+
+			if content, ok := defaultInfo.Value.Content["text/plain"]; ok {
+				if content.Schema.Value.Type == "string" && content.Schema.Value.Format == "binary" {
+					handleFile = true
+				}
+			}
+		}
 	}
 
 	// Parameters:  []WorkflowAppActionParameter{},
@@ -1792,7 +1812,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "get", parameters, optionalQueries, headersFound, "", api)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "get", parameters, optionalQueries, headersFound, "", api, handleFile)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1821,6 +1841,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
+	handleFile := false
 
 	//log.Println(path.Parameters)
 
@@ -1963,7 +1984,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "head", parameters, optionalQueries, headersFound, "", api)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "head", parameters, optionalQueries, headersFound, "", api, handleFile)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -1992,6 +2013,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
+	handleFile := false
 
 	//log.Println(path.Parameters)
 
@@ -1999,7 +2021,6 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-
 	headersFound := []string{}
 	if len(path.Delete.Parameters) > 0 {
 		for counter, param := range path.Delete.Parameters {
@@ -2136,7 +2157,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "delete", parameters, optionalQueries, headersFound, "", api)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "delete", parameters, optionalQueries, headersFound, "", api, handleFile)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -2166,6 +2187,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
+	handleFile := false
 
 	// Parameters:  []WorkflowAppActionParameter{},
 	// FIXME - add data for POST stuff
@@ -2340,7 +2362,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "post", parameters, optionalQueries, headersFound, fileField, api)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "post", parameters, optionalQueries, headersFound, fileField, api, handleFile)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -2374,6 +2396,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
+	handleFile := false
 
 	//log.Println(path.Parameters)
 
@@ -2517,7 +2540,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "patch", parameters, optionalQueries, headersFound, "", api)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "patch", parameters, optionalQueries, headersFound, "", api, handleFile)
 
 	if len(functionname) > 0 {
 		action.Name = functionname
@@ -2546,6 +2569,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
+	handleFile := false
 
 	//log.Println(path.Parameters)
 
@@ -2690,7 +2714,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
-	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "put", parameters, optionalQueries, headersFound, "", api)
+	functionname, curCode := MakePythoncode(swagger, functionName, baseUrl, "put", parameters, optionalQueries, headersFound, "", api, handleFile)
 
 	if len(functionname) > 0 {
 		action.Name = functionname

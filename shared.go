@@ -3054,7 +3054,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflowapps, err := GetPrioritizedApps(ctx, user)
 		envName := "cloud"
 		if project.Environment != "cloud" {
-			workflowapps, err = GetAllWorkflowApps(ctx, 1000)
+			workflowapps, err = GetAllWorkflowApps(ctx, 1000, 0)
 			envName = "Shuffle"
 		}
 
@@ -5288,7 +5288,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		app.Sharing = tmpfields.Sharing
 
 		if project.Environment != "cloud" {
-			log.Printf("[INFO] Set app %s to share everywhere (PUBLIC=true/false), because running onprem", app.Name, app.ID)
+			log.Printf("[INFO] Set app %s (%s) to share everywhere (PUBLIC=true/false), because running onprem", app.Name, app.ID)
 			app.Public = app.Sharing
 		}
 	}
@@ -8866,6 +8866,8 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s", app.Name, app.ID, user.ActiveOrg.Id, user.Username)
+
+	// If onprem, it should autobuild the container(s) from here
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
