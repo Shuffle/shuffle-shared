@@ -7456,13 +7456,13 @@ func ResendActionResult(actionData []byte) {
 		return
 	}
 
-	body, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		log.Printf("[WARNING] Error getting body from rerun: %s", err)
-		return
-	}
+	//body, err := ioutil.ReadAll(newresp.Body)
+	//if err != nil {
+	//	log.Printf("[WARNING] Error getting body from rerun: %s", err)
+	//	return
+	//}
 
-	log.Printf("[DEBUG] Status %d and Body from rerun: %s", newresp.StatusCode, string(body))
+	//log.Printf("[DEBUG] Status %d and Body from rerun: %s", newresp.StatusCode, string(body))
 }
 
 // Updateparam is a check to see if the execution should be continuously validated
