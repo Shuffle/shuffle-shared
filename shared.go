@@ -7431,7 +7431,7 @@ func ResendActionResult(actionData []byte) {
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 		backendUrl = "http://shuffle-workers:33333"
-		log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
+		log.Printf("\n\n[DEBUG] REsending request to rerun action result to %s\n\n", backendUrl)
 	}
 
 	if len(backendUrl) == 0 {
@@ -7456,13 +7456,13 @@ func ResendActionResult(actionData []byte) {
 		return
 	}
 
-	//body, err := ioutil.ReadAll(newresp.Body)
-	//if err != nil {
-	//	log.Printf("[WARNING] Error getting body from rerun: %s", err)
-	//	return
-	//}
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error getting body from rerun: %s", err)
+		return
+	}
 
-	//log.Printf("[DEBUG] Status %d and Body from rerun: %s", newresp.StatusCode, string(body))
+	log.Printf("[DEBUG] Status %d and Body from rerun: %s", newresp.StatusCode, string(body))
 }
 
 // Updateparam is a check to see if the execution should be continuously validated
@@ -8345,7 +8345,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		// Doesn't have to be SUCCESS and FINISHED everywhere anymore.
 		//skippedNodes := false
 		for _, result := range workflowExecution.Results {
-			if result.Status == "EXECUTING" {
+			if result.Status == "EXECUTING" || result.Status == "WAITING" {
 				finished = false
 				break
 			}
