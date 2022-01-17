@@ -5957,13 +5957,13 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		CloudUrl:      "https://shuffler.io",
 	}
 
-	requestCache = cache.New(15*time.Minute, 30*time.Minute)
-	if dbType == "elasticsearch" || dbType == "opensearch" {
+	requestCache = cache.New(60*time.Minute, 120*time.Minute)
+	if strings.ToLower(dbType) == "elasticsearch" || strings.ToLower(dbType) == "opensearch" {
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
 		if err != nil {
-			log.Printf("[ERROR] Failed setting up ES: %s", err)
+			log.Printf("[ERROR] Failed setting up Opensearch: %s", err)
 			return project, err
 		}
 
