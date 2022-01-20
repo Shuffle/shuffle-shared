@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	//"os/exec"
 	"regexp"
 	"strconv"
 	"strings"
@@ -6420,6 +6421,8 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// This is the same as aborted
+	IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 	err = SetWorkflowExecution(ctx, *workflowExecution, true)
 	if err != nil {
 		log.Printf("[WARNING] Error saving workflow execution for updates when aborting %s: %s", topic, err)
@@ -7130,6 +7133,10 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	// Maybe we need to pass the worker's real id, and not its VIP?
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 		backendUrl = "http://shuffle-workers:33333"
+
+		// From worker:
+		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
+
 		log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
 	}
 
@@ -7431,6 +7438,10 @@ func ResendActionResult(actionData []byte) {
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 		backendUrl = "http://shuffle-workers:33333"
+
+		// From worker:
+		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
+
 		log.Printf("\n\n[DEBUG] REsending request to rerun action result to %s\n\n", backendUrl)
 	}
 
@@ -7485,6 +7496,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if err != nil {
 			log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
 		}
+	}
+
+	skipExecutionCount := false
+	if workflowExecution.Status == "FINISHED" {
+		skipExecutionCount = true
 	}
 
 	dbSave := false
@@ -7854,6 +7870,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "app_executions_failed")
+
 		if workflowExecution.Workflow.Configuration.SkipNotifications == false {
 			// Add an else for HTTP request errors with success "false"
 			// These could be "silent" issues
@@ -8401,7 +8418,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			workflowExecution.Result = lastResult
 			workflowExecution.Status = "FINISHED"
-			IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
 			workflowExecution.CompletedAt = int64(time.Now().Unix())
 			if workflowExecution.LastNode == "" {
 				workflowExecution.LastNode = actionResult.Action.ID
@@ -8504,7 +8520,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				log.Printf("\n\nNO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING\n\n")
 
 				// This means it's started, hence executing :)
-				IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
 				//return &workflowExecution, false, nil
 
 				// Finding the result, and removing it if it exists. "Sinkholing"
@@ -8574,7 +8589,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if project.DbType != "elasticsearch" {
 			if len(tmpJson) >= 1000000 {
 				dbSave = true
-				log.Printf("[ERROR] Result length is too long (%d)! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson))
+				log.Printf("[WARNING] Result length is too long (%d)! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson))
 
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
 				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
@@ -8710,6 +8725,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				go ResendActionResult(cacheData)
 			}
 		}
+	}
+
+	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
+		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
 	}
 
 	return &workflowExecution, dbSave, err
@@ -11740,6 +11759,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.Workflow.ExecutingOrg,
 	}
 
+	// Means executing a subflow is happening
+	if len(workflowExecution.ExecutionParent) > 0 {
+		IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
+	}
+
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
 }
 
@@ -12162,4 +12186,190 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
+}
+
+type flushWriter struct {
+	f http.Flusher
+	w io.Writer
+}
+
+func (fw *flushWriter) Write(p []byte) (n int, err error) {
+	n, err = fw.w.Write(p)
+	if fw.f != nil {
+		fw.f.Flush()
+	}
+	return
+}
+
+func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	//// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream): %s. Continuing because it may be public.", err)
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
+		return
+	}
+
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+		} else if workflow.Public {
+			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
+		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	resp.Header().Set("Connection", "Keep-Alive")
+	resp.Header().Set("X-Content-Type-Options", "nosniff")
+	fw := flushWriter{w: resp}
+	if f, ok := resp.(http.Flusher); ok {
+		fw.f = f
+	} else {
+		log.Printf("[WARNING] Failed initializing flushwriter!")
+	}
+
+	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
+	previousCache := []byte{}
+	for {
+		cache, err := GetCache(ctx, sessionKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			if string(previousCache) == string(cacheData) {
+				//log.Printf("[DEBUG] Still same cache for %s", user.Id)
+			} else {
+				// A way to only check for data from other people
+				if !strings.Contains(string(cacheData), user.Id) {
+					fw.Write(cacheData)
+				}
+
+				log.Printf("[DEBUG] NEW cache for %s", user.Id)
+				previousCache = cacheData
+			}
+		} else {
+			log.Printf("[DEBUG] Nothing in cache.")
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	//// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream): %s. Continuing because it may be public.", err)
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
+		return
+	}
+
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+		} else if workflow.Public {
+			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
+		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read in workflow stream: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Literally just dumping them in, as they're supposed to be overwritten continuously
+	// PS: This is NOT an ideal process, and broadcasting should be handled differently
+	log.Printf("Body: %s", string(body))
+	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
+	err = SetCache(ctx, sessionKey, body)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte("OK"))
 }

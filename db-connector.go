@@ -77,42 +77,62 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 			}
 		}
 
+		// FIXME: Sometimes run this update even when the name is set
+		// e.g. 1% of the time to ensure we have the right one
+		if orgStatistics.OrgName == "" {
+			org, err := GetOrg(ctx, orgId)
+			if err == nil {
+				orgStatistics.OrgName = org.Name
+			}
+
+			orgStatistics.OrgId = orgId
+		}
+
 		if dataType == "workflow_executions" {
 			orgStatistics.TotalWorkflowExecutions += int64(dumpInterval)
 			orgStatistics.MonthlyWorkflowExecutions += int64(dumpInterval)
 			orgStatistics.WeeklyWorkflowExecutions += int64(dumpInterval)
+
 		} else if dataType == "workflow_executions_finished" {
 			orgStatistics.TotalWorkflowExecutionsFinished += int64(dumpInterval)
 			orgStatistics.MonthlyWorkflowExecutionsFinished += int64(dumpInterval)
 			orgStatistics.WeeklyWorkflowExecutionsFinished += int64(dumpInterval)
+
 		} else if dataType == "workflow_executions_failed" {
 			orgStatistics.TotalWorkflowExecutionsFailed += int64(dumpInterval)
 			orgStatistics.MonthlyWorkflowExecutionsFailed += int64(dumpInterval)
 			orgStatistics.WeeklyWorkflowExecutionsFailed += int64(dumpInterval)
+
 		} else if dataType == "app_executions" {
 			orgStatistics.TotalAppExecutions += int64(dumpInterval)
 			orgStatistics.MonthlyAppExecutions += int64(dumpInterval)
 			orgStatistics.WeeklyAppExecutions += int64(dumpInterval)
+
 		} else if dataType == "app_executions_failed" {
 			orgStatistics.TotalAppExecutionsFailed += int64(dumpInterval)
 			orgStatistics.MonthlyAppExecutionsFailed += int64(dumpInterval)
 			orgStatistics.WeeklyAppExecutionsFailed += int64(dumpInterval)
+
 		} else if dataType == "subflow_executions" {
 			orgStatistics.TotalSubflowExecutions += int64(dumpInterval)
 			orgStatistics.MonthlySubflowExecutions += int64(dumpInterval)
 			orgStatistics.WeeklySubflowExecutions += int64(dumpInterval)
+
 		} else if dataType == "org_sync_actions" {
 			orgStatistics.TotalOrgSyncActions += int64(dumpInterval)
 			orgStatistics.MonthlyOrgSyncActions += int64(dumpInterval)
 			orgStatistics.WeeklyOrgSyncActions += int64(dumpInterval)
+
 		} else if dataType == "workflow_executions_cloud" {
 			orgStatistics.TotalCloudExecutions += int64(dumpInterval)
 			orgStatistics.MonthlyCloudExecutions += int64(dumpInterval)
 			orgStatistics.WeeklyCloudExecutions += int64(dumpInterval)
+
 		} else if dataType == "workflow_executions_onprem" {
 			orgStatistics.TotalOnpremExecutions += int64(dumpInterval)
 			orgStatistics.MonthlyOnpremExecutions += int64(dumpInterval)
 			orgStatistics.WeeklyOnpremExecutions += int64(dumpInterval)
+
 		}
 
 		if _, err := tx.Put(key, orgStatistics); err != nil {
@@ -652,7 +672,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecution, action ActionResult) (string, error) {
 	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, action.Action.ID)
 
-	cacheKey := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, action.Action.ID)
+	cacheKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, action.Action.ID)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -694,6 +714,20 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			//log.Printf("CACHEDATA: %#v", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
+				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
+
+				for valueIndex, value := range workflowExecution.Results {
+					if strings.Contains(value.Result, "Result too large to handle") {
+						//log.Printf("[DEBUG] Found prefix %s to be replaced (1)", value.Result)
+						newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
+						if err != nil {
+							log.Printf("[DEBUG] Failed to parse in execution file value %s (1)", err)
+							continue
+						}
+
+						workflowExecution.Results[valueIndex].Result = newValue
+					}
+				}
 				//log.Printf("[DEBUG] Returned execution %s", id)
 				return workflowExecution, nil
 			} else {
@@ -736,13 +770,13 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 
 		// Parsing as file.
-		//log.Printf("[DEBUG] Getting execution %s", id)
+		log.Printf("[DEBUG] Getting execution %s. Results: %d", id, len(workflowExecution.Results))
 		for valueIndex, value := range workflowExecution.Results {
 			if strings.Contains(value.Result, "Result too large to handle") {
-				log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
+				//log.Printf("[DEBUG] Found prefix %s to be replaced (2)", value.Result)
 				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
 				if err != nil {
-					log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
+					log.Printf("[DEBUG] Failed to parse in execution file value %s (2)", err)
 					continue
 				}
 
@@ -2941,7 +2975,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			} else {
 				log.Println(string(cacheData))
 				log.Printf("[ERROR] Failed unmarshaling apps: %s", err)
-				log.Printf("[ERROR] DATALEN: %d", len(cacheData))
+				//log.Printf("[ERROR] DATALEN: %d", len(cacheData))
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
@@ -5448,7 +5482,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 
 			executionmarshal, err := json.Marshal(executions)
 			if err == nil {
-				log.Printf("LEN: %d", len(executionmarshal))
+				//log.Printf("LEN: %d", len(executionmarshal))
 				if len(executionmarshal) > totalMaxSize {
 					break
 				}

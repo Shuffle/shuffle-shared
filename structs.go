@@ -207,7 +207,9 @@ type Userapi struct {
 // Not directly, but being updated by org actions
 type ExecutionInfo struct {
 	// These have been configured for cache updates in db-connector.go with 5 hour (300 minutes) timeouts before dumping
-	LastCleared int64 `json:"last_cleared" datastore:"last_cleared"`
+	OrgId       string `json:"org_id" datastore:"org_id"`
+	OrgName     string `json:"org_name" datastore:"org_name"`
+	LastCleared int64  `json:"last_cleared" datastore:"last_cleared"`
 
 	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
 	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
