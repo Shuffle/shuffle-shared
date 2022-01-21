@@ -416,6 +416,11 @@ func GetDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id string) error {
 	nameKey := "workflowapp"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	timeNow := int64(time.Now().Unix())
+	workflowapp.Edited = timeNow
+	if workflowapp.Created == 0 {
+		workflowapp.Created = timeNow
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflowapp)
@@ -3407,7 +3412,13 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 		// FIXME: Overwrite necessary?
 		query := map[string]interface{}{
 			"size": 1000,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 		}
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
 			return []WorkflowApp{}, err

@@ -363,7 +363,7 @@ func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("URI: %s", url)
 
-	client, _, err := GetGithubClient(ctx, authInfo.Code, OauthToken{}, url)
+	client, accessToken, err := GetGithubClient(ctx, authInfo.Code, OauthToken{}, url)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting up github client for %s (%s): %s", user.Username, user.Id, err)
 		resp.WriteHeader(401)
@@ -393,9 +393,75 @@ func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 	user.PublicProfile.GithubBio = ghuser.Bio
 	user.PublicProfile.GithubTwitter = ghuser.TwitterUsername
 
+	//GET /repos/{owner}/{repo}/contributors
+	repositories := map[string]string{
+		"frikky/shuffle":           "core",
+		"frikky/shuffle-shared":    "core",
+		"shuffle/shuffle-docs":     "docs",
+		"shuffle/shuffle-apps":     "apps",
+		"shuffle/openapi-apps":     "apps",
+		"shuffle/shuffle-usecases": "workflows",
+	}
+
+	// Reset
+	user.PublicProfile.GithubContributions = GithubContributions{}
+	for repo, repoType := range repositories {
+		contributors, err := GetGithubRepoContributors(ctx, client, repo)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting user repo contributions for %s", user.Username)
+			continue
+		}
+
+		for _, contributor := range contributors {
+			if contributor.Login == user.PublicProfile.GithubUsername {
+				log.Printf("Contrib! Repo: %s, user: %s, contributions: %d", repo, contributor.Login, contributor.Contributions)
+
+				if repoType == "core" {
+					user.PublicProfile.GithubContributions.Core.Count += contributor.Contributions
+				} else if repoType == "docs" {
+					user.PublicProfile.GithubContributions.Docs.Count += contributor.Contributions
+
+				} else if repoType == "apps" {
+					user.PublicProfile.GithubContributions.Apps.Count += contributor.Contributions
+
+				} else if repoType == "workflows" {
+					user.PublicProfile.GithubContributions.Workflows.Count += contributor.Contributions
+
+				} else {
+					log.Printf("[WARNING] No handler for repotype %s (%s)", repoType, repo)
+				}
+
+				break
+			}
+		}
+	}
+
+	log.Printf("CONTRIB: %#v", user.PublicProfile.GithubContributions)
+
 	err = SetUser(ctx, &user, false)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting user data for %s: %s (github)", user.Username, err)
+		resp.WriteHeader(401)
+		return
+	}
+
+	trigger := TriggerAuth{}
+	trigger.Id = fmt.Sprintf("github_%s", user.Id)
+	trigger.Username = fmt.Sprintf(user.Username)
+	trigger.OrgId = user.ActiveOrg.Id
+	trigger.Owner = user.Id
+	trigger.Type = "github"
+	trigger.Code = authInfo.Code
+	trigger.OauthToken = OauthToken{
+		AccessToken:  accessToken.AccessToken,
+		TokenType:    accessToken.TokenType,
+		RefreshToken: accessToken.RefreshToken,
+		Expiry:       accessToken.Expiry,
+	}
+
+	err = SetTriggerAuth(ctx, trigger)
+	if err != nil {
+		log.Printf("[WARNING] Failed to set trigger auth for %s - %s (github)", trigger.Username, err)
 		resp.WriteHeader(401)
 		return
 	}
@@ -1981,6 +2047,42 @@ func GetGmailMessageAttachment(ctx context.Context, gmailClient *http.Client, us
 	//}
 
 	//log.Printf("\n\nUSER BODY: %s", string(body))
+	return message, nil
+}
+
+func GetGithubRepoContributors(ctx context.Context, githubClient *http.Client, repo string) ([]GithubProfile, error) {
+	fullUrl := fmt.Sprintf("https://api.github.com/repos/%s/contributors", repo)
+	req, err := http.NewRequest(
+		"GET",
+		fullUrl,
+		nil,
+	)
+
+	req.Header.Add("Content-Type", "application/json")
+	res, err := githubClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Github user get (4): %s", err)
+		return []GithubProfile{}, err
+	}
+
+	if res.StatusCode == 404 {
+		return []GithubProfile{}, errors.New(fmt.Sprintf("No repo contributors to get"))
+	}
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[WARNING] Gmail get msg (5): %s", err)
+		return []GithubProfile{}, err
+	}
+
+	//log.Printf("PROFILE: %s", string(body))
+	var message []GithubProfile
+	err = json.Unmarshal(body, &message)
+	if err != nil {
+		log.Printf("[WARNING] Failed body read unmarshal for gmail msg: %s", err)
+		return []GithubProfile{}, err
+	}
+
 	return message, nil
 }
 

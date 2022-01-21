@@ -310,18 +310,29 @@ type MFAInfo struct {
 }
 
 type PublicProfile struct {
-	Public            bool     `datastore:"public" json:"public"`
-	GithubUsername    string   `datastore:"github_username" json:"github_username"`
-	GithubUserid      string   `datastore:"github_userid" json:"github_userid"`
-	GithubAvatar      string   `datastore:"github_avatar" json:"github_avatar"`
-	GithubLocation    string   `datastore:"github_location" json:"github_location"`
-	GithubUrl         string   `datastore:"github_url" json:"github_url"`
-	GithubBio         string   `datastore:"github_bio" json:"github_bio"`
-	GithubTwitter     string   `datastore:"github_twitter" json:"github_twitter"`
-	WorkStatus        string   `datastore:"work_status" json:"work_status"`
-	Banner            string   `datastore:"banner" json:"banner"`
-	Skills            []string `datastore:"skills" json:"skills"`
-	WorkflowsReleased int      `datastore:"workflows_released" json:"workflows_released"`
+	Public              bool                `datastore:"public" json:"public"`
+	GithubUsername      string              `datastore:"github_username" json:"github_username"`
+	GithubUserid        string              `datastore:"github_userid" json:"github_userid"`
+	GithubAvatar        string              `datastore:"github_avatar" json:"github_avatar"`
+	GithubLocation      string              `datastore:"github_location" json:"github_location"`
+	GithubUrl           string              `datastore:"github_url" json:"github_url"`
+	GithubBio           string              `datastore:"github_bio" json:"github_bio"`
+	GithubTwitter       string              `datastore:"github_twitter" json:"github_twitter"`
+	WorkStatus          string              `datastore:"work_status" json:"work_status"`
+	Banner              string              `datastore:"banner" json:"banner"`
+	Skills              []string            `datastore:"skills" json:"skills"`
+	GithubContributions GithubContributions `datastore:"github_contributions" json:"github_contributions"`
+}
+
+type ContributionCount struct {
+	Count int64 `datastore:"contribution_count" json:"contribution_count"`
+}
+
+type GithubContributions struct {
+	Core      ContributionCount `datastore:"core" json:"core"`
+	Workflows ContributionCount `datastore:"workflows" json:"workflows"`
+	Apps      ContributionCount `datastore:"apps" json:"apps"`
+	Docs      ContributionCount `datastore:"docs" json:"docs"`
 }
 
 type User struct {
@@ -3142,4 +3153,5 @@ type GithubProfile struct {
 		PrivateRepos  int    `json:"private_repos"`
 		Collaborators int    `json:"collaborators"`
 	} `json:"plan"`
+	Contributions int64 `json:"contributions"`
 }
