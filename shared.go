@@ -43,6 +43,8 @@ import (
 	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/appengine"
+
+	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 )
 
 var project ShuffleStorage
@@ -4590,8 +4592,34 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	type SettingsReturn struct {
+		Success  bool   `json:"success"`
+		Username string `json:"username"`
+		Verified bool   `json:"verified"`
+		Apikey   string `json:"apikey`
+		Image    string `json:"image"`
+	}
+
+	log.Printf("User: %#v", userInfo.PublicProfile)
+
+	newObject := SettingsReturn{
+		Success:  true,
+		Username: userInfo.Username,
+		Verified: userInfo.Verified,
+		Apikey:   userInfo.ApiKey,
+		Image:    userInfo.PublicProfile.GithubAvatar,
+	}
+
+	newjson, err := json.Marshal(newObject)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshal in get settings: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed handling your user"}`)))
+		return
+	}
+
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, userInfo.Username, userInfo.Verified, userInfo.ApiKey)))
+	resp.Write(newjson)
 }
 
 func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
@@ -5109,6 +5137,126 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(body)
+}
+
+func handleAlgoliaCreatorSearch(ctx context.Context, username string) (string, error) {
+	cacheKey := fmt.Sprintf("algolia_creator_%s", username)
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHE: %d", len(cacheData))
+		if len(cacheData) == 36 {
+			return string(cacheData), nil
+		}
+	}
+
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("creators")
+	res, err := algoliaIndex.Search(username)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchCreator
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia creators: %s", err)
+		return "", err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	foundUserId := ""
+	for _, newRecord := range newRecords {
+		if newRecord.Username == username {
+			foundUserId = newRecord.ObjectID
+			break
+		}
+	}
+
+	if len(foundUserId) == 0 {
+		return "", errors.New("User not found")
+	}
+
+	if project.CacheDb {
+		err = SetCache(ctx, cacheKey, []byte(foundUserId))
+		if err != nil {
+			log.Printf("[WARNING] Failed updating algolia username cache: %s", err)
+		}
+	}
+
+	return foundUserId, nil
+}
+
+func HandleGetCreator(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	//_, userErr := HandleApiAuthentication(resp, request)
+	//if userErr != nil {
+	//	log.Printf("[WARNING] Api authentication failed in get user: %s", userErr)
+	//}
+
+	location := strings.Split(request.URL.String(), "/")
+	var username string
+	if location[1] == "api" {
+		if len(location) <= 5 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		username = location[5]
+	}
+
+	ctx := getContext(request)
+	userId, err := handleAlgoliaCreatorSearch(ctx, username)
+	if err != nil {
+		log.Printf("[WARNING] User with name %s could not be found: %s", userId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	foundUser, err := GetUser(ctx, userId)
+	if err != nil {
+		log.Printf("[WARNING] Can't find user %s (get creator): %s", userId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	if foundUser.PublicProfile.Public != true {
+		log.Printf("[WARNING] Can't return profile for %s (%s) as it's not public", username, userId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	if len(foundUser.PublicProfile.Banner) == 0 {
+		foundUser.PublicProfile.Banner = "https://pbs.twimg.com/profile_banners/355996680/1615856511/1500x500"
+	}
+
+	b, err := json.Marshal(foundUser.PublicProfile)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshaling user data for creator %s: %s", username, err)
+
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(b))
 }
 
 func DeleteUser(resp http.ResponseWriter, request *http.Request) {
@@ -12372,4 +12520,60 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte("OK"))
+}
+
+func handleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) (string, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("creators")
+	res, err := algoliaIndex.Search(user.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchCreator
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia creators: %s", err)
+		return "", err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == user.Id {
+			log.Printf("[INFO] Object %s already exists in Algolia", user.Id)
+
+			if overwrite {
+				break
+			} else {
+				return user.Id, errors.New("User ID already exists!")
+			}
+		}
+	}
+
+	timeNow := int64(time.Now().Unix())
+	records := []AlgoliaSearchCreator{
+		AlgoliaSearchCreator{
+			ObjectID:   user.Id,
+			TimeEdited: timeNow,
+			Image:      user.PublicProfile.GithubAvatar,
+			Username:   user.PublicProfile.GithubUsername,
+		},
+	}
+
+	_, err = algoliaIndex.SaveObjects(records)
+	if err != nil {
+		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		return "", err
+	}
+
+	log.Printf("[INFO] SUCCESSFULLY UPLOADED creator %s with ID %s TO ALGOLIA!", user.Username, user.Id)
+	return user.Id, nil
 }

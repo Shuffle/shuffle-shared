@@ -307,6 +307,9 @@ func getOutlookProfile(client *http.Client) (OutlookProfile, error) {
 	return profile, nil
 }
 
+// FIXME:
+// 1. Should find contributions to Shuffle repo's for the user
+// 2. Should save tokens to continuously check this
 func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -353,22 +356,56 @@ func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	url := fmt.Sprintf("http://%s%s", request.Host, request.URL.EscapedPath())
+	url := fmt.Sprintf("http://%s%s/set_authentication", request.Host, request.URL.EscapedPath())
 	if project.Environment == "cloud" && os.Getenv("CLOUD_ENVIRONMENT") != "local" {
-		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
+		url = fmt.Sprintf("https://%s%s/set_authentication", request.Host, request.URL.EscapedPath())
 	}
 
 	log.Printf("URI: %s", url)
 
-	client, token, err := GetGithubClient(ctx, authInfo.Code, OauthToken{}, url)
+	client, _, err := GetGithubClient(ctx, authInfo.Code, OauthToken{}, url)
 	if err != nil {
-		log.Printf("[WARNING] Failed setting up github client: %s", err)
+		log.Printf("[WARNING] Failed setting up github client for %s (%s): %s", user.Username, user.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-	_ = client
-	_ = token
+
+	ghuser, err := GetGithubProfile(ctx, client)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting github profile for %s (%s): %s", user.Username, user.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	user.PublicProfile.Public = true
+	user.PublicProfile.GithubUsername = ghuser.Login
+	user.PublicProfile.GithubUserid = strconv.Itoa(ghuser.ID)
+	user.PublicProfile.GithubAvatar = ghuser.AvatarURL
+
+	if len(user.PublicProfile.GithubAvatar) == 0 {
+		user.PublicProfile.GithubAvatar = ghuser.AvatarURL
+	}
+
+	user.PublicProfile.GithubLocation = ghuser.Location
+	user.PublicProfile.GithubUrl = ghuser.Blog
+	user.PublicProfile.GithubBio = ghuser.Bio
+	user.PublicProfile.GithubTwitter = ghuser.TwitterUsername
+
+	err = SetUser(ctx, &user, false)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting user data for %s: %s (github)", user.Username, err)
+		resp.WriteHeader(401)
+		return
+	}
+
+	_, err = handleAlgoliaCreatorUpload(ctx, user, false)
+	if err != nil {
+		log.Printf("[ERROR] Failed making user %s' information public")
+	}
+
+	log.Printf("Successful client setup for github?")
 
 	//if project.Environment == "cloud" && os.Getenv("CLOUD_ENVIRONMENT") != "local" {
 	resp.WriteHeader(200)
@@ -1947,6 +1984,41 @@ func GetGmailMessageAttachment(ctx context.Context, gmailClient *http.Client, us
 	return message, nil
 }
 
+func GetGithubProfile(ctx context.Context, githubClient *http.Client) (GithubProfile, error) {
+	fullUrl := fmt.Sprintf("https://api.github.com/user")
+	req, err := http.NewRequest(
+		"GET",
+		fullUrl,
+		nil,
+	)
+	req.Header.Add("Content-Type", "application/json")
+	res, err := githubClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Github user get (4): %s", err)
+		return GithubProfile{}, err
+	}
+
+	if res.StatusCode == 404 {
+		return GithubProfile{}, errors.New(fmt.Sprintf("No user to get"))
+	}
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[WARNING] Gmail get msg (5): %s", err)
+		return GithubProfile{}, err
+	}
+
+	//log.Printf("PROFILE: %s", string(body))
+	var message GithubProfile
+	err = json.Unmarshal(body, &message)
+	if err != nil {
+		log.Printf("[WARNING] Failed body read unmarshal for gmail msg: %s", err)
+		return GithubProfile{}, err
+	}
+
+	return message, nil
+}
+
 func GetGmailThread(ctx context.Context, gmailClient *http.Client, userId, messageId string) (GmailThreadStruct, error) {
 	fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/%s/threads/%s?format=full", userId, messageId)
 	//fullUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/me/messages/%s?format=full", messageId)
@@ -2710,18 +2782,49 @@ func RefreshGmailClient(ctx context.Context, auth TriggerAuth) (*http.Client, er
 }
 
 func GetGithubClient(ctx context.Context, code string, accessToken OauthToken, redirectUri string) (*http.Client, *oauth2.Token, error) {
+	//fullUrl := fmt.Sprintf("https://github.com/login/oauth/access_token?client_id=%s&client_secret=%s&code=%s&token_type=bearer", os.Getenv("GITHUB_CLIENT"), os.Getenv("GITHUB_SECRET"), code)
+	//log.Printf("Posting to URL %s for github", fullUrl)
+	//client := &http.Client{
+	//	Timeout: 1 * time.Second,
+	//}
+	//req, err := http.NewRequest(
+	//	"POST",
+	//	fullUrl,
+	//	nil,
+	//)
+
+	//req.Header.Add("Content-Type", "application/json")
+	//res, err := client.Do(req)
+	//if err != nil {
+	//	log.Printf("[WARNING] GMAIL Client: %s", err)
+	//	return &http.Client{}, &oauth2.Token{}, err
+	//}
+
+	//body, err := ioutil.ReadAll(res.Body)
+	//if err != nil {
+	//	log.Printf("[WARNING] Gmail subscription Body: %s", err)
+	//	return &http.Client{}, &oauth2.Token{}, err
+	//}
+
+	//log.Printf("BODY: %s", body)
+
+	//return &http.Client{}, &oauth2.Token{}, err
+
+	//RedirectURL: "http://localhost:3002/set_authentication",
 	conf := &oauth2.Config{
 		ClientID:     os.Getenv("GITHUB_CLIENT"),
 		ClientSecret: os.Getenv("GITHUB_SECRET"),
 		Scopes: []string{
-			"user:email",
+			"read:user",
+			//"repo",
 		},
-		RedirectURL: redirectUri,
 		Endpoint: oauth2.Endpoint{
 			AuthURL:  "https://github.com/login/oauth/authorize",
 			TokenURL: "https://github.com/login/oauth/access_token",
 		},
 	}
+
+	log.Printf("CONF: %#v", conf)
 
 	if len(code) > 0 {
 		access_token, err := conf.Exchange(ctx, code)

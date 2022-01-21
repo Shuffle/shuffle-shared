@@ -533,7 +533,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" {
-		parsedDataCurlParser = "parsed_curl_command += f\" -d '{body}'\""
+		parsedDataCurlParser = "parsed_curl_command += f\" -d '{body.decode(\"utf-8\")}'\""
 	}
 
 	data := fmt.Sprintf(`    def %s(self%s):

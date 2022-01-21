@@ -309,6 +309,21 @@ type MFAInfo struct {
 	PreviousCode string `datastore:"previous_code" json:"previous_code"`
 }
 
+type PublicProfile struct {
+	Public            bool     `datastore:"public" json:"public"`
+	GithubUsername    string   `datastore:"github_username" json:"github_username"`
+	GithubUserid      string   `datastore:"github_userid" json:"github_userid"`
+	GithubAvatar      string   `datastore:"github_avatar" json:"github_avatar"`
+	GithubLocation    string   `datastore:"github_location" json:"github_location"`
+	GithubUrl         string   `datastore:"github_url" json:"github_url"`
+	GithubBio         string   `datastore:"github_bio" json:"github_bio"`
+	GithubTwitter     string   `datastore:"github_twitter" json:"github_twitter"`
+	WorkStatus        string   `datastore:"work_status" json:"work_status"`
+	Banner            string   `datastore:"banner" json:"banner"`
+	Skills            []string `datastore:"skills" json:"skills"`
+	WorkflowsReleased int      `datastore:"workflows_released" json:"workflows_released"`
+}
+
 type User struct {
 	Username          string        `datastore:"Username" json:"username"`
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -334,6 +349,7 @@ type User struct {
 	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
 	LoginType         string        `datastore:"login_type" json:"login_type"`
 	GeneratedUsername string        `datastore:"generated_username" json:"generated_username"`
+	PublicProfile     PublicProfile `datastore:"public_profile" json:"public_profile"`
 
 	// Starting web3 integration
 	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
@@ -1013,6 +1029,13 @@ type ExecutionVariableWrapper struct {
 	NextActions  []string            `json:"nextActions"`
 	Environments []string            `json:"environments"`
 	Extra        int                 `json:"extra"`
+}
+
+type AlgoliaSearchCreator struct {
+	ObjectID   string `json:"objectID"`
+	TimeEdited int64  `json:"time_edited"`
+	Username   string `json:"username"`
+	Image      string `json:"image"`
 }
 
 type AlgoliaSearchWorkflow struct {
@@ -1893,6 +1916,7 @@ type HandleInfo struct {
 	Tutorials  []string        `json:"tutorials"`
 	ActiveApps []string        `json:"active_apps"`
 	Id         string          `json:"id"`
+	Avatar     string          `json:"avatar"`
 	Orgs       []OrgMini       `json:"orgs"`
 	ActiveOrg  OrgMini         `json:"active_org"`
 	Cookies    []SessionCookie `json:"session_cookie"`
@@ -3071,4 +3095,51 @@ type PrizedrawSubmitter struct {
 	PreviousWinner bool     `json:"previous_winner"`
 	Created        int64    `json:"created"`
 	Edited         int64    `json:"edited"`
+}
+
+type GithubProfile struct {
+	Login                   string    `json:"login"`
+	ID                      int       `json:"id"`
+	NodeID                  string    `json:"node_id"`
+	AvatarURL               string    `json:"avatar_url"`
+	GravatarID              string    `json:"gravatar_id"`
+	URL                     string    `json:"url"`
+	HTMLURL                 string    `json:"html_url"`
+	FollowersURL            string    `json:"followers_url"`
+	FollowingURL            string    `json:"following_url"`
+	GistsURL                string    `json:"gists_url"`
+	StarredURL              string    `json:"starred_url"`
+	SubscriptionsURL        string    `json:"subscriptions_url"`
+	OrganizationsURL        string    `json:"organizations_url"`
+	ReposURL                string    `json:"repos_url"`
+	EventsURL               string    `json:"events_url"`
+	ReceivedEventsURL       string    `json:"received_events_url"`
+	Type                    string    `json:"type"`
+	SiteAdmin               bool      `json:"site_admin"`
+	Name                    string    `json:"name"`
+	Company                 string    `json:"company"`
+	Blog                    string    `json:"blog"`
+	Location                string    `json:"location"`
+	Email                   string    `json:"email"`
+	Hireable                bool      `json:"hireable"`
+	Bio                     string    `json:"bio"`
+	TwitterUsername         string    `json:"twitter_username"`
+	PublicRepos             int       `json:"public_repos"`
+	PublicGists             int       `json:"public_gists"`
+	Followers               int       `json:"followers"`
+	Following               int       `json:"following"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+	PrivateGists            int       `json:"private_gists"`
+	TotalPrivateRepos       int       `json:"total_private_repos"`
+	OwnedPrivateRepos       int       `json:"owned_private_repos"`
+	DiskUsage               int       `json:"disk_usage"`
+	Collaborators           int       `json:"collaborators"`
+	TwoFactorAuthentication bool      `json:"two_factor_authentication"`
+	Plan                    struct {
+		Name          string `json:"name"`
+		Space         int    `json:"space"`
+		PrivateRepos  int    `json:"private_repos"`
+		Collaborators int    `json:"collaborators"`
+	} `json:"plan"`
 }
