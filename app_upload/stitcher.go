@@ -812,10 +812,10 @@ func main() {
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
 	log.Printf("\n\n============================= \n[INFO] Running with: \nUrl: %s\nApikey: %s\n============================= \n\n", baseUrl, apikey)
-	deployAll()
-	return
+	//deployAll()
+	//return
 
-	appname := "microsoft-teams-system-access"
+	appname := "pagerduty"
 	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {

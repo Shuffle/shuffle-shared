@@ -4592,16 +4592,6 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	type SettingsReturn struct {
-		Success  bool   `json:"success"`
-		Username string `json:"username"`
-		Verified bool   `json:"verified"`
-		Apikey   string `json:"apikey`
-		Image    string `json:"image"`
-	}
-
-	log.Printf("User: %#v", userInfo.PublicProfile)
-
 	newObject := SettingsReturn{
 		Success:  true,
 		Username: userInfo.Username,
@@ -12013,8 +12003,11 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	return false, ""
 }
 
+// Significantly slowed down everything. Just returning for now.
 func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []WorkflowApp {
+	return allApps
 	newApps := []WorkflowApp{}
+
 	for _, app := range allApps {
 		if len(app.ReferenceInfo.DocumentationUrl) > 0 && strings.HasPrefix(app.ReferenceInfo.DocumentationUrl, "https://raw.githubusercontent.com/Shuffle") && strings.Contains(app.ReferenceInfo.DocumentationUrl, ".md") {
 			// Should find documentation from the github (only if github?) and add it to app.Documentation before caching

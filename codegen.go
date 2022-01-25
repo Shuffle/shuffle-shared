@@ -353,7 +353,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				if len(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description) > 0 {
 					trimmedDescription := strings.Trim(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, " ")
 
-					authenticationSetup = fmt.Sprintf("if apikey != \" \":\n            if apikey.startswith(\"%s \"):\n                request_headers[\"%s\"] = apikey\n            else:\n                apikey = apikey.replace(\"%s\", \"\", -1).strip()\n                request_headers[\"%s\"] = f\"%s {apikey}\"", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, trimmedDescription)
+					authenticationSetup = fmt.Sprintf("if apikey != \" \":\n            if apikey.startswith(\"%s\"):\n                request_headers[\"%s\"] = apikey\n            else:\n                apikey = apikey.replace(\"%s\", \"\", -1).strip()\n                request_headers[\"%s\"] = f\"%s{apikey}\"", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, trimmedDescription)
 				}
 
 			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
@@ -533,7 +533,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" {
-		parsedDataCurlParser = "parsed_curl_command += f\" -d '{body.decode(\"utf-8\")}'\""
+		parsedDataCurlParser = `parsed_curl_command += f""" -d '{body.decode("utf-8")}'"""`
 	}
 
 	data := fmt.Sprintf(`    def %s(self%s):

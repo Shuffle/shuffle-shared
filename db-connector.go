@@ -1676,36 +1676,43 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
-				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
-				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler: %s", err)
-				err = nil
+			log.Printf("[ERROR] Error in org loading for %s: %s", key, err)
+			/*
+				if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
+					//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
+					log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler: %s", err)
+					err = nil
 
-				users := []User{}
-				q := datastore.NewQuery("Users").Filter("orgs =", id)
-				_, usererr := project.Dbclient.GetAll(ctx, q, &users)
+					users := []User{}
+					q := datastore.NewQuery("Users").Filter("orgs =", id)
+					_, usererr := project.Dbclient.GetAll(ctx, q, &users)
 
-				if usererr != nil {
-					log.Printf("[WARNING] Failed handling users in org fixer: %s", usererr)
-					for index, user := range users {
-						users[index].ActiveOrg = OrgMini{
-							Name: curOrg.Name,
-							Id:   curOrg.Id,
-							Role: user.Role,
+					if usererr != nil {
+						log.Printf("[WARNING] Failed handling users in org fixer: %s", usererr)
+						for index, user := range users {
+							users[index].ActiveOrg = OrgMini{
+								Name: curOrg.Name,
+								Id:   curOrg.Id,
+								Role: user.Role,
+							}
+
+							//log.Printf("Should update user %s because there's an error with it", users[index].Id)
+							SetUser(ctx, &users[index], false)
 						}
-
-						//log.Printf("Should update user %s because there's an error with it", users[index].Id)
-						SetUser(ctx, &users[index], false)
 					}
-				}
 
-				if len(users) > 0 {
-					curOrg.Users = users
-					setOrg = true
+					if len(users) > 0 {
+						curOrg.Users = users
+						setOrg = true
+					}
+				} else {
+					return &Org{}, err
 				}
-			} else {
-				return &Org{}, err
-			}
+			*/
+		}
+
+		if len(curOrg.Id) == 0 {
+			return &Org{}, err
 		}
 	}
 

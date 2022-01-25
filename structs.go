@@ -3155,3 +3155,11 @@ type GithubProfile struct {
 	} `json:"plan"`
 	Contributions int64 `json:"contributions"`
 }
+
+type SettingsReturn struct {
+	Success  bool   `json:"success"`
+	Username string `json:"username"`
+	Verified bool   `json:"verified"`
+	Apikey   string `json:"apikey"`
+	Image    string `json:"image"`
+}
