@@ -360,10 +360,10 @@ type User struct {
 	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
 	LoginType         string        `datastore:"login_type" json:"login_type"`
 	GeneratedUsername string        `datastore:"generated_username" json:"generated_username"`
-	PublicProfile     PublicProfile `datastore:"public_profile" json:"public_profile"`
 
 	// Starting web3 integration
-	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
+	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
+	PublicProfile PublicProfile `datastore:"public_profile" json:"public_profile"`
 }
 
 type EthInfo struct {

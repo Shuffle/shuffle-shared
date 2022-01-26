@@ -5706,7 +5706,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionRef)
 	if err != nil {
-		log.Printf("[INFO] User can't edit the org")
+		log.Printf("[INFO] Couldn't find workflow execution: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "No permission to get execution"}`))
 		return
