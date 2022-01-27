@@ -108,7 +108,7 @@ func runLoadCollections(ctx context.Context, topClient *http.Client) {
 		}
 
 		id := Md5sum([]byte(assetString))
-		err = SetOpenseaAsset(ctx, asset, id)
+		err := SetOpenseaAsset(ctx, asset, id)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting NFT asset in DB %s: %s", assetString, err)
 			continue

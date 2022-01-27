@@ -32,7 +32,6 @@ import (
 	elasticsearch "github.com/frikky/go-elasticsearch/v8"
 )
 
-var err error
 var requestCache *cache.Cache
 
 var maxCacheSize = 1020000
@@ -509,9 +508,32 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			return err
 		}
 	} else {
+		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
+
 		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-			log.Printf("[WARNING] Error adding workflow_execution: %s", err)
+			log.Printf("[WARNING] Error adding workflow_execution to datastore: %s", err)
+
+			// Has to do with certain data coming back in parameters where it shouldn't, causing saving to be impossible
+			if strings.Contains(fmt.Sprintf("%s", err), "contains an invalid nested") {
+				//log.Printf("[DEBUG] RETRYING WITHOUT WORKFLOW AND PARAMS?")
+				//workflowExecution.Workflow = Workflow{}
+				//newParams = []WorkflowAppActionParameters{}
+				newResults := []ActionResult{}
+				for _, result := range workflowExecution.Results {
+					result.Action.Parameters = []WorkflowAppActionParameter{}
+					newResults = append(newResults, result)
+				}
+
+				workflowExecution.Results = newResults
+
+				key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
+				if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
+					log.Printf("[ERROR] Workflow execution Error number 2: %s", err)
+				} else {
+					return nil
+				}
+			}
 			return err
 		}
 	}
@@ -720,6 +742,19 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
+				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
+					baseArgument := &ActionResult{
+						Result: workflowExecution.ExecutionArgument,
+						Action: Action{ID: "execution_argument"},
+					}
+					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
+					if err != nil {
+						log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (3)", err)
+					} else {
+						log.Printf("[DEBUG] Found a new value to parse with exec argument")
+						workflowExecution.ExecutionArgument = newValue
+					}
+				}
 
 				for valueIndex, value := range workflowExecution.Results {
 					if strings.Contains(value.Result, "Result too large to handle") {
@@ -772,6 +807,23 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
 			return &WorkflowExecution{}, err
+		}
+
+		// A workaround for large bits of information for execution argument
+		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
+			log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
+			baseArgument := &ActionResult{
+				Result: workflowExecution.ExecutionArgument,
+				Action: Action{ID: "execution_argument"},
+			}
+			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
+			if err != nil {
+				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (3)", err)
+			} else {
+				log.Printf("[DEBUG] Found a new value to parse with exec argument")
+				workflowExecution.ExecutionArgument = newValue
+			}
+
 		}
 
 		// Parsing as file.
@@ -1286,6 +1338,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	}
 
 	// Appending the users' workflows
+	var err error
 	nameKey := "workflow"
 	log.Printf("[AUDIT] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
 	if project.DbType == "elasticsearch" {
@@ -1713,7 +1766,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 
 		if len(curOrg.Id) == 0 {
-			return &Org{}, err
+			return &Org{}, errors.New(fmt.Sprintf("Couldn't find org with ID %s", curOrg.Id))
 		}
 	}
 
@@ -1944,7 +1997,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 		//log.Printf("[DEBUG] Deleted %s (%s)", strings.ToLower(entity), value)
 	} else {
 		key1 := datastore.NameKey(entity, value, nil)
-		err = project.Dbclient.Delete(ctx, key1)
+		err := project.Dbclient.Delete(ctx, key1)
 		if err != nil {
 			log.Printf("[WARNING] Error deleting %s from %s: %s", value, entity, err)
 			return err
@@ -2301,7 +2354,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	} else {
 		log.Printf("Looking for name %s in %s", appName, nameKey)
 		q := datastore.NewQuery(nameKey).Filter("name =", appName)
-		_, err = project.Dbclient.GetAll(ctx, q, &apps)
+		_, err := project.Dbclient.GetAll(ctx, q, &apps)
 		if err != nil && len(apps) == 0 {
 			log.Printf("[WARNING] Failed getting apps for name: %s", appName)
 			return apps, err
@@ -2384,7 +2437,7 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 		}
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("Username =", username)
-		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Failed getting users for username: %s", username)
 			return users, err
@@ -2477,7 +2530,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		}
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("Username =", username)
-		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Failed getting users for username: %s", username)
 			return users, err
@@ -2789,7 +2842,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			q = datastore.NewQuery(nameKey)
 		}
 
-		_, err = project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
+		_, err := project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
 		if err != nil && len(allworkflowappAuths) == 0 {
 			return allworkflowappAuths, err
 		}
@@ -2926,7 +2979,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			q = datastore.NewQuery(nameKey)
 		}
 
-		_, err = project.Dbclient.GetAll(ctx, q, &environments)
+		_, err := project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
 			return []Environment{}, err
 		}
@@ -2941,7 +2994,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			Id:      uuid.NewV4().String(),
 		}
 
-		err = SetEnvironment(ctx, &item)
+		err := SetEnvironment(ctx, &item)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting up new environment")
 		} else {
@@ -3017,7 +3070,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 
 			if orgChanged {
-				err = SetOrg(ctx, *org, org.Id)
+				err := SetOrg(ctx, *org, org.Id)
 				if err != nil {
 					log.Printf("[WARNING] Failed setting org %s with %d apps: %s", org.Id, len(org.ActiveApps), err)
 				}
@@ -3397,6 +3450,7 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 
 func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowApp, error) {
 	var allApps []WorkflowApp
+	var err error
 
 	// Used for recursion and autocleanup
 	if depth > 5 {
@@ -3953,7 +4007,7 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
 		//log.Printf("[WARNING] Getting executions from datastore")
 		q := datastore.NewQuery(index).Limit(24)
-		_, err = project.Dbclient.GetAll(ctx, q, &executions)
+		_, err := project.Dbclient.GetAll(ctx, q, &executions)
 		if err != nil {
 			log.Printf("[WARNING] Error getting opensea items: %s", err)
 			return executions, err
@@ -4271,7 +4325,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("apikey =", apikey)
-		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Error getting apikey: %s", err)
 			return User{}, err
@@ -4280,7 +4334,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 	if len(users) == 0 {
 		log.Printf("[WARNING] No users found for apikey %s", apikey)
-		return User{}, err
+		return User{}, errors.New("No users found for this apikey")
 	}
 
 	return users[0], nil
@@ -5191,7 +5245,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 		return users, nil
 	} else {
 		q := datastore.NewQuery(index)
-		_, err = project.Dbclient.GetAll(ctx, q, &users)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil {
 			return []User{}, err
 		}
@@ -5203,6 +5257,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {
 	index := "workflowexecution"
 	var executions []WorkflowExecution
+	var err error
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -5357,6 +5412,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 	index := "workflowexecution"
 
 	cacheKey := fmt.Sprintf("%s_%s", index, workflowId)
+	var err error
 	var executions []WorkflowExecution
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -5709,7 +5765,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 		return orgs, nil
 	} else {
 		q := datastore.NewQuery(index)
-		_, err = project.Dbclient.GetAll(ctx, q, &orgs)
+		_, err := project.Dbclient.GetAll(ctx, q, &orgs)
 		if err != nil {
 			return []Org{}, err
 		}
@@ -5748,6 +5804,7 @@ func SetSchedule(ctx context.Context, schedule ScheduleOld) error {
 func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowId, value string) ([]NewValue, error) {
 	nameKey := fmt.Sprintf("app_execution_values")
 	var workflows []NewValue
+	var err error
 
 	// Appending the users' workflows
 	if project.DbType == "elasticsearch" {

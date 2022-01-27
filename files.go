@@ -851,7 +851,7 @@ func uploadFile(ctx context.Context, file *File, contents []byte, parsedFile mul
 	file.Sha256sum = fmt.Sprintf("%x", sha256Sum)
 	log.Printf("[INFO] MD5 for file %s (%s) is %s and SHA256 is %s. Type: %s", file.Filename, file.Id, file.Md5sum, file.Sha256sum, file.ContentType)
 
-	err = SetFile(ctx, *file)
+	err := SetFile(ctx, *file)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting file back to active")
 		return err

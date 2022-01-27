@@ -5283,7 +5283,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	userId, err = url.QueryUnescape(userId)
+	userId, err := url.QueryUnescape(userId)
 	if err != nil {
 		log.Printf("[WARNING] Failed decoding user %s: %s", userId, err)
 		resp.WriteHeader(401)
@@ -6563,7 +6563,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 	err = SetWorkflowExecution(ctx, *workflowExecution, true)
 	if err != nil {
-		log.Printf("[WARNING] Error saving workflow execution for updates when aborting %s: %s", topic, err)
+		log.Printf("[WARNING] Error saving workflow execution for updates when aborting (2) %s: %s", topic, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting workflowexecution status to abort"}`)))
 		return
@@ -7616,10 +7616,9 @@ func ResendActionResult(actionData []byte) {
 
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool) (*WorkflowExecution, bool, error) {
-
 	if actionResult.Action.ID == "" {
-		//log.Printf("[ERROR] Failed handling EMPTY action %#v", actionResult)
-		return &workflowExecution, true, err
+		log.Printf("[ERROR] Failed handling EMPTY action %#v. Usually happens during worker run that sets everything?", actionResult)
+		return &workflowExecution, true, nil
 	}
 
 	// 1. Set cache
@@ -8537,9 +8536,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if finished {
 			dbSave = true
 			if len(workflowExecution.ExecutionParent) == 0 {
-				log.Printf("[INFO] Execution of %s in workflow %s finished.", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
+				log.Printf("[INFO] Execution of %s in workflow %s finished (not subflow).", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
 			} else {
-				log.Printf("[INFO] SubExecution %s of parentExecution %s in workflow %s finished.", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.ID)
+				log.Printf("[INFO] SubExecution %s of parentExecution %s in workflow %s finished (subflow).", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.ID)
 
 			}
 
@@ -8721,72 +8720,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	//GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
-	tmpJson, err := json.Marshal(workflowExecution)
-	if err == nil {
-		if project.DbType != "elasticsearch" {
-			if len(tmpJson) >= 1000000 {
-				dbSave = true
-				log.Printf("[WARNING] Result length is too long (%d)! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson))
-
-				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
-
-				// Result        string `json:"result" datastore:"result,noindex"`
-				// Arbitrary reduction size
-				maxSize := 150000
-				newResults := []ActionResult{}
-				bucketName := "shuffler.appspot.com"
-				//shuffle-large-executions
-				for _, item := range workflowExecution.Results {
-					if len(item.Result) > maxSize {
-						itemSize := len(item.Result)
-						baseResult := fmt.Sprintf(`{
-							"success": False,
-							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171)."
-							"size": %d,
-							"extra": "",
-							"id": "%s_%s"
-						}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
-
-						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
-						log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
-						bucket := project.StorageClient.Bucket(bucketName)
-						obj := bucket.Object(fullParsedPath)
-						w := obj.NewWriter(ctx)
-						if _, err := fmt.Fprintf(w, item.Result); err != nil {
-							log.Printf("[WARNING] Failed writing new exec file: %s", err)
-							item.Result = baseResult
-							newResults = append(newResults, item)
-							continue
-						}
-
-						// Close, just like writing a file.
-						if err := w.Close(); err != nil {
-							log.Printf("[WARNING] Failed closing new exec file: %s", err)
-							item.Result = baseResult
-							newResults = append(newResults, item)
-							continue
-						}
-
-						item.Result = fmt.Sprintf(`{
-							"success": False,
-							"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
-							"size": %d,
-							"extra": "replace",
-							"id": "%s_%s"
-						}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
-						// Setting an arbitrary decisionpoint to get it
-						// Backend will use this ID + action ID to get the data back
-						//item.Result = fmt.Sprintf("EXECUTION=%s", workflowExecution.ExecutionId)
-					}
-
-					newResults = append(newResults, item)
-				}
-
-				workflowExecution.Results = newResults
-			}
-		}
+	workflowExecution, newDbSave := compressExecution(ctx, workflowExecution, "mid-cleanup")
+	if !dbSave {
+		dbSave = newDbSave
 	}
 
 	// Should only apply a few seconds after execution, otherwise it's bascially spam.
@@ -8869,7 +8805,120 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
 	}
 
-	return &workflowExecution, dbSave, err
+	// Should this be able to return errors?
+	//return &workflowExecution, dbSave, err
+	return &workflowExecution, dbSave, nil
+}
+
+func compressExecution(ctx context.Context, workflowExecution WorkflowExecution, saveLocationInfo string) (WorkflowExecution, bool) {
+	//GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
+	dbSave := false
+	tmpJson, err := json.Marshal(workflowExecution)
+	if err == nil {
+		if project.DbType != "elasticsearch" {
+			if len(tmpJson) >= 1000000 {
+				dbSave = true
+				log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
+				actionId := "execution_argument"
+
+				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
+
+				// Result        string `json:"result" datastore:"result,noindex"`
+				// Arbitrary reduction size
+				maxSize := 150000
+				bucketName := "shuffler.appspot.com"
+
+				if len(workflowExecution.ExecutionArgument) > maxSize {
+					itemSize := len(workflowExecution.ExecutionArgument)
+					baseResult := fmt.Sprintf(`{
+								"success": False,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171)."
+								"size": %d,
+								"extra": "",
+								"id": "%s_%s"
+							}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
+					log.Printf("[DEBUG] Saving value of %s to storage path %s", actionId, fullParsedPath)
+					bucket := project.StorageClient.Bucket(bucketName)
+					obj := bucket.Object(fullParsedPath)
+					w := obj.NewWriter(ctx)
+					if _, err := fmt.Fprintf(w, workflowExecution.ExecutionArgument); err != nil {
+						log.Printf("[WARNING] Failed writing new exec file: %s", err)
+						workflowExecution.ExecutionArgument = baseResult
+						//continue
+					} else {
+						// Close, just like writing a file.
+						if err := w.Close(); err != nil {
+							log.Printf("[WARNING] Failed closing new exec file: %s", err)
+							workflowExecution.ExecutionArgument = baseResult
+						} else {
+							workflowExecution.ExecutionArgument = fmt.Sprintf(`{
+								"success": False,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+								"size": %d,
+								"extra": "replace",
+								"id": "%s_%s"
+							}`, itemSize, workflowExecution.ExecutionId, actionId)
+						}
+					}
+				}
+
+				newResults := []ActionResult{}
+				//shuffle-large-executions
+				for _, item := range workflowExecution.Results {
+					if len(item.Result) > maxSize {
+						itemSize := len(item.Result)
+						baseResult := fmt.Sprintf(`{
+								"success": False,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171)."
+								"size": %d,
+								"extra": "",
+								"id": "%s_%s"
+							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
+
+						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
+						log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
+						bucket := project.StorageClient.Bucket(bucketName)
+						obj := bucket.Object(fullParsedPath)
+						w := obj.NewWriter(ctx)
+						if _, err := fmt.Fprintf(w, item.Result); err != nil {
+							log.Printf("[WARNING] Failed writing new exec file: %s", err)
+							item.Result = baseResult
+							newResults = append(newResults, item)
+							continue
+						}
+
+						// Close, just like writing a file.
+						if err := w.Close(); err != nil {
+							log.Printf("[WARNING] Failed closing new exec file: %s", err)
+							item.Result = baseResult
+							newResults = append(newResults, item)
+							continue
+						}
+
+						item.Result = fmt.Sprintf(`{
+								"success": False,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
+								"size": %d,
+								"extra": "replace",
+								"id": "%s_%s"
+							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
+						// Setting an arbitrary decisionpoint to get it
+						// Backend will use this ID + action ID to get the data back
+						//item.Result = fmt.Sprintf("EXECUTION=%s", workflowExecution.ExecutionId)
+					}
+
+					newResults = append(newResults, item)
+				}
+
+				workflowExecution.Results = newResults
+			}
+		}
+	}
+
+	return workflowExecution, dbSave
 }
 
 // Finds the child nodes of a node in execution and returns them
@@ -9951,7 +10000,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte) (WorkflowExecution, error) {
 	var action Action
 	workflowExecution := WorkflowExecution{}
-	err = json.Unmarshal(body, &action)
+	err := json.Unmarshal(body, &action)
 	if err != nil {
 		log.Printf("[WARNING] Failed action single execution unmarshaling: %s", err)
 		return workflowExecution, err
@@ -11928,10 +11977,12 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
 		if sourceExecutionOk {
 			//log.Printf("[DEBUG] Got source exec %s", sourceExecution)
-			workflowExecution, err = GetWorkflowExecution(ctx, sourceExecution[0])
+			newExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
 			if err != nil {
 				log.Printf("[INFO] Failed getting source_execution in test validation based on %#v", sourceExecution[0])
 				return false, ""
+			} else {
+				workflowExecution = newExec
 			}
 
 		} else {

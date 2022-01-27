@@ -18,7 +18,7 @@ import (
 // Standalone to make it work many places
 func markNotificationRead(ctx context.Context, notification *Notification) error {
 	notification.Read = true
-	err = SetNotification(ctx, *notification)
+	err := SetNotification(ctx, *notification)
 	if err != nil {
 		return err
 	}
