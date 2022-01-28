@@ -8810,6 +8810,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	return &workflowExecution, dbSave, nil
 }
 
+// Finds execution results and parameters that are too large to manage and reduces them / saves data partly
 func compressExecution(ctx context.Context, workflowExecution WorkflowExecution, saveLocationInfo string) (WorkflowExecution, bool) {
 
 	//GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
@@ -8819,6 +8820,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	if err == nil {
 		if project.DbType != "elasticsearch" {
 			if len(tmpJson) >= 1000000 {
+				// Clean up results' actions
+
 				dbSave = true
 				log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
 				actionId := "execution_argument"
@@ -8828,7 +8831,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 				// Result        string `json:"result" datastore:"result,noindex"`
 				// Arbitrary reduction size
-				maxSize := 150000
+				maxSize := 50000
 				bucketName := "shuffler.appspot.com"
 
 				if len(workflowExecution.ExecutionArgument) > maxSize {
@@ -8871,6 +8874,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				//shuffle-large-executions
 				for _, item := range workflowExecution.Results {
 					if len(item.Result) > maxSize {
+
 						itemSize := len(item.Result)
 						baseResult := fmt.Sprintf(`{
 								"success": False,
@@ -8880,25 +8884,32 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-						fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
-						log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
-						bucket := project.StorageClient.Bucket(bucketName)
-						obj := bucket.Object(fullParsedPath)
-						w := obj.NewWriter(ctx)
-						//log.Printf("RES: ", item.Result)
-						if _, err := fmt.Fprint(w, item.Result); err != nil {
-							log.Printf("[WARNING] Failed writing new exec file: %s", err)
-							item.Result = baseResult
-							newResults = append(newResults, item)
-							continue
-						}
+						// 1. Get the value and set it instead if it exists
+						// 2. If it doesn't exist, add it
+						_, err := getExecutionFileValue(ctx, workflowExecution, item)
+						if err == nil {
+							//log.Printf("[DEBUG] Found execution locally for %s. Not saving another.", item.Action.Label)
+						} else {
+							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
+							log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
+							bucket := project.StorageClient.Bucket(bucketName)
+							obj := bucket.Object(fullParsedPath)
+							w := obj.NewWriter(ctx)
+							//log.Printf("RES: ", item.Result)
+							if _, err := fmt.Fprint(w, item.Result); err != nil {
+								log.Printf("[WARNING] Failed writing new exec file: %s", err)
+								item.Result = baseResult
+								newResults = append(newResults, item)
+								continue
+							}
 
-						// Close, just like writing a file.
-						if err := w.Close(); err != nil {
-							log.Printf("[WARNING] Failed closing new exec file: %s", err)
-							item.Result = baseResult
-							newResults = append(newResults, item)
-							continue
+							// Close, just like writing a file.
+							if err := w.Close(); err != nil {
+								log.Printf("[WARNING] Failed closing new exec file: %s", err)
+								item.Result = baseResult
+								newResults = append(newResults, item)
+								continue
+							}
 						}
 
 						item.Result = fmt.Sprintf(`{
@@ -8917,6 +8928,35 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				}
 
 				workflowExecution.Results = newResults
+			}
+
+			jsonString, err := json.Marshal(workflowExecution)
+			if err == nil {
+				log.Printf("Execution size: %d", len(jsonString))
+				if len(jsonString) > 1000000 {
+					for _, action := range workflowExecution.Workflow.Actions {
+						actionData, err := json.Marshal(action)
+						if err == nil {
+							log.Printf("Action Size (%s): %d", action.Label, len(actionData))
+						}
+					}
+
+					for resultIndex, result := range workflowExecution.Results {
+						resultData, err := json.Marshal(result)
+						actionData, err := json.Marshal(result.Action)
+						if err == nil {
+							log.Printf("Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
+						}
+
+						if len(actionData) > 10000 {
+							for paramIndex, param := range result.Action.Parameters {
+								if len(param.Value) > 10000 {
+									workflowExecution.Results[resultIndex].Action.Parameters[paramIndex].Value = "Size too large. Removed."
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 	}
