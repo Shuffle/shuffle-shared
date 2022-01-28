@@ -8811,7 +8811,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 }
 
 func compressExecution(ctx context.Context, workflowExecution WorkflowExecution, saveLocationInfo string) (WorkflowExecution, bool) {
+
 	//GetApp(ctx context.Context, id string, user User) (*WorkflowApp, error) {
+	//return workflowExecution, false
 	dbSave := false
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
@@ -8844,7 +8846,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					bucket := project.StorageClient.Bucket(bucketName)
 					obj := bucket.Object(fullParsedPath)
 					w := obj.NewWriter(ctx)
-					if _, err := fmt.Fprintf(w, workflowExecution.ExecutionArgument); err != nil {
+					if _, err := fmt.Fprint(w, workflowExecution.ExecutionArgument); err != nil {
 						log.Printf("[WARNING] Failed writing new exec file: %s", err)
 						workflowExecution.ExecutionArgument = baseResult
 						//continue
@@ -8883,7 +8885,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						bucket := project.StorageClient.Bucket(bucketName)
 						obj := bucket.Object(fullParsedPath)
 						w := obj.NewWriter(ctx)
-						if _, err := fmt.Fprintf(w, item.Result); err != nil {
+						//log.Printf("RES: ", item.Result)
+						if _, err := fmt.Fprint(w, item.Result); err != nil {
 							log.Printf("[WARNING] Failed writing new exec file: %s", err)
 							item.Result = baseResult
 							newResults = append(newResults, item)

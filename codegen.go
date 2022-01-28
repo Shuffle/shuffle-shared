@@ -526,7 +526,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Handles default return value
-	handleFileString := "try:\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            return ret.text\n        except Exception as e:\n            return ret.text"
+	handleFileString := "try:\n            \n            print(ret.json())\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            print(f\"[WARNING] JSON Exception in return: {e}\")\n            return ret.text\n        except Exception as e:\n            print(f\"[WARNING] Exception in return: {e}\")\n            return ret.text"
 	if handleFile {
 		handleFileString = fmt.Sprintf("new_file = [{\"filename\": \"%s_generated\", \"data\": ret.text}]\n        return_value = self.set_files(new_file)\n        return json.dumps({\"success\": True, \"file_id\": return_value[0], \"file_size\": len(ret.text)})", swagger.Info.Title)
 	}
@@ -654,7 +654,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "attachment") {
+	if strings.Contains(functionname, "get_emails") {
 		//log.Printf("\n%s", data)
 		//log.Printf("FUNCTION: %s", data)
 		//log.Println(data)
