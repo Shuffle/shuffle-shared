@@ -466,7 +466,7 @@ func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	_, err = handleAlgoliaCreatorUpload(ctx, user, false)
+	_, err = HandleAlgoliaCreatorUpload(ctx, user, false)
 	if err != nil {
 		log.Printf("[ERROR] Failed making user %s' information public")
 	}

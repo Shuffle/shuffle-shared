@@ -3554,7 +3554,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
 				handled := false
 				if project.Environment == "cloud" {
-					appid, err := handleAlgoliaAppSearch(ctx, action.AppName)
+					appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
 					if err == nil && len(appid) > 0 {
 						//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
 						tmpApp, err := GetApp(ctx, appid, user, false)
@@ -5129,7 +5129,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(body)
 }
 
-func handleAlgoliaCreatorSearch(ctx context.Context, username string) (string, error) {
+func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (string, error) {
 	cacheKey := fmt.Sprintf("algolia_creator_%s", username)
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
@@ -5209,7 +5209,7 @@ func HandleGetCreator(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
-	userId, err := handleAlgoliaCreatorSearch(ctx, username)
+	userId, err := HandleAlgoliaCreatorSearch(ctx, username)
 	if err != nil {
 		log.Printf("[WARNING] User with name %s could not be found: %s", userId, err)
 		resp.WriteHeader(401)
@@ -5234,6 +5234,12 @@ func HandleGetCreator(resp http.ResponseWriter, request *http.Request) {
 
 	if len(foundUser.PublicProfile.Banner) == 0 {
 		foundUser.PublicProfile.Banner = "https://pbs.twimg.com/profile_banners/355996680/1615856511/1500x500"
+	}
+	if len(foundUser.PublicProfile.ShuffleRanking) == 0 {
+		foundUser.PublicProfile.ShuffleRanking = "To be announced"
+	}
+	if len(foundUser.PublicProfile.ShuffleEarnings) == 0 {
+		foundUser.PublicProfile.ShuffleEarnings = "To be announced"
 	}
 
 	b, err := json.Marshal(foundUser.PublicProfile)
@@ -12609,7 +12615,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	resp.Write([]byte("OK"))
 }
 
-func handleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) (string, error) {
+func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) (string, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
 	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {

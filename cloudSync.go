@@ -12,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 )
 
@@ -60,7 +61,7 @@ func executeCloudAction(action CloudSyncJob, apikey string) error {
 	return nil
 }
 
-func handleAlgoliaAppSearch(ctx context.Context, appname string) (string, error) {
+func HandleAlgoliaAppSearch(ctx context.Context, appname string) (string, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
 	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
@@ -93,4 +94,54 @@ func handleAlgoliaAppSearch(ctx context.Context, appname string) (string, error)
 	}
 
 	return "", nil
+}
+
+func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]AlgoliaSearchApp, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return []AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("appsearch")
+
+	//opt.AttributesToRetrieve("firstname", "lastname"),
+	//appname := ""
+	//params := []interface{}{
+	//	opt.HitsPerPage(50),
+	//}
+	opts := opt.AttributesForFaceting(
+		"searchable(creator)",
+	)
+
+	res, err := algoliaIndex.SearchForFacetValues("creator", userId, opts)
+	if err != nil {
+		log.Printf("[WARNING] Failed app searching Algolia for creators: %s", err)
+		return []AlgoliaSearchApp{}, err
+	}
+
+	for _, hit := range res.FacetHits {
+		log.Printf("Hit: %#v", hit)
+	}
+	log.Printf("Res: %#v", res)
+
+	//var newRecords []AlgoliaSearchApp
+	//err = res.UnmarshalHits(&newRecords)
+	//if err != nil {
+	//	log.Printf("[WARNING] Failed unmarshaling from Algolia with app creators: %s", err)
+	//	return []AlgoliaSearchApp{}, err
+	//}
+	//log.Printf("[INFO] Algolia hits for %s: %d", appname, len(newRecords))
+
+	allRecords := []AlgoliaSearchApp{}
+	//for _, newRecord := range newRecords {
+	//	newAppName := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
+	//	newRecord.Name = newAppName
+	//	allRecords = append(allRecords, newRecord)
+
+	//}
+
+	return allRecords, nil
 }

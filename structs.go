@@ -322,6 +322,8 @@ type PublicProfile struct {
 	Banner              string              `datastore:"banner" json:"banner"`
 	Skills              []string            `datastore:"skills" json:"skills"`
 	GithubContributions GithubContributions `datastore:"github_contributions" json:"github_contributions"`
+	ShuffleEarnings     string              `datastore:"shuffle_earnings" json:"shuffle_earnings"`
+	ShuffleRanking      string              `datastore:"shuffle_ranking" json:"shuffle_ranking"`
 }
 
 type ContributionCount struct {
@@ -874,6 +876,7 @@ type Workflow struct {
 	Start                string     `json:"start" datastore:"start"`
 	Owner                string     `json:"owner" datastore:"owner"`
 	Sharing              string     `json:"sharing" datastore:"sharing"`
+	Image                string     `json:"image,omitempty" datastore:"image,noindex"`
 	Org                  []OrgMini  `json:"org,omitempty" datastore:"org"`
 	ExecutingOrg         OrgMini    `json:"execution_org,omitempty" datastore:"execution_org"`
 	OrgId                string     `json:"org_id,omitempty" datastore:"org_id"`
