@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-querystring/query"
 	"github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
 )
@@ -3316,4 +3317,239 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(b)
+}
+
+func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationStorage, refresh bool) (AppAuthenticationStorage, error) {
+
+	//transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.MaxIdleConnsPerHost = 100
+	transport.ResponseHeaderTimeout = time.Second * 10
+	transport.Proxy = nil
+	client := &http.Client{
+		Transport: transport,
+	}
+
+	requestData := DataToSend{
+		GrantType: "authorization_code",
+	}
+
+	url := ""
+	oauthUrl := ""
+	refreshUrl := ""
+	refreshToken := ""
+	for _, field := range appAuth.Fields {
+		if field.Key == "authentication_url" {
+			url = field.Value
+		}
+		log.Printf("KEY: %s", field.Key)
+		log.Printf("%s", field.Value)
+
+		if field.Key == "code" {
+			requestData.Code = field.Value
+		}
+
+		if field.Key == "client_secret" {
+			requestData.ClientSecret = field.Value
+		}
+
+		if field.Key == "client_id" {
+			requestData.ClientId = field.Value
+		}
+
+		if field.Key == "scope" {
+			requestData.Scope = field.Value
+		}
+
+		if field.Key == "redirect_uri" {
+			requestData.RedirectUri = field.Value
+		}
+
+		if field.Key == "refresh_uri" || field.Key == "refresh_url" {
+			//log.Printf("[DEBUG] Got refresh URL %s", field.Value)
+			refreshUrl = field.Value
+		}
+
+		if field.Key == "refresh_token" {
+			log.Printf("[DEBUG] Got refresh token %s", field.Value)
+			refreshToken = field.Value
+		}
+
+		if field.Key == "oauth_url" {
+			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
+			oauthUrl = field.Value
+		}
+	}
+
+	log.Printf("[DEBUG] Make request to %s for Oauth2 token. User: %s (%s)", url, user.Username, user.Id)
+
+	if len(url) == 0 {
+		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
+	}
+
+	// To send: POST
+	// URL sample: https://login.microsoftonline.com/b6eb57ed-ecfc-4af2-b0ff-467a2e2c806f/oauth2/v2.0/token
+	// Data to be sent: requestData formatted?
+
+	v, err := query.Values(requestData)
+	if err != nil {
+		return appAuth, err
+	}
+
+	respBody := []byte{}
+	if !refresh {
+		req, err := http.NewRequest(
+			"POST",
+			url,
+			bytes.NewBuffer([]byte(v.Encode())),
+		)
+
+		if err != nil {
+			return appAuth, err
+		}
+
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		newresp, err := client.Do(req)
+		if err != nil {
+			return appAuth, err
+		}
+
+		//log.Printf("Data: %#v", newresp)
+		//log.Printf("Data: %d", newresp.StatusCode)
+
+		body, err := ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			return appAuth, err
+		}
+		respBody = body
+
+		if newresp.StatusCode >= 300 {
+			return appAuth, errors.New(fmt.Sprintf("Bad status code: %d. Message: %s", newresp.StatusCode, respBody))
+		}
+	} else {
+		if len(refreshToken) == 0 {
+			log.Printf("[ERROR] No refresh token acquired for %s", refreshUrl)
+			return appAuth, errors.New("No refresh token specified during initial auth.")
+		}
+
+		// bytes.NewBuffer([]byte(v.Encode())),
+		requestRefreshUrl := fmt.Sprintf("%s?grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshUrl, refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
+		log.Printf("Refresh URL: %s", requestRefreshUrl)
+		req, err := http.NewRequest(
+			"POST",
+			requestRefreshUrl,
+			nil,
+		)
+
+		if err != nil {
+			return appAuth, err
+		}
+
+		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		newresp, err := client.Do(req)
+		if err != nil {
+			return appAuth, err
+		}
+
+		//log.Printf("Data: %#v", newresp)
+		//log.Printf("Data: %d", newresp.StatusCode)
+
+		body, err := ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			return appAuth, err
+		}
+
+		respBody = body
+
+		if newresp.StatusCode >= 300 {
+			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh: %d. Message: %s", newresp.StatusCode, respBody))
+		}
+
+		// Overwriting auth
+		newAuth := []AuthenticationStore{}
+		for _, item := range appAuth.Fields {
+			if item.Key == "access_token" || item.Value == "expiration" || item.Value == "expires_in" {
+				continue
+			}
+
+			newAuth = append(newAuth, item)
+		}
+
+		appAuth.Fields = newAuth
+	}
+
+	log.Printf("\n\nRESPONSE: %s\n\n", string(respBody))
+	var oauthResp Oauth2Resp
+	err = json.Unmarshal(respBody, &oauthResp)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling (appauth oauth2): %s", err)
+		return appAuth, err
+	}
+
+	if len(oauthResp.AccessToken) > 0 {
+		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+			Key:   "access_token",
+			Value: oauthResp.AccessToken,
+		})
+	}
+
+	if len(oauthResp.RefreshToken) > 0 {
+		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+			Key:   "refresh_token",
+			Value: oauthResp.RefreshToken,
+		})
+	}
+
+	if len(oauthUrl) > 0 {
+		log.Printf("[DEBUG] Appending Oauth2 API URL %s", oauthUrl)
+
+		newAuth := []AuthenticationStore{}
+		for _, item := range appAuth.Fields {
+			if item.Key == "url" || item.Key == "expiration" {
+				continue
+			}
+
+			newAuth = append(newAuth, item)
+		}
+
+		appAuth.Fields = newAuth
+
+		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+			Key:   "url",
+			Value: oauthUrl,
+		})
+	} else {
+		log.Printf("[DEBUG] No app API URL to attach to Oauth2 auth?")
+	}
+
+	// FIXME: Does this work with string?
+	//https://stackoverflow.com/questions/43870554/microsoft-oauth2-authentication-not-returning-refresh-token
+	parsedTime := strconv.FormatInt(int64(time.Now().Unix())+int64(oauthResp.ExpiresIn), 10)
+	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+		Key:   "expiration",
+		Value: parsedTime,
+	})
+
+	if len(refreshUrl) > 0 && !refresh {
+		log.Printf("[DEBUG] Appending Oauth2 Refresh URL %s", refreshUrl)
+		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+			Key:   "refresh_url",
+			Value: refreshUrl,
+		})
+		//} else {
+		//log.Printf("[DEBUG] No refresh URL to attach to Oauth2 auth?")
+	}
+
+	// FIXME: Set up auth for this with oauth2 in app?
+	// How does this work with the SDK?
+	appAuth.OrgId = user.ActiveOrg.Id
+	appAuth.Defined = true
+	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting up app auth %s: %s (oauth2)", appAuth.Id, err)
+		return appAuth, err
+	}
+
+	//log.Printf("%#v", oauthResp)
+	return appAuth, nil
 }

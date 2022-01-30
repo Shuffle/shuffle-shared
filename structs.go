@@ -311,6 +311,7 @@ type MFAInfo struct {
 
 type PublicProfile struct {
 	Public              bool                `datastore:"public" json:"public"`
+	Self                bool                `datastore:"self" json:"self"`
 	GithubUsername      string              `datastore:"github_username" json:"github_username"`
 	GithubUserid        string              `datastore:"github_userid" json:"github_userid"`
 	GithubAvatar        string              `datastore:"github_avatar" json:"github_avatar"`
@@ -1046,10 +1047,11 @@ type ExecutionVariableWrapper struct {
 }
 
 type AlgoliaSearchCreator struct {
-	ObjectID   string `json:"objectID"`
-	TimeEdited int64  `json:"time_edited"`
-	Username   string `json:"username"`
-	Image      string `json:"image"`
+	ObjectID   string   `json:"objectID"`
+	TimeEdited int64    `json:"time_edited"`
+	Username   string   `json:"username"`
+	Image      string   `json:"image"`
+	Synonyms   []string `json:"synonyms"`
 }
 
 type AlgoliaSearchWorkflow struct {
@@ -1063,13 +1065,14 @@ type AlgoliaSearchWorkflow struct {
 	Actions       []string `json:"actions"`
 	Tags          []string `json:"tags"`
 	Categories    []string `json:"categories"`
-	AccessibleBy  []string `json:"accessible_by"`
+	AccessibleBy  []string `json:"accessible_by,omitempty"`
 	ImageUrl      string   `json:"image_url"`
 	TimeEdited    int64    `json:"time_edited"`
 	Invalid       bool     `json:"invalid"`
-	Creator       string   `json:"creator"`
+	Creator       string   `json:"creator,omitempty"`
 	Priority      int      `json:"priority"`
-	SourceIP      string   `json:"source_ip`
+	SourceIPLower string   `json:"source_ip,omitempty"`
+	SourceIP      string   `json:"SourceIP,omitempty"`
 }
 
 type AlgoliaSearchApp struct {

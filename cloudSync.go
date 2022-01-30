@@ -11,8 +11,9 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
-	"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
+	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 )
 
@@ -96,6 +97,41 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (string, error)
 	return "", nil
 }
 
+func HandleAlgoliaWorkflowSearchByUser(ctx context.Context, userId string) ([]AlgoliaSearchWorkflow, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return []AlgoliaSearchWorkflow{}, errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("workflows")
+
+	appSearch := fmt.Sprintf("%s", userId)
+	res, err := algoliaIndex.Search(appSearch)
+	if err != nil {
+		log.Printf("[WARNING] Failed app searching Algolia for creators: %s", err)
+		return []AlgoliaSearchWorkflow{}, err
+	}
+
+	var newRecords []AlgoliaSearchWorkflow
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia with app creators: %s", err)
+		return []AlgoliaSearchWorkflow{}, err
+	}
+	//log.Printf("[INFO] Algolia hits for %s: %d", appSearch, len(newRecords))
+
+	allRecords := []AlgoliaSearchWorkflow{}
+	for _, newRecord := range newRecords {
+		allRecords = append(allRecords, newRecord)
+
+	}
+
+	return allRecords, nil
+}
+
 func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]AlgoliaSearchApp, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
@@ -107,41 +143,148 @@ func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]Algolia
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
 	algoliaIndex := algClient.InitIndex("appsearch")
 
-	//opt.AttributesToRetrieve("firstname", "lastname"),
-	//appname := ""
-	//params := []interface{}{
-	//	opt.HitsPerPage(50),
-	//}
-	opts := opt.AttributesForFaceting(
-		"searchable(creator)",
-	)
-
-	res, err := algoliaIndex.SearchForFacetValues("creator", userId, opts)
+	appSearch := fmt.Sprintf("%s", userId)
+	res, err := algoliaIndex.Search(appSearch)
 	if err != nil {
 		log.Printf("[WARNING] Failed app searching Algolia for creators: %s", err)
 		return []AlgoliaSearchApp{}, err
 	}
 
-	for _, hit := range res.FacetHits {
-		log.Printf("Hit: %#v", hit)
+	var newRecords []AlgoliaSearchApp
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia with app creators: %s", err)
+		return []AlgoliaSearchApp{}, err
 	}
-	log.Printf("Res: %#v", res)
-
-	//var newRecords []AlgoliaSearchApp
-	//err = res.UnmarshalHits(&newRecords)
-	//if err != nil {
-	//	log.Printf("[WARNING] Failed unmarshaling from Algolia with app creators: %s", err)
-	//	return []AlgoliaSearchApp{}, err
-	//}
-	//log.Printf("[INFO] Algolia hits for %s: %d", appname, len(newRecords))
+	//log.Printf("[INFO] Algolia hits for %s: %d", appSearch, len(newRecords))
 
 	allRecords := []AlgoliaSearchApp{}
-	//for _, newRecord := range newRecords {
-	//	newAppName := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
-	//	newRecord.Name = newAppName
-	//	allRecords = append(allRecords, newRecord)
+	for _, newRecord := range newRecords {
+		newAppName := strings.TrimSpace(strings.Replace(newRecord.Name, "_", " ", -1))
+		newRecord.Name = newAppName
+		allRecords = append(allRecords, newRecord)
 
-	//}
+	}
 
 	return allRecords, nil
+}
+
+func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSearchCreator, error) {
+	cacheKey := fmt.Sprintf("algolia_creator_%s", username)
+	searchCreator := AlgoliaSearchCreator{}
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHE: %d", len(cacheData))
+		//log.Printf("CACHEDATA: %#v", cacheData)
+		err = json.Unmarshal(cacheData, &searchCreator)
+		if err == nil {
+			return searchCreator, nil
+		}
+	}
+
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return searchCreator, errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("creators")
+	res, err := algoliaIndex.Search(username)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		return searchCreator, err
+	}
+
+	var newRecords []AlgoliaSearchCreator
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia creators: %s", err)
+		return searchCreator, err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	foundUser := AlgoliaSearchCreator{}
+	for _, newRecord := range newRecords {
+		if newRecord.Username == username || newRecord.ObjectID == username || ArrayContains(newRecord.Synonyms, username) {
+			foundUser = newRecord
+			break
+		}
+	}
+
+	if len(foundUser.ObjectID) == 0 {
+		return searchCreator, errors.New("User not found")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(foundUser)
+		if err != nil {
+			return foundUser, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating algolia username cache: %s", err)
+		}
+	}
+
+	return foundUser, nil
+}
+
+func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) (string, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("creators")
+	res, err := algoliaIndex.Search(user.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchCreator
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia creators: %s", err)
+		return "", err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == user.Id {
+			log.Printf("[INFO] Object %s already exists in Algolia", user.Id)
+
+			if overwrite {
+				break
+			} else {
+				return user.Id, errors.New("User ID already exists!")
+			}
+		}
+	}
+
+	timeNow := int64(time.Now().Unix())
+	records := []AlgoliaSearchCreator{
+		AlgoliaSearchCreator{
+			ObjectID:   user.Id,
+			TimeEdited: timeNow,
+			Image:      user.PublicProfile.GithubAvatar,
+			Username:   user.PublicProfile.GithubUsername,
+		},
+	}
+
+	_, err = algoliaIndex.SaveObjects(records)
+	if err != nil {
+		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		return "", err
+	}
+
+	log.Printf("[INFO] SUCCESSFULLY UPLOADED creator %s with ID %s TO ALGOLIA!", user.Username, user.Id)
+	return user.Id, nil
 }
