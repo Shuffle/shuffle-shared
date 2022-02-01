@@ -1992,8 +1992,32 @@ type FileResponse struct {
 }
 
 type SSOConfig struct {
-	SSOEntrypoint  string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
-	SSOCertificate string `json:"sso_certificate" datastore:"sso_certificate"`
+	SSOEntrypoint       string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
+	SSOCertificate      string `json:"sso_certificate" datastore:"sso_certificate"`
+	OpenIdClientId      string `json:"client_id" datastore:"client_id"`
+	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
+	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
+}
+
+type SamlRequest struct {
+	XMLName                     xml.Name `xml:"AuthnRequest"`
+	Text                        string   `xml:",chardata"`
+	Samlp                       string   `xml:"samlp,attr"`
+	Xmlns                       string   `xml:"xmlns,attr"`
+	Saml                        string   `xml:"saml,attr"`
+	AssertionConsumerServiceURL string   `xml:"AssertionConsumerServiceURL,attr"`
+	Destination                 string   `xml:"Destination,attr"`
+	ForceAuthn                  string   `xml:"ForceAuthn,attr"`
+	ID                          string   `xml:"ID,attr"`
+	IssueInstant                string   `xml:"IssueInstant,attr"`
+	ProtocolBinding             string   `xml:"ProtocolBinding,attr"`
+	Version                     string   `xml:"Version,attr"`
+	Issuer                      string   `xml:"Issuer"`
+	NameIDPolicy                struct {
+		Text        string `xml:",chardata"`
+		AllowCreate string `xml:"AllowCreate,attr"`
+		Format      string `xml:"Format,attr"`
+	} `xml:"NameIDPolicy"`
 }
 
 type SAMLResponse struct {

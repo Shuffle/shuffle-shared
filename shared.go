@@ -10433,6 +10433,41 @@ func fixCertificate(parsedX509Key string) string {
 
 // Example implementation of SSO, including a redirect for the user etc
 // Should make this stuff only possible after login
+func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	//https://dev-18062475.okta.com/oauth2/default/v1/authorize?client_id=0oa3romteykJ2aMgx5d7&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
+	//http://localhost:5002/api/v1/login_openid?code=rrm8BS8eUIYpQWnoM_Lzh_QoT3-EwQ2c9YkjRcJWqk4&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601
+
+	//code -> Token
+	code := request.URL.Query().Get("code")
+	if len(code) == 0 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "No code specified"}`))
+		return
+	}
+
+	ctx := getContext(request)
+	clientId := "0oa3romteykJ2aMgx5d7"
+	baseUrl := "https://dev-18062.okta.com/oauth2/v1/token"
+	redirectUri := "http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid"
+	body, err := RunOpenidLogin(ctx, clientId, baseUrl, redirectUri, code)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read of SSO: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(body))
+}
+
+// Example implementation of SSO, including a redirect for the user etc
+// Should make this stuff only possible after login
 func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -10477,15 +10512,22 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("%s", string(body))
+
 	// Parsing out without using Field
+	// This is a mess, but all made to handle base64 and equal signs
 	parsedSAML := ""
 	for _, item := range strings.Split(string(body), "&") {
-		if strings.Contains(item, "SAMLResponse") {
+		if strings.Contains(item, "SAMLRequest") || strings.Contains(item, "SAMLResponse") {
 			equalsplit := strings.Split(item, "=")
-			if len(equalsplit) == 2 {
-				//log.Printf("ITEM: %s", equalsplit[1])
+			addedEquals := len(equalsplit)
+			if len(equalsplit) >= 2 {
+				bareEquals := strings.Join(equalsplit[1:len(equalsplit)-1], "=")
+				if len(strings.Split(bareEquals, "=")) < addedEquals {
+					bareEquals += "="
+				}
 
-				decodedValue, err := url.QueryUnescape(equalsplit[1])
+				decodedValue, err := url.QueryUnescape(bareEquals)
 				if err != nil {
 					log.Printf("[WARNING] Failed url query escape: %s", err)
 					resp.WriteHeader(401)
@@ -10493,10 +10535,21 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
+				if strings.Contains(decodedValue, " ") {
+					decodedValue = strings.Replace(decodedValue, " ", "+", -1)
+				}
+
 				parsedSAML = decodedValue
 				break
 			}
 		}
+	}
+
+	if len(parsedSAML) == 0 {
+		log.Printf("[WARNING] No SAML to be parsed from request.")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No data to parse. Is the request missing the SAMLResponse query?"}`)))
+		return
 	}
 
 	bytesXML, err := base64.StdEncoding.DecodeString(parsedSAML)
@@ -10507,13 +10560,40 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("Parsed: %s", bytesXML)
+
+	// Sample request in keycloak lab env
+	// PS: Should it ever come this way..?
+	//<samlp:AuthnRequest xmlns:samlp="urn:oasis:names:tc:SAML:2.0:protocol" xmlns="urn:oasis:names:tc:SAML:2.0:assertion" xmlns:saml="urn:oasis:names:tc:SAML:2.0:assertion" AssertionConsumerServiceURL="http://192.168.55.2:8080/auth/realms/ShuffleSSOSaml/broker/shaffuru/endpoint" Destination="http://192.168.55.2:3001/api/v1/login_sso" ForceAuthn="false" ID="" IssueInstant="2022-01-31T20:24:37.238Z" ProtocolBinding="urn:oasis:names:tc:SAML:2.0:bindings:HTTP-POST" Version="2.0"><saml:Issuer>http://192.168.55.2:8080/auth/realms/ShuffleSSOSaml</saml:Issuer><samlp:NameIDPolicy AllowCreate="false" Format="urn:oasis:names:tc:SAML:1.1:nameid-format:emailAddress"/></samlp:AuthnRequest>
+
 	var samlResp SAMLResponse
 	err = xml.Unmarshal(bytesXML, &samlResp)
 	if err != nil {
-		log.Printf("[WARNING] Failed XML unmarshal: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed XML unpacking in SAML"}`)))
-		return
+		if strings.Contains(fmt.Sprintf("%s", err), "AuthnRequest") {
+			var newSamlResp SamlRequest
+			err = xml.Unmarshal(bytesXML, &newSamlResp)
+			if err != nil {
+				log.Printf("[WARNING] Failed XML unmarshal (2): %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed XML unpacking in SAML (2)"}`)))
+				return
+			}
+
+			// Being here means we need to redirect
+			log.Printf("[DEBUG] Handling authnrequest redirect back to %s? That's not how any of this works.", newSamlResp.AssertionConsumerServiceURL)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed XML unpacking in SAML (2)"}`)))
+			return
+
+			// User tries to access a protected resource on the SP. SP checks if the user has a local (and authenticated session). If not it generates a SAML <AuthRequest> which includes a random id. The SP then redirects the user to the IDP with this AuthnRequest.
+
+			return
+		} else {
+			log.Printf("[WARNING] Failed XML unmarshal: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed XML unpacking in SAML (1)"}`)))
+			return
+		}
 	}
 
 	baseCertificate := samlResp.Signature.KeyInfo.X509Data.X509Certificate
@@ -10629,7 +10709,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
 			if user.Username == userName {
-				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
+				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
 
 				//log.Printf("SESSION: %s", user.Session)
 

@@ -2884,6 +2884,40 @@ func RefreshGmailClient(ctx context.Context, auth TriggerAuth) (*http.Client, er
 	return client, nil
 }
 
+//https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
+func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code string) ([]byte, error) {
+	fullUrl := fmt.Sprintf("%s", baseUrl)
+	client := &http.Client{}
+
+	//data := fmt.Sprintf("client_id=%s&code=%s", clientId, code)
+	data := fmt.Sprintf("grant_type=authorization_code&redirect_uri=%s&code=%s&client_id=asd", redirectUri, code)
+	log.Printf("DATA: %s?%s", fullUrl, data)
+	req, err := http.NewRequest(
+		"POST",
+		fullUrl,
+		bytes.NewBuffer([]byte(data)),
+	)
+
+	req.Header.Add("content-type", "application/x-www-form-urlencoded")
+	req.Header.Add("accept", "application/json")
+	req.Header.Add("cache-control", "no-cache")
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] OpenID Client: %s", err)
+		return []byte{}, err
+	}
+
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[WARNING] OpenID client Body: %s", err)
+		return []byte{}, err
+	}
+
+	log.Printf("OpenID BODY: %s", body)
+
+	return body, nil
+}
+
 func GetGithubClient(ctx context.Context, code string, accessToken OauthToken, redirectUri string) (*http.Client, *oauth2.Token, error) {
 	//fullUrl := fmt.Sprintf("https://github.com/login/oauth/access_token?client_id=%s&client_secret=%s&code=%s&token_type=bearer", os.Getenv("GITHUB_CLIENT"), os.Getenv("GITHUB_SECRET"), code)
 	//log.Printf("Posting to URL %s for github", fullUrl)
