@@ -5,6 +5,7 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -2884,17 +2885,41 @@ func RefreshGmailClient(ctx context.Context, auth TriggerAuth) (*http.Client, er
 	return client, nil
 }
 
-//https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
-func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code string) ([]byte, error) {
-	fullUrl := fmt.Sprintf("%s", baseUrl)
-	client := &http.Client{}
+type CodeVerifier struct {
+	Value string
+}
 
-	//data := fmt.Sprintf("client_id=%s&code=%s", clientId, code)
-	data := fmt.Sprintf("grant_type=authorization_code&redirect_uri=%s&code=%s&client_id=asd", redirectUri, code)
-	log.Printf("DATA: %s?%s", fullUrl, data)
+const (
+	length = 32
+)
+
+func CreateCodeVerifierFromBytes(b []byte) (*CodeVerifier, error) {
+	return &CodeVerifier{
+		Value: base64URLEncode(b),
+	}, nil
+}
+
+func base64URLEncode(str []byte) string {
+	encoded := base64.StdEncoding.EncodeToString(str)
+	encoded = strings.Replace(encoded, "+", "-", -1)
+	encoded = strings.Replace(encoded, "/", "_", -1)
+	encoded = strings.Replace(encoded, "=", "", -1)
+	return encoded
+}
+
+func (v *CodeVerifier) CodeChallengeS256() string {
+	h := sha256.New()
+	h.Write([]byte(v.Value))
+	return base64URLEncode(h.Sum(nil))
+}
+
+//https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
+func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge string) ([]byte, error) {
+	client := &http.Client{}
+	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s&code_verifier=%s", clientId, redirectUri, code, codeChallenge)
 	req, err := http.NewRequest(
 		"POST",
-		fullUrl,
+		baseUrl,
 		bytes.NewBuffer([]byte(data)),
 	)
 

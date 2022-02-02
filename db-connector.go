@@ -373,7 +373,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 				}
 			}
 
-			log.Printf("[INFO] Set app cache with length %d and %d keys", len(data), keyAmount)
+			//log.Printf("[INFO] Set app cache with length %d and %d keys", len(data), keyAmount)
 		} else {
 			item := &memcache.Item{
 				Key:        name,

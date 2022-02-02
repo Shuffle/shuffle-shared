@@ -1965,6 +1965,19 @@ type Oauth2Resp struct {
 	ExtExpiresIn int    `json:"ext_expires_in"`
 }
 
+type OpenidUserinfo struct {
+	Sub string `json:"sub"`
+}
+
+type OpenidResp struct {
+	AccessToken  string `json:"access_token"`
+	IdToken      string `json:"id_token"`
+	Scope        string `json:"scope"`
+	TokenType    string `json:"token_type"`
+	ExpiresIn    int    `json:"expires_in"`
+	ExtExpiresIn int    `json:"ext_expires_in"`
+}
+
 type AuthorizationCode struct {
 	AuthorizationUrl string   `json:"authorizationUrl"`
 	RefreshUrl       string   `json:"refreshUrl"`
