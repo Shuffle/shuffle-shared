@@ -6657,7 +6657,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for app %s", user.Username, app.Name)
+			log.Printf("[AUDIT] Wrong user (%s) for app %s (%s)", user.Username, app.Name, app.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -10496,7 +10496,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("Challenge len2: %d", len(foundChallenge))
+	//log.Printf("Challenge len2: %d", len(foundChallenge))
 
 	if len(foundOrg) == 0 {
 		log.Printf("[ERROR] No org specified in state")
@@ -10523,7 +10523,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("Challenge: %s", foundChallenge)
+	//log.Printf("Challenge: %s", foundChallenge)
 	body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, foundChallenge)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read of OpenID Connect: %s", err)
@@ -10541,7 +10541,10 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
+	// Automated replacement
+	userInfoUrlSplit := strings.Split(org.SSOConfig.OpenIdAuthorization, "/")
+	userinfoEndpoint := strings.Join(userInfoUrlSplit[0:len(userInfoUrlSplit)-1], "/") + "/userinfo"
+	//userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
 	log.Printf("Userinfo endpoint: %s", userinfoEndpoint)
 	client := &http.Client{}
 	req, err := http.NewRequest(
@@ -10568,7 +10571,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed userinfo body parsing"}`))
 		return
 	}
-	log.Printf("Got user body: %s", string(body))
+
+	//log.Printf("Got user body: %s", string(body))
 
 	openidUser := OpenidUserinfo{}
 	err = json.Unmarshal(body, &openidUser)

@@ -997,7 +997,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	filename := curfile.Filename
-	fileId := uuid.NewV4().String()
+	fileId := fmt.Sprintf("file_%s", uuid.NewV4().String())
 	downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
 
 	duplicateWorkflows := []string{}
