@@ -1958,6 +1958,17 @@ func GetAction(workflowExecution WorkflowExecution, id, environment string) Acti
 	return Action{}
 }
 
+func ArrayContainsLower(visited []string, id string) bool {
+	found := false
+	for _, item := range visited {
+		if strings.ToLower(item) == strings.ToLower(id) {
+			found = true
+		}
+	}
+
+	return found
+}
+
 func ArrayContains(visited []string, id string) bool {
 	found := false
 	for _, item := range visited {
@@ -6657,10 +6668,29 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for app %s (%s)", user.Username, app.Name, app.ID)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			exit := true
+			log.Printf("Check published: %#v", app.PublishedId)
+			if len(app.PublishedId) > 0 {
+
+				// FIXME: is this privacy / vulnerability?
+				// Allows parent owner to see child usage.
+				// Intended to allow vision of changes, and have parent app suggestions be possible
+				parentapp, err := GetApp(ctx, app.PublishedId, user, false)
+				if err == nil {
+					if parentapp.Owner == user.Id {
+						log.Printf("[AUDIT] Parent app owner %s got access to child app %s (%s)", user.Username, user.Id, app.Name, app.ID)
+						exit = false
+						//app, err := GetApp(ctx, fileId, User{}, false)
+					}
+				}
+			}
+
+			if exit {
+				log.Printf("[AUDIT] Wrong user (%s) for app %s (%s) - get app config", user.Username, app.Name, app.ID)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 		}
 	}
 
@@ -9806,6 +9836,15 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	for _, param := range action.Parameters {
 		if param.Required && len(param.Value) == 0 {
 			log.Printf("Param: %#v", param)
+
+			if param.Name == "username_basic" {
+				param.Name = "username"
+			} else if param.Name == "password_basic" {
+				param.Name = "password"
+			}
+
+			param.Name = strings.Replace(param.Name, "_", " ", -1)
+			param.Name = strings.Title(param.Name)
 
 			value := fmt.Sprintf("Param %s can't be empty. Fill all required parameters.", param.Name)
 			log.Printf("[WARNING] During single exec: %s", value)

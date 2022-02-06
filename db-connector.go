@@ -436,12 +436,35 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
-			log.Printf("[WARNING] Error adding workflow app: %s", err)
-			return err
+			if strings.Contains(fmt.Sprintf("%s", err), "entity is too big") || strings.Contains(fmt.Sprintf("%s", err), "is longer than") {
+				workflowapp, err = UploadAppSpecFiles(ctx, &project.StorageClient, workflowapp, ParsedOpenApi{})
+				if err != nil {
+					log.Printf("[WARNING] Failed uploading app spec file in set workflow app: %s", err)
+				} else {
+					if _, err = project.Dbclient.Put(ctx, key, &workflowapp); err != nil {
+						log.Printf("[ERROR] Failed second upload of app %s (%s): %s", workflowapp.Name, workflowapp.ID, err)
+					} else {
+						log.Printf("[DEBUG] Successfully updated app %s (%s)!", workflowapp.Name, workflowapp.ID)
+					}
+				}
+			} else {
+				log.Printf("[WARNING] Error adding workflow app: %s", err)
+			}
+
+			if err != nil {
+				return err
+			}
 		}
 	}
 
 	if project.CacheDb {
+		// Don't want to overwrite this part.
+		//data, err := json.Marshal(workflowapp)
+		//if err != nil {
+		//	log.Printf("[WARNING] Failed marshalling in setapp: %s", err)
+		//	return nil
+		//}
+
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for setapp: %s", err)
@@ -859,10 +882,23 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 }
 
 func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (WorkflowApp, error) {
-	internalBucket := "shuffler.appspot.com"
+	//project.BucketName := "shuffler.appspot.com"
 	fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", id)
-	log.Printf("[DEBUG] Couldn't find working app for app with ID %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
+	log.Printf("[DEBUG] Couldn't find working app for app with ID %s. Checking filepath gs://%s/%s (size too big)", id, project.BucketName, fullParsedPath)
 	//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+
+	cacheKey := fmt.Sprintf("cloud_file_app_%s", id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &workflowApp)
+			if err == nil {
+				return workflowApp, nil
+			}
+		}
+	}
 
 	client, err := storage.NewClient(ctx)
 	if err != nil {
@@ -870,7 +906,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 		return workflowApp, err
 	}
 
-	bucket := client.Bucket(internalBucket)
+	bucket := client.Bucket(project.BucketName)
 	obj := bucket.Object(fullParsedPath)
 	fileReader, err := obj.NewReader(ctx)
 	if err != nil {
@@ -890,6 +926,20 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 		return workflowApp, err
 	}
 
+	log.Printf("[DEBUG] Got new file data for app with ID %s from filepath gs://%s/%s with %d actions", id, project.BucketName, fullParsedPath, len(workflowApp.Actions))
+	if project.CacheDb {
+		data, err := json.Marshal(workflowApp)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in get cloud app cache: %s", err)
+			return workflowApp, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for get cloud app cache: %s", err)
+		}
+	}
+
 	defer fileReader.Close()
 	return workflowApp, nil
 }
@@ -907,6 +957,17 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 				//log.Printf("CACHEDATA: %#v", cacheData)
 				err = json.Unmarshal(cacheData, &workflowApp)
 				if err == nil {
+					if (len(workflowApp.ID) == 0 || len(workflowApp.Actions) == 0) && project.Environment == "cloud" {
+						tmpApp, err := getCloudFileApp(ctx, *workflowApp, id)
+
+						if err == nil {
+							log.Printf("[DEBUG] Got app %s (%s) with %d actions from file (cache)", workflowApp.Name, workflowApp.ID, len(tmpApp.Actions))
+							workflowApp = &tmpApp
+						} else {
+							log.Printf("[DEBUG] Failed remote loading app  %s (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
+						}
+					}
+
 					return workflowApp, nil
 				}
 			} else {
@@ -946,6 +1007,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
+		log.Printf("[DEBUG] Actions in %s: %d", workflowApp.Name, len(workflowApp.Actions))
 		if err != nil || len(workflowApp.Actions) == 0 {
 			log.Printf("[WARNING] Failed getting app in GetApp with ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
@@ -2054,54 +2116,30 @@ func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) 
 	} else {
 		k := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, &openapi); err != nil {
-			log.Printf("[WARNING] Failed setting openapi for ID %s in datastore: %s", id, err)
+
+			if strings.Contains(fmt.Sprintf("%s", err), "entity is too big") || strings.Contains(fmt.Sprintf("%s", err), "is longer than") {
+				_, err = UploadAppSpecFiles(ctx, &project.StorageClient, WorkflowApp{}, openapi)
+				if err != nil {
+					log.Printf("[WARNING] Failed uploading app spec file in set openapi app: %s", err)
+				} else {
+					oldBody := openapi.Body
+					openapi.Body = ""
+					if _, err = project.Dbclient.Put(ctx, k, &openapi); err != nil {
+						log.Printf("[ERROR] Failed second upload of openapi app %s: %s", openapi.ID, err)
+					} else {
+						log.Printf("[DEBUG] Successfully updated openapi app with no body!")
+
+						// Ensuring cache is in order
+						openapi.Body = oldBody
+					}
+				}
+			} else {
+				//log.Printf("[WARNING] Error adding workflow app: %s", err)
+				log.Printf("[WARNING] Failed setting openapi for ID %s in datastore: %s", id, err)
+			}
 			return err
 		}
 
-		/*
-			swagger, err := openapi3.NewSwaggerLoader().LoadSwaggerFromData([]byte(openapi.Body))
-			if err != nil {
-				log.Printf("[DEBUG] Failed preloading swagger: %s", err)
-				return err
-			}
-
-			curName := fmt.Sprintf("%s_%s", strings.Replace(strings.Replace(swagger.Info.Title, " ", "_", -1), "-", "_", -1), id)
-			client, err := storage.NewClient(ctx)
-			if err != nil {
-				log.Printf("[WARNING] Failed to create client (storage - set openapi datastore): %s", err)
-				return err
-			}
-
-			bucket := client.Bucket("shuffler.appspot.com")
-			basePath := fmt.Sprintf("generated_apps/%s", curName)
-			obj := bucket.Object(fmt.Sprintf("%s/openapi.yaml", basePath))
-			w := obj.NewWriter(ctx)
-			if _, err := fmt.Fprintln(w, openapi.Body); err != nil {
-				return err
-			}
-			// Close, just like writing a file.
-			if err := w.Close(); err != nil {
-				return err
-			}
-
-			//err = json.Unmarshal(data, &api)
-			//	if err != nil {
-			//		log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
-			//		return *api, err
-			//	}
-
-			//bucket := client.Bucket("shuffler.appspot.com")
-			//basePath := fmt.Sprintf("generated_apps/%s", curName)
-			obj = bucket.Object(fmt.Sprintf("extra_specs/%s/openapi.json", id))
-			w = obj.NewWriter(ctx)
-			if _, err := fmt.Fprintln(w, openapi.Body); err != nil {
-				return err
-			}
-			// Close, just like writing a file.
-			if err := w.Close(); err != nil {
-				return err
-			}
-		*/
 	}
 
 	if project.CacheDb {
@@ -2166,11 +2204,12 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		api = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-		if err := project.Dbclient.Get(ctx, key, api); err != nil {
-			internalBucket := "shuffler.appspot.com"
+		err := project.Dbclient.Get(ctx, key, api)
+		if err != nil || len(api.Body) == 0 {
+			//project.BucketName := "shuffler.appspot.com"
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
 			//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-			log.Printf("[DEBUG] Couldn't find openapi for %s. Should check filepath gs://%s/%s (size too big)", id, internalBucket, fullParsedPath)
+			log.Printf("[DEBUG] Couldn't find openapi for %s. Checking filepath gs://%s/%s (size too big)", id, project.BucketName, fullParsedPath)
 
 			client, err := storage.NewClient(ctx)
 			if err != nil {
@@ -2178,7 +2217,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 				return *api, err
 			}
 
-			bucket := client.Bucket(internalBucket)
+			bucket := client.Bucket(project.BucketName)
 			obj := bucket.Object(fullParsedPath)
 			fileReader, err := obj.NewReader(ctx)
 			if err != nil {
@@ -3105,12 +3144,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			if len(innerApp.Actions) == 0 {
 				log.Printf("App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
-				internalBucket := "shuffler.appspot.com"
+				//project.BucketName := "shuffler.appspot.com"
 				fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
+				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
 
-				bucket := client.Bucket(internalBucket)
+				bucket := client.Bucket(project.BucketName)
 				obj := bucket.Object(fullParsedPath)
 				fileReader, err := obj.NewReader(ctx)
 				if err == nil {
@@ -3197,12 +3236,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				if len(innerApp.Actions) == 0 {
 					log.Printf("App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
-					internalBucket := "shuffler.appspot.com"
+					//project.BucketName := "shuffler.appspot.com"
 					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
 					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-					//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, internalBucket, fullParsedPath)
+					//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
 
-					bucket := client.Bucket(internalBucket)
+					bucket := client.Bucket(project.BucketName)
 					obj := bucket.Object(fullParsedPath)
 					fileReader, err := obj.NewReader(ctx)
 					if err == nil {
@@ -6070,6 +6109,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		CacheDb:       cacheDb,
 		DbType:        dbType,
 		CloudUrl:      "https://shuffler.io",
+		BucketName:    "shuffler.appspot.com",
 	}
 
 	requestCache = cache.New(60*time.Minute, 120*time.Minute)
@@ -6210,4 +6250,70 @@ func SetJoinPrizedraw2021(ctx context.Context, inputItem PrizedrawSubmitter) err
 	}
 
 	return nil
+}
+
+func UploadAppSpecFiles(ctx context.Context, client *storage.Client, api WorkflowApp, parsed ParsedOpenApi) (WorkflowApp, error) {
+	extraPath := fmt.Sprintf("extra_specs/%s/appspec.json", api.ID)
+	openApiPath := fmt.Sprintf("extra_specs/%s/openapi.json", parsed.ID)
+	//log.Printf("[WARNING] Should save actions as other part: %s", extraPath)
+
+	appBytes, err := json.Marshal(api)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshaling app during failure fix: %s", err)
+		return api, err
+	}
+
+	openapiBytes, err := json.Marshal(parsed)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshaling app's OpenAPI during failure fix: %s", err)
+		return api, err
+	}
+
+	// Api.yaml
+	bucket := client.Bucket(project.BucketName)
+
+	if len(api.ID) > 0 {
+		obj := bucket.Object(extraPath)
+		w := obj.NewWriter(ctx)
+		if _, err := fmt.Fprint(w, string(appBytes)); err != nil {
+			log.Printf("[WARNING] Failed writing app file: %s", err)
+			return api, err
+		}
+
+		// Close, just like writing a file.
+		if err := w.Close(); err != nil {
+			log.Printf("[WARNING] Failed closing app file: %s", err)
+			return api, err
+		}
+	}
+
+	// OpenAPI
+	if len(parsed.ID) > 0 {
+		obj := bucket.Object(openApiPath)
+		w := obj.NewWriter(ctx)
+		if _, err := fmt.Fprint(w, string(openapiBytes)); err != nil {
+			log.Printf("[WARNING] Failed writing openapi file: %s", err)
+			return api, err
+		}
+
+		// Close, just like writing a file.
+		if err := w.Close(); err != nil {
+			log.Printf("[WARNING] Failed closing openapi file: %s", err)
+			return api, err
+		}
+
+		log.Printf("\n\n[DEBUG] Uploaded OpenAPI to path: %s\n\n", openApiPath)
+	}
+
+	fullParsedPath := fmt.Sprintf("gs://%s/extra_specs/%s", project.BucketName, api.ID)
+	log.Printf("[DEBUG] Successfully uploaded app action data to path: %s. App ID: %s, OpenAPI ID: %s", fullParsedPath, api.ID, parsed.ID)
+	api.Actions = []WorkflowAppAction{}
+	api.ActionFilePath = fullParsedPath
+	err = SetWorkflowAppDatastore(ctx, api, api.ID)
+	if err != nil {
+		log.Printf("[ERROR] Failed adding app to db: %s", err)
+		return api, err
+	}
+
+	return api, nil
 }

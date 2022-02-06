@@ -17,6 +17,7 @@ type ShuffleStorage struct {
 	Es            elasticsearch.Client
 	DbType        string
 	CloudUrl      string
+	BucketName    string
 }
 
 type ExecutionRequestWrapper struct {
@@ -87,6 +88,8 @@ type WorkflowApp struct {
 	LoopVersions   []string            `json:"loop_versions" datastore:"loop_versions"`
 	Owner          string              `json:"owner" datastore:"owner" yaml:"owner"`
 	Public         bool                `json:"public" datastore:"public"`
+	PublishedId    string              `json:"published_id" datastore:"published_id"`
+	ChildIds       []string            `json:"child_ids" datastore:"child_ids"`
 	ReferenceOrg   string              `json:"reference_org" datastore:"reference_org"`
 	ReferenceUrl   string              `json:"reference_url" datastore:"reference_url"`
 	ActionFilePath string              `json:"action_file_path" datastore:"action_file_path"`

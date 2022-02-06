@@ -208,7 +208,7 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 	//log.Printf("RECORDS: %d", len(newRecords))
 	foundUser := AlgoliaSearchCreator{}
 	for _, newRecord := range newRecords {
-		if newRecord.Username == username || newRecord.ObjectID == username || ArrayContains(newRecord.Synonyms, username) {
+		if strings.ToLower(newRecord.Username) == strings.ToLower(username) || newRecord.ObjectID == username || ArrayContainsLower(newRecord.Synonyms, username) {
 			foundUser = newRecord
 			break
 		}
