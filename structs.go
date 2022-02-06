@@ -1059,24 +1059,37 @@ type AlgoliaSearchCreator struct {
 }
 
 type AlgoliaSearchWorkflow struct {
-	Name          string   `json:"name"`
-	ObjectID      string   `json:"objectID"`
-	Description   string   `json:"description"`
-	Variables     int      `json:"variables"`
-	ActionAmount  int      `json:"action_amount"`
-	TriggerAmount int      `json:"trigger_amount"`
-	Triggers      []string `json:"triggers"`
-	Actions       []string `json:"actions"`
-	Tags          []string `json:"tags"`
-	Categories    []string `json:"categories"`
-	AccessibleBy  []string `json:"accessible_by,omitempty"`
-	ImageUrl      string   `json:"image_url"`
-	TimeEdited    int64    `json:"time_edited"`
-	Invalid       bool     `json:"invalid"`
-	Creator       string   `json:"creator,omitempty"`
-	Priority      int      `json:"priority"`
-	SourceIPLower string   `json:"source_ip,omitempty"`
-	SourceIP      string   `json:"SourceIP,omitempty"`
+	Name             string            `json:"name"`
+	ObjectID         string            `json:"objectID"`
+	Description      string            `json:"description"`
+	Variables        int               `json:"variables"`
+	ActionAmount     int               `json:"action_amount"`
+	TriggerAmount    int               `json:"trigger_amount"`
+	Triggers         []string          `json:"triggers"`
+	Actions          []string          `json:"actions"`
+	Tags             []string          `json:"tags"`
+	Categories       []string          `json:"categories"`
+	AccessibleBy     []string          `json:"accessible_by,omitempty"`
+	ImageUrl         string            `json:"image_url"`
+	TimeEdited       int64             `json:"time_edited"`
+	Invalid          bool              `json:"invalid"`
+	Creator          string            `json:"creator,omitempty"`
+	Priority         int               `json:"priority"`
+	SourceIPLower    string            `json:"source_ip,omitempty"`
+	SourceIP         string            `json:"SourceIP,omitempty"`
+	CreatorInfo      CreatorInfo       `json:"creator_info,omitempty"`
+	ActionReferences []ActionReference `json:"action_references,omitempty"`
+}
+
+type ActionReference struct {
+	Name     string `json:"name"`
+	Id       string `json:"id"`
+	ImageUrl string `json:"image_url"`
+}
+
+type CreatorInfo struct {
+	Username string `json:"username"`
+	Image    string `json:"image"`
 }
 
 type AlgoliaSearchApp struct {

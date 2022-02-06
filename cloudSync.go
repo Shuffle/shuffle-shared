@@ -214,8 +214,42 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 		}
 	}
 
+	// Handling search within a workflow, and in the future, within apps
 	if len(foundUser.ObjectID) == 0 {
-		return searchCreator, errors.New("User not found")
+		if len(username) == 36 {
+			// Check workflows
+			algoliaIndex := algClient.InitIndex("workflows")
+			res, err := algoliaIndex.Search(username)
+			if err != nil {
+				log.Printf("[WARNING] Failed searching Algolia creator workflow: %s", err)
+				return searchCreator, err
+			}
+
+			var newRecords []AlgoliaSearchWorkflow
+			err = res.UnmarshalHits(&newRecords)
+			if err != nil {
+				log.Printf("[WARNING] Failed unmarshaling from Algolia creator workflow: %s", err)
+				return searchCreator, err
+			}
+
+			//log.Printf("[DEBUG] Got %d records for workflow sub", len(newRecords))
+			if len(newRecords) == 1 {
+				if len(newRecords[0].Creator) > 0 && username != newRecords[0].Creator {
+					foundCreator, err := HandleAlgoliaCreatorSearch(ctx, newRecords[0].Creator)
+					if err != nil {
+						return searchCreator, err
+					}
+
+					foundUser = foundCreator
+				} else {
+					return searchCreator, errors.New("User not found")
+				}
+			} else {
+				return searchCreator, errors.New("User not found")
+			}
+		} else {
+			return searchCreator, errors.New("User not found")
+		}
 	}
 
 	if project.CacheDb {
