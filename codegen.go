@@ -1215,7 +1215,7 @@ func DumpPythonGCP(ctx context.Context, client *storage.Client, basePath, name, 
 	bucket := client.Bucket(bucketName)
 	obj := bucket.Object(fmt.Sprintf("%s/src/app.py", basePath))
 	w := obj.NewWriter(ctx)
-	if _, err := fmt.Fprintf(w, parsedCode); err != nil {
+	if _, err := fmt.Fprintln(w, parsedCode); err != nil {
 		return "", err
 	}
 	// Close, just like writing a file.

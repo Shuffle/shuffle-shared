@@ -6,6 +6,7 @@ package shuffle
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -15,7 +16,6 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"sort"
@@ -187,8 +187,8 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 		fileId = strings.Split(fileId, "?")[0]
 	}
 
-	if len(fileId) != 36 {
-		log.Printf("Bad format for fileId %s", fileId)
+	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
+		log.Printf("[WARNING] Bad format for fileId %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))
 		return
@@ -261,8 +261,8 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		fileId = strings.Split(fileId, "?")[0]
 	}
 
-	if len(fileId) != 36 {
-		log.Printf("Bad format for fileId %s", fileId)
+	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
+		log.Printf("[WARNING] Bad format for fileId %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))
 		return
@@ -474,7 +474,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Have to use Fprintln otherwise it tries to parse all strings etc.
-		if _, err := fmt.Fprintf(zipFile, string(filedata)); err != nil {
+		if _, err := fmt.Fprintln(zipFile, string(filedata)); err != nil {
 			log.Printf("Datapasting failed for %s when creating zip file from bucket: %v", file.Filename, err)
 			continue
 		}
@@ -524,8 +524,8 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	if len(fileId) != 36 {
-		log.Printf("Bad format for fileId %s", fileId)
+	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
+		log.Printf("[WARNING] Bad format for fileId %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))
 		return
@@ -615,10 +615,39 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		defer fileReader.Close()
+		if file.Encrypted {
+			scanner := bufio.NewScanner(fileReader)
+			allText := []byte{}
+			for scanner.Scan() {
+				fmt.Println(scanner.Bytes())
+				allText = append(allText, scanner.Bytes()...)
+			}
+
+			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			data, err := HandleKeyDecryption(string(allText), passphrase)
+			if err != nil {
+				log.Printf("[ERROR] Failed decrypting file: %s", err)
+			} else {
+				log.Printf("[DEBUG] File size reduced from %d to %d after decryption", len(allText), len(data))
+				allText = []byte(data)
+			}
+
+			FileContentType := http.DetectContentType(allText)
+			FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
+			//Send the headers
+			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+			resp.Header().Set("Content-Type", FileContentType)
+			resp.Header().Set("Content-Length", FileSize)
+
+			reader := bytes.NewReader(allText)
+			io.Copy(resp, reader)
+			return
+
+		}
 
 		FileHeader := make([]byte, 512)
 		FileContentType := http.DetectContentType(FileHeader)
-		resp.Header().Set("Content-Disposition", "attachment; filename="+fileId)
+		resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
 		resp.Header().Set("Content-Type", FileContentType)
 
 		io.Copy(resp, fileReader)
@@ -645,13 +674,45 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		if file.Encrypted {
+			log.Printf("[DEBUG] Should handle file decryption of %s.", fileId)
+			scanner := bufio.NewScanner(Openfile)
+			allText := []byte{}
+			for scanner.Scan() {
+				fmt.Println(scanner.Bytes())
+				allText = append(allText, scanner.Bytes()...)
+			}
+
+			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			data, err := HandleKeyDecryption(string(allText), passphrase)
+			if err != nil {
+				log.Printf("[ERROR] Failed decrypting file: %s", err)
+			} else {
+				log.Printf("[DEBUG] File size reduced from %d to %d after decryption", len(allText), len(data))
+				allText = []byte(data)
+			}
+
+			FileContentType := http.DetectContentType(allText)
+			FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
+			//Send the headers
+			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+			resp.Header().Set("Content-Type", FileContentType)
+			resp.Header().Set("Content-Length", FileSize)
+
+			reader := bytes.NewReader(allText)
+			io.Copy(resp, reader)
+			return
+		} else {
+			log.Printf("[DEBUG] Not decrypting file before download.")
+		}
+
 		//File is found, create and send the correct headers
 		//Get the Content-Type of the file
 		//Create a buffer to store the header of the file in
-		FileHeader := make([]byte, 512)
 		//Copy the headers into the FileHeader buffer
-		Openfile.Read(FileHeader)
 		//Get content type of file
+		FileHeader := make([]byte, 512)
+		Openfile.Read(FileHeader)
 		FileContentType := http.DetectContentType(FileHeader)
 
 		//Get the file size
@@ -659,7 +720,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		FileSize := strconv.FormatInt(FileStat.Size(), 10) //Get file size as a string
 
 		//Send the headers
-		resp.Header().Set("Content-Disposition", "attachment; filename="+fileId)
+		resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
 		resp.Header().Set("Content-Type", FileContentType)
 		resp.Header().Set("Content-Length", FileSize)
 
@@ -689,8 +750,8 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	if len(fileId) != 36 {
-		log.Printf("Bad format for fileId %s", fileId)
+	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
+		log.Printf("[WARNING] Bad format for fileId %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))
 		return
@@ -758,6 +819,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Read the file from the upload request
 	request.ParseMultipartForm(32 << 20)
 	parsedFile, _, err := request.FormFile("shuffle_file")
 	if err != nil {
@@ -786,11 +848,26 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 
 	buf.Reset()
 
-	err = uploadFile(ctx, file, contents, parsedFile)
+	// Handle file encryption if an encryption key is set
+	newContents := contents
+	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+	newFileValue, err := handleKeyEncryption(string(contents), parsedKey)
+	if err != nil {
+		log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
+	} else {
+		newContents = []byte(newFileValue)
+		file.FileSize = int64(len(newContents))
+		file.ContentType = http.DetectContentType(newContents)
+		file.Encrypted = true
+	}
+
+	log.Printf("[DEBUG] Got old length %d vs encrypted length %d", len(contents), len(newFileValue))
+
+	err = uploadFile(ctx, file, newContents)
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file: %s", err)
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to initialize with google cloud"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed file upload in Shuffle"}`))
 		return
 	}
 
@@ -799,7 +876,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }
 
-func uploadFile(ctx context.Context, file *File, contents []byte, parsedFile multipart.File) error {
+func uploadFile(ctx context.Context, file *File, contents []byte) error {
 	md5 := Md5sum(contents)
 	sha256Sum := sha256.Sum256(contents)
 
@@ -813,7 +890,7 @@ func uploadFile(ctx context.Context, file *File, contents []byte, parsedFile mul
 		obj := bucket.Object(file.DownloadPath)
 
 		w := obj.NewWriter(ctx)
-		if _, err := fmt.Fprintf(w, string(contents)); err != nil {
+		if _, err := fmt.Fprintln(w, string(contents)); err != nil {
 			log.Printf("[ERROR] Failed to write the file to datastore: %s", err)
 			return err
 		}
@@ -834,15 +911,8 @@ func uploadFile(ctx context.Context, file *File, contents []byte, parsedFile mul
 		}
 
 		defer f.Close()
-
-		if parsedFile == nil {
-			// FIXME
-			// This doesn't work 100% yet
-			log.Printf("[DEBUG] Should upload a NEW file without parsedFile Seeking?")
-		} else {
-			parsedFile.Seek(0, io.SeekStart)
-			io.Copy(f, parsedFile)
-		}
+		reader := bytes.NewReader(contents)
+		io.Copy(f, reader)
 	}
 
 	// FIXME: Set this one to 200 anyway? Can't download file then tho..

@@ -986,6 +986,7 @@ type File struct {
 	UpdatedBy    string   `json:"updated_by" datastore:"updated_by"`
 	CreatedBy    string   `json:"created_by" datastore:"created_by"`
 	Namespace    string   `json:"namespace" datastore:"namespace"`
+	Encrypted    bool     `json:"encrypted" datastore:"encrypted"`
 }
 
 type AppAuthenticationStorage struct {
