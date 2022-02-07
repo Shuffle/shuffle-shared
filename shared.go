@@ -11763,13 +11763,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			action.Parameters = newParams
-
-			// Old: ya29.A0ARrdaM83s35V5HfQH917H1xRvm7GpBA_6tE3bpYVb_V0UV-b2j1huFASyb4xSK7AeafbUgKCcF2Ydm_noMZjLEMLsHhrH-51WEw9kcKRupP6eh7yPoGnCB9z52yeMQxtuQkTaiAEBHBtNvUrZx1BNnrlEob3Gg
-			// New (compare with this): ya29.A0ARrdaM-uE3vtnfphQw9Py3yl6V1OyWWu-kNtsKqZp5Vm4g0jmTMEUuy0dZR_53hty9mHdbKFdYcJksADj2rjrkZ9C9pXgmR0NJjgHbvhnDQSBr0rIiH50dQlKfglYaBBecninHxKib7i02gY4D-eIrgModhuOg
-			// Problem: The NEW access token is just set, not being passed to the param
-			for _, param := range newParams {
-				log.Printf("New param: %s - %s", param.Name, param.Value)
-			}
 		}
 
 		action.LargeImage = ""
