@@ -244,13 +244,28 @@ type ExecutionInfo struct {
 	WeeklyCloudExecutions            int64 `json:"weekly_cloud_executions" datastore:"weekly_cloud_executions"`
 	WeeklyOnpremExecutions           int64 `json:"weekly_onprem_executions" datastore:"weekly_onprem_executions"`
 
+	DailyAppExecutions              int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
+	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
+	DailySubflowExecutions          int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
+	DailyWorkflowExecutions         int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
+	DailyWorkflowExecutionsFinished int64 `json:"daily_workflow_executions_finished" datastore:"daily_workflow_executions_finished"`
+	DailyWorkflowExecutionsFailed   int64 `json:"daily_workflow_executions_failed" datastore:"daily_workflow_executions_failed"`
+	DailyOrgSyncActions             int64 `json:"daily_org_sync_actions" datastore:"daily_org_sync_actions"`
+	DailyCloudExecutions            int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
+	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
+
+	HourlyAppExecutions              int64 `json:"hourly_app_executions" datastore:"hourly_app_executions"`
+	HourlyAppExecutionsFailed        int64 `json:"hourly_app_executions_failed" datastore:"hourly_app_executions_failed"`
+	HourlySubflowExecutions          int64 `json:"hourly_subflow_executions" datastore:"hourly_subflow_executions"`
+	HourlyWorkflowExecutions         int64 `json:"hourly_workflow_executions" datastore:"hourly_workflow_executions"`
+	HourlyWorkflowExecutionsFinished int64 `json:"hourly_workflow_executions_finished" datastore:"hourly_workflow_executions_finished"`
+	HourlyWorkflowExecutionsFailed   int64 `json:"hourly_workflow_executions_failed" datastore:"hourly_workflow_executions_failed"`
+	HourlyOrgSyncActions             int64 `json:"hourly_org_sync_actions" datastore:"hourly_org_sync_actions"`
+	HourlyCloudExecutions            int64 `json:"hourly_cloud_executions" datastore:"hourly_cloud_executions"`
+	HourlyOnpremExecutions           int64 `json:"hourly_onprem_executions" datastore:"hourly_onprem_executions"`
+
 	// These are just here in case we get use of them
-	TotalApiUsage           int64 `json:"total_api_usage" datastore:"total_api_usage"`
-	DailyApiUsage           int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
-	DailyWorkflowExecutions int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
-	DailyAppExecutions      int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
-	DailyCloudExecutions    int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
-	DailyOnpremExecutions   int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
+	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
 }
 
 type ParsedOpenApi struct {
@@ -559,18 +574,19 @@ type HookAction struct {
 }
 
 type Hook struct {
-	Id          string       `json:"id" datastore:"id"`
-	Start       string       `json:"start" datastore:"start"`
-	Info        Info         `json:"info" datastore:"info"`
-	Actions     []HookAction `json:"actions" datastore:"actions,noindex"`
-	Type        string       `json:"type" datastore:"type"`
-	Owner       string       `json:"owner" datastore:"owner"`
-	Status      string       `json:"status" datastore:"status"`
-	Workflows   []string     `json:"workflows" datastore:"workflows"`
-	Running     bool         `json:"running" datastore:"running"`
-	OrgId       string       `json:"org_id" datastore:"org_id"`
-	Environment string       `json:"environment" datastore:"environment"`
-	Auth        string       `json:"auth" datastore:"auth"`
+	Id             string       `json:"id" datastore:"id"`
+	Start          string       `json:"start" datastore:"start"`
+	Info           Info         `json:"info" datastore:"info"`
+	Actions        []HookAction `json:"actions" datastore:"actions,noindex"`
+	Type           string       `json:"type" datastore:"type"`
+	Owner          string       `json:"owner" datastore:"owner"`
+	Status         string       `json:"status" datastore:"status"`
+	Workflows      []string     `json:"workflows" datastore:"workflows"`
+	Running        bool         `json:"running" datastore:"running"`
+	OrgId          string       `json:"org_id" datastore:"org_id"`
+	Environment    string       `json:"environment" datastore:"environment"`
+	Auth           string       `json:"auth" datastore:"auth"`
+	CustomResponse string       `json:"custom_response" datastore:"custom_response"`
 }
 
 // Used within a user

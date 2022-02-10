@@ -6289,14 +6289,15 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type requestData struct {
-		Type        string `json:"type"`
-		Description string `json:"description"`
-		Id          string `json:"id"`
-		Name        string `json:"name"`
-		Workflow    string `json:"workflow"`
-		Start       string `json:"start"`
-		Environment string `json:"environment"`
-		Auth        string `json:"auth"`
+		Type           string `json:"type"`
+		Description    string `json:"description"`
+		Id             string `json:"id"`
+		Name           string `json:"name"`
+		Workflow       string `json:"workflow"`
+		Start          string `json:"start"`
+		Environment    string `json:"environment"`
+		Auth           string `json:"auth"`
+		CustomResponse string `json:"custom_response"`
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -6309,7 +6310,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := getContext(request)
 	var requestdata requestData
-	err = yaml.Unmarshal([]byte(body), &requestdata)
+	err = json.Unmarshal([]byte(body), &requestdata)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshaling inputdata for webhook: %s", err)
 		resp.WriteHeader(401)
@@ -6404,10 +6405,11 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 				Field: "",
 			},
 		},
-		Running:     false,
-		OrgId:       user.ActiveOrg.Id,
-		Environment: requestdata.Environment,
-		Auth:        requestdata.Auth,
+		Running:        false,
+		OrgId:          user.ActiveOrg.Id,
+		Environment:    requestdata.Environment,
+		Auth:           requestdata.Auth,
+		CustomResponse: requestdata.CustomResponse,
 	}
 
 	hook.Status = "running"
