@@ -266,6 +266,7 @@ type ExecutionInfo struct {
 
 	// These are just here in case we get use of them
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
+	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
 }
 
 type ParsedOpenApi struct {

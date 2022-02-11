@@ -5836,6 +5836,25 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	/*
+		if project.Environment != "cloud" {
+			log.Printf("[DEBUG] Starting cloud schedule for org %s (%s)", newOrg.Name, newOrg.Id)
+			interval := 15
+			log.Printf("[DEBUG] Should start schedule for org %s", newOrg.Name)
+			job := func() {
+				err := remoteOrgJobHandler(newOrg, interval)
+				if err != nil {
+					log.Printf("[ERROR] Failed request with remote org setup (3): %s", err)
+				}
+			}
+
+			jobret, err := newscheduler.Every(int(interval)).Seconds().NotImmediately().Run(job)
+			if err != nil {
+				log.Printf("[CRITICAL] Failed to schedule new org: %s", err)
+			}
+		}
+	*/
+
 	log.Printf("[INFO] User %s SUCCESSFULLY ADDED child org %s (%s) for parent %s (%s)", user.Username, newOrg.Name, newOrg.Id, parentOrg.Name, parentOrg.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))

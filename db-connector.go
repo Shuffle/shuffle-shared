@@ -2798,7 +2798,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 
 		err = SetOrg(ctx, *org, orgId)
 		if err != nil {
-			log.Printf("Failed setting org %s", orgId)
+			log.Printf("[WARNING] Failed setting org %s (2)", orgId)
 		}
 	}
 
