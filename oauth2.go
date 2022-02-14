@@ -3401,8 +3401,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		if field.Key == "authentication_url" {
 			url = field.Value
 		}
-		log.Printf("KEY: %s", field.Key)
-		log.Printf("%s", field.Value)
+		//log.Printf("KEY: %s", field.Key)
+		//log.Printf("%s", field.Value)
 
 		if field.Key == "code" {
 			requestData.Code = field.Value

@@ -1583,6 +1583,10 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 	// Redundant, but working ;)
 	if project.Environment == "cloud" {
 		backendUrl = "https://shuffler.io"
+
+		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
 	} else {
 		backendUrl = "http://127.0.0.1:5001"
 	}
@@ -3507,6 +3511,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if !strings.Contains(trigger.Parameters[0].Value, trigger.ID) {
 					log.Printf("[INFO] Fixing webhook URL for %s", trigger.ID)
 					baseUrl := "https://shuffler.io"
+					if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+						baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+					}
+
 					if project.Environment != "cloud" {
 						baseUrl = "http://localhost:3001"
 					}
@@ -6372,7 +6380,12 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Let remote endpoint handle access checks (shuffler.io)
-	currentUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", newId)
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	}
+
+	currentUrl := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", baseUrl, newId)
 	startNode := requestdata.Start
 	if requestdata.Environment == "cloud" && project.Environment != "cloud" {
 		// https://shuffler.io/v1/hooks/webhook_80184973-3e82-4852-842e-0290f7f34d7c
@@ -6411,7 +6424,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		Info: Info{
 			Name:        requestdata.Name,
 			Description: requestdata.Description,
-			Url:         fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", newId),
+			Url:         fmt.Sprintf("%s/api/v1/hooks/webhook_%s", baseUrl, newId),
 		},
 		Type:   "webhook",
 		Owner:  user.Username,
@@ -6975,6 +6988,10 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	if project.Environment == "cloud" {
 		backendUrl = "https://shuffler.io"
 		//backendUrl = "https://69ad-84-214-96-67.ngrok.io"
+
+		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
 	}
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
@@ -7282,6 +7299,10 @@ func ResendActionResult(actionData []byte) {
 	if project.Environment == "cloud" {
 		backendUrl = "https://shuffler.io"
 		//backendUrl = "https://69ad-84-214-96-67.ngrok.io"
+
+		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
 	}
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -10852,6 +10873,10 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		redirectUrl = "https://shuffler.io/workflows"
+
+		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/workflows", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
 	}
 
 	log.Printf("[DEBUG] Using %s as redirectUrl in SSO", backendUrl)
