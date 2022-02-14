@@ -9572,7 +9572,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	cacheId := fmt.Sprintf("%s_%s_%s", tmpData.OrgId, tmpData.WorkflowId, tmpData.Key)
+	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
 	if err != nil {
 		log.Printf("[WARNING] Failed to GET cache key %s for org %s", tmpData.Key, tmpData.OrgId)

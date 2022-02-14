@@ -5997,8 +5997,8 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	timeNow := int64(time.Now().Unix())
 	cacheData.Edited = timeNow
 
-	cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
-
+	//cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
+	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
 	if len(cacheId) > 128 {
 		cacheId = cacheId[0:127]
 	}
