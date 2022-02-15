@@ -3430,7 +3430,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 
 		if field.Key == "refresh_token" {
-			log.Printf("[DEBUG] Got refresh token %s", field.Value)
+			//log.Printf("[DEBUG] Got refresh token %s", field.Value)
 			refreshToken = field.Value
 		}
 
@@ -3491,13 +3491,13 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			return appAuth, errors.New("No refresh token specified during initial auth.")
 		}
 
-		// bytes.NewBuffer([]byte(v.Encode())),
-		requestRefreshUrl := fmt.Sprintf("%s?grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshUrl, refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
-		//log.Printf("Refresh URL: %s", requestRefreshUrl)
+		requestRefreshUrl := fmt.Sprintf("%s", refreshUrl)
+		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
+		log.Printf("[DEBUG] Refresh URL: %s\n\nDATA: %s", requestRefreshUrl, refreshData)
 		req, err := http.NewRequest(
 			"POST",
 			requestRefreshUrl,
-			nil,
+			bytes.NewBuffer([]byte(refreshData)),
 		)
 
 		if err != nil {
