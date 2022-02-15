@@ -3493,7 +3493,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		requestRefreshUrl := fmt.Sprintf("%s", refreshUrl)
 		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
-		log.Printf("[DEBUG] Refresh URL: %s\n\nDATA: %s", requestRefreshUrl, refreshData)
+		//log.Printf("[DEBUG] Refresh URL: %s\n", requestRefreshUrl)
 		req, err := http.NewRequest(
 			"POST",
 			requestRefreshUrl,
@@ -3510,8 +3510,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			return appAuth, err
 		}
 
-		//log.Printf("Data: %#v", newresp)
-		//log.Printf("Data: %d", newresp.StatusCode)
+		log.Printf("[DEBUG] Refresh Response for %s: %d", requestRefreshUrl, newresp.StatusCode)
 
 		body, err := ioutil.ReadAll(newresp.Body)
 		if err != nil {
@@ -3521,6 +3520,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		respBody = body
 
 		if newresp.StatusCode >= 300 {
+			// Printing on error to handle in future instances
+			log.Printf("[ERROR] Oauth2 data for %s: %#v", requestRefreshUrl, newresp)
 			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh: %d. Message: %s", newresp.StatusCode, respBody))
 		}
 
@@ -3537,7 +3538,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		appAuth.Fields = newAuth
 	}
 
-	log.Printf("\n\nRESPONSE: %s\n\n", string(respBody))
+	//log.Printf("\n\nRESPONSE: %s\n\n", string(respBody))
 	var oauthResp Oauth2Resp
 	err = json.Unmarshal(respBody, &oauthResp)
 	if err != nil {
