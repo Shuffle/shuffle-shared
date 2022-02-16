@@ -68,9 +68,9 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 		if err := tx.Get(key, orgStatistics); err != nil {
 
 			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
-				log.Printf("[DEBUG] Continuing by creating cache entity for %s", orgId)
+				log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
 			} else {
-				log.Printf("[ERROR] Failed getting stats: %s", err)
+				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
 				tx.Rollback()
 				return
 			}

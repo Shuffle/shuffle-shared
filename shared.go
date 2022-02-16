@@ -3936,7 +3936,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								thisError := fmt.Sprintf("%s is missing required parameter %s", action.Label, param.Name)
 								if handleOauth {
 									log.Printf("[WARNING] Handling oauth2 app saving, hence not throwing warnings (1)")
-									workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (1)", action.Name))
+									//workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (1)", action.Name))
 								} else {
 									action.Errors = append(action.Errors, thisError)
 									workflow.Errors = append(workflow.Errors, thisError)
@@ -3957,7 +3957,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					if !paramFound && param.Required {
 						if handleOauth {
 							log.Printf("[WARNING] Handling oauth2 app saving, hence not throwing warnings (2)")
-							workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (2)", action.Name))
+							//workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (2)", action.Name))
 						} else {
 							thisError := fmt.Sprintf("Parameter %s is required", param.Name)
 							action.Errors = append(action.Errors, thisError)
