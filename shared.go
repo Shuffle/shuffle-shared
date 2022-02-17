@@ -7384,31 +7384,52 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
+	//if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-		log.Printf("\n\nSETTING RESULTS: %#v", workflowExecution.Results)
-		if len(workflowExecution.Results) > 0 {
-			lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
-			log.Printf("LAST: %s", lastResult)
-		}
 
-		//for _, item := range workflowExecution.Results {
+		setExecVar := true
+		//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %#v", actionResult.Result)
+		if strings.Contains(actionResult.Result, "\"success\":") {
+			type SubflowMapping struct {
+				Success bool `json:"success"`
+			}
 
-		//}
-		//workflowExecution.Result = workflowExecution.Workflow.DefaultReturnValue
-		actionResult.Action.ExecutionVariable.Value = actionResult.Result
-
-		foundIndex := -1
-		for i, executionVariable := range workflowExecution.ExecutionVariables {
-			if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
-				foundIndex = i
-				break
+			var subflowData SubflowMapping
+			err = json.Unmarshal([]byte(actionResult.Result), &subflowData)
+			if err != nil {
+				log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
+				setExecVar = false
+			} else {
+				if subflowData.Success == false {
+					setExecVar = false
+				}
 			}
 		}
 
-		if foundIndex >= 0 {
-			workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+		if setExecVar {
+			log.Printf("[DEBUG] Updating exec variable %s with new value of length %d", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+			if len(workflowExecution.Results) > 0 {
+				lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
+				log.Printf("LAST: %s", lastResult)
+			}
+
+			actionResult.Action.ExecutionVariable.Value = actionResult.Result
+
+			foundIndex := -1
+			for i, executionVariable := range workflowExecution.ExecutionVariables {
+				if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+					foundIndex = i
+					break
+				}
+			}
+
+			if foundIndex >= 0 {
+				workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+			} else {
+				workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+			}
 		} else {
-			workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+			log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 		}
 	}
 
