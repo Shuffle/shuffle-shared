@@ -6037,8 +6037,6 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("\n\nINSIDE ABORT\n\n")
-
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
 	if location[1] == "api" {
@@ -6172,6 +6170,16 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		parsedReason = reason[0]
 	}
 
+	returnData := SubflowData{
+		Success: false,
+		Result:  parsedReason,
+	}
+
+	reasonData, err := json.Marshal(returnData)
+	if err != nil {
+		reasonData = []byte(parsedReason)
+	}
+
 	if len(workflowExecution.Results) == 0 || addResult {
 		newaction := Action{
 			ID: workflowExecution.Start,
@@ -6188,7 +6196,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			Action:        newaction,
 			ExecutionId:   workflowExecution.ExecutionId,
 			Authorization: workflowExecution.Authorization,
-			Result:        parsedReason,
+			Result:        string(reasonData),
 			StartedAt:     workflowExecution.StartedAt,
 			CompletedAt:   workflowExecution.StartedAt,
 			Status:        "FAILURE",
@@ -6226,7 +6234,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 					Action:        newaction,
 					ExecutionId:   workflowExecution.ExecutionId,
 					Authorization: workflowExecution.Authorization,
-					Result:        parsedReason,
+					Result:        string(reasonData),
 					StartedAt:     workflowExecution.StartedAt,
 					CompletedAt:   workflowExecution.StartedAt,
 					Status:        "FAILURE",
@@ -12754,4 +12762,285 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte("OK"))
+}
+
+func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get usecases: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// FIXME: Load for the specific org and have structs for it all
+	_ = user
+
+	//ctx := getContext(request)
+	resp.WriteHeader(200)
+	resp.Write([]byte(`[
+    {
+        "name": "1. Collect & Distribute",
+        "color": "#c51152",
+        "list": [
+            {
+                "name": "2-way Ticket synchronization",
+                "items": {}
+            },
+            {
+                "name": "Email management",
+                "items": {
+                    "name": "Release a quarantined message",
+                    "items": {}
+                }
+            },
+            {
+                "name": "EDR to ticket",
+                "items": {
+                    "name": "Get host information",
+                    "items": {}
+                }
+            },
+            {
+                "name": "SIEM to ticket",
+                "items": {}
+            },
+            {
+                "name": "ChatOps",
+                "items": {}
+            },
+            {
+                "name": "Threat Intel received",
+                "items": {}
+            },
+            {
+                "name": "Domain investigation with LetsEncrypt",
+                "items": {}
+            },
+            {
+                "name": "Botnet tracker",
+                "items": {}
+            },
+            {
+                "name": "Get running containers",
+                "items": {}
+            },
+            {
+                "name": "Assign tickets",
+                "items": {}
+            },
+            {
+                "name": "Firewall alerts",
+                "items": {
+                    "name": "URL filtering",
+                    "items": {}
+                }
+            },
+            {
+                "name": "IDS/IPS alerts",
+                "items": {
+                    "name": "Manage policies",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Deduplicate information",
+                "items": {}
+            },
+            {
+                "name": "Correlate information",
+                "items": {}
+            }
+        ]
+    },
+    {
+        "name": "2. Enrich",
+        "color": "#f4c20d",
+        "list": [
+            {
+                "name": "Internal Enrichment",
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            },
+            {
+                "name": "External historical Enrichment",
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Realtime",
+                "items": {
+                    "name": "Analyze screenshots",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Ticketing webhook verification",
+                "items": {}
+            }
+        ]
+    },
+    {
+        "name": "3. Detect",
+        "color": "#3cba54",
+        "list": [
+            {
+                "name": "Search SIEM (Sigma)",
+                "items": {
+                    "name": "Endpoint",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Search EDR (OSQuery)",
+                "items": {}
+            },
+            {
+                "name": "Search emails (Phish)",
+                "items": {
+                    "name": "Check headers and IOCs",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Search IOCs (ioc-finder)",
+                "items": {}
+            },
+            {
+                "name": "Search files (Yara)",
+                "items": {}
+            },
+            {
+                "name": "Correlate tickets",
+                "items": {}
+            },
+            {
+                "name": "Honeypot access",
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            }
+        ]
+    },
+    {
+        "name": "4. Respond",
+        "color": "#4a148c",
+        "list": [
+            {
+                "name": "Eradicate malware",
+                "items": {}
+            },
+            {
+                "name": "Quarantine host(s)",
+                "items": {}
+            },
+            {
+                "name": "Trigger scans",
+                "items": {}
+            },
+            {
+                "name": "Update indicators (FW, EDR, SIEM...)",
+                "items": {}
+            },
+            {
+                "name": "Autoblock activity when threat intel is received",
+                "items": {}
+            },
+            {
+                "name": "Lock/Delete/Reset account",
+                "items": {}
+            },
+            {
+                "name": "Lock vault",
+                "items": {}
+            },
+            {
+                "name": "Increase authentication",
+                "items": {}
+            },
+            {
+                "name": "Get policies from assets",
+                "items": {}
+            }
+        ]
+    },
+    {
+        "name": "5. Verify",
+        "color": "#4885ed",
+        "list": [
+            {
+                "name": "Discover vulnerabilities",
+                "items": {}
+            },
+            {
+                "name": "Discover assets",
+                "items": {}
+            },
+            {
+                "name": "Ensure policies are followed",
+                "items": {}
+            },
+            {
+                "name": "Find Inactive users",
+                "items": {}
+            },
+            {
+                "name": "Ensure access rights match HR systems",
+                "items": {}
+            },
+            {
+                "name": "Ensure onboarding is followed",
+                "items": {}
+            },
+            {
+                "name": "Third party apps in SaaS",
+                "items": {}
+            },
+            {
+                "name": "Devices used for your cloud account",
+                "items": {}
+            },
+            {
+                "name": "Too much access in GCP/Azure/AWS/ other clouds",
+                "items": {}
+            },
+            {
+                "name": "Certificate validation",
+                "items": {}
+            },
+            {
+                "name": "Monitor new DNS entries for domain with passive DNS",
+                "items": {}
+            },
+            {
+                "name": "Monitor and track password dumps",
+                "items": {}
+            },
+            {
+                "name": "Monitor for mentions of domain on darknet sites",
+                "items": {}
+            },
+            {
+                "name": "Reporting",
+                "items": {
+                    "name": "Monthly reports",
+                    "items": {
+                        "name": "...",
+                        "items": {}
+                    }
+                }
+            }
+        ]
+    }
+]`))
 }

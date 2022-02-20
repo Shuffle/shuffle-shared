@@ -915,6 +915,7 @@ type Workflow struct {
 	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
 	PublishedId string     `json:"published_id" yaml:"published_id"`
 	Subflows    []Workflow `json:"subflows,omitempty" yaml:"subflows"`
+	UsecaseIds  []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
 }
 
 type Category struct {
@@ -1983,8 +1984,8 @@ type BuildLaterStruct struct {
 // Overwriting results fo a subflow trigger
 type SubflowData struct {
 	Success       bool   `json:"success"`
-	ExecutionId   string `json:"execution_id"`
-	Authorization string `json:"authorization"`
+	ExecutionId   string `json:"execution_id,omitempty"`
+	Authorization string `json:"authorization,omitempty"`
 	Result        string `json:"result"`
 	ResultSet     bool   `json:"result_set,omitempty"`
 }
