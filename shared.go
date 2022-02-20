@@ -12772,10 +12772,10 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get usecases: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		log.Printf("[WARNING] Api authentication failed in get usecases. Continuing anyway: %s", err)
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
 	}
 
 	// FIXME: Load for the specific org and have structs for it all
