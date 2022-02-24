@@ -1872,7 +1872,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	// Just here to verify that the user is logged in
 	_, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in validate swagger: %s", err)
+		log.Printf("[WARNING] Api authentication failed in validate swagger: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -6995,7 +6995,6 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		backendUrl = "https://shuffler.io"
-		//backendUrl = "https://69ad-84-214-96-67.ngrok.io"
 
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
@@ -7306,7 +7305,6 @@ func ResendActionResult(actionData []byte) {
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		backendUrl = "https://shuffler.io"
-		//backendUrl = "https://69ad-84-214-96-67.ngrok.io"
 
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
@@ -8951,7 +8949,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	// Just here to verify that the user is logged in
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in validate swagger: %s", err)
+		log.Printf("[WARNING] Api authentication failed in validate swagger: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return

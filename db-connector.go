@@ -1024,7 +1024,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
-		log.Printf("[DEBUG] Actions in %s: %d", workflowApp.Name, len(workflowApp.Actions))
+		log.Printf("[DEBUG] Actions in %s (%s): %d", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions))
 		if err != nil || len(workflowApp.Actions) == 0 {
 			log.Printf("[WARNING] Failed getting app in GetApp with ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
@@ -4951,7 +4951,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(100)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-created_at").Limit(100)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &files)
 		if err != nil && len(files) == 0 {
