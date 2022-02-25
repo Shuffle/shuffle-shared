@@ -8882,6 +8882,8 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 func GetExecutionbody(body []byte) string {
 	parsedBody := string(body)
+
+	// Specific weird newline issues
 	if strings.Contains(parsedBody, "choice") {
 		if strings.Count(parsedBody, `\\n`) > 2 {
 			parsedBody = strings.Replace(parsedBody, `\\n`, "", -1)
@@ -8908,7 +8910,13 @@ func GetExecutionbody(body []byte) string {
 	}
 
 	if !strings.HasPrefix(parsedBody, "{") && !strings.HasPrefix(parsedBody, "[") && strings.Contains(parsedBody, "=") {
-		log.Printf("[DEBUG] Trying to make string %s to json", parsedBody)
+		log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML)", parsedBody)
+
+		// Dumb XML handler
+		if strings.HasPrefix(strings.TrimSpace(parsedBody), "<") && strings.HasSuffix(strings.TrimSpace(parsedBody), ">") {
+			log.Printf("[DEBUG] XML detected. Not parsing anyything.")
+			return parsedBody
+		}
 
 		newbody := map[string]string{}
 		for _, item := range strings.Split(parsedBody, "&") {
