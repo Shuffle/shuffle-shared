@@ -12812,6 +12812,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "SIEM to ticket",
+								"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
                 "items": {}
             },
             {

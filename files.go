@@ -843,6 +843,8 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	var buf bytes.Buffer
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
+	//log.Printf("File content: %s\n%x", string(contents))
+
 	file.FileSize = int64(len(contents))
 	file.ContentType = http.DetectContentType(contents)
 

@@ -215,6 +215,11 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string) error {
 	log.Printf("[DEBUG] Should send notifications to workflow %s", workflowId)
 
+	if strings.Contains(strings.ToLower(notification.ReferenceUrl), strings.ToLower(workflowId)) {
+		log.Printf("[WARNING] Notification NOT being sent to workflow as it's the same Workflow ID as failed!")
+		return errors.New("Same workflow ID as notification ID. Stopped for infinite loop")
+	}
+
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
@@ -369,7 +374,15 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		selectedApikey := ""
 		for _, user := range filteredUsers {
 			if user.Role == "admin" && len(user.ApiKey) > 0 && len(selectedApikey) == 0 {
-				selectedApikey = user.ApiKey
+				// Checking if it's the right active org
+				// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
+				foundUser, err := GetUser(ctx, user.Id)
+				if err == nil {
+					if foundUser.ActiveOrg.Id == orgId {
+						log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
+						selectedApikey = user.ApiKey
+					}
+				}
 			}
 
 			log.Printf("[DEBUG] Made notification for user %s (%s)", user.Username, user.Id)
@@ -392,7 +405,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow)
 			if err != nil {
-				log.Printf("[ERROR] Failed sending notification to workflowId %s: %s", org.Defaults.NotificationWorkflow, err)
+				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, err)
 			}
 		}
 	}
