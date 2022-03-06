@@ -12571,7 +12571,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	if err != nil {
 		log.Printf("[WARNING] Failed setting app framework for org %s: %s", org.Name, err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed updating organization info"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed updating organization info. Please contact us if this persists."}`))
 		return
 	} else {
 		cacheKey := fmt.Sprintf("apps_%s", user.Id)
@@ -12789,7 +12789,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(`[
     {
-        "name": "1. Collect & Distribute",
+        "name": "1. Collect",
         "color": "#c51152",
         "list": [
             {
@@ -12813,6 +12813,9 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             {
                 "name": "SIEM to ticket",
 								"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
+								"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
+								"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
+								"reference_image": "/images/detectionframework.png",
                 "items": {}
             },
             {
@@ -13048,4 +13051,106 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
         ]
     }
 ]`))
+}
+
+func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get usecases. Continuing anyway: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Needs to be a shuffler.io account to update
+	if !strings.HasSuffix(user.Username, "@shuffler.io") {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Can't change framework info"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read for usecase update: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var usecase Usecase
+	err = json.Unmarshal(body, &usecase)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling usecase: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Updated usecase %s as user %s (%s)", usecase.Name, user.Username, user.Id)
+	usecase.EditedBy = user.Id
+	ctx := getContext(request)
+	err = SetUsecase(ctx, usecase)
+	if err != nil {
+		log.Printf("[ERROR] Failed updating usecase: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
+func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	_, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get usecase (1). Continuing anyway: %s", err)
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
+	}
+
+	var name string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 5 {
+			log.Printf("[ERROR] Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		name = location[5]
+	}
+
+	log.Printf("[DEBUG] Got name %s", name)
+	ctx := getContext(request)
+	usecase, err := GetUsecase(ctx, name)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting usecase %s: %s", name, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	newjson, err := json.Marshal(usecase)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshal in get usecase: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
 }

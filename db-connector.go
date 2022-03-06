@@ -51,7 +51,7 @@ func GetESIndexPrefix(index string) string {
 }
 
 // Dumps data from cache to DB for every 5 action
-var dumpInterval = 0x5
+var dumpInterval = 0x9
 
 func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 	nameKey := "org_statistics"
@@ -6333,4 +6333,119 @@ func UploadAppSpecFiles(ctx context.Context, client *storage.Client, api Workflo
 	}
 
 	return api, nil
+}
+
+func SetUsecase(ctx context.Context, usecase Usecase, optionalEditedSecondsOffset ...int) error {
+	var err error
+	nameKey := "usecases"
+	name := strings.ToLower(strings.Replace(usecase.Name, " ", "_", -1))
+
+	timeNow := int64(time.Now().Unix())
+	usecase.Edited = timeNow
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(usecase)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in setapp: %s", err)
+		return nil
+	}
+
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, name, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, name, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &usecase); err != nil {
+			log.Printf("[WARNING] Error adding usecase: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, name)
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for setusecase: %s", err)
+		}
+	}
+
+	return nil
+}
+
+func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
+	usecase := &Usecase{}
+	nameKey := "usecases"
+	id := strings.ToLower(strings.Replace(name, " ", "_", -1))
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &usecase)
+			if err == nil {
+				return usecase, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for usecase: %s", err)
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		if err != nil {
+			log.Printf("[WARNING] Error: %s", err)
+			return usecase, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return usecase, errors.New("Workflow doesn't exist")
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return usecase, err
+		}
+
+		wrapped := UsecaseWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return usecase, err
+		}
+
+		usecase = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, usecase); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[INFO] Error in usecase loading. Migrating usecase to new workflow handler.")
+				err = nil
+			} else {
+				return usecase, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for usecase %s", cacheKey)
+		data, err := json.Marshal(usecase)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getusecase: %s", err)
+			return usecase, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getusecase: %s", err)
+		}
+	}
+
+	return usecase, nil
+
 }

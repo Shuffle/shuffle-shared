@@ -1781,6 +1781,17 @@ type WorkflowWrapper struct {
 	Source      Workflow `json:"_source"`
 }
 
+type UsecaseWrapper struct {
+	Index       string  `json:"_index"`
+	Type        string  `json:"_type"`
+	ID          string  `json:"_id"`
+	Version     int     `json:"_version"`
+	SeqNo       int     `json:"_seq_no"`
+	PrimaryTerm int     `json:"_primary_term"`
+	Found       bool    `json:"found"`
+	Source      Usecase `json:"_source"`
+}
+
 type AppWrapper struct {
 	Index       string      `json:"_index"`
 	Type        string      `json:"_type"`
@@ -3240,4 +3251,24 @@ type SettingsReturn struct {
 	Verified bool   `json:"verified"`
 	Apikey   string `json:"apikey"`
 	Image    string `json:"image"`
+}
+
+type Usecase struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	LeftText    string `json:"left_text"`
+	RightText   string `json:"right_text"`
+	LeftImage   string `json:"left_image"`
+	RightImage  string `json:"right_image"`
+	Direction   string `json:"direction"`
+	Process     []struct {
+		Source      string `json:"source"`
+		Target      string `json:"target"`
+		Description string `json:"description"`
+		Human       bool   `json:"human"`
+	} `json:"process"`
+	Edited   int64  `json:"edited"`
+	EditedBy string `json:"edited_by"`
+	Blogpost string `json:"blogpost"`
+	Video    string `json:"video"`
 }
