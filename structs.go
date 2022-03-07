@@ -916,6 +916,9 @@ type Workflow struct {
 	PublishedId string     `json:"published_id" yaml:"published_id"`
 	Subflows    []Workflow `json:"subflows,omitempty" yaml:"subflows"`
 	UsecaseIds  []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
+	Blogpost    string     `json:"blogpost" yaml:"blogpost"`
+	Video       string     `json:"video" yaml:"video"`
+	Status      string     `json:"status" datastore:"status"`
 }
 
 type Category struct {

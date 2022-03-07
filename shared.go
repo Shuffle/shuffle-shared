@@ -3169,6 +3169,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
 	}
 
+	if workflow.Status != "test" && workflow.Status != "production" {
+		workflow.Status = "test"
+		log.Printf("[DEBUG] Defaulted workflow status to %s. Alternative: prod", workflow.Status)
+	}
+
+	if strings.ToLower(workflow.Status) == "prod" {
+		workflow.Status = "production"
+	}
+
 	workflow.Subflows = []Workflow{}
 	if len(workflow.DefaultReturnValue) > 0 && len(workflow.DefaultReturnValue) < 200 {
 		log.Printf("[INFO] Set default return value to on failure to (%s): %s", workflow.ID, workflow.DefaultReturnValue)
@@ -5755,12 +5764,14 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit || len(parentOrg.ChildOrgs) > int(parentOrg.SyncFeatures.MultiTenant.Limit) {
-			log.Printf("[WARNING] Org %s is not allowed to make ANOTHER sub-organization. Limit reached!: %s", tmpData.OrgId, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Your limit of sub-organizations has been reached. Contact support to increase."}`))
-			return
-		}
+		/*
+			if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit || len(parentOrg.ChildOrgs) > int(parentOrg.SyncFeatures.MultiTenant.Limit) {
+				log.Printf("[WARNING] Org %s is not allowed to make ANOTHER sub-organization. Limit reached!: %s", tmpData.OrgId, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Your limit of sub-organizations has been reached. Contact support to increase."}`))
+				return
+			}
+		*/
 
 		parentOrg.SyncUsage.MultiTenant.Counter += 1
 		log.Printf("[DEBUG] Allowing suborg for %s because they have %d vs %d limit", parentOrg.Id, len(parentOrg.ChildOrgs), parentOrg.SyncFeatures.MultiTenant.Limit)
