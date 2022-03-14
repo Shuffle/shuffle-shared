@@ -12838,14 +12838,6 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
                 "items": {}
             },
             {
-                "name": "Domain investigation with LetsEncrypt",
-                "items": {}
-            },
-            {
-                "name": "Botnet tracker",
-                "items": {}
-            },
-            {
                 "name": "Get running containers",
                 "items": {}
             },
@@ -13014,6 +13006,10 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
                 "items": {}
             },
             {
+                "name": "Botnet tracker",
+                "items": {}
+            },
+            {
                 "name": "Ensure access rights match HR systems",
                 "items": {}
             },
@@ -13035,6 +13031,10 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "Certificate validation",
+                "items": {}
+            },
+            {
+                "name": "Domain investigation with LetsEncrypt",
                 "items": {}
             },
             {

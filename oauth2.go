@@ -979,7 +979,7 @@ func MakeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 
 	data, err := json.Marshal(sub)
 	if err != nil {
-		log.Printf("Marshal: %s", err)
+		log.Printf("[WARNING] Marshal error: %s", err)
 		return SubResponse{}, err
 	}
 
@@ -991,7 +991,7 @@ func MakeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 	req.Header.Add("Content-Type", "application/json")
 	res, err := client.Do(req)
 	if err != nil {
-		log.Printf("[WARNING] GMAIL Client: %s", err)
+		log.Printf("[WARNING] GMAIL Client for subscription: %s", err)
 		return SubResponse{}, err
 	}
 
@@ -1012,6 +1012,7 @@ func MakeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 	newSub := SubResponse{}
 	err = json.Unmarshal(body, &newSub)
 	if err != nil {
+		log.Printf("[WARNING] Error in JSON unmarshal for gmail client: %s", err)
 		return SubResponse{}, err
 	}
 
