@@ -7401,6 +7401,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
+	newResult := FixBadJsonBody([]byte(actionResult.Result))
+	actionResult.Result = string(newResult)
+
 	//if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 
@@ -8956,7 +8959,167 @@ func GetExecutionbody(body []byte) string {
 		//log.Printf("BODY: %#v", newbody)
 	}
 
+	// Check bad characters in keys
+	// FIXME: Re-enable this when it's safe.
+	//log.Printf("Input: %s", parsedBody)
+	parsedBody = string(FixBadJsonBody([]byte(parsedBody)))
+	//log.Printf("Output: %s", parsedBody)
+
 	return parsedBody
+}
+
+// Can't just regex out stuff due to unicode problems with other languages
+func handleKeyRemoval(key string) string {
+	key = strings.Replace(key, "!", "", -1)
+	key = strings.Replace(key, "@", "", -1)
+	key = strings.Replace(key, "#", "", -1)
+	key = strings.Replace(key, "$", "", -1)
+	key = strings.Replace(key, "%", "", -1)
+	key = strings.Replace(key, "~", "", -1)
+	key = strings.Replace(key, "|", "", -1)
+	key = strings.Replace(key, "^", "", -1)
+	key = strings.Replace(key, "&", "", -1)
+	key = strings.Replace(key, "*", "", -1)
+	key = strings.Replace(key, "(", "", -1)
+	key = strings.Replace(key, ")", "", -1)
+	key = strings.Replace(key, "[", "", -1)
+	key = strings.Replace(key, "]", "", -1)
+	key = strings.Replace(key, "{", "", -1)
+	key = strings.Replace(key, "}", "", -1)
+	key = strings.Replace(key, "<", "", -1)
+	key = strings.Replace(key, ">", "", -1)
+	key = strings.Replace(key, "+", "", -1)
+	key = strings.Replace(key, "=", "", -1)
+	key = strings.Replace(key, "?", "", -1)
+	key = strings.Replace(key, ".", "", -1)
+	key = strings.Replace(key, ",", "", -1)
+	key = strings.Replace(key, "/", "", -1)
+	key = strings.Replace(key, "\\", "", -1)
+	key = strings.Replace(key, "'", "", -1)
+
+	return key
+}
+
+// https://www.codemio.com/2021/02/advanced-golang-tutorials-dynamic-json-parsing.html
+func handleJSONObject(object interface{}, key, totalObject string) string {
+	currentObject := ""
+	key = handleKeyRemoval(key)
+
+	switch t := object.(type) {
+	case int:
+		currentObject += fmt.Sprintf(`"%s": %d, `, key, t)
+		if len(key) == 0 {
+			currentObject += fmt.Sprintf(`%d, `, t)
+		}
+	case int64:
+		currentObject += fmt.Sprintf(`"%s": %d, `, key, t)
+		if len(key) == 0 {
+			currentObject += fmt.Sprintf(`%d, `, t)
+		}
+	case float64:
+		tmpObject := fmt.Sprintf(`"%s": %f, `, key, t)
+		if len(key) == 0 {
+			tmpObject = fmt.Sprintf(`%f, `, t)
+		}
+
+		if strings.HasSuffix(tmpObject, "000000, ") {
+			tmpObject = tmpObject[0 : len(tmpObject)-9]
+			tmpObject += ", "
+		}
+
+		currentObject += tmpObject
+	case bool:
+		if len(key) == 0 {
+			currentObject += fmt.Sprintf(`%v, `, t)
+		} else {
+			currentObject += fmt.Sprintf(`"%s": %v, `, key, t)
+		}
+	case string:
+		if len(key) == 0 {
+			currentObject += fmt.Sprintf(`"%s", `, t)
+		} else {
+			currentObject += fmt.Sprintf(`"%s": "%s", `, key, t)
+		}
+	case map[string]interface{}:
+		if len(key) == 0 {
+			currentObject += fmt.Sprintf(`{`)
+		} else {
+			currentObject += fmt.Sprintf(`"%s": {`, key)
+		}
+
+		for k, v := range t {
+			currentObject = handleJSONObject(v, k, currentObject)
+		}
+
+		if len(currentObject) > 3 {
+			currentObject = currentObject[0 : len(currentObject)-2]
+		}
+
+		currentObject += "}, "
+	case []interface{}:
+		if len(key) == 0 {
+			currentObject += fmt.Sprintf(`[`)
+		} else {
+			currentObject += fmt.Sprintf(`"%s": [`, key)
+		}
+
+		for _, v := range t {
+			currentObject = handleJSONObject(v, "", currentObject)
+		}
+
+		if len(currentObject) > 3 {
+			currentObject = currentObject[0 : len(currentObject)-2]
+		}
+
+		currentObject += "], "
+	default:
+		log.Printf("[ERROR] Missing handler for type %s - key: %s", t, key)
+	}
+
+	totalObject += currentObject
+	return totalObject
+}
+
+func FixBadJsonBody(parsedBody []byte) []byte {
+	return parsedBody
+	// NOT handling data that starts as a loop for now: [] instead of {} as outer wrapper.
+	// Lists and all other types do work inside the JSON, and are rebuilt with a new key (if applicable).
+
+	if !strings.HasPrefix(string(parsedBody), "{") {
+		return parsedBody
+	}
+
+	var results map[string]interface{}
+	err := json.Unmarshal([]byte(parsedBody), &results)
+	if err != nil {
+		log.Printf("[WARNING] Failed parsing data: %s", err)
+		return parsedBody
+	}
+
+	totalObject := "{"
+	for key, value := range results {
+		_ = value
+		totalObject = handleJSONObject(value, key, totalObject)
+	}
+
+	if len(totalObject) > 3 {
+		totalObject = totalObject[0 : len(totalObject)-2]
+	}
+
+	totalObject += "}"
+
+	//log.Printf("Auto sanitized keys.: %s", totalObject)
+	//for _, result := range results {
+	//	// But if you don't know the field types, you can use type switching to determine (safe):
+	//	// Keep in mind that, since this is a map, the order is not guaranteed.
+	//	fmt.Println("\nType Switching: ")
+	//	for k := range result {
+	//	}
+
+	//	fmt.Println("------------------------------")
+	//}
+
+	return []byte(totalObject)
 }
 
 func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
@@ -12804,10 +12967,6 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
         "color": "#c51152",
         "list": [
             {
-                "name": "2-way Ticket synchronization",
-                "items": {}
-            },
-            {
                 "name": "Email management",
                 "items": {
                     "name": "Release a quarantined message",
@@ -12827,6 +12986,10 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 								"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
 								"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
 								"reference_image": "/images/detectionframework.png",
+                "items": {}
+            },
+            {
+                "name": "2-way Ticket synchronization",
                 "items": {}
             },
             {
