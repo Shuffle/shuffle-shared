@@ -676,12 +676,32 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 		if file.Encrypted {
 			log.Printf("[DEBUG] Should handle file decryption of %s.", fileId)
-			scanner := bufio.NewScanner(Openfile)
 			allText := []byte{}
-			for scanner.Scan() {
-				fmt.Println(scanner.Bytes())
-				allText = append(allText, scanner.Bytes()...)
+
+			buf := make([]byte, 1024)
+			for {
+				n, err := Openfile.Read(buf)
+				if err == io.EOF {
+					break
+				}
+
+				if err != nil {
+					continue
+				}
+
+				if n > 0 {
+					//fmt.Println(string(buf[:n]))
+					allText = append(allText, buf[:n]...)
+				}
 			}
+
+			//fmt.Println(err)
+			//fmt.Println(scanner.Bytes())
+			//scanner := bufio.NewScanner(Openfile)
+			//log.Printf("File: %#v", Openfile)
+			//for scanner.Scan() {
+			//	log.Printf("Text size: %d", len(allText))
+			//}
 
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
 			data, err := HandleKeyDecryption(string(allText), passphrase)

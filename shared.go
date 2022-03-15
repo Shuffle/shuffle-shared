@@ -9675,6 +9675,12 @@ func HandleKeyDecryption(data string, passphrase string) (string, error) {
 	}
 
 	nonceSize := gcm.NonceSize()
+	//log.Printf("Nonce: %d", nonceSize)
+	//log.Printf("Data: %d", len(parsedData))
+	//if len(parsedData) <= nonceSize+2 {
+	//	return "", errors.New(fmt.Sprintf("Nonce size is wrong: %d", nonceSize))
+	//}
+
 	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
