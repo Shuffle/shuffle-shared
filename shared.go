@@ -8970,32 +8970,11 @@ func GetExecutionbody(body []byte) string {
 
 // Can't just regex out stuff due to unicode problems with other languages
 func handleKeyRemoval(key string) string {
-	key = strings.Replace(key, "!", "", -1)
-	key = strings.Replace(key, "@", "", -1)
-	key = strings.Replace(key, "#", "", -1)
-	key = strings.Replace(key, "$", "", -1)
-	key = strings.Replace(key, "%", "", -1)
-	key = strings.Replace(key, "~", "", -1)
-	key = strings.Replace(key, "|", "", -1)
-	key = strings.Replace(key, "^", "", -1)
-	key = strings.Replace(key, "&", "", -1)
-	key = strings.Replace(key, "*", "", -1)
-	key = strings.Replace(key, "(", "", -1)
-	key = strings.Replace(key, ")", "", -1)
-	key = strings.Replace(key, "[", "", -1)
-	key = strings.Replace(key, "]", "", -1)
-	key = strings.Replace(key, "{", "", -1)
-	key = strings.Replace(key, "}", "", -1)
-	key = strings.Replace(key, "<", "", -1)
-	key = strings.Replace(key, ">", "", -1)
-	key = strings.Replace(key, "+", "", -1)
-	key = strings.Replace(key, "=", "", -1)
-	key = strings.Replace(key, "?", "", -1)
-	key = strings.Replace(key, ".", "", -1)
-	key = strings.Replace(key, ",", "", -1)
-	key = strings.Replace(key, "/", "", -1)
-	key = strings.Replace(key, "\\", "", -1)
-	key = strings.Replace(key, "'", "", -1)
+	abolish := []string{"!", "@", "#", "$", "%", "~", "|", "^", "&", "*", "(", ")", "[", "]", "{", "}", "<", ">", "+", "=", "?", ".", ",", "/", "\\", "'"}
+
+	for _, remove := range abolish {
+		key = strings.Replace(key, remove, "", -1)
+	}
 
 	return key
 }
@@ -9081,7 +9060,9 @@ func handleJSONObject(object interface{}, key, totalObject string) string {
 }
 
 func FixBadJsonBody(parsedBody []byte) []byte {
-	return parsedBody
+	if os.Getenv("SHUFFLE_JSON_PARSER") != "parse" {
+		return parsedBody
+	}
 	// NOT handling data that starts as a loop for now: [] instead of {} as outer wrapper.
 	// Lists and all other types do work inside the JSON, and are rebuilt with a new key (if applicable).
 
@@ -9675,12 +9656,6 @@ func HandleKeyDecryption(data string, passphrase string) (string, error) {
 	}
 
 	nonceSize := gcm.NonceSize()
-	//log.Printf("Nonce: %d", nonceSize)
-	//log.Printf("Data: %d", len(parsedData))
-	//if len(parsedData) <= nonceSize+2 {
-	//	return "", errors.New(fmt.Sprintf("Nonce size is wrong: %d", nonceSize))
-	//}
-
 	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
