@@ -3014,9 +3014,15 @@ func GetGithubClient(ctx context.Context, code string, accessToken OauthToken, r
 
 // THis all of a sudden became really horrible.. fml
 func GetGmailClient(ctx context.Context, code string, accessToken OauthToken, redirectUri string) (*http.Client, *oauth2.Token, error) {
+	clientId := os.Getenv("GMAIL_CLIENT_ID")
+	clientSecret := os.Getenv("GMAIL_CLIENT_SECRET")
+
+	// Debugging
+	log.Printf("GMAIL ID: %#v, SECRET: %#v", clientId, clientSecret)
+
 	conf := &oauth2.Config{
-		ClientID:     os.Getenv("GMAIL_CLIENT_ID"),
-		ClientSecret: os.Getenv("GMAIL_CLIENT_SECRET"),
+		ClientID:     clientId,
+		ClientSecret: clientSecret,
 		Scopes: []string{
 			"https://www.googleapis.com/auth/gmail.readonly",
 		},
