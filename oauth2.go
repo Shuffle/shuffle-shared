@@ -3017,9 +3017,6 @@ func GetGmailClient(ctx context.Context, code string, accessToken OauthToken, re
 	clientId := os.Getenv("GMAIL_CLIENT_ID")
 	clientSecret := os.Getenv("GMAIL_CLIENT_SECRET")
 
-	// Debugging
-	log.Printf("GMAIL ID: %#v, SECRET: %#v", clientId, clientSecret)
-
 	conf := &oauth2.Config{
 		ClientID:     clientId,
 		ClientSecret: clientSecret,

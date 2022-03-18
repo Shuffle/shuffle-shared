@@ -2651,7 +2651,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		// After done, check if ANY of the users' orgs are suborgs of active parent org. If they are, remove.
 		// Update: This piece runs anyway, in case the job is to REMOVE any suborg
 		//if len(addedOrgs) > 0 {
-		log.Printf("orgs to be added: %#v", addedOrgs)
+		log.Printf("[DEBUG] Orgs to be added: %#v. Existing: %#v", addedOrgs, foundUser.Orgs)
 		newUserOrgs := []string{}
 		for _, suborg := range foundUser.Orgs {
 			if suborg == userInfo.ActiveOrg.Id {
@@ -2672,10 +2672,15 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 				parsedOrgs = append(parsedOrgs, item.Id)
 			}
 
-			if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
-				log.Printf("[DEBUG] Reappending org %s", suborg)
-				newUserOrgs = append(newUserOrgs, suborg)
-				continue
+			//if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
+			if !ArrayContains(parsedOrgs, suborg) {
+				if ArrayContains(t.Suborgs, suborg) {
+					log.Printf("[DEBUG] Reappending org %s", suborg)
+					newUserOrgs = append(newUserOrgs, suborg)
+				} else {
+					log.Printf("[DEBUG] Skipping org %s", suborg)
+				}
+				//continue
 			}
 
 			log.Printf("[DEBUG] Should remove user %s (%s) from org %s if it doesn't exist in t.Suborgs", foundUser.Username, foundUser.Id, suborg)
