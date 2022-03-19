@@ -11666,7 +11666,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		referenceId, referenceok := request.URL.Query()["reference_execution"]
 		if answerok && referenceok {
 			// If answer is false, reference execution with result
-			log.Printf("[INFO] Answer is OK AND reference is OK!")
+			//log.Printf("[INFO] Answer is OK AND reference is OK!")
 			if answer[0] == "false" {
 				log.Printf("Should update reference and return, no need for further execution!")
 
@@ -11717,12 +11717,29 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if referenceok {
-			log.Printf("Handling an old execution continuation!")
+			log.Printf("[DEBUG] Handling an old execution continuation! Start: %#v", start)
+
 			// Will use the old name, but still continue with NEW ID
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
 				log.Printf("Failed getting execution (execution) %s: %s", referenceId[0], err)
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
+			}
+
+			if oldExecution.Status != "WAITING" {
+				return WorkflowExecution{}, ExecInfo{}, "", errors.New("Workflow is no longer with status waiting. Can't continue.")
+			}
+
+			if startok {
+				for _, result := range oldExecution.Results {
+					if result.Action.ID == start[0] {
+						if result.Status == "SUCCESS" || result.Status == "FINISHED" {
+							// Disabling this to allow multiple continuations
+							//return WorkflowExecution{}, ExecInfo{}, "", errors.New("This workflow has already been continued")
+						}
+						log.Printf("Start: %#v", result.Status)
+					}
+				}
 			}
 
 			workflowExecution = *oldExecution
@@ -11735,7 +11752,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			sessionToken := uuid.NewV4()
 			workflowExecution.ExecutionId = sessionToken.String()
 		} else {
-			log.Printf("Using the same executionId as before: %s", workflowExecution.ExecutionId)
+			log.Printf("[DEBUG] Using the same executionId as before: %s", workflowExecution.ExecutionId)
 			makeNew = false
 		}
 
