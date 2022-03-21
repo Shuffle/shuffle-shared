@@ -13059,10 +13059,6 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
                     "name": "Analyze screenshots",
                     "items": {}
                 }
-            },
-            {
-                "name": "Ticketing webhook verification",
-                "items": {}
             }
         ]
     },
@@ -13097,7 +13093,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
                 "items": {}
             },
             {
-                "name": "Correlate tickets",
+                "name": "Validate old tickets",
                 "items": {}
             },
             {
@@ -13111,7 +13107,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
     },
     {
         "name": "4. Respond",
-        "color": "#4a148c",
+        "color": "#4885ed",
         "list": [
             {
                 "name": "Eradicate malware",
@@ -13153,7 +13149,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
     },
     {
         "name": "5. Verify",
-        "color": "#4885ed",
+        "color": "#7f00ff",
         "list": [
             {
                 "name": "Discover vulnerabilities",
@@ -13268,6 +13264,8 @@ func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	usecase.Name = strings.Replace(usecase.Name, " ", "_", -1)
+	usecase.Name = url.QueryEscape(usecase.Name)
 	log.Printf("[DEBUG] Updated usecase %s as user %s (%s)", usecase.Name, user.Username, user.Id)
 	usecase.EditedBy = user.Id
 	ctx := getContext(request)

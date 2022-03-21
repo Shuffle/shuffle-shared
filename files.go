@@ -460,23 +460,70 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 	packed := 0
 	for _, file := range fileResponse.Files {
-		filedata, err := ioutil.ReadFile(file.DownloadPath)
-		if err != nil {
-			log.Printf("Filereading failed for %s create zip file : %v", file.Filename, err)
-			continue
+		var filedata = []byte{}
+		if file.Encrypted {
+			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
+				log.Printf("[WARNING] No namespace handler for cloud decryption!")
+			} else {
+				Openfile, err := os.Open(file.DownloadPath)
+				defer Openfile.Close() //Close after function return
+
+				allText := []byte{}
+				buf := make([]byte, 1024)
+				for {
+					n, err := Openfile.Read(buf)
+					if err == io.EOF {
+						break
+					}
+
+					if err != nil {
+						continue
+					}
+
+					if n > 0 {
+						//fmt.Println(string(buf[:n]))
+						allText = append(allText, buf[:n]...)
+					}
+				}
+
+				//fmt.Println(err)
+				//fmt.Println(scanner.Bytes())
+				//scanner := bufio.NewScanner(Openfile)
+				//log.Printf("File: %#v", Openfile)
+				//for scanner.Scan() {
+				//	log.Printf("Text size: %d", len(allText))
+				//}
+
+				passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+				data, err := HandleKeyDecryption(string(allText), passphrase)
+				if err != nil {
+					log.Printf("[ERROR] Failed decrypting file: %s", err)
+				} else {
+					log.Printf("[DEBUG] File size reduced from %d to %d after decryption", len(allText), len(data))
+					allText = []byte(data)
+				}
+
+				filedata = allText
+			}
+		} else {
+			filedata, err = ioutil.ReadFile(file.DownloadPath)
+			if err != nil {
+				log.Printf("Filereading failed for %s create zip file : %v", file.Filename, err)
+				continue
+			}
 		}
 
 		//log.Printf("DATA: %s", string(filedata))
 
 		zipFile, err := zipWriter.Create(file.Filename)
 		if err != nil {
-			log.Printf("Packing failed for %s create zip file: %v", file.Filename, err)
+			log.Printf("[WARNING] Packing failed for %s create zip file: %v", file.Filename, err)
 			continue
 		}
 
 		// Have to use Fprintln otherwise it tries to parse all strings etc.
 		if _, err := fmt.Fprintln(zipFile, string(filedata)); err != nil {
-			log.Printf("Datapasting failed for %s when creating zip file from bucket: %v", file.Filename, err)
+			log.Printf("[WARNING] Datapasting failed for %s when creating zip file from bucket: %v", file.Filename, err)
 			continue
 		}
 
@@ -1149,7 +1196,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed setting file reference"}`))
 		return
 	} else {
-		log.Printf("[INFO] Created file %s with namespace %s", newFile.DownloadPath, newFile.Namespace)
+		log.Printf("[INFO] Created file %s with namespace %#v", newFile.DownloadPath, newFile.Namespace)
 	}
 
 	resp.WriteHeader(200)
