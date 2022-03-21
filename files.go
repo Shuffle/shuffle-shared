@@ -17,6 +17,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -1066,9 +1067,12 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if strings.Contains(curfile.Filename, "/") || strings.Contains(curfile.Filename, `"`) || strings.Contains(curfile.Filename, "..") || strings.Contains(curfile.Filename, "~") {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Invalid characters in filename"}`))
-		return
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false, "reason": "Invalid characters in filename"}`))
+		//return
+		log.Printf("[WARNING] Invalid characters in filename %s. URL escaping to make sure nothing breaks.", curfile.Filename)
+		curfile.Filename = url.QueryEscape(curfile.Filename)
+
 	}
 
 	// 1. Create the file object.
