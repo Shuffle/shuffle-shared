@@ -12437,8 +12437,8 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 
 // Significantly slowed down everything. Just returning for now.
 func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []WorkflowApp {
-	return allApps
 	newApps := []WorkflowApp{}
+	//return allApps
 
 	for _, app := range allApps {
 		if len(app.ReferenceInfo.DocumentationUrl) > 0 && strings.HasPrefix(app.ReferenceInfo.DocumentationUrl, "https://raw.githubusercontent.com/Shuffle") && strings.Contains(app.ReferenceInfo.DocumentationUrl, ".md") {
