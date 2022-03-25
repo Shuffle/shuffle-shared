@@ -815,8 +815,8 @@ func main() {
 	deployAll()
 	return
 
-	appname := "http"
-	appversion := "1.3.0"
+	appname := "email"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

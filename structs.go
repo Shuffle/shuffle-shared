@@ -297,8 +297,9 @@ type Environment struct {
 	OrgId      string `datastore:"org_id" json:"org_id"`
 	Created    int64  `json:"created" datastore:"created"`
 	Edited     int64  `json:"edited" datastore:"edited"`
-	RunningIp  string `json:"running_ip" datastore:"running_ip"`
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
+	RunningIp  string `json:"running_ip" datastore:"running_ip"`
+	Auth       string `json:"auth" datastore:"auth"`
 }
 
 // Saves some data, not sure what to have here lol
@@ -675,13 +676,14 @@ type SyncUsage struct {
 	SendSms            SyncDataUsage `json:"send_sms" datastore:"send_sms"`
 	EmailTrigger       SyncDataUsage `json:"email_trigger" datastore:"email_trigger"`
 	WorkflowExecutions SyncDataUsage `json:"workflow_executions" datastore:"workflow_executions"`
-	Apps               SyncDataUsage `json:"apps" datastore:"apps"`
 	Autocomplete       SyncDataUsage `json:"autocomplete" datastore:"autocomplete"`
 	Authentication     SyncDataUsage `json:"authentication" datastore:"authentication"`
 	Schedule           SyncDataUsage `json:"schedule" datastore:"schedule"`
 	AppExecutions      SyncDataUsage `json:"app_executions" datastore:"app_executions"`
 	Workflows          SyncDataUsage `json:"workflows" datastore:"workflows"`
 	MultiTenant        SyncDataUsage `json:"multi_tenant" datastore:"multi_tenant"`
+	MultiEnv           SyncDataUsage `json:"multi_env" datastore:"multi_env"`
+	Apps               SyncDataUsage `json:"apps" datastore:"apps"`
 }
 
 type SyncDataUsage struct {
@@ -708,16 +710,17 @@ type SyncFeatures struct {
 	SendMail           SyncData `json:"send_mail" datastore:"send_mail"`
 	SendSms            SyncData `json:"send_sms" datastore:"send_sms"`
 	Updates            SyncData `json:"updates" datastore:"updates"`
-	Notifications      SyncData `json:"notifications" datastore:"notifications"`
 	EmailTrigger       SyncData `json:"email_trigger" datastore:"email_trigger"`
+	MultiEnv           SyncData `json:"multi_env" datastore:"multi_env"`
 	MultiTenant        SyncData `json:"multi_tenant" datastore:"multi_tenant"`
+	Notifications      SyncData `json:"notifications" datastore:"notifications"`
 	AppExecutions      SyncData `json:"app_executions" datastore:"app_executions"`
 	WorkflowExecutions SyncData `json:"workflow_executions" datastore:"workflow_executions"`
-	Apps               SyncData `json:"apps" datastore:"apps"`
 	Workflows          SyncData `json:"workflows" datastore:"workflows"`
 	Autocomplete       SyncData `json:"autocomplete" datastore:"autocomplete"`
 	Authentication     SyncData `json:"authentication" datastore:"authentication"`
 	Schedule           SyncData `json:"schedule" datastore:"schedule"`
+	Apps               SyncData `json:"apps" datastore:"apps"`
 }
 
 type SyncData struct {

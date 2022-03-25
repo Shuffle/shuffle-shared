@@ -1122,16 +1122,33 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	var newEnvironments []Environment
 	err = json.Unmarshal(body, &newEnvironments)
 	if err != nil {
-		log.Printf("Failed unmarshaling: %s", err)
+		log.Printf("[ERROR] Failed unmarshaling: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to unmarshal data"}`)))
 		return
 	}
 
+	log.Printf("[WARNING] Got %d new environments to be added", len(newEnvironments))
+
 	if len(newEnvironments) < 1 {
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "One environment is required"}`)))
 		return
+	}
+
+	if project.Environment == "cloud" {
+		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+			return
+		}
+
+		if !foundOrg.SyncFeatures.MultiEnv.Active {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Adding multiple environments requires an active hybrid, enterprise or MSSP subscription"}`)))
+			return
+		}
 	}
 
 	// Validate input here
@@ -1148,6 +1165,11 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Can't disable default environment"}`))
 			return
+		}
+
+		if project.Environment == "cloud" && env.Type != "cloud" && len(env.Name) < 10 {
+			log.Printf("[ERROR] Skipping env %s because length is shorter than 10", env.Name)
+			continue
 		}
 
 		if defaults > 0 {
@@ -2832,9 +2854,11 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	for _, action := range workflow.Actions {
 		if action.Environment == "" {
 			//action.Environment = baseEnvironment
-			if project.Environment == "cloud" {
-				action.Environment = "Cloud"
-			}
+
+			// FIXME: Still necessary? This hinders hybrid mode cloud -> onprem
+			//if project.Environment == "cloud" {
+			//	action.Environment = "Cloud"
+			//}
 
 			action.IsValid = true
 		}
@@ -3100,36 +3124,63 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Id != tmpworkflow.Owner {
-		if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
-			workflow.ID = tmpworkflow.ID
-		} else if tmpworkflow.Public {
-			//log.Printf("\n\nSHOULD CREATE A NEW WORKFLOW FOR THE USER :O\n\n")
+	correctUser := false
+	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
+		if tmpworkflow.Public {
+			// FIXME:
+			// If the user Id is part of the creator: DONT update this way.
+			// /users/creators/username
+			// Just making sure
+			if project.Environment == "cloud" {
+				username := "frikky"
+				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
+				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, tmpworkflow.ID)
+				if err != nil {
+					log.Printf("[WARNING] User with name %s could not be found (app update): %s", username, err)
+					// Check workflow if it
 
-			log.Printf("[INFO] User %s is saving the public workflow %s", user.Username, tmpworkflow.ID)
-			workflow = *tmpworkflow
-			workflow.ID = uuid.NewV4().String()
-			workflow.Public = false
-			workflow.Owner = user.Id
-			workflow.Org = []OrgMini{
-				user.ActiveOrg,
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+
+				if algoliaUser.ObjectID == user.Id || ArrayContains(algoliaUser.Synonyms, user.Id) {
+					//log.Printf("[WARNING] User %s (%s) has access to edit! Keep it public!!", user.Username, user.Id)
+					correctUser = true
+					tmpworkflow.Public = true
+					workflow.Public = true
+
+				}
 			}
-			workflow.ExecutingOrg = user.ActiveOrg
-			workflow.OrgId = user.ActiveOrg.Id
-			workflow.PreviouslySaved = false
 
-			err = SetWorkflow(ctx, workflow, workflow.ID)
-			if err != nil {
-				log.Printf("[WARNING] Failed saving NEW version of public %s for user %s: %s", tmpworkflow.ID, user.Username, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false}`))
+			if !correctUser {
+				log.Printf("[INFO] User %s is saving the public workflow %s", user.Username, tmpworkflow.ID)
+				workflow = *tmpworkflow
+				workflow.ID = uuid.NewV4().String()
+				workflow.Public = false
+				workflow.Owner = user.Id
+				workflow.Org = []OrgMini{
+					user.ActiveOrg,
+				}
+				workflow.ExecutingOrg = user.ActiveOrg
+				workflow.OrgId = user.ActiveOrg.Id
+				workflow.PreviouslySaved = false
+
+				err = SetWorkflow(ctx, workflow, workflow.ID)
+				if err != nil {
+					log.Printf("[WARNING] Failed saving NEW version of public %s for user %s: %s", tmpworkflow.ID, user.Username, err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+
+				resp.WriteHeader(200)
+				resp.Write([]byte(fmt.Sprintf(`{"success": true, "new_id": "%s"}`, workflow.ID)))
 				return
 			}
-
-			resp.WriteHeader(200)
-			resp.Write([]byte(fmt.Sprintf(`{"success": true, "new_id": "%s"}`, workflow.ID)))
-			return
+		} else if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
+			workflow.ID = tmpworkflow.ID
 		} else {
 			log.Printf("[WARNING] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
 			resp.WriteHeader(401)
@@ -3241,6 +3292,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	newOrgApps := []string{}
 	for _, action := range workflow.Actions {
+		//log.Printf("ENV: %s", action.Environment)
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
 			continue
 		}
@@ -4140,6 +4192,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.OrgId = user.ActiveOrg.Id
 		workflow.ExecutingOrg = user.ActiveOrg
 		workflow.Org = append(workflow.Org, user.ActiveOrg)
+	}
+
+	// Only happens if the workflow is public and being edited
+	if correctUser {
+		workflow.Public = true
+		log.Printf("[DEBUG] User %s (%s) updated their public workflow %s (%s)", user.Username, user.Id, workflow.Name, workflow.ID)
 	}
 
 	err = SetWorkflow(ctx, workflow, fileId)
@@ -12231,8 +12289,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	workflowExecution.Results = defaultResults
 	workflowExecution.Workflow.Actions = newActions
 	onpremExecution := true
-	environments := []string{}
 
+	environments := []string{}
 	if len(workflowExecution.ExecutionOrg) == 0 && len(workflow.ExecutingOrg.Id) > 0 {
 		workflowExecution.ExecutionOrg = workflow.ExecutingOrg.Id
 	}
@@ -12268,6 +12326,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	imageNames := []string{}
 	cloudExec := false
 	for _, action := range workflowExecution.Workflow.Actions {
+		//log.Printf("[DEBUG] ENV: %s", action.Environment)
+
 		// Verify if the action environment exists and append
 		found := false
 		for _, env := range allEnvs {
@@ -12298,7 +12358,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		found = false
 		for _, env := range environments {
 			if env == action.Environment {
-
 				found = true
 				break
 			}
@@ -13078,7 +13137,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
                 "items": {}
             },
             {
-                "name": "Search emails (Phish)",
+                "name": "Search emails (Sublime)",
                 "items": {
                     "name": "Check headers and IOCs",
                     "items": {}
@@ -13090,6 +13149,10 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "Search files (Yara)",
+                "items": {}
+            },
+            {
+                "name": "IDS & IPS (Snort/Surricata)",
                 "items": {}
             },
             {
@@ -13143,6 +13206,10 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "Get policies from assets",
+                "items": {}
+            },
+            {
+                "name": "Run ansible scripts",
                 "items": {}
             }
         ]

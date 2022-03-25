@@ -909,7 +909,6 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			log.Printf("CACHEDATA: %#v", cacheData)
 			err = json.Unmarshal(cacheData, &workflowApp)
 			if err == nil {
 				return workflowApp, nil
@@ -1809,7 +1808,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
 			log.Printf("[ERROR] Error in org loading for %s: %s", key, err)
-			log.Printf("Users: %#v", curOrg.Users)
+			//log.Printf("Users: %#v", curOrg.Users)
 			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
 				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler: %s", err)
@@ -3452,17 +3451,18 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 
 				v2, err := semver.NewVersion(innerApp.AppVersion)
 				if err != nil {
-					log.Printf("[WARNING] Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+					log.Printf("[ERROR] Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+					continue
 				}
 
 				appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
 				c, err := semver.NewConstraint(appConstraint)
 				if err != nil {
-					log.Printf("[WARNING] Failed preparing constraint: %s", err)
+					log.Printf("[ERROR] Failed preparing constraint %#v: %s", appConstraint, err)
+					continue
 				}
 
 				if c.Check(v2) {
-
 					newApp = innerApp
 					newApp.Versions = loopedApp.Versions
 					newApp.LoopVersions = loopedApp.LoopVersions
