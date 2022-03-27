@@ -1909,9 +1909,10 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	}
 
 	var r map[string]interface{}
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		log.Printf("[WARNING] Error parsing the response body: %s", err)
-		return err
+	err = json.Unmarshal(respBody, &r)
+	if err != nil {
+		log.Printf("[WARNING] Error parsing the response body from Opensearch: %s. Raw: %s", err, respBody)
+		//return err
 	}
 	return nil
 }
