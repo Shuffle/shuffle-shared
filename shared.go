@@ -3684,6 +3684,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			comment.Color = "#ffffff"
 		}
 
+		comment.Position.X = float64(comment.Position.X)
+		comment.Position.Y = float64(comment.Position.Y)
+
 		newComments = append(newComments, comment)
 	}
 
@@ -12138,6 +12141,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	// Not necessary with comments at all
+	workflowExecution.Workflow.Comments = []Comment{}
 	removeTriggers := []string{}
 	for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
 		//log.Printf("[INFO] ID: %s vs %s", trigger.ID, workflowExecution.Start)

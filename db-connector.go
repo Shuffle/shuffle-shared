@@ -545,6 +545,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	if project.DbType == "elasticsearch" {
 		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
 		if err != nil {
+			log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
 			return err
 		}
 	} else {
@@ -1898,9 +1899,13 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	}
 
 	defer res.Body.Close()
+	respBody, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		respBody = []byte("Failed to parse body")
+	}
 
 	if res.StatusCode != 200 && res.StatusCode != 201 {
-		return errors.New(fmt.Sprintf("Bad statuscode from database: %d", res.StatusCode))
+		return errors.New(fmt.Sprintf("Bad statuscode from database: %d. Reason: %s", res.StatusCode, string(respBody)))
 	}
 
 	var r map[string]interface{}
