@@ -2893,7 +2893,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			for _, item := range workflowapps {
 				//log.Printf("NAME: %s", item.Name)
-				if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.1.0" {
+				if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.2.0" {
 					//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
 					nodeId := uuid.NewV4().String()
 					workflow.Start = nodeId
