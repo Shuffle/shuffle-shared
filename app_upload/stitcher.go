@@ -73,7 +73,6 @@ def run(request):
 	except:
 		return f'Error parsing JSON'
 
-	print(f'ACTION: {action}')
 	if action == None:
 		print("Returning because no action defined")
 		return f'No JSON detected'
@@ -410,8 +409,9 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 	location := fmt.Sprintf("projects/%s/locations/%s", gceProject, localization)
 	functionName := fmt.Sprintf("%s/functions/%s", location, appname)
 
+	// Increased to 512 due to potential issues in the future
 	cloudFunction := &cloudfunctions.CloudFunction{
-		AvailableMemoryMb:    256,
+		AvailableMemoryMb:    512,
 		EntryPoint:           "run",
 		EnvironmentVariables: environmentVariables,
 		HttpsTrigger:         &cloudfunctions.HttpsTrigger{},
@@ -494,7 +494,9 @@ func deployAppCloudFunc(appname string, appversion string) {
 	}
 
 	//"FUNCTION_APIKEY": apikey,
-	environmentVariables := map[string]string{}
+	environmentVariables := map[string]string{
+		"SHUFFLE_LOGS_DISABLED": "true",
+	}
 
 	for _, location := range locations {
 		err := deployFunction(fullAppname, location, bucketname, environmentVariables)
@@ -815,8 +817,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "thehive"
-	appversion := "1.1.3"
+	appname := "shuffle-tools"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

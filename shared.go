@@ -7982,7 +7982,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							Action:        curAction,
 							ExecutionId:   actionResult.ExecutionId,
 							Authorization: actionResult.Authorization,
-							Result:        "Skipped because of previous node - 2",
+							Result:        `{"success": false, "reason": "Skipped because of previous node - 2"}`,
 							StartedAt:     0,
 							CompletedAt:   0,
 							Status:        "SKIPPED",
@@ -8035,7 +8035,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if actionResult.Status == "SKIPPED" {
 		//unfinishedNodes := []string{}
 		childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
-		//log.Printf("childnodes: %d", len(childNodes)
+		log.Printf("childnodes: %d: %#v", len(childNodes), childNodes)
 
 		appendBadResults := true
 		appendResults := []ActionResult{}
@@ -8085,6 +8085,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					break
 				}
 			}
+
+			//if curAction.Label == "Merge_cache" {
+			//	log.Printf("\n\n\n[DEBUG] FROM %s - FOUND childnode %s %s (%s). exists: %#v\n\n\n", actionResult.Action.Label, curAction.ID, curAction.Name, curAction.Label, resultExists)
+			//}
 
 			// Finds sub-nodes to be skipped if a parent node condition fails
 			skipIdCheck := false
@@ -8142,7 +8146,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 									continue
 								}
 
-								for _, result := range workflowExecution.Results {
+								//appendResults = append(appendResults, newResult)
+								tmpResults := append(workflowExecution.Results, appendResults...)
+								for _, result := range tmpResults {
 									if result.Action.ID == thisId {
 										log.Printf("[DEBUG] Found result for %s (%s): %s", result.Action.Label, thisId, result.Status)
 
@@ -8165,6 +8171,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						} else if (len(foundSkipped) == len(foundIds)) && len(foundSkipped) == len(ids) {
 							appendBadResults = true
 						} else {
+							//log.Printf("\n\n\nNOT appending results for %s. Try later?\n\n\n", curAction.Label)
+							// appendResults = append(appendResults, newResult)
 							appendBadResults = false
 						}
 
@@ -8177,22 +8185,35 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 
 				if !appendBadResults {
-					break
+					continue
+					//break
 				}
 
 				if !skipNodeAdd {
-					//log.Printf("[DEBUG] Appending skip for node %s (%s)", curAction.Name, curAction.Label)
+					//if curAction.Label == "Merge_cache" {
+					//	log.Printf("\n\n\n[DEBUG] Appending skip for node %s (%s - %s)\n\n\n", curAction.Name, curAction.Label, curAction.ID)
+					//}
+
 					newResult := ActionResult{
 						Action:        curAction,
 						ExecutionId:   actionResult.ExecutionId,
 						Authorization: actionResult.Authorization,
-						Result:        "Skipped because of previous node - 1",
+						Result:        `{"success": false, "reason": "Skipped because of previous node - 1"}`,
 						StartedAt:     0,
 						CompletedAt:   0,
 						Status:        "SKIPPED",
 					}
 
 					appendResults = append(appendResults, newResult)
+
+					newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, curAction.ID)
+					cacheData := []byte("1")
+					err = SetCache(ctx, newExecId, cacheData)
+					if err != nil {
+						log.Printf("[WARNING] Failed setting cache for skipped action %s: %s", newExecId, err)
+					} else {
+						//log.Printf("\n\n[DEBUG] Adding %s to cache. Name: %s\n\n", newExecId, action.Name)
+					}
 				} else {
 					//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
 					//var visited []string
@@ -8811,6 +8832,7 @@ func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string
 
 	// 1. Find children of this specific node
 	// 2. Find the children of those nodes etc.
+	// 3. Sort it in the right order to handle merges properly
 	for _, branch := range workflowExecution.Workflow.Branches {
 		if branch.SourceID == nodeId {
 			//log.Printf("NODE: %s, SRC: %s, CHILD: %s\n", nodeId, branch.SourceID, branch.DestinationID)
@@ -8819,6 +8841,7 @@ func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string
 			childNodes := FindChildNodes(workflowExecution, branch.DestinationID)
 			for _, bottomChild := range childNodes {
 				found := false
+
 				for _, topChild := range allChildren {
 					if topChild == bottomChild {
 						found = true
@@ -12132,7 +12155,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					Action:        curaction,
 					ExecutionId:   workflowExecution.ExecutionId,
 					Authorization: workflowExecution.Authorization,
-					Result:        "Skipped because it's not under the startnode",
+					Result:        `{"success": false, "reason": "Skipped because it's not under the startnode"}`,
 					StartedAt:     0,
 					CompletedAt:   0,
 					Status:        "SKIPPED",
@@ -12177,7 +12200,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					Action:        curaction,
 					ExecutionId:   workflowExecution.ExecutionId,
 					Authorization: workflowExecution.Authorization,
-					Result:        "Skipped because it's not under the startnode",
+					Result:        `{"success": false, "reason": "Skipped because it's not under the startnode"}`,
 					StartedAt:     0,
 					CompletedAt:   0,
 					Status:        "SKIPPED",
