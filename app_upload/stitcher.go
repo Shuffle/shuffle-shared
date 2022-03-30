@@ -411,7 +411,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 
 	// Increased to 512 due to potential issues in the future
 	cloudFunction := &cloudfunctions.CloudFunction{
-		AvailableMemoryMb:    512,
+		AvailableMemoryMb:    256,
 		EntryPoint:           "run",
 		EnvironmentVariables: environmentVariables,
 		HttpsTrigger:         &cloudfunctions.HttpsTrigger{},
@@ -817,7 +817,7 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "shuffle-tools"
+	appname := "email"
 	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {

@@ -4187,13 +4187,13 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 		newFields := []AuthenticationStore{}
 		for _, field := range workflowappauth.Fields {
 			parsedKey := fmt.Sprintf("%s_%d_%s_%s", workflowappauth.OrgId, workflowappauth.Created, workflowappauth.Label, field.Key)
-			newKey, err := handleKeyEncryption(field.Value, parsedKey)
+			newKey, err := handleKeyEncryption([]byte(field.Value), parsedKey)
 			if err != nil {
 				setEncrypted = false
 				break
 			}
 
-			field.Value = newKey
+			field.Value = string(newKey)
 			newFields = append(newFields, field)
 		}
 

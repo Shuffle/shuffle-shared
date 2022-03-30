@@ -6,7 +6,7 @@ package shuffle
 
 import (
 	"archive/zip"
-	"bufio"
+	//"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -486,16 +486,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				//fmt.Println(err)
-				//fmt.Println(scanner.Bytes())
-				//scanner := bufio.NewScanner(Openfile)
-				//log.Printf("File: %#v", Openfile)
-				//for scanner.Scan() {
-				//	log.Printf("Text size: %d", len(allText))
-				//}
-
 				passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-				data, err := HandleKeyDecryption(string(allText), passphrase)
+				data, err := HandleKeyDecryption(allText, passphrase)
 				if err != nil {
 					log.Printf("[ERROR] Failed decrypting file: %s", err)
 				} else {
@@ -622,14 +614,14 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !found {
-		log.Printf("User %s doesn't have access to %s", user.Username, fileId)
+		log.Printf("[WARNING] User %s doesn't have access to %s", user.Username, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if file.Status != "active" {
-		log.Printf("[ERROR] File status isn't active, but %s. Can't continue.", file.Status)
+		log.Printf("[WARNING] File status isn't active, but %s. Can't continue.", file.Status)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "The file isn't ready to be downloaded yet. Status required: active"}`))
 		return
@@ -639,7 +631,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	downloadPath := file.DownloadPath
 
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		//log.Printf("[INFO] Trying to get file %s from google storage", file.Id)
+		log.Printf("[INFO] Trying to get file %s from google storage", file.Id)
 
 		bucket := project.StorageClient.Bucket(orgFileBucket)
 		obj := bucket.Object(file.DownloadPath)
@@ -664,15 +656,26 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 		defer fileReader.Close()
 		if file.Encrypted {
-			scanner := bufio.NewScanner(fileReader)
 			allText := []byte{}
-			for scanner.Scan() {
-				fmt.Println(scanner.Bytes())
-				allText = append(allText, scanner.Bytes()...)
+			buf := make([]byte, 1024)
+			for {
+				n, err := fileReader.Read(buf)
+				if err == io.EOF {
+					break
+				}
+
+				if err != nil {
+					continue
+				}
+
+				if n > 0 {
+					//fmt.Println(string(buf[:n]))
+					allText = append(allText, buf[:n]...)
+				}
 			}
 
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-			data, err := HandleKeyDecryption(string(allText), passphrase)
+			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				log.Printf("[ERROR] Failed decrypting file: %s", err)
 			} else {
@@ -683,6 +686,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			FileContentType := http.DetectContentType(allText)
 			FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
 			//Send the headers
+			log.Printf("Content Type: %#v", FileContentType)
 			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
 			resp.Header().Set("Content-Type", FileContentType)
 			resp.Header().Set("Content-Length", FileSize)
@@ -743,16 +747,8 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			//fmt.Println(err)
-			//fmt.Println(scanner.Bytes())
-			//scanner := bufio.NewScanner(Openfile)
-			//log.Printf("File: %#v", Openfile)
-			//for scanner.Scan() {
-			//	log.Printf("Text size: %d", len(allText))
-			//}
-
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-			data, err := HandleKeyDecryption(string(allText), passphrase)
+			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				log.Printf("[ERROR] Failed decrypting file: %s", err)
 			} else {
@@ -921,7 +917,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	// Handle file encryption if an encryption key is set
 	newContents := contents
 	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-	newFileValue, err := handleKeyEncryption(string(contents), parsedKey)
+	newFileValue, err := handleKeyEncryption(contents, parsedKey)
 	if err != nil {
 		log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
 	} else {

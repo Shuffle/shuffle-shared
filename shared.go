@@ -9687,61 +9687,61 @@ func create32Hash(key string) ([]byte, error) {
 	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
 }
 
-func handleKeyEncryption(data string, passphrase string) (string, error) {
+func handleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[WARNING] Failed hashing in encrypt: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		log.Printf("[WARNING] Error generating ciphertext: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		log.Printf("[WARNING] Error creating new GCM from block: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
 	nonce := make([]byte, gcm.NonceSize())
 	if _, err = io.ReadFull(rand.Reader, nonce); err != nil {
 		log.Printf("[WARNING] Error reading GCM nonce: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
-	ciphertext := gcm.Seal(nonce, nonce, []byte(data), nil)
+	ciphertext := gcm.Seal(nonce, nonce, data, nil)
 
 	// base64 encoding to ensure we can store it as a string
 	parsedValue := base64.StdEncoding.EncodeToString(ciphertext)
-	return parsedValue, nil
+	return []byte(parsedValue), nil
 }
 
-func HandleKeyDecryption(data string, passphrase string) (string, error) {
+func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[WARNING] Failed hashing in decrypt: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		log.Printf("[WARNING] Error creating cipher from key in decryption: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
 		log.Printf("[WARNING] Error creating new GCM block in decryption: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
-	parsedData, err := base64.StdEncoding.DecodeString(data)
+	parsedData, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
 		log.Printf("[ERROR] Failed base64 decode for an auth key %s: %s", data, err)
-		return "", err
+		return []byte{}, err
 	}
 
 	nonceSize := gcm.NonceSize()
@@ -9749,10 +9749,10 @@ func HandleKeyDecryption(data string, passphrase string) (string, error) {
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		log.Printf("[WARNING] Error reading decryptionkey: %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
-	return string(plaintext), nil
+	return plaintext, nil
 }
 
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
@@ -10117,7 +10117,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		if curAuth.Encrypted {
 			for _, field := range curAuth.Fields {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-				newValue, err := HandleKeyDecryption(field.Value, parsedKey)
+				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err != nil {
 					log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
 					break
@@ -10126,7 +10126,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 				newParam := WorkflowAppActionParameter{
 					Name:  field.Key,
 					ID:    action.AuthenticationId,
-					Value: newValue,
+					Value: string(newValue),
 				}
 
 				newParams = append(newParams, newParam)
@@ -11979,14 +11979,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				newFields := []AuthenticationStore{}
 				for _, field := range curAuth.Fields {
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-					newValue, err := HandleKeyDecryption(field.Value, parsedKey)
+					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
 						log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
 						setField = false
 						break
 					}
 
-					field.Value = newValue
+					field.Value = string(newValue)
 					newFields = append(newFields, field)
 				}
 
