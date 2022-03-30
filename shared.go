@@ -7315,11 +7315,13 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 
 // Re-validating whether the workflow is done or not IF a result should be found.
 func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowExecution, executed []string) {
+	var err error
+
 	//ctx := context.Background()
-	execution := WorkflowExecution{}
+	execution := &WorkflowExecution{}
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && project.Environment == "worker" {
 		log.Printf("[DEBUG] Defaulting to current workflow in worker")
-		execution = workflowExecution
+		execution = &workflowExecution
 	} else {
 		execution, err = GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
@@ -7329,7 +7331,7 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 	}
 
 	if execution.Status != "EXECUTING" {
-		log.Printf("\n\n[WARNING] Workflow is finished: %s\n\n", err)
+		log.Printf("\n\n[WARNING] Workflow is finished, but with status: %s\n\n", execution.Status)
 		return
 	}
 
