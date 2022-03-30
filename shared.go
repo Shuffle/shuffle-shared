@@ -7316,10 +7316,16 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 // Re-validating whether the workflow is done or not IF a result should be found.
 func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowExecution, executed []string) {
 	//ctx := context.Background()
-	execution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-	if err != nil {
-		log.Printf("\n\n[WARNING] Failed to get workflow in fix it up: %s\n\n", err)
-		return
+	execution := WorkflowExecution{}
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && project.Environment == "worker" {
+		log.Printf("[DEBUG] Defaulting to current workflow in worker")
+		execution = workflowExecution
+	} else {
+		execution, err = GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		if err != nil {
+			log.Printf("\n\n[WARNING] Failed to get workflow in fix it up: %s\n\n", err)
+			return
+		}
 	}
 
 	if execution.Status != "EXECUTING" {
@@ -7431,7 +7437,7 @@ func ResendActionResult(actionData []byte) {
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool) (*WorkflowExecution, bool, error) {
 	if actionResult.Action.ID == "" {
-		log.Printf("[ERROR] Failed handling EMPTY action %#v. Usually happens during worker run that sets everything?", actionResult)
+		//log.Printf("[ERROR] Failed handling EMPTY action %#v. Usually happens during worker run that sets everything?", actionResult)
 		return &workflowExecution, true, nil
 	}
 
@@ -7922,7 +7928,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 
 					if len(curAction.ID) == 0 {
-						log.Printf("Couldn't find subnode %s", nodeId)
+						//log.Printf("Couldn't find subnode %s", nodeId)
 						continue
 					}
 				}
@@ -8053,7 +8059,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			if len(curAction.ID) == 0 {
-				log.Printf("Couldn't find subnode (0) %s as action. Checking triggers.", nodeId)
+				//log.Printf("Couldn't find subnode (0) %s as action. Checking triggers.", nodeId)
 				for _, trigger := range workflowExecution.Workflow.Triggers {
 					//if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
 					if trigger.ID == nodeId {
@@ -8073,7 +8079,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 
 				if len(curAction.ID) == 0 {
-					log.Printf("Couldn't find subnode (1) %s", nodeId)
+					//log.Printf("Couldn't find subnode (1) %s", nodeId)
 					continue
 				}
 			}
