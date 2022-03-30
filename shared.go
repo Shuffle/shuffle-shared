@@ -7317,9 +7317,9 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowExecution, executed []string) {
 	var err error
 
-	//ctx := context.Background()
 	execution := &WorkflowExecution{}
-	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && project.Environment == "worker" {
+	//log.Printf("ENV: %s", project.Environment)
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "worker" || project.Environment == "") {
 		log.Printf("[DEBUG] Defaulting to current workflow in worker")
 		execution = &workflowExecution
 	} else {
