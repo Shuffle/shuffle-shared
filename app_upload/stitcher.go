@@ -817,7 +817,7 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "email"
+	appname := "shuffle-tools"
 	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {

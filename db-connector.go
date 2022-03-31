@@ -6325,7 +6325,7 @@ func UploadAppSpecFiles(ctx context.Context, client *storage.Client, api Workflo
 			return api, err
 		}
 
-		log.Printf("\n\n[DEBUG] Uploaded OpenAPI to path: %s\n\n", openApiPath)
+		log.Printf("[DEBUG] Uploaded OpenAPI for %s to path: %s", api.ID, openApiPath)
 	}
 
 	fullParsedPath := fmt.Sprintf("gs://%s/extra_specs/%s", project.BucketName, api.ID)

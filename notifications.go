@@ -186,7 +186,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		notification.UserId = ""
-		notification.OrgId = ""
+		//notification.OrgId = ""
 		newNotifications = append(newNotifications, notification)
 	}
 

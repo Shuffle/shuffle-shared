@@ -1304,8 +1304,8 @@ func GetRunnerOnprem(classname string) string {
 def run(request):
     print("Started execution!")
     action = request.get_json() 
-    print(action)
-    print(type(action))
+    #print(action)
+    #print(type(action))
     authorization_key = action.get("authorization")
     current_execution_id = action.get("execution_id")
 	
@@ -1322,13 +1322,13 @@ func GetRunnerGCP(classname string) string {
 	return fmt.Sprintf(`
 # Run the actual thing after we've checked params
 def run(request):
-	print(request.data)
+	#print(request.data)
 	try:
 		action = request.get_json(force=True)
 	except:
 		return f'Error parsing JSON'
 
-	print(f'ACTION: {action}')
+	#print(f'ACTION: {action}')
 	if action == None:
 		print("Returning because no action defined")
 		return f'No JSON detected'
