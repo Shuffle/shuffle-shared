@@ -2939,7 +2939,7 @@ func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, c
 		return []byte{}, err
 	}
 
-	log.Printf("OpenID BODY: %s", body)
+	log.Printf("OpenID return BODY: %s", body)
 
 	return body, nil
 }

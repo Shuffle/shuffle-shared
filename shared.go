@@ -10131,6 +10131,15 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 					break
 				}
 
+				if field.Key == "url" {
+					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+					if strings.HasSuffix(string(newValue), "/") {
+						newValue = []byte(string(newValue)[0 : len(newValue)-1])
+					}
+
+					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+				}
+
 				newParam := WorkflowAppActionParameter{
 					Name:  field.Key,
 					ID:    action.AuthenticationId,
@@ -11992,6 +12001,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
 						setField = false
 						break
+					}
+
+					// Remove / at end of urls
+					// TYPICALLY shouldn't use them.
+					if field.Key == "url" {
+						//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+						if strings.HasSuffix(string(newValue), "/") {
+							newValue = []byte(string(newValue)[0 : len(newValue)-1])
+						}
+
+						//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
 					}
 
 					field.Value = string(newValue)
