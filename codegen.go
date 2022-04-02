@@ -318,7 +318,13 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			*/
 			queryData += fmt.Sprintf(`
         if %s:
-            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, query, query, query)
+            if isinstance(%s, list) or isinstance(%s, dict) or isinstance(%s, object):
+                try:
+                    %s = json.dumps(%s)
+                except:
+                    pass
+
+            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, query, query, query, query, query, query, query, query)
 		}
 	} else {
 		//log.Printf("No optional queries?")
@@ -434,16 +440,23 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		parameterData = fmt.Sprintf(", %s", strings.Join(parameters, ", "))
 		//log.Printf("Params: %#v", parameters)
 
+		// This is gibberish :)
 		for _, param := range parameters {
 			if strings.Contains(param, "headers=") {
 				headerParserCode = "if len(headers) > 0:\n            for header in headers.split(\"\\n\"):\n                if '=' in header:\n                    headersplit=header.split('=')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()\n                elif ':' in header:\n                    headersplit=header.split(':')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()"
 			} else if strings.Contains(param, "queries=") {
-				queryParserCode = "\n        if len(queries) > 0:\n            if queries[0] == \"?\" or queries[0] == \"&\":\n                queries = queries[1:len(queries)]\n            if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                queries = queries[0:-1]\n            for query in queries.split(\"&\"):\n                if '=' in query:\n                    headersplit=query.split('=')\n                    params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                else:\n                    params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
+				queryParserCode = "\n        if len(queries) > 0:\n            if queries[0] == \"?\" or queries[0] == \"&\":\n                queries = queries[1:len(queries)]\n            if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                queries = queries[0:-1]\n            for query in queries.split(\"&\"):\n                 if isinstance(query, list) or isinstance(query, dict) or isinstance(query, object):\n                    try:\n                        query = json.dumps(query)\n                    except:\n                        pass\n                 if '=' in query:\n                    headersplit=query.split('=')\n                    params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                 else:\n                    params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
 			} else {
 				if !strings.Contains(url, fmt.Sprintf("{%s}", param)) {
 					queryData += fmt.Sprintf(`
         if %s:
-            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, param, param, param)
+            if isinstance(%s, list) or isinstance(%s, dict) or isinstance(%s, object):
+                try:
+                    %s = json.dumps(%s)
+                except:
+                    pass
+
+            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, param, param, param, param, param, param, param, param)
 				}
 			}
 		}
@@ -654,11 +667,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(functionname, "get_emails") {
-		//log.Printf("\n%s", data)
-		//log.Printf("FUNCTION: %s", data)
-		//log.Println(data)
-		//log.Printf("Queries: %s", queryString)
+	if strings.Contains(strings.ToLower(functionname), "extensions") {
+		log.Printf("\n%s", data)
 	}
 
 	return functionname, data

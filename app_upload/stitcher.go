@@ -411,7 +411,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 
 	// Increased to 512 due to potential issues in the future
 	cloudFunction := &cloudfunctions.CloudFunction{
-		AvailableMemoryMb:    256,
+		AvailableMemoryMb:    512,
 		EntryPoint:           "run",
 		EnvironmentVariables: environmentVariables,
 		HttpsTrigger:         &cloudfunctions.HttpsTrigger{},
