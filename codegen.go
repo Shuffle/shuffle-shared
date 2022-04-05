@@ -546,7 +546,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" {
-		parsedDataCurlParser = `parsed_curl_command += f""" -d '{body.decode("utf-8")}'"""`
+		parsedDataCurlParser = `parsed_curl_command += f""" -d '{body}'""" if isinstance(body, str) else f""" -d '{body.decode("utf-8")}'"""`
 	}
 
 	data := fmt.Sprintf(`    def %s(self%s):
@@ -610,7 +610,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
             self.action_result["action"] = self.action
             print("[DEBUG] Updated values in self.action_result from OpenAPI app! (1)") 
         except Exception as e:
-            print(f"[WARNING]Something went wrong when adding extra returns (1). {e}")
+            print(f"[WARNING] Something went wrong when adding extra returns (1). {e}")
 
         session = requests.Session()
         ret = session.%s(url, headers=request_headers, params=params%s%s%s%s)
@@ -1473,8 +1473,10 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Connect.Summary, actualPath)
 
+	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	newDesc := fmt.Sprintf("%s\n\n%s", path.Connect.Description, baseUrl)
 	action := WorkflowAppAction{
-		Description: path.Connect.Description,
+		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Connect", path.Connect.Summary),
 		Label:       fmt.Sprintf(path.Connect.Summary),
 		NodeType:    "action",
@@ -1483,7 +1485,6 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	}
 
 	action.Returns.Schema.Type = "string"
-	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
@@ -1648,8 +1649,10 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Get.Summary, actualPath)
 
+	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	newDesc := fmt.Sprintf("%s\n\n%s", path.Get.Description, baseUrl)
 	action := WorkflowAppAction{
-		Description: path.Get.Description,
+		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Get", path.Get.Summary),
 		Label:       fmt.Sprintf(path.Get.Summary),
 		NodeType:    "action",
@@ -1658,7 +1661,6 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	}
 
 	action.Returns.Schema.Type = "string"
-	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
@@ -1835,8 +1837,10 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Head.Summary, actualPath)
 
+	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	newDesc := fmt.Sprintf("%s\n\n%s", path.Head.Description, baseUrl)
 	action := WorkflowAppAction{
-		Description: path.Head.Description,
+		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Head", path.Head.Summary),
 		Label:       fmt.Sprintf(path.Head.Summary),
 		NodeType:    "action",
@@ -1845,7 +1849,6 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	}
 
 	action.Returns.Schema.Type = "string"
-	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
@@ -2007,8 +2010,10 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Delete.Summary, actualPath)
 
+	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	newDesc := fmt.Sprintf("%s\n\n%s", path.Delete.Description, baseUrl)
 	action := WorkflowAppAction{
-		Description: path.Delete.Description,
+		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Delete", path.Delete.Summary),
 		Label:       fmt.Sprintf(path.Delete.Summary),
 		NodeType:    "action",
@@ -2017,7 +2022,6 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	}
 
 	action.Returns.Schema.Type = "string"
-	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
@@ -2181,8 +2185,10 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	//log.Printf("PATH: %s", actualPath)
 	functionName := FixFunctionName(path.Post.Summary, actualPath)
 
+	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	newDesc := fmt.Sprintf("%s\n\n%s", path.Post.Description, baseUrl)
 	action := WorkflowAppAction{
-		Description: path.Post.Description,
+		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Post", path.Post.Summary),
 		Label:       fmt.Sprintf(path.Post.Summary),
 		NodeType:    "action",
@@ -2191,7 +2197,6 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	}
 
 	action.Returns.Schema.Type = "string"
-	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
@@ -2390,8 +2395,10 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Patch.Summary, actualPath)
 
+	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	newDesc := fmt.Sprintf("%s\n\n%s", path.Patch.Description, baseUrl)
 	action := WorkflowAppAction{
-		Description: path.Patch.Description,
+		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Patch", path.Patch.Summary),
 		Label:       fmt.Sprintf(path.Patch.Summary),
 		NodeType:    "action",
@@ -2400,7 +2407,6 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	}
 
 	action.Returns.Schema.Type = "string"
-	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)
@@ -2563,8 +2569,10 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	// What to do with this, hmm
 	functionName := FixFunctionName(path.Put.Summary, actualPath)
 
+	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	newDesc := fmt.Sprintf("%s\n\n%s", path.Put.Description, baseUrl)
 	action := WorkflowAppAction{
-		Description: path.Put.Description,
+		Description: newDesc,
 		Name:        fmt.Sprintf("%s %s", "Put", path.Put.Summary),
 		Label:       fmt.Sprintf(path.Put.Summary),
 		NodeType:    "action",
@@ -2573,7 +2581,6 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	}
 
 	action.Returns.Schema.Type = "string"
-	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
 		m := regexp.MustCompile(`_shuffle_replace_\d`)

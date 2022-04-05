@@ -9021,7 +9021,7 @@ func GetExecutionbody(body []byte) string {
 	}
 
 	if !strings.HasPrefix(parsedBody, "{") && !strings.HasPrefix(parsedBody, "[") && strings.Contains(parsedBody, "=") {
-		log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML)", parsedBody)
+		//log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML)", parsedBody)
 
 		// Dumb XML handler
 		if strings.HasPrefix(strings.TrimSpace(parsedBody), "<") && strings.HasSuffix(strings.TrimSpace(parsedBody), ">") {
@@ -9258,10 +9258,12 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	isJson := false
 	err = json.Unmarshal(body, &version)
 	if err != nil {
-		log.Printf("Json err: %s", err)
+		log.Printf("[WARNING] Json upload err: %s", err)
+
+		body = []byte(strings.Replace(string(body), "\\/", "/", -1))
 		err = yaml.Unmarshal(body, &version)
 		if err != nil {
-			log.Printf("Yaml error (3): %s", err)
+			log.Printf("[WARNING] Yaml error (3): %s", err)
 			//if len(string(body)) < 500 {
 			//	log.Printf("%s",
 			//}
@@ -10173,7 +10175,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 	for _, param := range action.Parameters {
 		if param.Required && len(param.Value) == 0 {
-			log.Printf("Param: %#v", param)
+			//log.Printf("Param: %#v", param)
 
 			if param.Name == "username_basic" {
 				param.Name = "username"
