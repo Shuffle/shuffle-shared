@@ -6135,7 +6135,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		BucketName:    "shuffler.appspot.com",
 	}
 
-	requestCache = cache.New(60*time.Minute, 120*time.Minute)
+	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(dbType) == "elasticsearch" || strings.ToLower(dbType) == "opensearch" {
 		project.Es = *GetEsConfig()
 

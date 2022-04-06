@@ -1262,6 +1262,13 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if strings.ToLower(os.Getenv("DISABLE_RERUN_AND_ABORT")) == "true" {
+		log.Printf("[AUDIT] Rerunning is disabled by the DISABLE_RERUN_AND_ABORT argument. Stopping.")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "DISABLE_RERUN_AND_ABORT is active. Won't rerun executions."}`)))
+		return
+	}
+
 	ctx := getContext(request)
 	environmentName := fileId
 	if len(fileId) != 36 {
@@ -1357,6 +1364,13 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[AUDIT] User isn't admin during stop executions")
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	if strings.ToLower(os.Getenv("DISABLE_RERUN_AND_ABORT")) == "true" {
+		log.Printf("[AUDIT] Rerunning is disabled by the DISABLE_RERUN_AND_ABORT argument. Stopping. (abort)")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "DISABLE_RERUN_AND_ABORT is active. Won't rerun executions (abort)"}`)))
 		return
 	}
 
@@ -7188,7 +7202,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	// When all the "WAITING" executions are done, the backend will set the execution itself
 	// back to executing, allowing the parent to continue
 	if isLooping {
-		log.Printf("\n\n[DEBUG] ITS LOOPING!\n\n")
+		//log.Printf("\n\n[DEBUG] ITS LOOPING!\n\n")
 		return nil
 	}
 
