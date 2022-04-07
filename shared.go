@@ -1262,10 +1262,10 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if strings.ToLower(os.Getenv("DISABLE_RERUN_AND_ABORT")) == "true" {
-		log.Printf("[AUDIT] Rerunning is disabled by the DISABLE_RERUN_AND_ABORT argument. Stopping.")
+	if strings.ToLower(os.Getenv("SHUFFLE_DISABLE_RERUN_AND_ABORT")) == "true" {
+		log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping.")
 		resp.WriteHeader(409)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "DISABLE_RERUN_AND_ABORT is active. Won't rerun executions."}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SHUFFLE_DISABLE_RERUN_AND_ABORT is active. Won't rerun executions."}`)))
 		return
 	}
 
@@ -1367,10 +1367,10 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if strings.ToLower(os.Getenv("DISABLE_RERUN_AND_ABORT")) == "true" {
-		log.Printf("[AUDIT] Rerunning is disabled by the DISABLE_RERUN_AND_ABORT argument. Stopping. (abort)")
+	if strings.ToLower(os.Getenv("SHUFFLE_DISABLE_RERUN_AND_ABORT")) == "true" {
+		log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping. (abort)")
 		resp.WriteHeader(409)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "DISABLE_RERUN_AND_ABORT is active. Won't rerun executions (abort)"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SHUFFLE_DISABLE_RERUN_AND_ABORT is active. Won't rerun executions (abort)"}`)))
 		return
 	}
 
@@ -3606,7 +3606,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		} else if trigger.TriggerType == "USERINPUT" {
 			// E.g. check email
-			log.Printf("[INFO] Validating USERINPUT during SAVING")
 			sms := ""
 			email := ""
 			subflow := ""
@@ -3661,6 +3660,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				log.Printf("[DEBUG] Should send SMS to %s during execution.", sms)
 			}
+
 			if strings.Contains(triggerType, "subflow") {
 				if len(subflow) != 36 {
 					log.Printf("[WARNING] Subflow isn't specified!")
@@ -3671,7 +3671,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				log.Printf("[DEBUG] Should send SMS to %s during execution.", sms)
+				log.Printf("[DEBUG] Should run subflow with workflow %s during execution.", subflow)
 			}
 		}
 
@@ -7100,7 +7100,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 		// From worker:
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
-		log.Printf("\n\n[DEBUG] Sending request for shuffle-subflow result to %s\n\n", backendUrl)
+		log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
 	}
 
 	// Callback to itself
@@ -8059,27 +8059,31 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
 		log.Printf("childnodes: %d: %#v", len(childNodes), childNodes)
 
-		appendBadResults := true
-		appendResults := []ActionResult{}
-		for _, nodeId := range childNodes {
-			if nodeId == actionResult.Action.ID {
+		//FIXME: Should this run and fix all nodes,
+		// or should it send them in as new SKIPs? Should we only handle DIRECT
+		// children? I wonder.
+
+		//log.Printf("\n\n\n[DEBUG] FROM %s - FOUND childnode %s %s (%s). exists: %#v\n\n\n", actionResult.Action.Label, curAction.ID, curAction.Name, curAction.Label, resultExists)
+		// FIXME: Add triggers
+		for _, branch := range workflowExecution.Workflow.Branches {
+			if branch.SourceID != actionResult.Action.ID {
 				continue
 			}
 
-			curAction := Action{ID: ""}
+			// Find the target & check if it has more branches. If it does, and they're not finished - continue
+			foundAction := Action{}
 			for _, action := range workflowExecution.Workflow.Actions {
-				if action.ID == nodeId {
-					curAction = action
+				if action.ID == branch.DestinationID {
+					foundAction = action
 					break
 				}
 			}
 
-			if len(curAction.ID) == 0 {
-				//log.Printf("Couldn't find subnode (0) %s as action. Checking triggers.", nodeId)
+			if len(foundAction.ID) == 0 {
 				for _, trigger := range workflowExecution.Workflow.Triggers {
 					//if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
-					if trigger.ID == nodeId {
-						curAction = Action{
+					if trigger.ID == branch.DestinationID {
+						foundAction = Action{
 							ID:      trigger.ID,
 							AppName: trigger.AppName,
 							Name:    trigger.AppName,
@@ -8087,171 +8091,307 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 
 						if trigger.AppName == "Shuffle Workflow" {
-							curAction.AppName = "shuffle-subflow"
+							foundAction.AppName = "shuffle-subflow"
 						}
 
 						break
 					}
 				}
 
-				if len(curAction.ID) == 0 {
-					//log.Printf("Couldn't find subnode (1) %s", nodeId)
+				if len(foundAction.ID) == 0 {
 					continue
 				}
 			}
 
-			resultExists := false
-			for _, result := range workflowExecution.Results {
-				if result.Action.ID == curAction.ID {
-					resultExists = true
-					break
+			log.Printf("\n\n\n[WARNING] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", foundAction.Label, foundAction.ID)
+
+			foundCount := 0
+			skippedCount := 0
+			for _, checkBranch := range workflowExecution.Workflow.Branches {
+				if checkBranch.DestinationID == foundAction.ID {
+					foundCount += 1
+
+					// Check if they're all skipped or not
+					if checkBranch.SourceID == actionResult.Action.ID {
+						skippedCount += 1
+						continue
+					}
+
+					// Not found = not counted yet
+					for _, res := range workflowExecution.Results {
+						if res.Action.ID == checkBranch.SourceID {
+							skippedCount += 1
+							break
+						}
+					}
 				}
 			}
 
-			//if curAction.Label == "Merge_cache" {
-			//	log.Printf("\n\n\n[DEBUG] FROM %s - FOUND childnode %s %s (%s). exists: %#v\n\n\n", actionResult.Action.Label, curAction.ID, curAction.Name, curAction.Label, resultExists)
-			//}
-
-			// Finds sub-nodes to be skipped if a parent node condition fails
-			skipIdCheck := false
-			if !resultExists {
-				// Check parents are done here. Only add it IF all parents are skipped
-				skipNodeAdd := false
-
-				// Find parent nodes that are also a child node of SKIPPED
-				parentNodes := []string{}
-				for _, branch := range workflowExecution.Workflow.Branches {
-					if branch.DestinationID == curAction.ID {
-
-						for _, childnode := range childNodes {
-							if childnode == branch.SourceID {
-								parentNodes = append(parentNodes, branch.SourceID)
-								break
-							}
-						}
+			log.Printf("[WARNING] Found %d branches. %d skipped.", foundCount, skippedCount)
+			if foundCount == skippedCount {
+				found := false
+				for _, res := range workflowExecution.Results {
+					if res.Action.ID == foundAction.ID {
+						found = true
 					}
 				}
 
-				//log.Printf("Parents: %#v", parentNodes)
-
-				for _, branch := range workflowExecution.Workflow.Branches {
-
-					// FIXME: Make this dynamic to curAction.ID's parent that we're checking from
-					//if branch.SourceID == actionResult.Action.ID {
-					if ArrayContains(parentNodes, branch.SourceID) {
-						// Check if the node has more destinations
-						// branch = old branch (original?)
-						ids := []string{}
-						for _, innerbranch := range workflowExecution.Workflow.Branches {
-							if innerbranch.DestinationID == branch.DestinationID {
-								ids = append(ids, innerbranch.SourceID)
-							}
-
-							//if innerbranch.ID == "70104246-45cf-4fa3-8b03-323d3cdf6434" {
-							//	log.Printf("Branch: %#v", innerbranch)
-							//}
-						}
-
-						//if curAction.Label == "Shuffle Tools_4" {
-						//}
-
-						foundIds := []string{actionResult.Action.ID}
-						foundSuccess := []string{}
-						foundSkipped := []string{actionResult.Action.ID}
-
-						//log.Printf("\n\nAction: %s (%s). Branches: %d\n\n", curAction.Label, curAction.ID, len(ids))
-						// If more than one source branch for the target is found;
-						// Look for the result of the parent
-						if len(ids) > 1 {
-							for _, thisId := range ids {
-								if thisId == actionResult.Action.ID {
-									continue
-								}
-
-								//appendResults = append(appendResults, newResult)
-								tmpResults := append(workflowExecution.Results, appendResults...)
-								for _, result := range tmpResults {
-									if result.Action.ID == thisId {
-										log.Printf("[DEBUG] Found result for %s (%s): %s", result.Action.Label, thisId, result.Status)
-
-										foundIds = append(foundIds, thisId)
-										if result.Status == "SUCCESS" {
-											foundSuccess = append(foundSuccess, thisId)
-										} else {
-											foundSkipped = append(foundSkipped, thisId)
-										}
-									}
-								}
-							}
-						} else {
-							appendBadResults = true
-							skipIdCheck = true
-						}
-
-						if skipIdCheck {
-							// Pass here, as it's just here to skip the next part
-						} else if (len(foundSkipped) == len(foundIds)) && len(foundSkipped) == len(ids) {
-							appendBadResults = true
-						} else {
-							//log.Printf("\n\n\nNOT appending results for %s. Try later?\n\n\n", curAction.Label)
-							// appendResults = append(appendResults, newResult)
-							appendBadResults = false
-						}
-
-						//if len(foundIds) == len(ids) {
-						//	// Means you can continue
-						//	appendBadResults = false
-						//	break
-						//}
-					}
-				}
-
-				if !appendBadResults {
-					continue
-					//break
-				}
-
-				if !skipNodeAdd {
-					//if curAction.Label == "Merge_cache" {
-					//	log.Printf("\n\n\n[DEBUG] Appending skip for node %s (%s - %s)\n\n\n", curAction.Name, curAction.Label, curAction.ID)
-					//}
-
+				if !found {
 					newResult := ActionResult{
-						Action:        curAction,
+						Action:        foundAction,
 						ExecutionId:   actionResult.ExecutionId,
 						Authorization: actionResult.Authorization,
-						Result:        `{"success": false, "reason": "Skipped because of previous node - 1"}`,
+						Result:        fmt.Sprintf(`{"success": false, "reason": "Skipped because of previous node (%s) - 1"}`, actionResult.Action.Label),
 						StartedAt:     0,
 						CompletedAt:   0,
 						Status:        "SKIPPED",
 					}
 
-					appendResults = append(appendResults, newResult)
-
-					newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, curAction.ID)
-					cacheData := []byte("1")
-					err = SetCache(ctx, newExecId, cacheData)
+					resultData, err := json.Marshal(newResult)
 					if err != nil {
-						log.Printf("[WARNING] Failed setting cache for skipped action %s: %s", newExecId, err)
-					} else {
-						//log.Printf("\n\n[DEBUG] Adding %s to cache. Name: %s\n\n", newExecId, action.Name)
+						log.Printf("[ERROR] Failed skipping action")
+						continue
 					}
-				} else {
-					//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
-					//var visited []string
-					//var executed []string
-					//var nextActions []string
+
+					streamUrl := fmt.Sprintf("http://localhost:5001/api/v1/streams")
+					if project.Environment == "cloud" {
+						streamUrl = fmt.Sprintf("https://shuffler.io/api/v1/streams")
+						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
+					}
+
+					log.Printf("[DEBUG] Sending result for action as skipped")
+
+					req, err := http.NewRequest(
+						"POST",
+						streamUrl,
+						bytes.NewBuffer([]byte(resultData)),
+					)
+
+					if err != nil {
+						log.Printf("[ERROR] Error building SKIPPED request (%s): %s", foundAction.Label, err)
+						continue
+					}
+
+					client := &http.Client{}
+					newresp, err := client.Do(req)
+					if err != nil {
+						log.Printf("[ERROR] Error running SKIPPED request (%s): %s", foundAction.Label, err)
+						continue
+					}
+
+					body, err := ioutil.ReadAll(newresp.Body)
+					if err != nil {
+						log.Printf("[ERROR] Failed reading body when running SKIPPED request (%s): %s", foundAction.Label, err)
+						continue
+					}
+
+					log.Printf("[DEBUG] Skipped body return: %s", string(body))
 				}
 			}
 		}
 
-		//log.Printf("Append skipped results: %#v", appendBadResults)
-		if len(appendResults) > 0 {
-			dbSave = true
-			for _, res := range appendResults {
-				workflowExecution.Results = append(workflowExecution.Results, res)
+		/*
+				appendBadResults := true
+				appendResults := []ActionResult{}
+				for _, nodeId := range childNodes {
+					if nodeId == actionResult.Action.ID {
+						continue
+					}
+
+					curAction := Action{ID: ""}
+					for _, action := range workflowExecution.Workflow.Actions {
+						if action.ID == nodeId {
+							curAction = action
+							break
+						}
+					}
+
+					if len(curAction.ID) == 0 {
+						//log.Printf("Couldn't find subnode (0) %s as action. Checking triggers.", nodeId)
+						for _, trigger := range workflowExecution.Workflow.Triggers {
+							//if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+							if trigger.ID == nodeId {
+								curAction = Action{
+									ID:      trigger.ID,
+									AppName: trigger.AppName,
+									Name:    trigger.AppName,
+									Label:   trigger.Label,
+								}
+
+								if trigger.AppName == "Shuffle Workflow" {
+									curAction.AppName = "shuffle-subflow"
+								}
+
+								break
+							}
+						}
+
+						if len(curAction.ID) == 0 {
+							//log.Printf("Couldn't find subnode (1) %s", nodeId)
+							continue
+						}
+					}
+
+					resultExists := false
+					for _, result := range workflowExecution.Results {
+						if result.Action.ID == curAction.ID {
+							resultExists = true
+							break
+						}
+					}
+
+					if curAction.Label == "Shuffle Tools_14" {
+						log.Printf("\n\n\n[DEBUG] FROM %s - FOUND childnode %s %s (%s). exists: %#v\n\n\n", actionResult.Action.Label, curAction.ID, curAction.Name, curAction.Label, resultExists)
+					}
+
+					// Finds sub-nodes to be skipped if a parent node condition fails
+					skipIdCheck := false
+					if !resultExists {
+						// Check parents are done here. Only add it IF all parents are skipped
+						skipNodeAdd := false
+
+						// Find parent nodes that are also a child node of SKIPPED
+						parentNodes := []string{}
+						for _, branch := range workflowExecution.Workflow.Branches {
+
+							// If the current node has more branches, check those
+							if branch.DestinationID == curAction.ID {
+								if curAction.Label == "Shuffle Tools_14" {
+									log.Printf("Found branch!")
+								}
+
+								parentNodes = append(parentNodes, branch.SourceID)
+
+									//for _, childnode := range childNodes {
+									//	if childnode == branch.SourceID {
+									//		parentNodes = append(parentNodes, branch.SourceID)
+									//		break
+									//	}
+									//}
+							}
+						}
+
+						//log.Printf("Parents: %#v", parentNodes)
+
+						for _, branch := range workflowExecution.Workflow.Branches {
+
+							// FIXME: Make this dynamic to curAction.ID's parent that we're checking from
+							//if branch.SourceID == actionResult.Action.ID {
+							if ArrayContains(parentNodes, branch.SourceID) {
+								// Check if the node has more destinations
+								// branch = old branch (original?)
+								ids := []string{}
+								for _, innerbranch := range workflowExecution.Workflow.Branches {
+									if innerbranch.DestinationID == branch.DestinationID {
+										ids = append(ids, innerbranch.SourceID)
+									}
+
+									//if innerbranch.ID == "70104246-45cf-4fa3-8b03-323d3cdf6434" {
+									//	log.Printf("Branch: %#v", innerbranch)
+									//}
+								}
+
+								//if curAction.Label == "Shuffle Tools_4" {
+								//}
+
+								foundIds := []string{actionResult.Action.ID}
+								foundSuccess := []string{}
+								foundSkipped := []string{actionResult.Action.ID}
+
+								//log.Printf("\n\nAction: %s (%s). Branches: %d\n\n", curAction.Label, curAction.ID, len(ids))
+								// If more than one source branch for the target is found;
+								// Look for the result of the parent
+								if len(ids) > 1 {
+									for _, thisId := range ids {
+										if thisId == actionResult.Action.ID {
+											continue
+										}
+
+										//appendResults = append(appendResults, newResult)
+										tmpResults := append(workflowExecution.Results, appendResults...)
+										for _, result := range tmpResults {
+											if result.Action.ID == thisId {
+												log.Printf("[DEBUG] Found result for %s (%s): %s", result.Action.Label, thisId, result.Status)
+
+												foundIds = append(foundIds, thisId)
+												if result.Status == "SUCCESS" {
+													foundSuccess = append(foundSuccess, thisId)
+												} else {
+													foundSkipped = append(foundSkipped, thisId)
+												}
+											}
+										}
+									}
+								} else {
+									appendBadResults = true
+									skipIdCheck = true
+								}
+
+								if skipIdCheck {
+									// Pass here, as it's just here to skip the next part
+								} else if (len(foundSkipped) == len(foundIds)) && len(foundSkipped) == len(ids) {
+									appendBadResults = true
+								} else {
+									//log.Printf("\n\n\nNOT appending results for %s. Try later?\n\n\n", curAction.Label)
+									// appendResults = append(appendResults, newResult)
+									appendBadResults = false
+								}
+
+								//if len(foundIds) == len(ids) {
+								//	// Means you can continue
+								//	appendBadResults = false
+								//	break
+								//}
+							}
+						}
+
+						if !appendBadResults {
+							continue
+							//break
+						}
+
+						if !skipNodeAdd {
+							if curAction.Label == "Shuffle Tools_14" {
+								log.Printf("\n\n\n[DEBUG] Appending skip for node %s (%s - %s)\n\n\n", curAction.Name, curAction.Label, curAction.ID)
+							}
+
+							newResult := ActionResult{
+								Action:        curAction,
+								ExecutionId:   actionResult.ExecutionId,
+								Authorization: actionResult.Authorization,
+								Result:        fmt.Sprintf(`{"success": false, "reason": "Skipped because of previous node (%s) - 1"}`, actionResult.Action.Label),
+								StartedAt:     0,
+								CompletedAt:   0,
+								Status:        "SKIPPED",
+							}
+
+							appendResults = append(appendResults, newResult)
+
+							newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, curAction.ID)
+							cacheData := []byte("1")
+							err = SetCache(ctx, newExecId, cacheData)
+							if err != nil {
+								log.Printf("[WARNING] Failed setting cache for skipped action %s: %s", newExecId, err)
+							} else {
+								//log.Printf("\n\n[DEBUG] Adding %s to cache. Name: %s\n\n", newExecId, action.Name)
+							}
+						} else {
+							//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
+							//var visited []string
+							//var executed []string
+							//var nextActions []string
+						}
+					}
+				}
+
+			//log.Printf("Append skipped results: %#v", appendBadResults)
+			if len(appendResults) > 0 {
+				dbSave = true
+				for _, res := range appendResults {
+					workflowExecution.Results = append(workflowExecution.Results, res)
+				}
 			}
-		}
+		*/
 	}
 
 	// Related to notifications
@@ -10588,7 +10728,7 @@ func ValidateNewWorkerExecution(body []byte) error {
 			//log.Printf("\n\nFound SUBFLOW in full result send \n\n")
 			for _, trigger := range baseExecution.Workflow.Triggers {
 				if trigger.ID == result.Action.ID {
-					log.Printf("Found SUBFLOW id: %s", trigger.ID)
+					//log.Printf("Found SUBFLOW id: %s", trigger.ID)
 
 					for _, param := range trigger.Parameters {
 						if param.Name == "check_result" && param.Value == "true" {
@@ -12162,11 +12302,26 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// as it's not a childnode of the startnode
 		// This is a configuration item for the workflow itself.
 		if len(workflowExecution.Results) > 0 {
+			extra := 0
+			for _, trigger := range workflowExecution.Workflow.Triggers {
+				//log.Printf("Appname trigger (0): %s", trigger.AppName)
+				if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+					extra += 1
+				}
+			}
+
 			defaultResults = []ActionResult{}
 			for _, result := range workflowExecution.Results {
 				if result.Status == "WAITING" {
-					result.Status = "FINISHED"
-					result.Result = "Continuing"
+					result.Status = "SUCCESS"
+					result.Result = `{"success": true, "reason": "Continuing from user input"}`
+
+					log.Printf("Actions + extra = %d. Results = %d", len(workflowExecution.Workflow.Actions)+extra, len(workflowExecution.Results))
+					if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
+						workflowExecution.Status = "FINISHED"
+					} else {
+						workflowExecution.Status = "EXECUTING"
+					}
 				}
 
 				defaultResults = append(defaultResults, result)
@@ -12199,7 +12354,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					Action:        curaction,
 					ExecutionId:   workflowExecution.ExecutionId,
 					Authorization: workflowExecution.Authorization,
-					Result:        `{"success": false, "reason": "Skipped because it's not under the startnode"}`,
+					Result:        `{"success": false, "reason": "Skipped because it's not under the startnode (1)"}`,
 					StartedAt:     0,
 					CompletedAt:   0,
 					Status:        "SKIPPED",
@@ -12240,15 +12395,25 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					ID:         trigger.ID,
 				}
 
-				defaultResults = append(defaultResults, ActionResult{
-					Action:        curaction,
-					ExecutionId:   workflowExecution.ExecutionId,
-					Authorization: workflowExecution.Authorization,
-					Result:        `{"success": false, "reason": "Skipped because it's not under the startnode"}`,
-					StartedAt:     0,
-					CompletedAt:   0,
-					Status:        "SKIPPED",
-				})
+				found := false
+				for _, res := range defaultResults {
+					if res.Action.ID == trigger.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					defaultResults = append(defaultResults, ActionResult{
+						Action:        curaction,
+						ExecutionId:   workflowExecution.ExecutionId,
+						Authorization: workflowExecution.Authorization,
+						Result:        `{"success": false, "reason": "Skipped because it's not under the startnode (2)"}`,
+						StartedAt:     0,
+						CompletedAt:   0,
+						Status:        "SKIPPED",
+					})
+				}
 			} else {
 				// Replaces trigger with the subflow
 				//if trigger.AppName == "Shuffle Workflow" {
