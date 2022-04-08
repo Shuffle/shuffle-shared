@@ -2662,9 +2662,9 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 			// Handles migration of the user
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[DEBUG] Failed loading user (this is ok): %s", err)
+				log.Printf("[DEBUG] Failed loading user %s (this is ok): %#v", username, err)
 			} else {
-				log.Printf("[WARNING] Failed loading user - does it have to change? %s", err)
+				log.Printf("[WARNING] Failed loading user %#v - does it have to change? %s", username, err)
 				return &User{}, err
 			}
 			//	log.Printf("[INFO] Error in user. Migrating to new org and user handler.")

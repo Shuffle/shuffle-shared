@@ -4697,7 +4697,6 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
 			orgFound = true
 		} else {
-			log.Printf("FoundUser: %#v", foundUser.Orgs)
 			for _, item := range foundUser.Orgs {
 				if item == userInfo.ActiveOrg.Id {
 					orgFound = true
@@ -5082,29 +5081,75 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !orgFound {
-		log.Printf("User %s is admin, but can't delete users outside their own org.", userInfo.Id)
+		log.Printf("[WARNING] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 		return
 	}
 
-	// Invert. No user deletion.
-	if foundUser.Active {
+	// OLD: Invert. No user deletion.
+	//if foundUser.Active {
+	//	foundUser.Active = false
+	//} else {
+	//	foundUser.Active = true
+	//}
 
-		foundUser.Active = false
-	} else {
-		foundUser.Active = true
+	// NEW
+	neworgs := []string{}
+	for _, orgid := range foundUser.Orgs {
+		if orgid == userInfo.ActiveOrg.Id {
+			continue
+		} else {
+			// Automatically setting to first one
+			if foundUser.ActiveOrg.Id == userInfo.ActiveOrg.Id {
+				foundUser.ActiveOrg.Id = orgid
+			}
+		}
+
+		neworgs = append(neworgs, orgid)
 	}
 
-	err = SetUser(ctx, foundUser, true)
+	if foundUser.ActiveOrg.Id == userInfo.ActiveOrg.Id {
+		log.Printf("[ERROR] User %s (%s) doesn't have an org anymore after being deleted. Give them one (NOT SET UP)", foundUser.Username, foundUser.Id)
+		foundUser.ActiveOrg.Id = ""
+	}
+
+	foundUser.Orgs = neworgs
+	err = SetUser(ctx, foundUser, false)
 	if err != nil {
-		log.Printf("Failed swapping active for user %s (%s)", foundUser.Username, foundUser.Id)
+		log.Printf("[WARNING] Failed removing user %s (%s) from org %s", foundUser.Username, foundUser.Id, orgFound)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
 	}
 
-	log.Printf("[INFO] Successfully inverted activation for %s", foundUser.Username)
+	org, err := GetOrg(ctx, userInfo.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[DEBUG] Failed getting org %s in delete user: %s", userInfo.ActiveOrg.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	users := []User{}
+	for _, user := range org.Users {
+		if user.Id == foundUser.Id {
+			continue
+		}
+
+		users = append(users, user)
+	}
+
+	org.Users = users
+	err = SetOrg(ctx, *org, org.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating org (delete user %s) %s: %s", foundUser.Username, org.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Removed their access but failed updating own user list"}`)))
+		return
+	}
+
+	log.Printf("[INFO] Successfully removed %s from org %s", foundUser.Username, userInfo.ActiveOrg.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -8103,7 +8148,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("\n\n\n[WARNING] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", foundAction.Label, foundAction.ID)
+			//log.Printf("\n\n\n[WARNING] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", foundAction.Label, foundAction.ID)
 
 			foundCount := 0
 			skippedCount := 0
@@ -8127,7 +8172,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[WARNING] Found %d branches. %d skipped.", foundCount, skippedCount)
+			log.Printf("[WARNING] Found %d branches. %d skipped. If equal, we make the node skipped", foundCount, skippedCount)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
