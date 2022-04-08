@@ -2589,6 +2589,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	orgUpdater := true
 	if len(t.Role) > 0 && (t.Role != "admin" && t.Role != "user" && t.Role != "org-reader") {
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
@@ -2603,9 +2604,36 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(t.Role) > 0 {
-			log.Printf("[INFO] Updated user %s from %s to %#v. If role is empty, not updating", foundUser.Username, foundUser.Role, t.Role)
-			foundUser.Role = t.Role
-			foundUser.Roles = []string{t.Role}
+			log.Printf("[INFO] Updated user %s from %s to %#v in org %s. If role is empty, not updating", foundUser.Username, foundUser.Role, t.Role, userInfo.ActiveOrg.Id)
+			orgUpdater = false
+
+			// Realtime update if the user is in the same org
+			if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
+				foundUser.Role = t.Role
+				foundUser.Roles = []string{t.Role}
+			}
+
+			// Getting the specific org and just updating the user in that one
+			foundOrg, err := GetOrg(ctx, userInfo.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get org in edit role to %s for %s (%s): %s", t.Role, foundUser.Username, foundUser.Id, err)
+			} else {
+				users := []User{}
+				for _, user := range foundOrg.Users {
+					if user.Id == foundUser.Id {
+						user.Role = t.Role
+						user.Roles = []string{t.Role}
+					}
+
+					users = append(users, user)
+				}
+
+				foundOrg.Users = users
+				err = SetOrg(ctx, *foundOrg, foundOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting org when changing role to %s for %s (%s): %s", t.Role, foundUser.Username, foundUser.Id, err)
+				}
+			}
 		}
 	}
 
@@ -2766,7 +2794,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		*/
 	}
 
-	err = SetUser(ctx, foundUser, true)
+	err = SetUser(ctx, foundUser, orgUpdater)
 	if err != nil {
 		log.Printf("[WARNING] Error patching user %s: %s", foundUser.Username, err)
 		resp.WriteHeader(401)

@@ -2707,7 +2707,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
-	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps", user.Username, user.Role, len(user.PrivateApps))
+	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %#v", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
 	if updateOrg {
 		user = fixUserOrg(ctx, user)
