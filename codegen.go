@@ -324,7 +324,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
                 except:
                     pass
 
-            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, query, query, query, query, query, query, query, query)
+            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, query, query, query, query, query, query, query)
 		}
 	} else {
 		//log.Printf("No optional queries?")
@@ -456,7 +456,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
                 except:
                     pass
 
-            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, param, param, param, param, param, param, param, param)
+            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, param, param, param, param, param, param, param)
 				}
 			}
 		}
