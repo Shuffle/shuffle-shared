@@ -6928,7 +6928,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 		appReturn.OpenAPI = openapidata
 	}
-	log.Printf("5")
 
 	appdata, err = json.Marshal(appReturn)
 	if err != nil {

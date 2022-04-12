@@ -1052,7 +1052,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Loads of validation below
-	if len(curfile.Filename) == 0 || len(curfile.OrgId) == 0 || len(curfile.WorkflowId) == 0 {
+	if len(curfile.OrgId) == 0 || len(curfile.WorkflowId) == 0 {
 		log.Printf("[ERROR] Missing field during fileupload. Required: filename, org_id, workflow_id")
 		log.Printf("INPUT: %s", string(body))
 		resp.WriteHeader(401)
@@ -1066,6 +1066,10 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Not allowed to access this organization ID"}`))
 		return
+	}
+
+	if len(curfile.Filename) == 0 {
+		curfile.Filename = "no_name"
 	}
 
 	var workflow *Workflow
