@@ -1416,8 +1416,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		user.Role = "admin"
 	}
 
-	log.Printf("Role: %s", user.Role)
-	// FIXME: Is this correct? In theory, user should just NOT have access to admin I guess.
 	if user.Role == "user" {
 		log.Printf("[DEBUG] Giving org-user %s (%s) access to all workflows in their active org.", user.Username, user.Id)
 		user.Role = "admin"

@@ -1480,7 +1480,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 	total := 0
 	for _, workflow := range workflows {
 		if workflow.OrgId != user.ActiveOrg.Id {
-			//log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
+			log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
 			continue
 		}
 
@@ -10069,8 +10069,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
-
-		_ = user
 	}
 
 	if workflowExecution.Status != "EXECUTING" {
@@ -10087,6 +10085,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
 	if err != nil {
@@ -10216,6 +10215,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	err = SetCacheKey(ctx, tmpData)
 	if err != nil {
 		log.Printf("[WARNING] Failed to set cache key %s for org %s", tmpData.Key, tmpData.OrgId)
