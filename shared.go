@@ -7533,6 +7533,8 @@ func ResendActionResult(actionData []byte, retries int) {
 	if err != nil {
 		log.Printf("[WARNING] Error running resend action request - retries: %d, err: %s", retries, err)
 
+		// How to self repair? Quit and restart the worker?
+		// This means worker is buggy when talking to itself
 		if project.Environment != "cloud" && retries < 5 {
 			if strings.Contains(fmt.Sprintf("%s", err), "cannot assign requested address") {
 				time.Sleep(5 * time.Second)
@@ -7540,6 +7542,9 @@ func ResendActionResult(actionData []byte, retries int) {
 
 				ResendActionResult(actionData, retries)
 			}
+		} else if project.Environment != "cloud" && retries >= 5 {
+			//panic("No more sockets available. Restarting worker to self-repair.")
+			log.Printf("[WARNING] Should we quit out on worker and start a new? How can we remove socket boundry?")
 		}
 
 		return
@@ -13775,8 +13780,6 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetBackendexecution(ctx context.Context, executionId, authorization string) (WorkflowExecution, error) {
-	//log.Printf("[DEBUG] ResultURL: %s", backendUrl)
-
 	exec := WorkflowExecution{}
 	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", os.Getenv("BASE_URL"))
 
@@ -13805,7 +13808,7 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	}
 
 	data, err := json.Marshal(requestData)
-	if err == nil {
+	if err != nil {
 		log.Printf("[WARNING] Failed parent init marshal: %s", err)
 		return exec, err
 	}
