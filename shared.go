@@ -8776,13 +8776,31 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			log.Printf("[WARNING] Sinkholing request of %#v IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
 			var subflowData SubflowData
-			err = json.Unmarshal([]byte(actionResult.Result), &subflowData)
-			if err == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
-				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
-				log.Printf("\n\nNO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING\n\n")
+			jsonerr := json.Unmarshal([]byte(actionResult.Result), &subflowData)
 
-				// This means it's started, hence executing :)
-				//return &workflowExecution, false, nil
+			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
+				if project.Environment != "cloud" {
+					cacheKey := fmt.Sprintf("workflowexecution-%s", subflowData.ExecutionId)
+					if value, found := requestCache.Get(cacheKey); found {
+						parsedValue := value.(*WorkflowExecution)
+
+						log.Printf("[INFO][%s] Found subflow result %s for subflow %s in recheck with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
+
+						if len(parsedValue.Result) > 0 {
+							subflowData.Result = parsedValue.Result
+						}
+					} else {
+						log.Printf("[INFO][%s] No subflow result found in cache for %s", workflowExecution.ExecutionId, subflowData.ExecutionId)
+					}
+				}
+			}
+
+			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
+				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
+				log.Printf("\n\n[%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem\n\n", workflowExecution.ExecutionId, len(workflowExecution.Results))
+
+				//Check cache for whether the execution actually finished or not
+				// FIXMe: May need to get this from backend
 
 				// Finding the result, and removing it if it exists. "Sinkholing"
 				workflowExecution.Status = "EXECUTING"
@@ -8809,6 +8827,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							break
 						}
 					}
+
 				} else {
 					log.Printf("\n\nLIST NOT sinkholed (%d) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.\n\n", len(subflowDataList))
 
