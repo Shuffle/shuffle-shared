@@ -7531,7 +7531,17 @@ func ResendActionResult(actionData []byte, retries int) {
 
 	_, err = topClient.Do(req)
 	if err != nil {
-		log.Printf("[WARNING] Error running resend action request: %s", err)
+		log.Printf("[WARNING] Error running resend action request - retries: %d, err: %s", retries, err)
+
+		if project.Environment != "cloud" && retries < 5 {
+			if strings.Contains(fmt.Sprintf("%s", err), "cannot assign requested address") {
+				time.Sleep(5 * time.Second)
+				retries = retries + 1
+
+				ResendActionResult(actionData, retries)
+			}
+		}
+
 		return
 	}
 
