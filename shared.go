@@ -7467,11 +7467,11 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 		}
 
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
-		go ResendActionResult(cacheData)
+		go ResendActionResult(cacheData, 0)
 	}
 }
 
-func ResendActionResult(actionData []byte) {
+func ResendActionResult(actionData []byte, retries int) {
 	topClient := &http.Client{
 		Transport: &http.Transport{
 			Proxy: nil,
@@ -7515,7 +7515,17 @@ func ResendActionResult(actionData []byte) {
 	)
 
 	if err != nil {
-		log.Printf("[WARNING] Error building resend action request: %s", err)
+		log.Printf("[WARNING] Error building resend action request - retries: %d, err: %s", retries, err)
+
+		if project.Environment != "cloud" && retries < 5 {
+			if strings.Contains(fmt.Sprintf("%s", err), "cannot assign requested address") {
+				time.Sleep(5 * time.Second)
+				retries = retries + 1
+
+				ResendActionResult(actionData, retries)
+			}
+		}
+
 		return
 	}
 
@@ -8901,7 +8911,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 
 				//log.Printf("\n\n[DEBUG] Should rerun? %s\n\n", action.ID)
-				go ResendActionResult(cacheData)
+				go ResendActionResult(cacheData, 0)
 			}
 		}
 	}
