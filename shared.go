@@ -8791,28 +8791,34 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 					cacheKey := fmt.Sprintf("workflowexecution-%s", subflowData.ExecutionId)
 					if value, found := requestCache.Get(cacheKey); found {
-						parsedValue := value.(*WorkflowExecution)
+						parsedValue := WorkflowExecution{}
+						cacheData := []byte(value.([]uint8))
+						err = json.Unmarshal(cacheData, &parsedValue)
+						if err == nil {
+							log.Printf("[INFO][%s] Found subflow result (1) %s for subflow %s in recheck from cache with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
 
-						log.Printf("[INFO][%s] Found subflow result (1) %s for subflow %s in recheck from cache with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
-						if len(parsedValue.Result) > 0 {
-							subflowData.Result = parsedValue.Result
+							if len(parsedValue.Result) > 0 {
+								subflowData.Result = parsedValue.Result
+							} else if parsedValue.Status == "FINISHED" {
+								subflowData.Result = "Subflow finished (PS: This is from worker autofill - happens if no actual result in subflow exec)"
+							}
 						}
-					} else {
 
 						// Check backend
 						//log.Printf("[INFO][%s] Found subflow result %s for subflow %s in recheck from cache with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
-
-						log.Printf("[INFO][%s] No subflow result found in cache for subflow %s. Checking backend next", workflowExecution.ExecutionId, subflowData.ExecutionId)
-						if len(subflowData.ExecutionId) > 0 {
-							parsedValue, err := GetBackendexecution(ctx, subflowData.ExecutionId, subflowData.Authorization)
-							if err != nil {
-								log.Printf("[WARNING] Failed getting subflow execution from backend to verify: %s", err)
-							} else {
-								log.Printf("[INFO][%s] Found subflow result (2) %s for subflow %s in backend with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
-								if len(parsedValue.Result) > 0 {
-									subflowData.Result = parsedValue.Result
-								} else if parsedValue.Status == "FINISHED" {
-									subflowData.Result = "Subflow finished (PS: This is from worker autofill - happens if no actual result in subflow exec)"
+						if len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
+							log.Printf("[INFO][%s] No subflow result found in cache for subflow %s. Checking backend next", workflowExecution.ExecutionId, subflowData.ExecutionId)
+							if len(subflowData.ExecutionId) > 0 {
+								parsedValue, err := GetBackendexecution(ctx, subflowData.ExecutionId, subflowData.Authorization)
+								if err != nil {
+									log.Printf("[WARNING] Failed getting subflow execution from backend to verify: %s", err)
+								} else {
+									log.Printf("[INFO][%s] Found subflow result (2) %s for subflow %s in backend with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
+									if len(parsedValue.Result) > 0 {
+										subflowData.Result = parsedValue.Result
+									} else if parsedValue.Status == "FINISHED" {
+										subflowData.Result = "Subflow finished (PS: This is from worker autofill - happens if no actual result in subflow exec)"
+									}
 								}
 							}
 						}
@@ -11988,7 +11994,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if err == nil {
 					log.Printf("[ERROR] Subflow already found %s - returning", newExecId)
 
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
+					return workflowExecution, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
 				}
 
 				cacheData := []byte("1")
