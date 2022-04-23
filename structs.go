@@ -1979,17 +1979,18 @@ type SessionCookie struct {
 }
 
 type HandleInfo struct {
-	Success    bool            `json:"success"`
-	Admin      string          `json:"admin"`
-	Username   string          `json:"username"`
-	Tutorials  []string        `json:"tutorials"`
-	ActiveApps []string        `json:"active_apps"`
-	Id         string          `json:"id"`
-	Avatar     string          `json:"avatar"`
-	Orgs       []OrgMini       `json:"orgs"`
-	ActiveOrg  OrgMini         `json:"active_org"`
-	Cookies    []SessionCookie `json:"session_cookie"`
-	EthInfo    EthInfo         `json:"eth_info"`
+	Success      bool            `json:"success"`
+	Admin        string          `json:"admin"`
+	Username     string          `json:"username"`
+	Tutorials    []string        `json:"tutorials"`
+	ActiveApps   []string        `json:"active_apps"`
+	Id           string          `json:"id"`
+	Avatar       string          `json:"avatar"`
+	Orgs         []OrgMini       `json:"orgs"`
+	ActiveOrg    OrgMini         `json:"active_org"`
+	Cookies      []SessionCookie `json:"session_cookie"`
+	EthInfo      EthInfo         `json:"eth_info"`
+	ChatDisabled bool            `json:"chat_disabled"`
 }
 
 type BuildLaterStruct struct {

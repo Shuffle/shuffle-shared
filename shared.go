@@ -7169,6 +7169,11 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 		backendUrl = "http://shuffle-workers:33333"
 
+		hostenv := os.Getenv("WORKER_HOSTNAME")
+		if len(hostenv) > 0 {
+			backendUrl = fmt.Sprintf("http://%s:33333", hostenv)
+		}
+
 		// From worker:
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
@@ -7484,6 +7489,13 @@ func ResendActionResult(actionData []byte) {
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 		backendUrl = "http://shuffle-workers:33333"
+
+		// Should connect to self, not shuffle-workers
+		hostenv := os.Getenv("WORKER_HOSTNAME")
+		if len(hostenv) > 0 {
+			backendUrl = fmt.Sprintf("http://%s:33333", hostenv)
+		}
+		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
 		// From worker:
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
@@ -10804,7 +10816,7 @@ func ValidateNewWorkerExecution(body []byte) error {
 
 					for _, param := range trigger.Parameters {
 						if param.Name == "check_result" && param.Value == "true" {
-							log.Printf("Found check as true!")
+							//log.Printf("Found check as true!")
 
 							var subflowData SubflowData
 							err = json.Unmarshal([]byte(result.Result), &subflowData)
@@ -10813,7 +10825,7 @@ func ValidateNewWorkerExecution(body []byte) error {
 							} else if len(subflowData.Result) == 0 {
 								log.Printf("There is no result yet. Don't save?")
 							} else {
-								log.Printf("There is is a result: %s", result.Result)
+								//log.Printf("There is a result: %s", result.Result)
 							}
 
 							break
@@ -10891,7 +10903,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 			}
 
 			if !isLooping && setExecution && shouldSetValue && parentExecution.Status == "EXECUTING" {
-				log.Printf("[DEBUG] Its NOT looping. Should set?")
+				//log.Printf("[DEBUG] Its NOT looping. Should set?")
 				return nil
 			} else if isLooping && setExecution && shouldSetValue && parentExecution.Status == "EXECUTING" {
 				log.Printf("[DEBUG] Parentexecutions' subflow IS looping and is correct workflow. Should find correct answer in the node's result. Length of results: %d", len(parentExecution.Results))
