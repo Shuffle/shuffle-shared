@@ -7501,6 +7501,22 @@ func ResendActionResult(actionData []byte, retries int) {
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
 		log.Printf("\n\n[DEBUG] REsending request to rerun action result to %s\n\n", backendUrl)
+
+		// Here to prevent infinite loops
+		var res ActionResult
+		err := json.Unmarshal(actionData, &res)
+		if err == nil {
+			ctx := context.Background()
+			parsedValue, err := GetBackendexecution(ctx, res.ExecutionId, res.Authorization)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting execution from backend to verify (3): %s", err)
+			} else {
+				log.Printf("[INFO][%s] Found execution result (3) %s for subflow %s in backend with %d results and result %#v", res.ExecutionId, parsedValue.Status, res.ExecutionId, len(parsedValue.Results), parsedValue.Result)
+				if parsedValue.Status != "EXECUTING" {
+					return
+				}
+			}
+		}
 	}
 
 	if len(backendUrl) == 0 {
@@ -8779,10 +8795,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if runCheck {
 			// err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
 
-			log.Printf("[WARNING] Sinkholing request of %#v IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
 			var subflowData SubflowData
 			jsonerr := json.Unmarshal([]byte(actionResult.Result), &subflowData)
 
+			// Big blob to check cache & backend for more results
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				if project.Environment != "cloud" {
 
@@ -8826,6 +8842,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
+			log.Printf("[WARNING] Sinkholing request of %#v IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
 				log.Printf("\n\n[%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem\n\n", workflowExecution.ExecutionId, len(workflowExecution.Results))
@@ -11990,9 +12007,18 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			if allowContinuation == false {
 				newExecId := fmt.Sprintf("%s_%s_%s", workflowExecution.ExecutionParent, workflowExecution.ExecutionId, workflowExecution.ExecutionSourceNode)
-				_, err := GetCache(ctx, newExecId)
+				cache, err := GetCache(ctx, newExecId)
 				if err == nil {
-					log.Printf("[ERROR] Subflow already found %s - returning", newExecId)
+					cacheData := []byte(cache.([]uint8))
+
+					newexec := WorkflowExecution{}
+					log.Printf("[WARNING] Subflow exec %s already found - returning", newExecId)
+
+					// Returning to be used in worker
+					err = json.Unmarshal(cacheData, &newexec)
+					if err == nil {
+						return newexec, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
+					}
 
 					return workflowExecution, ExecInfo{}, fmt.Sprintf("Subflow for %s has already been executed", newExecId), errors.New(fmt.Sprintf("Subflow for %s has already been executed", newExecId))
 				}
