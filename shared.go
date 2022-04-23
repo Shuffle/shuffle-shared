@@ -7411,7 +7411,7 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 	execution := &WorkflowExecution{}
 	//log.Printf("ENV: %s", project.Environment)
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "worker" || project.Environment == "") {
-		log.Printf("[DEBUG] Defaulting to current workflow in worker")
+		//log.Printf("[DEBUG] Defaulting to current workflow in worker")
 		execution = &workflowExecution
 	} else {
 		execution, err = GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
@@ -8780,17 +8780,37 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				if project.Environment != "cloud" {
+
+					//Check cache for whether the execution actually finished or not
+					// FIXMe: May need to get this from backend
+
 					cacheKey := fmt.Sprintf("workflowexecution-%s", subflowData.ExecutionId)
 					if value, found := requestCache.Get(cacheKey); found {
 						parsedValue := value.(*WorkflowExecution)
 
-						log.Printf("[INFO][%s] Found subflow result %s for subflow %s in recheck with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
-
+						log.Printf("[INFO][%s] Found subflow result (1) %s for subflow %s in recheck from cache with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
 						if len(parsedValue.Result) > 0 {
 							subflowData.Result = parsedValue.Result
 						}
 					} else {
-						log.Printf("[INFO][%s] No subflow result found in cache for %s", workflowExecution.ExecutionId, subflowData.ExecutionId)
+
+						// Check backend
+						//log.Printf("[INFO][%s] Found subflow result %s for subflow %s in recheck from cache with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
+
+						log.Printf("[INFO][%s] No subflow result found in cache for subflow %s. Checking backend next", workflowExecution.ExecutionId, subflowData.ExecutionId)
+						if len(subflowData.ExecutionId) > 0 {
+							parsedValue, err := GetBackendexecution(ctx, subflowData.ExecutionId, subflowData.Authorization)
+							if err != nil {
+								log.Printf("[WARNING] Failed getting subflow execution from backend to verify: %s", err)
+							} else {
+								log.Printf("[INFO][%s] Found subflow result (2) %s for subflow %s in backend with %d results and result %#v", workflowExecution.ExecutionId, parsedValue.Status, subflowData.ExecutionId, len(parsedValue.Results), parsedValue.Result)
+								if len(parsedValue.Result) > 0 {
+									subflowData.Result = parsedValue.Result
+								} else if parsedValue.Status == "FINISHED" {
+									subflowData.Result = "Subflow finished (PS: This is from worker autofill - happens if no actual result in subflow exec)"
+								}
+							}
+						}
 					}
 				}
 			}
@@ -8798,9 +8818,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
 				log.Printf("\n\n[%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem\n\n", workflowExecution.ExecutionId, len(workflowExecution.Results))
-
-				//Check cache for whether the execution actually finished or not
-				// FIXMe: May need to get this from backend
 
 				// Finding the result, and removing it if it exists. "Sinkholing"
 				workflowExecution.Status = "EXECUTING"
@@ -12117,7 +12134,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							// Disabling this to allow multiple continuations
 							//return WorkflowExecution{}, ExecInfo{}, "", errors.New("This workflow has already been continued")
 						}
-						log.Printf("Start: %#v", result.Status)
+						//log.Printf("Start: %#v", result.Status)
 					}
 				}
 			}
@@ -13755,4 +13772,79 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
+}
+
+func GetBackendexecution(ctx context.Context, executionId, authorization string) (WorkflowExecution, error) {
+	//log.Printf("[DEBUG] ResultURL: %s", backendUrl)
+
+	exec := WorkflowExecution{}
+	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", os.Getenv("BASE_URL"))
+
+	topClient := &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+
+	httpProxy := os.Getenv("HTTP_PROXY")
+	httpsProxy := os.Getenv("HTTPS_PROXY")
+	if len(httpProxy) > 0 || len(httpsProxy) > 0 {
+		topClient = &http.Client{}
+	} else {
+		if len(httpProxy) > 0 {
+			log.Printf("Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+		}
+		if len(httpsProxy) > 0 {
+			log.Printf("Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+		}
+	}
+
+	requestData := ActionResult{
+		ExecutionId:   executionId,
+		Authorization: authorization,
+	}
+
+	data, err := json.Marshal(requestData)
+	if err == nil {
+		log.Printf("[WARNING] Failed parent init marshal: %s", err)
+		return exec, err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		resultUrl,
+		bytes.NewBuffer([]byte(data)),
+	)
+
+	newresp, err := topClient.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed making subflow request (1): %s. Is URL valid: %s", err, resultUrl)
+		return exec, err
+	}
+
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading parent body: %s", err)
+		return exec, err
+	}
+	//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
+
+	if newresp.StatusCode != 200 {
+		log.Printf("[ERROR] Bad statuscode setting subresult with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
+		return exec, errors.New(fmt.Sprintf("Bad statuscode: %s", newresp.StatusCode))
+	}
+
+	err = json.Unmarshal(body, &exec)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling execution: %s", err)
+		return exec, err
+	}
+
+	cacheKey := fmt.Sprintf("workflowexecution-%s", executionId)
+	err = SetCache(ctx, cacheKey, body)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for workflowexec key %s: %s", cacheKey, err)
+	}
+
+	return exec, nil
 }
