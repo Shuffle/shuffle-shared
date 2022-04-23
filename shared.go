@@ -13849,10 +13849,12 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 		return exec, err
 	}
 
-	cacheKey := fmt.Sprintf("workflowexecution-%s", executionId)
-	err = SetCache(ctx, cacheKey, body)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for workflowexec key %s: %s", cacheKey, err)
+	if exec.Status == "FINISHED" || exec.Status == "FAILURE" {
+		cacheKey := fmt.Sprintf("workflowexecution-%s", executionId)
+		err = SetCache(ctx, cacheKey, body)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for workflowexec key %s: %s", cacheKey, err)
+		}
 	}
 
 	return exec, nil
