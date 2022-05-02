@@ -817,8 +817,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "http"
-	appversion := "1.3.0"
+	appname := "outlook_owa"
+	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

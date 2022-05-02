@@ -50,10 +50,11 @@ func GetESIndexPrefix(index string) string {
 	return index
 }
 
-// Dumps data from cache to DB for every 5 action
-var dumpInterval = 0x9
+// Dumps data from cache to DB for every 25 action
+var dumpInterval = 0x19
 
 func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
+
 	nameKey := "org_statistics"
 	orgStatistics := &ExecutionInfo{}
 
@@ -170,11 +171,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 		return
 	}
 
-	// Dump to disk every 5
-	dbDumpInterval := uint8(dumpInterval)
-
+	// Dump to disk every 0x19
 	// 1. Get the existing value
 	// 2. Update it
+	dbDumpInterval := uint8(dumpInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
 	if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
 		item := &memcache.Item{
@@ -188,8 +188,13 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 		}
 	} else {
 		if item == nil || item.Value == nil {
-			item.Value = []byte(string(1))
-			log.Printf("[ERROR] Value in DB is nil.")
+			item = &memcache.Item{
+				Key:        key,
+				Value:      []byte(string(1)),
+				Expiration: time.Minute * 300,
+			}
+
+			log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
 		}
 
 		if len(item.Value) == 1 {
@@ -3139,6 +3144,26 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				err := SetOrg(ctx, *org, org.Id)
 				if err != nil {
 					log.Printf("[WARNING] Failed setting org %s with %d apps: %s", org.Id, len(org.ActiveApps), err)
+
+					if len(org.Users) > 10 {
+						newUsers := []User{}
+						for _, user := range org.Users {
+							if len(user.Id) == 0 {
+								continue
+							}
+
+							newUsers = append(newUsers, user)
+						}
+
+						if len(newUsers) > 0 {
+							org.Users = newUsers
+
+							err := SetOrg(ctx, *org, org.Id)
+							if err != nil {
+								log.Printf("[WARNING] (2) Failed setting org %s with %d apps after cleanup: %s", org.Id, len(org.ActiveApps), err)
+							}
+						}
+					}
 				}
 			}
 		}
@@ -3169,7 +3194,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 
 			if len(innerApp.Actions) == 0 {
-				log.Printf("App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+				//log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
 				//project.BucketName := "shuffler.appspot.com"
 				fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
@@ -3357,6 +3382,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		if err != nil {
 			log.Printf("[DEBUG] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
 		}
+
 		log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
 
 		// IF the app doesn't have actions, check OpenAPI

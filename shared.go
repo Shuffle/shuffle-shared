@@ -1533,7 +1533,7 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 
 	// Rerun after 570 seconds (9.5 minutes), ensuring it can check 3 times before
 	// automated aborting of the execution happens
-	waitTime := 570
+	waitTime := 270
 	//waitTime := 0
 	executed := []string{}
 	for _, execution := range executions {
@@ -3528,7 +3528,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		log.Printf("[INFO] Workflow: %s, Trigger %s: %s", workflow.ID, trigger.TriggerType, trigger.Status)
+		//log.Printf("[INFO] Workflow: %s, Trigger %s: %s", workflow.ID, trigger.TriggerType, trigger.Status)
 
 		// Check if it's actually running
 		// FIXME: Do this for other triggers too
@@ -8182,7 +8182,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if actionResult.Status == "SKIPPED" {
 		//unfinishedNodes := []string{}
 		childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
-		log.Printf("childnodes: %d: %#v", len(childNodes), childNodes)
+		_ = childNodes
+		//log.Printf("childnodes: %d: %#v", len(childNodes), childNodes)
 
 		//FIXME: Should this run and fix all nodes,
 		// or should it send them in as new SKIPs? Should we only handle DIRECT
@@ -8252,7 +8253,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[WARNING] Found %d branches. %d skipped. If equal, we make the node skipped", foundCount, skippedCount)
+			//log.Printf("[WARNING] Found %d branches. %d skipped. If equal, make the node skipped", foundCount, skippedCount)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
@@ -8284,7 +8285,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
 					}
 
-					log.Printf("[DEBUG] Sending result for action as skipped")
+					//log.Printf("[DEBUG] Sending result for action as skipped")
 
 					req, err := http.NewRequest(
 						"POST",
@@ -8845,7 +8846,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Sinkholing request of %#v IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
-				log.Printf("\n\n[%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem\n\n", workflowExecution.ExecutionId, len(workflowExecution.Results))
+				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem\n\n", workflowExecution.ExecutionId, len(workflowExecution.Results))
 
 				// Finding the result, and removing it if it exists. "Sinkholing"
 				workflowExecution.Status = "EXECUTING"
@@ -9778,13 +9779,13 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	}
 
 	//childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID)
-	log.Printf("FIND CHILDNODES OF STARTNODE %s", workflowAction)
+	//log.Printf("FIND CHILDNODES OF STARTNODE %s", workflowAction)
 	workflowExecution := WorkflowExecution{
 		Workflow: *workflow,
 	}
 
 	childNodes := FindChildNodes(workflowExecution, workflowAction)
-	log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
+	//log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
 	newActions := []Action{}
 	branches := []Branch{}
 
@@ -12911,7 +12912,9 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 // Significantly slowed down everything. Just returning for now.
 func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []WorkflowApp {
 	newApps := []WorkflowApp{}
-	//return allApps
+
+	// Skipping this for now as it makes things slow
+	return allApps
 
 	for _, app := range allApps {
 		if len(app.ReferenceInfo.DocumentationUrl) > 0 && strings.HasPrefix(app.ReferenceInfo.DocumentationUrl, "https://raw.githubusercontent.com/Shuffle") && strings.Contains(app.ReferenceInfo.DocumentationUrl, ".md") {
