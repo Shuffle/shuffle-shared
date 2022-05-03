@@ -628,6 +628,12 @@ type Org struct {
 	SSOConfig         SSOConfig             `json:"sso_config" datastore:"sso_config"`
 	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework""`
 	Disabled          bool                  `json:"disabled" datastore:"disabled"`
+	PartnerInfo       PartnerInfo           `json:"partner_info" datastore:"partner_info"`
+}
+
+type PartnerInfo struct {
+	Reseller      bool   `json:"reseller" datastore:"reseller"`
+	ResellerLevel string `json:"reseller_level" datastore:"reseller_level"`
 }
 
 type Defaults struct {
@@ -3278,4 +3284,44 @@ type Usecase struct {
 	EditedBy string `json:"edited_by"`
 	Blogpost string `json:"blogpost"`
 	Video    string `json:"video"`
+}
+
+type DealSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string       `json:"_index"`
+			Type   string       `json:"_type"`
+			ID     string       `json:"_id"`
+			Score  float64      `json:"_score"`
+			Source ResellerDeal `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type ResellerDeal struct {
+	ID          string `json:"id" datastore:"id"`
+	Name        string `json:"name" datastore:"name"`
+	Type        string `json:"type" datastore:"type"`
+	Address     string `json:"address" datastore:"address"`
+	Country     string `json:"country" datastore:"country"`
+	Currency    string `json:"currency" datastore:"currency"`
+	Status      string `json:"status" datastore:"status"`
+	Value       string `json:"value" datastore:"value"`
+	Discount    string `json:"discount" datastore:"discount"`
+	ResellerOrg string `json:"reseller_org" datastore:"reseller_org"`
+	Created     int64  `json:"created" datastore:"created"`
+	Edited      int64  `json:"edited" datastore:"edited"`
 }

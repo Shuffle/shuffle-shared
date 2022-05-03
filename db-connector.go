@@ -3770,7 +3770,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	if project.DbType == "elasticsearch" {
 		data, err := json.Marshal(executionRequest)
 		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
+			log.Printf("[WARNING] Failed marshalling in setworkflow: %s", err)
 			return nil
 		}
 
@@ -6485,4 +6485,151 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 
 	return usecase, nil
 
+}
+
+func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
+	nameKey := "reseller_deal"
+
+	timeNow := int64(time.Now().Unix())
+	deal.Edited = timeNow
+	if deal.Created == 0 {
+		deal.Created = timeNow
+	}
+
+	if len(deal.ID) == 0 {
+		deal.ID = uuid.NewV4().String()
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(deal)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set deal: %s", err)
+		return err
+	}
+
+	// FIXMe: Shouldn't really be possible, but may be useful for hybrid (?)
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, deal.ID, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, deal.ID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &deal); err != nil {
+			log.Printf("[WARNING] Error adding deal: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, deal.ID)
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for deal: %s", err)
+		}
+	}
+
+	return nil
+}
+
+func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
+	nameKey := "reseller_deal"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+
+	deals := []ResellerDeal{}
+	if project.DbType == "elasticsearch" {
+		log.Printf("GETTING deals for org %s in item %s", orgId, nameKey)
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"reseller_org": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("Error encoding deal query: %s", err)
+			return deals, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get deals): %s", err)
+			return deals, err
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return deals, err
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			log.Printf("[WARNING] Body of deals is bad: %s", string(respBody))
+			return deals, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		wrapped := DealSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return deals, err
+		}
+
+		newDeals := []ResellerDeal{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.ResellerOrg != orgId {
+				continue
+			}
+
+			newDeals = append(newDeals, hit.Source)
+		}
+
+		log.Printf("[INFO] Got %d deals for org %s", len(newDeals), orgId)
+		deals = newDeals
+	} else {
+
+		query := datastore.NewQuery(nameKey).Filter("reseller_org =", orgId)
+		_, err := project.Dbclient.GetAll(ctx, query, &deals)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+			return deals, err
+		}
+
+		log.Printf("[INFO] Got %d deals for org %s", len(deals), orgId)
+	}
+
+	if project.CacheDb {
+		newdeal, err := json.Marshal(deals)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling deals: %s", err)
+			return deals, nil
+		}
+
+		err = SetCache(ctx, cacheKey, newdeal)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating deal cache: %s", err)
+		}
+	}
+
+	return deals, nil
 }
