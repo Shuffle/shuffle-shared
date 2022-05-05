@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Standalone to make it work many places
@@ -223,23 +224,13 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
-		backendUrl = "https://shuffler.io"
+		//backendUrl = "https://shuffler.io"
+		backendUrl = "http://localhost:5002"
 	}
 
 	// Callback to itself
 	if len(backendUrl) == 0 {
 		backendUrl = "http://localhost:5001"
-	}
-
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow with ID %s: %s", workflowId, err)
-		return err
-	}
-
-	if workflow.OrgId != notification.OrgId {
-		log.Printf("[WARNING] Can't access workflow %s with org ID %s (%s): %s", workflowId, notification.OrgId, workflow.Org)
-		return errors.New(fmt.Sprintf("Org %s does not have access to workflow with ID %s", notification.OrgId, workflowId))
 	}
 
 	b, err := json.Marshal(notification)
@@ -326,12 +317,20 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return nil
 	} else {
 		log.Printf("[INFO] Notification with title %#v is being made for users in org %s", title, orgId)
+
+		org, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[WARNING] Error getting org %s in createOrgNotification: %s", orgId, err)
+			return err
+		}
+
 		generatedId := uuid.NewV4().String()
 		mainNotification := Notification{
 			Title:             title,
 			Description:       description,
 			Id:                generatedId,
 			OrgId:             orgId,
+			OrgName:           org.Name,
 			UserId:            "",
 			Tags:              []string{},
 			Amount:            1,
@@ -340,6 +339,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			Dismissable:       true,
 			Personal:          false,
 			Read:              false,
+			CreatedAt:         int64(time.Now().Unix()),
+			UpdatedAt:         int64(time.Now().Unix()),
 		}
 
 		err = SetNotification(ctx, mainNotification)
@@ -351,12 +352,6 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		// 1. Find users in org
 		// 2. Make notification for each of them
 		// 3. Make reference to org notification
-
-		org, err := GetOrg(ctx, orgId)
-		if err != nil {
-			log.Printf("[WARNING] Error getting org %s in createOrgNotification: %s", orgId, err)
-			return err
-		}
 
 		//NotificationWorkflow   string `json:"notification_workflow" datastore:"notification_workflow"`
 
@@ -385,7 +380,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				}
 			}
 
-			log.Printf("[DEBUG] Made notification for user %s (%s)", user.Username, user.Id)
+			//log.Printf("[DEBUG] Made notification for user %s (%s)", user.Username, user.Id)
 			newNotification := mainNotification
 			newNotification.Id = uuid.NewV4().String()
 			newNotification.UserId = user.Id
@@ -403,9 +398,36 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				log.Printf("[ERROR] Didn't find an apikey to use when sending notifications for org %s to workflow %s", org.Id, org.Defaults.NotificationWorkflow)
 			}
 
+			workflow, err := GetWorkflow(ctx, org.Defaults.NotificationWorkflow)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting workflow with ID %s: %s", org.Defaults.NotificationWorkflow, err)
+				return err
+			}
+
+			if workflow.OrgId != mainNotification.OrgId {
+				log.Printf("[WARNING] Can't access workflow %s with org ID %s (%s): %s", workflow.ID, mainNotification.OrgId, workflow.Org)
+
+				// Get parent org if it exists and check too
+				if len(org.ManagerOrgs) > 0 {
+					parentOrg, err := GetOrg(ctx, org.ManagerOrgs[0].Id)
+					if err != nil {
+						log.Printf("[WARNING] Error getting parent org %s in createOrgNotification (2): %s", orgId, err)
+						return err
+					}
+
+					if org.Defaults.NotificationWorkflow != parentOrg.Defaults.NotificationWorkflow {
+						return errors.New(fmt.Sprintf("Org %s does not have access to workflow with ID %s", mainNotification.OrgId, workflow.ID))
+					} else {
+						log.Printf("[DEBUG] Running with parent orgs' notification workflow")
+					}
+				} else {
+					return errors.New(fmt.Sprintf("Org %s does not have access to workflow with ID %s", mainNotification.OrgId, workflow.ID))
+				}
+			}
+
 			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow)
 			if err != nil {
-				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, err)
+				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
 			}
 		}
 	}

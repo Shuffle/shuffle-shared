@@ -981,6 +981,7 @@ type Notification struct {
 	Title             string   `json:"title" datastore:"title"`
 	Description       string   `json:"description" datastore:"description"`
 	OrgId             string   `json:"org_id" datastore:"org_id"`
+	OrgName           string   `json:"org_name" datastore:"org_name"`
 	UserId            string   `json:"user_id" datastore:"user_id"`
 	Tags              []string `json:"tags" datastore:"tags"`
 	Amount            int      `json:"amount" datastore:"amount"`
