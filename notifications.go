@@ -224,8 +224,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
-		//backendUrl = "https://shuffler.io"
-		backendUrl = "http://localhost:5002"
+		backendUrl = "https://shuffler.io"
+		//backendUrl = "http://localhost:5002"
 	}
 
 	// Callback to itself
