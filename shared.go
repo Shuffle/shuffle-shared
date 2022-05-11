@@ -8311,7 +8311,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						continue
 					}
 
-					log.Printf("[DEBUG] Skipped body return: %s", string(body))
+					log.Printf("[DEBUG] Skipped body return (%d): %s", newresp.StatusCode, string(body))
 				}
 			}
 		}
@@ -9336,15 +9336,17 @@ func GetExecutionbody(body []byte) string {
 	}
 
 	// Replaces dots in string. Bad regex :D
-	pattern := regexp.MustCompile(`\"(\w+)\.(\w+)\":`)
-	found := pattern.FindAllString(parsedBody, -1)
-	for _, item := range found {
-		newItem := strings.Replace(item, ".", "_", -1)
-		parsedBody = strings.Replace(parsedBody, item, newItem, -1)
-	}
+	/*
+		pattern := regexp.MustCompile(`\"(\w+)\.(\w+)\":`)
+		found := pattern.FindAllString(parsedBody, -1)
+		for _, item := range found {
+			newItem := strings.ReplaceAll(item, ".", "_", -1)
+			parsedBody = strings.Replace(parsedBody, item, newItem, -1)
+		}
+	*/
 
 	if !strings.HasPrefix(parsedBody, "{") && !strings.HasPrefix(parsedBody, "[") && strings.Contains(parsedBody, "=") {
-		//log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML)", parsedBody)
+		log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML)", parsedBody)
 
 		// Dumb XML handler
 		if strings.HasPrefix(strings.TrimSpace(parsedBody), "<") && strings.HasSuffix(strings.TrimSpace(parsedBody), ">") {
