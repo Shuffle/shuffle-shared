@@ -5784,6 +5784,13 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 		for _, hit := range wrapped.Hits.Hits {
 			orgs = append(orgs, hit.Source)
 		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter(fmt.Sprintf("%s =", fieldName), value)
+		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting orgs for field %#v: %s", fieldName, err)
+			return orgs, err
+		}
 	}
 
 	return orgs, nil

@@ -7013,6 +7013,46 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 	*/
+	if project.Environment == "cloud" {
+		// If it fails, allow login if password correct?
+		// Check if suborg -> Get parent & check SSO
+		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+		if err == nil {
+			log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
+			org := baseOrg
+
+			if len(baseOrg.ManagerOrgs) > 0 {
+
+				// Use auth from parent org if user is also in that one
+				newOrg, err := GetOrg(ctx, baseOrg.ManagerOrgs[0].Id)
+				if err == nil {
+
+					found := false
+					for _, user := range newOrg.Users {
+						if user.Username == userdata.Username {
+							found = true
+						}
+					}
+
+					if found {
+						log.Printf("Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
+						org = newOrg
+					}
+				}
+			}
+
+			log.Printf("SAML in org for user %s: %#v", userdata.Username, org.SSOConfig)
+			if len(org.SSOConfig.SSOEntrypoint) > 0 {
+				log.Printf("[DEBUG] Should redirect user %s in org %s to SSO login at %s", userdata.Username, userdata.ActiveOrg.Id, org.SSOConfig.SSOEntrypoint)
+				// https://trial-7276434.okta.com/app/trial-7276434_shuffle_1/exk10dgh8tZNCaXGC697/sso/saml
+
+				// user controllable field hmm :)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "SSO_REDIRECT", "url": "%s"}`, org.SSOConfig.SSOEntrypoint)))
+				return
+			}
+		}
+	}
 
 	if userdata.LoginType == "SSO" {
 		log.Printf(`[WARNING] Username %s (%s) has login type set to SSO (single sign-on).`, userdata.Username, userdata.Id)
@@ -11303,7 +11343,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" {
 		log.Printf("[WARNING] Openid SSO is not implemented for cloud yet. User %s", openidUser.Sub)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud Openid not available for you"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud Openid is not available yet"}`)))
 		return
 	}
 
@@ -11524,8 +11564,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("%s", string(body))
-
 	// Parsing out without using Field
 	// This is a mess, but all made to handle base64 and equal signs
 	parsedSAML := ""
@@ -11555,8 +11593,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					decodedValue = strings.Replace(decodedValue, " ", "+", -1)
 				}
 
-				log.Printf("ParsedSaml: %s", decodedValue)
-
 				parsedSAML = decodedValue
 				break
 			}
@@ -11578,7 +11614,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("Parsed: %s", bytesXML)
+	//log.Printf("Parsed: %s", bytesXML)
 
 	// Sample request in keycloak lab env
 	// PS: Should it ever come this way..?
@@ -11672,12 +11708,14 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	// 1. Check if the user exists - if it does - give it a valid cookie
 	// 2. If it doesn't, find the correct org to connect them with, then register them
 
-	if project.Environment == "cloud" {
-		log.Printf("[WARNING] SAML SSO is not implemented for cloud yet")
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud SSO not available for you"}`)))
-		return
-	}
+	/*
+		if project.Environment == "cloud" {
+			log.Printf("[WARNING] SAML SSO is not implemented for cloud yet")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud SSO is not available for you"}`)))
+			return
+		}
+	*/
 
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
@@ -11685,6 +11723,10 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("%s - %s", user.GeneratedUsername, userName)
 			if user.GeneratedUsername == userName {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
+
+				if project.Environment == "cloud" {
+					user.ActiveOrg.Id = matchingOrgs[0].Id
+				}
 
 				//log.Printf("SESSION: %s", user.Session)
 
@@ -11730,6 +11772,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
 
 				//log.Printf("SESSION: %s", user.Session)
+				if project.Environment == "cloud" {
+					user.ActiveOrg.Id = matchingOrgs[0].Id
+				}
 
 				expiration := time.Now().Add(3600 * time.Second)
 				//if len(user.Session) == 0 {
@@ -11803,6 +11848,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.LoginType = "SSO"
 	newUser.Role = "user"
 	newUser.Session = uuid.NewV4().String()
+
+	newUser.ActiveOrg.Id = matchingOrgs[0].Id
 
 	verifyToken := uuid.NewV4()
 	ID := uuid.NewV4()
