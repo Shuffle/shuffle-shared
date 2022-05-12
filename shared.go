@@ -11530,14 +11530,18 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	// This is a mess, but all made to handle base64 and equal signs
 	parsedSAML := ""
 	for _, item := range strings.Split(string(body), "&") {
+		//log.Printf("Got body with info: %s", item)
 		if strings.Contains(item, "SAMLRequest") || strings.Contains(item, "SAMLResponse") {
 			equalsplit := strings.Split(item, "=")
 			addedEquals := len(equalsplit)
 			if len(equalsplit) >= 2 {
-				bareEquals := strings.Join(equalsplit[1:len(equalsplit)-1], "=")
-				if len(strings.Split(bareEquals, "=")) < addedEquals {
-					bareEquals += "="
-				}
+				//bareEquals := strings.Join(equalsplit[1:len(equalsplit)-1], "=")
+				bareEquals := equalsplit[1]
+				//log.Printf("Equal: %s", bareEquals)
+				_ = addedEquals
+				//if len(strings.Split(bareEquals, "=")) < addedEquals {
+				//	bareEquals += "="
+				//}
 
 				decodedValue, err := url.QueryUnescape(bareEquals)
 				if err != nil {
@@ -11550,6 +11554,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if strings.Contains(decodedValue, " ") {
 					decodedValue = strings.Replace(decodedValue, " ", "+", -1)
 				}
+
+				log.Printf("ParsedSaml: %s", decodedValue)
 
 				parsedSAML = decodedValue
 				break
@@ -12816,7 +12822,7 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetAppRequirements() string {
-	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.3\nMarkupSafe==2.0.1\nflask[async]==2.0.2\n"
+	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.3\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
 }
 
 // Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth

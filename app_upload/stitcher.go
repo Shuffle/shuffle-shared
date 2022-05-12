@@ -248,10 +248,10 @@ func addRequirements(filelocation string) {
 		return
 	}
 
-	if strings.Contains(string(data), "liquid") && strings.Contains(string(data), "requests") {
-		log.Printf("[WARNING] Req file already formatted with liquid and requests?")
-		return
-	}
+	//if strings.Contains(string(data), "liquid") && strings.Contains(string(data), "requests") {
+	//	log.Printf("[WARNING] Req file already formatted with liquid and requests?")
+	//	return
+	//}
 
 	filedata := shuffle.GetAppRequirements() + string(data)
 	err = ioutil.WriteFile(filelocation, []byte(filedata), os.ModePerm)
@@ -817,8 +817,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "outlook_owa"
-	appversion := "1.0.0"
+	appname := "shuffle-tools"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)
