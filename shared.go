@@ -7018,7 +7018,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		// Check if suborg -> Get parent & check SSO
 		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
 		if err == nil {
-			log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
+			//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
 			org := baseOrg
 
 			if len(baseOrg.ManagerOrgs) > 0 {
@@ -7041,7 +7041,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			log.Printf("SAML in org for user %s: %#v", userdata.Username, org.SSOConfig)
+			//log.Printf("SAML in org for user %s: %#v", userdata.Username, org.SSOConfig)
 			if len(org.SSOConfig.SSOEntrypoint) > 0 {
 				log.Printf("[DEBUG] Should redirect user %s in org %s to SSO login at %s", userdata.Username, userdata.ActiveOrg.Id, org.SSOConfig.SSOEntrypoint)
 				// https://trial-7276434.okta.com/app/trial-7276434_shuffle_1/exk10dgh8tZNCaXGC697/sso/saml
@@ -13502,6 +13502,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
         "list": [
             {
                 "name": "Email management",
+								"priority": 100,
                 "items": {
                     "name": "Release a quarantined message",
                     "items": {}
@@ -13509,6 +13510,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "EDR to ticket",
+								"priority": 100,
                 "items": {
                     "name": "Get host information",
                     "items": {}
@@ -13516,6 +13518,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "SIEM to ticket",
+								"priority": 100,
 								"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
 								"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
 								"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
@@ -13524,26 +13527,27 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "2-way Ticket synchronization",
+								"priority": 90,
                 "items": {}
             },
             {
                 "name": "ChatOps",
+								"priority": 70,
                 "items": {}
             },
             {
                 "name": "Threat Intel received",
-                "items": {}
-            },
-            {
-                "name": "Get running containers",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Assign tickets",
+								"priority": 30,
                 "items": {}
             },
             {
                 "name": "Firewall alerts",
+								"priority": 90,
                 "items": {
                     "name": "URL filtering",
                     "items": {}
@@ -13551,6 +13555,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "IDS/IPS alerts",
+								"priority": 90,
                 "items": {
                     "name": "Manage policies",
                     "items": {}
@@ -13558,10 +13563,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "Deduplicate information",
-                "items": {}
-            },
-            {
-                "name": "Correlate information",
+								"priority": 70,
                 "items": {}
             }
         ]
@@ -13572,6 +13574,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
         "list": [
             {
                 "name": "Internal Enrichment",
+								"priority": 100,
                 "items": {
                     "name": "...",
                     "items": {}
@@ -13579,6 +13582,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "External historical Enrichment",
+								"priority": 90,
                 "items": {
                     "name": "...",
                     "items": {}
@@ -13586,6 +13590,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "Realtime",
+								"priority": 50,
                 "items": {
                     "name": "Analyze screenshots",
                     "items": {}
@@ -13599,6 +13604,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
         "list": [
             {
                 "name": "Search SIEM (Sigma)",
+								"priority": 90,
                 "items": {
                     "name": "Endpoint",
                     "items": {}
@@ -13606,10 +13612,12 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "Search EDR (OSQuery)",
+								"priority": 90,
                 "items": {}
             },
             {
                 "name": "Search emails (Sublime)",
+								"priority": 90,
                 "items": {
                     "name": "Check headers and IOCs",
                     "items": {}
@@ -13617,22 +13625,27 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
             },
             {
                 "name": "Search IOCs (ioc-finder)",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Search files (Yara)",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "IDS & IPS (Snort/Surricata)",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Validate old tickets",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Honeypot access",
+								"priority": 50,
                 "items": {
                     "name": "...",
                     "items": {}
@@ -13646,42 +13659,57 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
         "list": [
             {
                 "name": "Eradicate malware",
+								"priority": 90,
                 "items": {}
             },
             {
                 "name": "Quarantine host(s)",
+								"priority": 90,
+                "items": {}
+            },
+            {
+                "name": "Block IPs, URLs, Domains and Hashes",
+								"priority": 90,
                 "items": {}
             },
             {
                 "name": "Trigger scans",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Update indicators (FW, EDR, SIEM...)",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Autoblock activity when threat intel is received",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Lock/Delete/Reset account",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Lock vault",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Increase authentication",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Get policies from assets",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Run ansible scripts",
+								"priority": 50,
                 "items": {}
             }
         ]
@@ -13692,66 +13720,82 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
         "list": [
             {
                 "name": "Discover vulnerabilities",
+								"priority": 80,
                 "items": {}
             },
             {
                 "name": "Discover assets",
+								"priority": 80,
                 "items": {}
             },
             {
                 "name": "Ensure policies are followed",
+								"priority": 80,
                 "items": {}
             },
             {
                 "name": "Find Inactive users",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Botnet tracker",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Ensure access rights match HR systems",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Ensure onboarding is followed",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Third party apps in SaaS",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Devices used for your cloud account",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Too much access in GCP/Azure/AWS/ other clouds",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Certificate validation",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Domain investigation with LetsEncrypt",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Monitor new DNS entries for domain with passive DNS",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Monitor and track password dumps",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Monitor for mentions of domain on darknet sites",
+								"priority": 50,
                 "items": {}
             },
             {
                 "name": "Reporting",
+								"priority": 50,
                 "items": {
                     "name": "Monthly reports",
                     "items": {

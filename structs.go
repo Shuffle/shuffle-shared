@@ -3285,6 +3285,7 @@ type Usecase struct {
 	EditedBy string `json:"edited_by"`
 	Blogpost string `json:"blogpost"`
 	Video    string `json:"video"`
+	Priority string `json:"video"`
 }
 
 type DealSearchWrapper struct {
