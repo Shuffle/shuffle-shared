@@ -1794,23 +1794,26 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error in org get: %s", err)
 			return &Org{}, err
 		}
 
 		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return &Org{}, errors.New("Org doesn't exist")
-		}
-
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
+			log.Printf("[WARNING] Failed getting org body: %s", err)
 			return &Org{}, err
+		}
+
+		if res.StatusCode == 404 {
+			log.Printf("[WARNING] Failed getting org - status: %d - %s", 404, string(respBody))
+			return &Org{}, errors.New("Org doesn't exist")
 		}
 
 		wrapped := OrgWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
+			log.Printf("[WARNING] Failed unmarshaling org: %s", err)
 			return &Org{}, err
 		}
 
@@ -1859,6 +1862,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 	}
 
+	log.Printf("[DEBUG] Got org with ID %s", curOrg.Id)
 	newUsers := []User{}
 	for _, user := range curOrg.Users {
 		user.Password = ""
