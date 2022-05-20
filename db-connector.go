@@ -1188,6 +1188,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 // FIXME: Not necessarily functional sadly.
 // Unused for the most part.
 func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error) {
+	log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
 	env := &Environment{}
 	environments := []Environment{}
 	nameKey := "Environments"
@@ -1755,7 +1756,7 @@ func GetAllOpenApi(ctx context.Context) ([]ParsedOpenApi, error) {
 
 func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 	var allworkflows []Workflow
-	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId)
+	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId).Limit(100)
 	if orgId == "ALL" {
 		q = datastore.NewQuery("workflow")
 	}
@@ -1862,7 +1863,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 	}
 
-	log.Printf("[DEBUG] Got org with ID %s", curOrg.Id)
 	newUsers := []User{}
 	for _, user := range curOrg.Users {
 		user.Password = ""
@@ -2948,6 +2948,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 }
 
 func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
+	log.Printf("[DEBUG] Getting environments for orgId %s", orgId)
 	nameKey := "Environments"
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
@@ -3049,15 +3050,16 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			environments = append(environments, hit.Source)
 		}
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
-		if orgId == "ALL" && project.Environment != "cloud" {
-			q = datastore.NewQuery(nameKey)
-		}
+		//log.Printf("\n\nQuerying ALL for org %s\n\n", orgId)
+		//q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(2)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("archived =", false).Limit(2)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
 			return []Environment{}, err
 		}
+
+		log.Printf("Got %d environments for org: %#v", len(environments), environments)
 	}
 
 	if len(environments) == 0 {
@@ -3069,6 +3071,11 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			Id:      uuid.NewV4().String(),
 		}
 
+		if project.Environment == "cloud" {
+			item.Name = "Cloud"
+			item.Type = "onprem"
+		}
+
 		err := SetEnvironment(ctx, &item)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting up new environment")
@@ -3076,6 +3083,8 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			environments = append(environments, item)
 		}
 	}
+
+	//log.Printf("\n\n[DEBUG2] Getting environments2 for orgId %s\n\n", orgId)
 
 	if project.CacheDb {
 		data, err := json.Marshal(environments)
@@ -3796,10 +3805,10 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 
 func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionRequestWrapper, error) {
 	nameKey := fmt.Sprintf("workflowqueue-%s", id)
-	q := datastore.NewQuery(nameKey).Limit(10)
 	executions := []ExecutionRequest{}
 
 	amount := limit
+	q := datastore.NewQuery(nameKey).Limit(amount)
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -4421,7 +4430,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("apikey =", apikey)
+		q := datastore.NewQuery(nameKey).Filter("apikey =", apikey).Limit(1)
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Error getting apikey: %s", err)
@@ -4763,8 +4772,8 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(100)
-
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+
 		if err != nil && len(notifications) == 0 {
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
 				q = q.Limit(50)
@@ -5161,10 +5170,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 
 		return schedules, err
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org = ", orgId)
-		if orgId == "ALL" && project.Environment != "cloud" {
-			q = datastore.NewQuery(nameKey)
-		}
+		q := datastore.NewQuery(nameKey).Filter("org = ", orgId).Limit(50)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &schedules)
 		if err != nil && len(schedules) == 0 {
@@ -5275,6 +5281,7 @@ func GetEnvironmentCount() (int, error) {
 
 func GetAllUsers(ctx context.Context) ([]User, error) {
 	index := "Users"
+
 	users := []User{}
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
@@ -5341,7 +5348,8 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 
 		return users, nil
 	} else {
-		q := datastore.NewQuery(index)
+		q := datastore.NewQuery(index).Limit(50)
+
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil {
 			return []User{}, err
@@ -5789,7 +5797,7 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 			orgs = append(orgs, hit.Source)
 		}
 	} else {
-		query := datastore.NewQuery(nameKey).Filter(fmt.Sprintf("%s =", fieldName), value)
+		query := datastore.NewQuery(nameKey).Filter(fmt.Sprintf("%s =", fieldName), value).Limit(10)
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting orgs for field %#v: %s", fieldName, err)
@@ -5802,6 +5810,7 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 
 func GetAllOrgs(ctx context.Context) ([]Org, error) {
 	index := "Organizations"
+
 	var orgs []Org
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
@@ -5868,7 +5877,8 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 
 		return orgs, nil
 	} else {
-		q := datastore.NewQuery(index)
+		q := datastore.NewQuery(index).Limit(100)
+
 		_, err := project.Dbclient.GetAll(ctx, q, &orgs)
 		if err != nil {
 			return []Org{}, err
@@ -6619,7 +6629,7 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 		deals = newDeals
 	} else {
 
-		query := datastore.NewQuery(nameKey).Filter("reseller_org =", orgId)
+		query := datastore.NewQuery(nameKey).Filter("reseller_org =", orgId).Limit(50)
 		_, err := project.Dbclient.GetAll(ctx, query, &deals)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)

@@ -602,6 +602,13 @@ type OrgMini struct {
 	ChildOrgs  []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
 }
 
+type Priority struct {
+	Name        string `json:"name" datastore:"name"`
+	Description string `json:"description" datastore:"description"`
+	Type        string `json:"type" datastore:"type"`
+	Active      bool   `json:"active" datastore:"active"`
+}
+
 type Org struct {
 	Name              string                `json:"name" datastore:"name"`
 	Description       string                `json:"description" datastore:"description"`
@@ -625,10 +632,11 @@ type Org struct {
 	ChildOrgs         []OrgMini             `json:"child_orgs" datastore:"child_orgs"`
 	ManagerOrgs       []OrgMini             `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
 	CreatorOrg        string                `json:"creator_org" datastore:"creator_org"`
-	SSOConfig         SSOConfig             `json:"sso_config" datastore:"sso_config"`
-	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework""`
 	Disabled          bool                  `json:"disabled" datastore:"disabled"`
 	PartnerInfo       PartnerInfo           `json:"partner_info" datastore:"partner_info"`
+	SSOConfig         SSOConfig             `json:"sso_config" datastore:"sso_config"`
+	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework""`
+	Priorities        []Priority            `json:"priorities" datastore:"priorities"`
 }
 
 type PartnerInfo struct {
@@ -1998,6 +2006,7 @@ type HandleInfo struct {
 	Cookies      []SessionCookie `json:"session_cookie"`
 	EthInfo      EthInfo         `json:"eth_info"`
 	ChatDisabled bool            `json:"chat_disabled"`
+	Priorities   []Priority      `json:"priorities" datastore:"priorities"`
 }
 
 type BuildLaterStruct struct {
@@ -3267,6 +3276,14 @@ type SettingsReturn struct {
 	Image    string `json:"image"`
 }
 
+type ExtraButton struct {
+	Name  string `json:"name"`
+	Image string `json:"image"`
+	Link  string `json:"link"`
+	App   string `json:"app"`
+	Type  string `json:"type"`
+}
+
 type Usecase struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
@@ -3281,11 +3298,12 @@ type Usecase struct {
 		Description string `json:"description"`
 		Human       bool   `json:"human"`
 	} `json:"process"`
-	Edited   int64  `json:"edited"`
-	EditedBy string `json:"edited_by"`
-	Blogpost string `json:"blogpost"`
-	Video    string `json:"video"`
-	Priority string `json:"video"`
+	Edited       int64         `json:"edited"`
+	EditedBy     string        `json:"edited_by"`
+	Blogpost     string        `json:"blogpost"`
+	Video        string        `json:"video"`
+	Priority     string        `json:"priority"`
+	ExtraButtons []ExtraButton `json:"extra_buttons"`
 }
 
 type DealSearchWrapper struct {

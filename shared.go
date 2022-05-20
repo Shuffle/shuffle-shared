@@ -12865,6 +12865,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 }
 
 func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
+	ret, err := project.Es.Info()
+	if err != nil {
+		log.Printf("[ERROR] Failed connecting to ES: %s", err)
+	}
+
+	if ret.StatusCode >= 300 {
+		resp.WriteHeader(ret.StatusCode)
+		resp.Write([]byte("Bad response from ES"))
+		return
+	}
+
 	fmt.Fprint(resp, "OK")
 }
 
@@ -13891,7 +13902,6 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		name = location[5]
 	}
 
-	log.Printf("[DEBUG] Got name %s", name)
 	ctx := getContext(request)
 	usecase, err := GetUsecase(ctx, name)
 	if err != nil {
@@ -13899,6 +13909,33 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	replacedName := strings.Replace(strings.ToLower(usecase.Name), " ", "_", -1)
+	if replacedName == "email_management" {
+		usecase.ExtraButtons = []ExtraButton{
+			ExtraButton{
+				Name:  "IMAP",
+				App:   "Email",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/email_ec25da1fdbf18934ca468788b73bec32.png",
+				Link:  "",
+				Type:  "communication",
+			},
+			ExtraButton{
+				Name:  "Gmail",
+				App:   "Gmail",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Gmail_794e51c3c1a8b24b89ccc573a3defc47.png",
+				Link:  "https://shuffler.io/workflows/e506060f-0c58-4f95-a0b8-f671103d78e5",
+				Type:  "communication",
+			},
+			ExtraButton{
+				Name:  "Outlook",
+				App:   "Outlook Graph",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Outlook_graph_d71641a57deeee8149df99080adebeb7.png",
+				Link:  "",
+				Type:  "communication",
+			},
+		}
 	}
 
 	newjson, err := json.Marshal(usecase)
@@ -13986,4 +14023,13 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	}
 
 	return exec, nil
+}
+
+func GetPriorities(ctx context.Context, org *Org) ([]Priority, error) {
+	// Check notifications
+	// Check if notification workflow is made
+	// Check workflows vs usecases
+	// Check based on org configuration (name, environments, apps...)
+
+	return []Priority{}, nil
 }
