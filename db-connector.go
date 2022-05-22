@@ -4663,6 +4663,9 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
+	DeleteCache(ctx, cacheKey)
+
 	return nil
 }
 
@@ -4695,9 +4698,24 @@ func SetFile(ctx context.Context, file File) error {
 }
 
 func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, error) {
-	var notifications []Notification
-
 	nameKey := "notifications"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+
+	var notifications []Notification
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &notifications)
+			if err == nil {
+				return notifications, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+		}
+	}
+
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -4786,6 +4804,19 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			} else {
 				return notifications, err
 			}
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(notifications)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling notification cache: %s", err)
+			return notifications, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating notification cache: %s", err)
 		}
 	}
 
@@ -4882,12 +4913,12 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(100)
+		q := datastore.NewQuery(nameKey).Filter("user_id =", userId).Limit(25)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 		if err != nil && len(notifications) == 0 {
 			if strings.Contains(fmt.Sprintf("%s", err), "ResourceExhausted") {
-				q = q.Limit(50)
+				q = q.Limit(10)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
@@ -6462,7 +6493,7 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return usecase, errors.New("Workflow doesn't exist")
+			return usecase, errors.New("Usecase doesn't exist")
 		}
 
 		defer res.Body.Close()

@@ -32,6 +32,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 
+	"github.com/bradfitz/slice"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/frikky/kin-openapi/openapi2"
@@ -47,6 +48,321 @@ import (
 var project ShuffleStorage
 var baseDockerName = "frikky/shuffle"
 var SSOUrl = ""
+var usecaseData = `[
+    {
+        "name": "1. Collect",
+        "color": "#c51152",
+        "list": [
+            {
+                "name": "Email management",
+								"priority": 100,
+								"type": "communication",
+                "items": {
+                    "name": "Release a quarantined message",
+                    "items": {}
+                }
+            },
+            {
+                "name": "EDR to ticket",
+								"priority": 100,
+								"type": "edr",
+                "items": {
+                    "name": "Get host information",
+                    "items": {}
+                }
+            },
+            {
+                "name": "SIEM to ticket",
+								"priority": 100,
+								"type": "siem",
+								"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
+								"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
+								"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
+								"reference_image": "/images/detectionframework.png",
+                "items": {}
+            },
+            {
+                "name": "2-way Ticket synchronization",
+								"priority": 90,
+                "items": {}
+            },
+            {
+                "name": "ChatOps",
+								"priority": 70,
+                "items": {}
+            },
+            {
+                "name": "Threat Intel received",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Assign tickets",
+								"priority": 30,
+                "items": {}
+            },
+            {
+                "name": "Firewall alerts",
+								"priority": 90,
+                "items": {
+                    "name": "URL filtering",
+                    "items": {}
+                }
+            },
+            {
+                "name": "IDS/IPS alerts",
+								"priority": 90,
+                "items": {
+                    "name": "Manage policies",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Deduplicate information",
+								"priority": 70,
+                "items": {}
+            }
+        ]
+    },
+    {
+        "name": "2. Enrich",
+        "color": "#f4c20d",
+        "list": [
+            {
+                "name": "Internal Enrichment",
+								"priority": 100,
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            },
+            {
+                "name": "External historical Enrichment",
+								"priority": 90,
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Realtime",
+								"priority": 50,
+                "items": {
+                    "name": "Analyze screenshots",
+                    "items": {}
+                }
+            }
+        ]
+    },
+    {
+        "name": "3. Detect",
+        "color": "#3cba54",
+        "list": [
+            {
+                "name": "Search SIEM (Sigma)",
+								"priority": 90,
+                "items": {
+                    "name": "Endpoint",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Search EDR (OSQuery)",
+								"priority": 90,
+                "items": {}
+            },
+            {
+                "name": "Search emails (Sublime)",
+								"priority": 90,
+                "items": {
+                    "name": "Check headers and IOCs",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Search IOCs (ioc-finder)",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Search files (Yara)",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "IDS & IPS (Snort/Surricata)",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Validate old tickets",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Honeypot access",
+								"priority": 50,
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            }
+        ]
+    },
+    {
+        "name": "4. Respond",
+        "color": "#4885ed",
+        "list": [
+            {
+                "name": "Eradicate malware",
+								"priority": 90,
+                "items": {}
+            },
+            {
+                "name": "Quarantine host(s)",
+								"priority": 90,
+                "items": {}
+            },
+            {
+                "name": "Block IPs, URLs, Domains and Hashes",
+								"priority": 90,
+                "items": {}
+            },
+            {
+                "name": "Trigger scans",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Update indicators (FW, EDR, SIEM...)",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Autoblock activity when threat intel is received",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Lock/Delete/Reset account",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Lock vault",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Increase authentication",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Get policies from assets",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Run ansible scripts",
+								"priority": 50,
+                "items": {}
+            }
+        ]
+    },
+    {
+        "name": "5. Verify",
+        "color": "#7f00ff",
+        "list": [
+            {
+                "name": "Discover vulnerabilities",
+								"priority": 80,
+                "items": {}
+            },
+            {
+                "name": "Discover assets",
+								"priority": 80,
+                "items": {}
+            },
+            {
+                "name": "Ensure policies are followed",
+								"priority": 80,
+                "items": {}
+            },
+            {
+                "name": "Find Inactive users",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Botnet tracker",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Ensure access rights match HR systems",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Ensure onboarding is followed",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Third party apps in SaaS",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Devices used for your cloud account",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Too much access in GCP/Azure/AWS/ other clouds",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Certificate validation",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Domain investigation with LetsEncrypt",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Monitor new DNS entries for domain with passive DNS",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Monitor and track password dumps",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Monitor for mentions of domain on darknet sites",
+								"priority": 50,
+                "items": {}
+            },
+            {
+                "name": "Reporting",
+								"priority": 50,
+                "items": {
+                    "name": "Monthly reports",
+                    "items": {
+                        "name": "...",
+                        "items": {}
+                    }
+                }
+            }
+        ]
+    }
+]`
 
 func getContext(request *http.Request) context.Context {
 	if project.Environment == "cloud" {
@@ -13505,319 +13821,9 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	_ = user
 
 	//ctx := getContext(request)
+
 	resp.WriteHeader(200)
-	resp.Write([]byte(`[
-    {
-        "name": "1. Collect",
-        "color": "#c51152",
-        "list": [
-            {
-                "name": "Email management",
-								"priority": 100,
-                "items": {
-                    "name": "Release a quarantined message",
-                    "items": {}
-                }
-            },
-            {
-                "name": "EDR to ticket",
-								"priority": 100,
-                "items": {
-                    "name": "Get host information",
-                    "items": {}
-                }
-            },
-            {
-                "name": "SIEM to ticket",
-								"priority": 100,
-								"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
-								"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
-								"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
-								"reference_image": "/images/detectionframework.png",
-                "items": {}
-            },
-            {
-                "name": "2-way Ticket synchronization",
-								"priority": 90,
-                "items": {}
-            },
-            {
-                "name": "ChatOps",
-								"priority": 70,
-                "items": {}
-            },
-            {
-                "name": "Threat Intel received",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Assign tickets",
-								"priority": 30,
-                "items": {}
-            },
-            {
-                "name": "Firewall alerts",
-								"priority": 90,
-                "items": {
-                    "name": "URL filtering",
-                    "items": {}
-                }
-            },
-            {
-                "name": "IDS/IPS alerts",
-								"priority": 90,
-                "items": {
-                    "name": "Manage policies",
-                    "items": {}
-                }
-            },
-            {
-                "name": "Deduplicate information",
-								"priority": 70,
-                "items": {}
-            }
-        ]
-    },
-    {
-        "name": "2. Enrich",
-        "color": "#f4c20d",
-        "list": [
-            {
-                "name": "Internal Enrichment",
-								"priority": 100,
-                "items": {
-                    "name": "...",
-                    "items": {}
-                }
-            },
-            {
-                "name": "External historical Enrichment",
-								"priority": 90,
-                "items": {
-                    "name": "...",
-                    "items": {}
-                }
-            },
-            {
-                "name": "Realtime",
-								"priority": 50,
-                "items": {
-                    "name": "Analyze screenshots",
-                    "items": {}
-                }
-            }
-        ]
-    },
-    {
-        "name": "3. Detect",
-        "color": "#3cba54",
-        "list": [
-            {
-                "name": "Search SIEM (Sigma)",
-								"priority": 90,
-                "items": {
-                    "name": "Endpoint",
-                    "items": {}
-                }
-            },
-            {
-                "name": "Search EDR (OSQuery)",
-								"priority": 90,
-                "items": {}
-            },
-            {
-                "name": "Search emails (Sublime)",
-								"priority": 90,
-                "items": {
-                    "name": "Check headers and IOCs",
-                    "items": {}
-                }
-            },
-            {
-                "name": "Search IOCs (ioc-finder)",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Search files (Yara)",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "IDS & IPS (Snort/Surricata)",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Validate old tickets",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Honeypot access",
-								"priority": 50,
-                "items": {
-                    "name": "...",
-                    "items": {}
-                }
-            }
-        ]
-    },
-    {
-        "name": "4. Respond",
-        "color": "#4885ed",
-        "list": [
-            {
-                "name": "Eradicate malware",
-								"priority": 90,
-                "items": {}
-            },
-            {
-                "name": "Quarantine host(s)",
-								"priority": 90,
-                "items": {}
-            },
-            {
-                "name": "Block IPs, URLs, Domains and Hashes",
-								"priority": 90,
-                "items": {}
-            },
-            {
-                "name": "Trigger scans",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Update indicators (FW, EDR, SIEM...)",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Autoblock activity when threat intel is received",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Lock/Delete/Reset account",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Lock vault",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Increase authentication",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Get policies from assets",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Run ansible scripts",
-								"priority": 50,
-                "items": {}
-            }
-        ]
-    },
-    {
-        "name": "5. Verify",
-        "color": "#7f00ff",
-        "list": [
-            {
-                "name": "Discover vulnerabilities",
-								"priority": 80,
-                "items": {}
-            },
-            {
-                "name": "Discover assets",
-								"priority": 80,
-                "items": {}
-            },
-            {
-                "name": "Ensure policies are followed",
-								"priority": 80,
-                "items": {}
-            },
-            {
-                "name": "Find Inactive users",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Botnet tracker",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Ensure access rights match HR systems",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Ensure onboarding is followed",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Third party apps in SaaS",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Devices used for your cloud account",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Too much access in GCP/Azure/AWS/ other clouds",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Certificate validation",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Domain investigation with LetsEncrypt",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Monitor new DNS entries for domain with passive DNS",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Monitor and track password dumps",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Monitor for mentions of domain on darknet sites",
-								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Reporting",
-								"priority": 50,
-                "items": {
-                    "name": "Monthly reports",
-                    "items": {
-                        "name": "...",
-                        "items": {}
-                    }
-                }
-            }
-        ]
-    }
-]`))
+	resp.Write([]byte(usecaseData))
 }
 
 func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
@@ -13835,7 +13841,7 @@ func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Needs to be a shuffler.io account to update
-	if !strings.HasSuffix(user.Username, "@shuffler.io") {
+	if project.Environment == "cloud" && !strings.HasSuffix(user.Username, "@shuffler.io") {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't change framework info"}`))
 		return
@@ -13858,6 +13864,7 @@ func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	usecase.Success = true
 	usecase.Name = strings.Replace(usecase.Name, " ", "_", -1)
 	usecase.Name = url.QueryEscape(usecase.Name)
 	log.Printf("[DEBUG] Updated usecase %s as user %s (%s)", usecase.Name, user.Username, user.Id)
@@ -13894,7 +13901,7 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 	if location[1] == "api" {
 		if len(location) <= 5 {
 			log.Printf("[ERROR] Path too short: %d", len(location))
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
@@ -13906,9 +13913,13 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 	usecase, err := GetUsecase(ctx, name)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting usecase %s: %s", name, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		usecase.Success = true
+		usecase.Name = name
+		//resp.WriteHeader(400)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
+	} else {
+		usecase.Success = true
 	}
 
 	replacedName := strings.Replace(strings.ToLower(usecase.Name), " ", "_", -1)
@@ -13941,7 +13952,7 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 	newjson, err := json.Marshal(usecase)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get usecase: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
 		return
 	}
@@ -14025,11 +14036,237 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	return exec, nil
 }
 
-func GetPriorities(ctx context.Context, org *Org) ([]Priority, error) {
-	// Check notifications
-	// Check if notification workflow is made
-	// Check workflows vs usecases
-	// Check based on org configuration (name, environments, apps...)
+func addPriority(org Org, priority Priority) (*Org, bool) {
+	updated := false
+	if len(org.Priorities) < 5 {
+		org.Priorities = append(org.Priorities, priority)
+		updated = true
+	}
 
-	return []Priority{}, nil
+	//log.Printf("Priorities: %d", len(org.Priorities))
+
+	return &org, updated
+}
+
+// Watch academy - Shuffle 101 if you're new
+// Check notifications
+// Check if all apps have been discovered
+// Check if notification workflow is made
+// Check workflows vs usecases
+// Check based on org configuration (name, environments, apps...)
+// Workflows not finished / without a parent workflow/trigger
+// Workflows not in production
+
+// Should just be based on cache, not queries - keep it fast!
+func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error) {
+	// Get usecases -> Check which aren't done based on priorities
+	// 1. Check what apps are selected. Are email, edr and siem in there?
+	// If not - autocorrect based on workflows' apps?
+	//log.Printf("[DEBUG] SecurityFramework: %#v", org.SecurityFramework)
+
+	// First prio: Find these & attach usecases?
+	// Only set these if cache is set for the user
+	orgUpdated := false
+	updated := false
+	if project.CacheDb == false {
+		// Not checking as cache is used for all checks
+		return org.Priorities, nil
+	}
+
+	if len(org.Defaults.NotificationWorkflow) == 0 {
+		org, updated = addPriority(*org, Priority{
+			Name:        fmt.Sprintf("You haven't defined a notification workflow yet."),
+			Description: "Notification workflows are used to automate your notification handling. These can be used to alert yourself in other systems when issues are found in your current- or sub-organizations",
+			Type:        "notifications",
+			Active:      true,
+			URL:         fmt.Sprintf("/admin"),
+		})
+
+		if updated {
+			orgUpdated = true
+		}
+	}
+
+	var notifications []Notification
+	cache, err := GetCache(ctx, fmt.Sprintf("notifications_%s", org.Id))
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %#v", cacheData)
+		err = json.Unmarshal(cacheData, &notifications)
+		if err == nil && len(notifications) > 0 {
+			org, updated = addPriority(*org, Priority{
+				Name:        fmt.Sprintf("You have %d unhandled notifications.", len(notifications)),
+				Description: "Notifications help make your workflow infrastructure stable. Click the notification icon in the top right to see all open ones.",
+				Type:        "notifications",
+				Active:      true,
+				URL:         fmt.Sprintf("/notifications"),
+			})
+
+			if updated {
+				orgUpdated = true
+			}
+		}
+	} else {
+		//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+	}
+
+	var workflows []Workflow
+	cache, err = GetCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &workflows)
+		if err == nil && len(workflows) > 0 {
+			if org.SecurityFramework.SIEM.Name == "" || org.SecurityFramework.EDR.Name == "" || org.SecurityFramework.Communication.Name == "" {
+				//log.Printf("Should find siem, edr and comms based on apps in use in workflows")
+				for _, workflow := range workflows {
+					for _, action := range workflow.Actions {
+						if len(action.Category) == 0 {
+							continue
+						}
+						//log.Printf("%s:%s = %s", action.AppName, action.AppVersion, action.Category)
+						if org.SecurityFramework.Communication.Name == "" && action.Category == "Communication" {
+							orgUpdated = true
+							org.SecurityFramework.Communication = Category{
+								Name:        action.Name,
+								Count:       1,
+								Description: "",
+								LargeImage:  action.LargeImage,
+								ID:          action.AppID,
+							}
+						}
+
+						if org.SecurityFramework.SIEM.Name == "" && action.Category == "SIEM" {
+							orgUpdated = true
+							org.SecurityFramework.SIEM = Category{
+								Name:        action.Name,
+								Count:       1,
+								Description: "",
+								LargeImage:  action.LargeImage,
+								ID:          action.AppID,
+							}
+						}
+
+						if org.SecurityFramework.EDR.Name == "" && action.Category == "EDR" {
+							orgUpdated = true
+							org.SecurityFramework.EDR = Category{
+								Name:        action.Name,
+								Count:       1,
+								Description: "",
+								LargeImage:  action.LargeImage,
+								ID:          action.AppID,
+							}
+						}
+					}
+				}
+
+				// Checking again to see if specifying either should be a priority
+				if org.SecurityFramework.SIEM.Name == "" || org.SecurityFramework.EDR.Name == "" || org.SecurityFramework.Communication.Name == "" {
+					org, updated = addPriority(*org, Priority{
+						Name:        "Apps for Email, EDR & SIEM should be specified",
+						Description: "The most common usecases are based on Email, EDR & SIEM. If these aren't specified Shuffle won't be used optimally.",
+						Type:        "definition",
+						Active:      true,
+						URL:         fmt.Sprintf("/detectionframework"),
+					})
+
+					if updated {
+						orgUpdated = true
+					}
+				}
+			}
+
+		}
+	} else {
+		//log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
+	}
+
+	if len(org.MainPriority) == 0 {
+		// Just choosing something for them, e.g. basic usecase building
+
+		org.MainPriority = "1. Collect"
+		orgUpdated = true
+	}
+
+	// Matching org priority with usecases & previously built workflows
+	if len(org.MainPriority) > 0 && len(workflows) > 0 {
+		var usecases UsecaseLinks
+		err = json.Unmarshal([]byte(usecaseData), &usecases)
+		if err == nil {
+			log.Printf("Got parsed usecases - should check priority vs mainpriority")
+
+			for usecaseIndex, usecase := range usecases {
+				if usecase.Name != org.MainPriority {
+					continue
+				}
+
+				// match them with usecases here
+				for _, workflow := range workflows {
+					if len(workflow.UsecaseIds) == 0 {
+						continue
+					}
+
+					// Fidning matching usecase for workflow
+					for _, workflowUsecase := range workflow.UsecaseIds {
+						newUsecasename := strings.ToLower(workflowUsecase)
+
+						for subusecaseIndex, subusecase := range usecase.List {
+							if newUsecasename == strings.ToLower(subusecase.Name) {
+								usecases[usecaseIndex].List[subusecaseIndex].Matches = append(usecases[usecaseIndex].List[subusecaseIndex].Matches, workflow)
+								break
+							}
+						}
+					}
+				}
+
+				// Sort sub-usecases by priority
+				slice.Sort(usecase.List[:], func(i, j int) bool {
+					return usecase.List[i].Priority > usecase.List[j].Priority
+				})
+
+				log.Printf("[DEBUG] Priorities for %s", usecase.Name)
+				for _, subusecase := range usecase.List {
+					// Check if it has a workflow attached to it too?
+					//log.Printf("%s = %d. Matches: %d", subusecase.Name, subusecase.Priority, len(subusecase.Matches))
+
+					if len(subusecase.Matches) == 0 {
+						continue
+					}
+
+					// Checking main type just in case, so it forces you to choose the app first (?)
+					if len(subusecase.Type) > 0 {
+						if strings.ToLower(subusecase.Type) == "siem" && org.SecurityFramework.SIEM.Name == "" {
+							continue
+						}
+
+						if strings.ToLower(subusecase.Type) == "edr" && org.SecurityFramework.EDR.Name == "" {
+							continue
+						}
+
+						if strings.ToLower(subusecase.Type) == "communication" && org.SecurityFramework.Communication.Name == "" {
+							continue
+						}
+					}
+
+					org, updated = addPriority(*org, Priority{
+						Name:        fmt.Sprintf("Complete the prioritized usecase %#v", subusecase.Name),
+						Description: fmt.Sprintf("Usecases are prioritized based on your Organizations Main Priority and matching priorities from Shuffle towards that priority. %#v is most likely one of your highest priorities. Dismiss this priority to get new priorities.", subusecase.Name),
+						Type:        "usecase",
+						Active:      true,
+						URL:         fmt.Sprintf("/usecases?selected_object=%s", subusecase.Name),
+					})
+
+					if updated {
+						orgUpdated = true
+					}
+				}
+			}
+		}
+	}
+
+	if orgUpdated {
+		log.Printf("[DEBUG] Should update org with %d notifications", len(org.Priorities))
+	}
+
+	return org.Priorities, nil
+	//return []Priority{}, nil
 }

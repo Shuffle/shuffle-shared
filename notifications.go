@@ -141,6 +141,8 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[AUDIT] Cleared all notifications for user %s (%s)", user.Username, user.Id)
+	cacheKey := fmt.Sprintf("notifications_%s", user.ActiveOrg.Id)
+	DeleteCache(ctx, cacheKey)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))

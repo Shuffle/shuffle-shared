@@ -607,6 +607,7 @@ type Priority struct {
 	Description string `json:"description" datastore:"description"`
 	Type        string `json:"type" datastore:"type"`
 	Active      bool   `json:"active" datastore:"active"`
+	URL         string `json:"url" datastore:"url"`
 }
 
 type Org struct {
@@ -637,6 +638,7 @@ type Org struct {
 	SSOConfig         SSOConfig             `json:"sso_config" datastore:"sso_config"`
 	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework""`
 	Priorities        []Priority            `json:"priorities" datastore:"priorities"`
+	MainPriority      string                `json:"main_priority" datastore:"main_priority"`
 }
 
 type PartnerInfo struct {
@@ -3285,6 +3287,7 @@ type ExtraButton struct {
 }
 
 type Usecase struct {
+	Success     bool   `json:"success"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	LeftText    string `json:"left_text"`
@@ -3344,4 +3347,24 @@ type ResellerDeal struct {
 	ResellerOrg string `json:"reseller_org" datastore:"reseller_org"`
 	Created     int64  `json:"created" datastore:"created"`
 	Edited      int64  `json:"edited" datastore:"edited"`
+}
+
+type UsecaseLinks []struct {
+	Name  string `json:"name"`
+	Color string `json:"color"`
+	List  []struct {
+		Name     string `json:"name"`
+		Priority int    `json:"priority"`
+		Type     string `json:"type"`
+		Items    struct {
+			Name  string `json:"name"`
+			Items struct {
+			} `json:"items"`
+		} `json:"items,omitempty"`
+		Description    string     `json:"description,omitempty"`
+		Video          string     `json:"video,omitempty"`
+		Blogpost       string     `json:"blogpost,omitempty"`
+		ReferenceImage string     `json:"reference_image,omitempty"`
+		Matches        []Workflow `json:"matches"`
+	} `json:"list"`
 }
