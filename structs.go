@@ -2079,6 +2079,7 @@ type SSOConfig struct {
 	SSOEntrypoint       string `json:"sso_entrypoint" datastore:"sso_entrypoint"`
 	SSOCertificate      string `json:"sso_certificate" datastore:"sso_certificate"`
 	OpenIdClientId      string `json:"client_id" datastore:"client_id"`
+	OpenIdClientSecret  string `json:"client_secret" datastore:"client_secret"`
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
 }
@@ -3367,4 +3368,20 @@ type UsecaseLinks []struct {
 		ReferenceImage string     `json:"reference_image,omitempty"`
 		Matches        []Workflow `json:"matches"`
 	} `json:"list"`
+}
+
+type IdTokenCheck struct {
+	Aud   string `json:"aud"`
+	Iss   string `json:"iss"`
+	Iat   int    `json:"iat"`
+	Nbf   int    `json:"nbf"`
+	Exp   int    `json:"exp"`
+	Aio   string `json:"aio"`
+	Nonce string `json:"nonce"`
+	Rh    string `json:"rh"`
+	Sub   string `json:"sub"`
+	Tid   string `json:"tid"`
+	Uti   string `json:"uti"`
+	Ver   string `json:"ver"`
+	Org   Org    `json:"org"`
 }

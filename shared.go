@@ -11504,144 +11504,189 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//https://dev-18062475.okta.com/oauth2/default/v1/authorize?client_id=0oa3romteykJ2aMgx5d7&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
-	//http://localhost:5002/api/v1/login_openid?code=rrm8BS8eUIYpQWnoM_Lzh_QoT3-EwQ2c9YkjRcJWqk4&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601
+	//https://dev-18062475.okta.com/oauth2/default/v1/authorize?client_id=oa3romteykJ2aMgx5d7&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
+	// http://localhost:5002/api/v1/login_openid?code=rrm8BS8eUIYpQWnoM_Lzh_QoT3-EwQ2c9YkjRcJWqk4&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601
+	// http://localhost:5001/api/v1/login_openid#id_token=asdasd&session_state=asde9d78d8-6535-45fe-848d-0efa9f119595
 
 	//code -> Token
+	ctx := getContext(request)
+
+	skipValidation := false
+	openidUser := OpenidUserinfo{}
+	org := &Org{}
 	code := request.URL.Query().Get("code")
 	if len(code) == 0 {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "No code specified"}`))
-		return
-	}
+		// Check id_token grant info
+		if request.Method == "POST" {
+			body, err := ioutil.ReadAll(request.Body)
+			if err != nil {
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code or id_token specified - body read error in POST"}`)))
+				resp.WriteHeader(401)
+				return
+			}
 
-	state := request.URL.Query().Get("state")
-	if len(state) == 0 {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "No state specified"}`))
-		return
-	}
+			stateSplit := strings.Split(string(body), "&")
+			for _, innerstate := range stateSplit {
+				itemsplit := strings.Split(innerstate, "=")
 
-	stateBase, err := base64.StdEncoding.DecodeString(state)
-	if err != nil {
-		log.Printf("[ERROR] Failed base64 decode OpenID state: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed base64 decoding of state"}`)))
-		return
-	}
+				if len(itemsplit) <= 1 {
+					log.Printf("[WARNING] No key:value: %s", innerstate)
+					continue
+				}
 
-	log.Printf("State: %s", stateBase)
-	foundOrg := ""
-	foundRedir := ""
-	foundChallenge := ""
-	stateSplit := strings.Split(string(stateBase), "&")
-	for _, innerstate := range stateSplit {
-		itemsplit := strings.Split(innerstate, "=")
-		//log.Printf("Itemsplit: %#v", itemsplit)
-		if len(itemsplit) <= 1 {
-			log.Printf("[WARNING] No key:value: %s", innerstate)
-			continue
+				if itemsplit[0] == "id_token" {
+					token, err := VerifyIdToken(ctx, itemsplit[1])
+					if err != nil {
+						log.Printf("[ERROR] Bad ID token provided: %s", err)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad ID token provided"}`)))
+						resp.WriteHeader(401)
+						return
+					}
+
+					log.Printf("[DEBUG] Validated - token: %s!", token)
+					openidUser.Sub = token.Sub
+					org = &token.Org
+					skipValidation = true
+
+					break
+				}
+			}
 		}
 
-		if itemsplit[0] == "org" {
-			foundOrg = strings.TrimSpace(itemsplit[1])
-		}
-
-		if itemsplit[0] == "redirect" {
-			foundRedir = strings.TrimSpace(itemsplit[1])
-		}
-
-		if itemsplit[0] == "challenge" {
-			foundChallenge = strings.TrimSpace(itemsplit[1])
+		if !skipValidation {
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No code specified"}`)))
+			resp.WriteHeader(401)
+			return
 		}
 	}
 
-	//log.Printf("Challenge len2: %d", len(foundChallenge))
+	if !skipValidation {
+		state := request.URL.Query().Get("state")
+		if len(state) == 0 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No state specified"}`)))
+			return
+		}
 
-	if len(foundOrg) == 0 {
-		log.Printf("[ERROR] No org specified in state")
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No org specified in state"}`)))
-		return
-	}
+		stateBase, err := base64.StdEncoding.DecodeString(state)
+		if err != nil {
+			log.Printf("[ERROR] Failed base64 decode OpenID state: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed base64 decoding of state"}`)))
+			return
+		}
 
-	ctx := getContext(request)
-	org, err := GetOrg(ctx, foundOrg)
-	if err != nil {
-		log.Printf("[WARNING] Error getting org in OpenID: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Couldn't find the org for sign-in in Shuffle"}`))
-		return
-	}
+		log.Printf("State: %s", stateBase)
+		foundOrg := ""
+		foundRedir := ""
+		foundChallenge := ""
+		stateSplit := strings.Split(string(stateBase), "&")
+		for _, innerstate := range stateSplit {
+			itemsplit := strings.Split(innerstate, "=")
+			//log.Printf("Itemsplit: %#v", itemsplit)
+			if len(itemsplit) <= 1 {
+				log.Printf("[WARNING] No key:value: %s", innerstate)
+				continue
+			}
 
-	clientId := org.SSOConfig.OpenIdClientId
-	tokenUrl := org.SSOConfig.OpenIdToken
-	if len(tokenUrl) == 0 {
-		log.Printf("[ERROR] No token URL specified for OpenID")
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No token URL specified. Please make sure to specify a token URL in the /admin panel in Shuffle for OpenID Connect"}`)))
-		return
-	}
+			if itemsplit[0] == "org" {
+				foundOrg = strings.TrimSpace(itemsplit[1])
+			}
 
-	//log.Printf("Challenge: %s", foundChallenge)
-	body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, foundChallenge)
-	if err != nil {
-		log.Printf("[WARNING] Error with body read of OpenID Connect: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+			if itemsplit[0] == "redirect" {
+				foundRedir = strings.TrimSpace(itemsplit[1])
+			}
 
-	openid := OpenidResp{}
-	err = json.Unmarshal(body, &openid)
-	if err != nil {
-		log.Printf("[WARNING] Error in Openid marshal: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+			if itemsplit[0] == "challenge" {
+				foundChallenge = strings.TrimSpace(itemsplit[1])
+			}
+		}
 
-	// Automated replacement
-	userInfoUrlSplit := strings.Split(org.SSOConfig.OpenIdAuthorization, "/")
-	userinfoEndpoint := strings.Join(userInfoUrlSplit[0:len(userInfoUrlSplit)-1], "/") + "/userinfo"
-	//userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
-	log.Printf("Userinfo endpoint: %s", userinfoEndpoint)
-	client := &http.Client{}
-	req, err := http.NewRequest(
-		"GET",
-		userinfoEndpoint,
-		nil,
-	)
+		//log.Printf("Challenge len2: %d", len(foundChallenge))
 
-	//req.Header.Add("accept", "application/json")
-	//req.Header.Add("cache-control", "no-cache")
-	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", openid.AccessToken))
-	res, err := client.Do(req)
-	if err != nil {
-		log.Printf("[WARNING] OpenID client DO (2): %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed userinfo request"}`))
-		return
-	}
+		if len(foundOrg) == 0 {
+			log.Printf("[ERROR] No org specified in state")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No org specified in state"}`)))
+			return
+		}
 
-	body, err = ioutil.ReadAll(res.Body)
-	if err != nil {
-		log.Printf("[WARNING] OpenID client Body (2): %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed userinfo body parsing"}`))
-		return
+		org, err = GetOrg(ctx, foundOrg)
+		if err != nil {
+			log.Printf("[WARNING] Error getting org in OpenID: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Couldn't find the org for sign-in in Shuffle"}`))
+			return
+		}
+
+		clientId := org.SSOConfig.OpenIdClientId
+		tokenUrl := org.SSOConfig.OpenIdToken
+		if len(tokenUrl) == 0 {
+			log.Printf("[ERROR] No token URL specified for OpenID")
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No token URL specified. Please make sure to specify a token URL in the /admin panel in Shuffle for OpenID Connect"}`)))
+			return
+		}
+
+		//log.Printf("Challenge: %s", foundChallenge)
+		body, err := RunOpenidLogin(ctx, clientId, tokenUrl, foundRedir, code, foundChallenge, org.SSOConfig.OpenIdClientSecret)
+		if err != nil {
+			log.Printf("[WARNING] Error with body read of OpenID Connect: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		openid := OpenidResp{}
+		err = json.Unmarshal(body, &openid)
+		if err != nil {
+			log.Printf("[WARNING] Error in Openid marshal: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// Automated replacement
+		userInfoUrlSplit := strings.Split(org.SSOConfig.OpenIdAuthorization, "/")
+		userinfoEndpoint := strings.Join(userInfoUrlSplit[0:len(userInfoUrlSplit)-1], "/") + "/userinfo"
+		//userinfoEndpoint := strings.Replace(org.SSOConfig.OpenIdAuthorization, "/authorize", "/userinfo", -1)
+		log.Printf("Userinfo endpoint: %s", userinfoEndpoint)
+		client := &http.Client{}
+		req, err := http.NewRequest(
+			"GET",
+			userinfoEndpoint,
+			nil,
+		)
+
+		//req.Header.Add("accept", "application/json")
+		//req.Header.Add("cache-control", "no-cache")
+		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", openid.AccessToken))
+		res, err := client.Do(req)
+		if err != nil {
+			log.Printf("[WARNING] OpenID client DO (2): %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo request"}`))
+			return
+		}
+
+		body, err = ioutil.ReadAll(res.Body)
+		if err != nil {
+			log.Printf("[WARNING] OpenID client Body (2): %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed userinfo body parsing"}`))
+			return
+		}
+
+		err = json.Unmarshal(body, &openidUser)
+		if err != nil {
+			log.Printf("[WARNING] Error in Openid marshal (2): %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	//log.Printf("Got user body: %s", string(body))
-
-	openidUser := OpenidUserinfo{}
-	err = json.Unmarshal(body, &openidUser)
-	if err != nil {
-		log.Printf("[WARNING] Error in Openid marshal (2): %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
 
 	/*
 
@@ -11650,7 +11695,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	*/
 
 	if len(openidUser.Sub) == 0 {
-		log.Printf("[WARNING] No user found (2): %s", err)
+		log.Printf("[WARNING] No user found in openid login (2)")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -11825,9 +11870,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 	return
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(body))
 }
 
 // Example implementation of SSO, including a redirect for the user etc

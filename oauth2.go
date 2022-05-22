@@ -2915,9 +2915,13 @@ func (v *CodeVerifier) CodeChallengeS256() string {
 }
 
 //https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
-func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge string) ([]byte, error) {
+func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge, clientSecret string) ([]byte, error) {
 	client := &http.Client{}
 	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s&code_verifier=%s", clientId, redirectUri, code, codeChallenge)
+	if len(clientSecret) > 0 {
+		data += fmt.Sprintf("&client_secret=%s", clientSecret)
+	}
+
 	req, err := http.NewRequest(
 		"POST",
 		baseUrl,
@@ -3616,4 +3620,85 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	//log.Printf("%#v", oauthResp)
 	return appAuth, nil
+}
+
+func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
+	// Check org in nonce -> check if ID points back to an org
+	outerSplit := strings.Split(string(idToken), ".")
+	for _, innerstate := range outerSplit {
+		log.Printf("%s", innerstate)
+		decoded, err := base64.StdEncoding.DecodeString(innerstate)
+		if err != nil {
+
+			// Random padding problems
+			innerstate += "="
+			decoded, err = base64.StdEncoding.DecodeString(innerstate)
+			if err != nil {
+				log.Printf("[WARNING] Failed base64 decode of state (2): %s", err)
+				continue
+			}
+		}
+
+		var token IdTokenCheck
+		err = json.Unmarshal([]byte(decoded), &token)
+		if err != nil {
+			log.Printf("[INFO] IDToken unmarshal error: %s", err)
+			continue
+		}
+
+		// Aud = client secret
+		// Nonce = contains all the info
+		if len(token.Aud) <= 0 {
+			log.Printf("[WARNING] Couldn't find AUD - continuing to next: %s", string(decoded))
+			continue
+		}
+
+		if len(token.Nonce) > 0 {
+			parsedState, err := base64.StdEncoding.DecodeString(token.Nonce)
+			if err != nil {
+				log.Printf("[ERROR] Failed state split: %s", err)
+				continue
+			}
+
+			foundOrg := ""
+			foundChallenge := ""
+			stateSplit := strings.Split(string(parsedState), "&")
+			for _, innerstate := range stateSplit {
+				itemsplit := strings.Split(innerstate, "=")
+				if len(itemsplit) <= 1 {
+					log.Printf("[WARNING] No key:value: %s", innerstate)
+					continue
+				}
+
+				if itemsplit[0] == "org" {
+					foundOrg = strings.TrimSpace(itemsplit[1])
+				}
+
+				if itemsplit[0] == "challenge" {
+					foundChallenge = strings.TrimSpace(itemsplit[1])
+				}
+			}
+
+			if len(foundOrg) == 0 {
+				log.Printf("[ERROR] No org specified in state (2)")
+				return IdTokenCheck{}, err
+			}
+
+			org, err := GetOrg(ctx, foundOrg)
+			if err != nil {
+				log.Printf("[WARNING] Error getting org in OpenID (2): %s", err)
+				return IdTokenCheck{}, err
+			}
+
+			// Validating the user itself
+			if token.Aud == org.SSOConfig.OpenIdClientId && foundChallenge == org.SSOConfig.OpenIdClientSecret {
+				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")
+				token.Org = *org
+				return token, nil
+			} else {
+			}
+		}
+	}
+
+	return IdTokenCheck{}, errors.New("Couldn't verify nonce")
 }
