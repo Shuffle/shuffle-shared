@@ -1188,7 +1188,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 // FIXME: Not necessarily functional sadly.
 // Unused for the most part.
 func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error) {
-	log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
+	//log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
 	env := &Environment{}
 	environments := []Environment{}
 	nameKey := "Environments"
@@ -2948,7 +2948,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 }
 
 func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
-	log.Printf("[DEBUG] Getting environments for orgId %s", orgId)
+	//log.Printf("[DEBUG] Getting environments for orgId %s", orgId)
 	nameKey := "Environments"
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
