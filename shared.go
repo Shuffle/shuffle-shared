@@ -12708,6 +12708,53 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if action.ID == workflowExecution.Start {
 			startFound = true
 		}
+
+		// Fill in apikey?
+		if project.Environment == "cloud" {
+			if (action.AppName == "Shuffle Tools" || action.AppName == "email") && action.Name == "send_email_shuffle" || action.Name == "send_sms_shuffle" {
+				for paramKey, param := range action.Parameters {
+					// Autoreplace in general, even if there is a key. Overwrite previous configs to ensure this becomes the norm. Frontend also matches.
+					if param.Name == "apikey" {
+						//log.Printf("Autoreplacing apikey")
+
+						// This will be in cache after running once or twice AKA fast
+						org, err := GetOrg(ctx, workflowExecution.Workflow.OrgId)
+						if err != nil {
+							log.Printf("[ERROR] Error getting org in APIkey replacement: %s", err)
+							continue
+						}
+
+						// Make sure to find one that's belonging to the org
+						// Picking random last user if
+
+						backupApikey := ""
+						for _, user := range org.Users {
+							if len(user.ApiKey) == 0 {
+								continue
+							}
+
+							if user.Role != "org-reader" {
+								backupApikey = user.ApiKey
+							}
+
+							if len(user.Orgs) == 1 || user.ActiveOrg.Id == workflowExecution.Workflow.OrgId {
+								//log.Printf("Choice: %s, %#v - %s", user.Username, user.Id, user.ApiKey)
+								action.Parameters[paramKey].Value = user.ApiKey
+								break
+							}
+						}
+
+						if len(action.Parameters[paramKey].Value) == 0 {
+							log.Printf("[WARNING] No apikey user found. Picking first random user")
+							action.Parameters[paramKey].Value = backupApikey
+						}
+
+						break
+					}
+				}
+			}
+
+		}
 		//log.Println(action.Environment)
 
 		if action.Environment == "" {
