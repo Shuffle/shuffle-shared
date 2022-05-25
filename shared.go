@@ -7290,34 +7290,29 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(users) > 1 {
-		log.Printf("[WARNING] Username %s has multiple users (%d). Checking if it matches any.", data.Username, len(users))
-	}
-
 	userdata := User{}
-	for _, user := range users {
-		if user.Id == "" && user.Username == "" {
-			log.Printf(`[WARNING] Username %s (%s) isn't valid. Amount of users checked: %d (1)`, user.Username, user.Id, len(users))
-			continue
-		}
+	if len(users) != 1 {
+		log.Printf("[WARNING] Username %s has multiple or no users (%d). Checking if it matches any.", data.Username, len(users))
 
-		if user.ActiveOrg.Id != "" {
-			err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
-			if err != nil {
-				log.Printf("[WARNING] Bad password: %s", err)
+		for _, user := range users {
+			if user.Id == "" && user.Username == "" {
+				log.Printf(`[WARNING] Username %s (%s) isn't valid. Amount of users checked: %d (1)`, user.Username, user.Id, len(users))
 				continue
 			}
 
-			userdata = user
-			break
-		}
-	}
+			if user.ActiveOrg.Id != "" {
+				err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
+				if err != nil {
+					log.Printf("[WARNING] Bad password: %s", err)
+					continue
+				}
 
-	if userdata.Id == "" && userdata.Username == "" {
-		log.Printf(`[WARNING] Username %s isn't valid. Amount of users checked: %d (2)`, data.Username, len(users))
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Username and/or password is incorrect"}`)))
-		return
+				userdata = user
+				break
+			}
+		}
+	} else {
+		userdata = users[0]
 	}
 
 	/*
@@ -7329,14 +7324,15 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 	*/
+
 	if project.Environment == "cloud" {
+		//log.Printf("[DEBUG] Are they using SSO?")
 		// If it fails, allow login if password correct?
 		// Check if suborg -> Get parent & check SSO
 		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
 		if err == nil {
 			//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
 			org := baseOrg
-
 			if len(baseOrg.ManagerOrgs) > 0 {
 
 				// Use auth from parent org if user is also in that one
@@ -7368,6 +7364,23 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+	}
+
+	if len(users) == 1 {
+		err = bcrypt.CompareHashAndPassword([]byte(userdata.Password), []byte(data.Password))
+		if err != nil {
+			userdata = User{}
+			log.Printf("[WARNING] Bad password: %s", err)
+		} else {
+			log.Printf("[DEBUG] Correct password with single user!")
+		}
+	}
+
+	if userdata.Id == "" && userdata.Username == "" {
+		log.Printf(`[WARNING] Username %s isn't valid. Amount of users checked: %d (2)`, data.Username, len(users))
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Username and/or password is incorrect"}`)))
+		return
 	}
 
 	if userdata.LoginType == "SSO" {
@@ -14011,6 +14024,7 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		usecase.Success = true
 	}
 
+	// Hardcoding until we have something good for open source + cloud
 	replacedName := strings.Replace(strings.ToLower(usecase.Name), " ", "_", -1)
 	if replacedName == "email_management" {
 		usecase.ExtraButtons = []ExtraButton{
@@ -14018,7 +14032,7 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 				Name:  "IMAP",
 				App:   "Email",
 				Image: "https://storage.googleapis.com/shuffle_public/app_images/email_ec25da1fdbf18934ca468788b73bec32.png",
-				Link:  "",
+				Link:  "https://shuffler.io/workflows/b65d180c-4d27-4cb6-8128-3687a08aadb3",
 				Type:  "communication",
 			},
 			ExtraButton{
@@ -14032,7 +14046,79 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 				Name:  "Outlook",
 				App:   "Outlook Graph",
 				Image: "https://storage.googleapis.com/shuffle_public/app_images/Outlook_graph_d71641a57deeee8149df99080adebeb7.png",
-				Link:  "",
+				Link:  "https://shuffler.io/workflows/3862ed8f-7801-4393-8524-05de8f8a401d",
+				Type:  "communication",
+			},
+		}
+	} else if replacedName == "edr_to_ticket" {
+		usecase.ExtraButtons = []ExtraButton{
+			ExtraButton{
+				Name:  "Velociraptor",
+				App:   "Velociraptor",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/velociraptor_63de9fc91bcb4813d9c58cc6efd49b33.png",
+				Link:  "https://shuffler.io/apps/63de9fc91bcb4813d9c58cc6efd49b33",
+				Type:  "edr",
+			},
+			ExtraButton{
+				Name:  "Carbon Black",
+				App:   "Carbon Black",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Carbon_Black_Response_e9fa2602ea6baafffa4b5eec722095d3.png",
+				Link:  "https://shuffler.io/apps/e9fa2602ea6baafffa4b5eec722095d3",
+				Type:  "edr",
+			},
+			ExtraButton{
+				Name:  "Crowdstrike",
+				App:   "Crowdstrike",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Crowdstrike_Falcon_7a66ce3c26e0d724f31f1ebc9a7a41b4.png",
+				Link:  "https://shuffler.io/apps/7a66ce3c26e0d724f31f1ebc9a7a41b4",
+				Type:  "edr",
+			},
+		}
+	} else if replacedName == "siem_to_ticket" {
+		usecase.ExtraButtons = []ExtraButton{
+			ExtraButton{
+				Name:  "Wazuh",
+				App:   "Wazuh",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Wazuh_fb715a176a192687e95e9d162186c97f.png",
+				Link:  "https://shuffler.io/workflows/bb45124c-d39e-4acc-a5d9-f8aa526042b5",
+				Type:  "siem",
+			},
+			ExtraButton{
+				Name:  "Splunk",
+				App:   "Splunk",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Splunk_Splunk_e352462c6d2f0a692281600d96002a45.png",
+				Link:  "https://shuffler.io/apps/441a2d85f6c1e8408dd1ee1e804cd241",
+				Type:  "siem",
+			},
+			ExtraButton{
+				Name:  "QRadar",
+				App:   "QRadar",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/QRadar_4fe358bd204f672d37c55b4f1d48ccdb.png",
+				Link:  "https://shuffler.io/apps/96a3d95a2a73cfdb51ea4a394287ed33",
+				Type:  "siem",
+			},
+		}
+	} else if replacedName == "chatops" {
+		usecase.ExtraButtons = []ExtraButton{
+			ExtraButton{
+				Name:  "Webex",
+				App:   "Webex",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Webex_1f6f2fc4fd399597e98ff34f78f56c45.png",
+				Link:  "https://shuffler.io/workflows/88e16093-37b7-41cf-b02b-d1ca0e737993",
+				Type:  "communication",
+			},
+			ExtraButton{
+				Name:  "Teams",
+				App:   "Microsoft Teams",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Microsoft_Teams_User_Access_4826c529f8082205a4b926ac9f1dfcfb.png",
+				Link:  "https://shuffler.io/apps/4826c529f8082205a4b926ac9f1dfcfb",
+				Type:  "communication",
+			},
+			ExtraButton{
+				Name:  "Slack",
+				App:   "Slack",
+				Image: "https://storage.googleapis.com/shuffle_public/app_images/Slack_Web_API_f63a65ddf0ee369845b6918575d47fc1.png",
+				Link:  "https://shuffler.io/workflows/0a7eeca9-e056-40e5-9a70-f078937c6055",
 				Type:  "communication",
 			},
 		}
