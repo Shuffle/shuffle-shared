@@ -9704,15 +9704,14 @@ func GetExecutionbody(body []byte) string {
 		}
 	}
 
-	// Replaces dots in string. Bad regex :D
-	/*
-		pattern := regexp.MustCompile(`\"(\w+)\.(\w+)\":`)
-		found := pattern.FindAllString(parsedBody, -1)
-		for _, item := range found {
-			newItem := strings.ReplaceAll(item, ".", "_", -1)
-			parsedBody = strings.Replace(parsedBody, item, newItem, -1)
-		}
-	*/
+	// Replaces dots in string when it's key specifically has a dot
+	// FIXME: Do this with key recursion and key replacements only
+	pattern := regexp.MustCompile(`\"(\w+)\.(\w+)\":`)
+	found := pattern.FindAllString(parsedBody, -1)
+	for _, item := range found {
+		newItem := strings.Replace(item, ".", "_", -1)
+		parsedBody = strings.Replace(parsedBody, item, newItem, -1)
+	}
 
 	if !strings.HasPrefix(parsedBody, "{") && !strings.HasPrefix(parsedBody, "[") && strings.Contains(parsedBody, "=") {
 		log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML)", parsedBody)
@@ -14367,7 +14366,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 		var usecases UsecaseLinks
 		err = json.Unmarshal([]byte(usecaseData), &usecases)
 		if err == nil {
-			log.Printf("Got parsed usecases - should check priority vs mainpriority")
+			log.Printf("[DEBUG] Got parsed usecases for %s - should check priority vs mainpriority (%s)", org.Name, org.MainPriority)
 
 			for usecaseIndex, usecase := range usecases {
 				if usecase.Name != org.MainPriority {

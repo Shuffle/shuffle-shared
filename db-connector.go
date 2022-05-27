@@ -3059,7 +3059,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return []Environment{}, err
 		}
 
-		log.Printf("Got %d environments for org: %#v", len(environments), environments)
+		//log.Printf("Got %d environments for org: %#v", len(environments), environments)
 	}
 
 	if len(environments) == 0 {
