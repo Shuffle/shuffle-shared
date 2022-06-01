@@ -1,11 +1,12 @@
 package shuffle
 
 import (
+	"encoding/xml"
+	"time"
+
 	"cloud.google.com/go/datastore"
 	"cloud.google.com/go/storage"
-	"encoding/xml"
 	"github.com/frikky/go-elasticsearch/v8"
-	"time"
 )
 
 type ShuffleStorage struct {
@@ -402,13 +403,16 @@ type Session struct {
 }
 
 type Contact struct {
-	Firstname   string `json:"firstname"`
-	Lastname    string `json:"lastname"`
-	Title       string `json:"title"`
-	Companyname string `json:"companyname"`
-	Phone       string `json:"phone"`
-	Email       string `json:"email"`
-	Message     string `json:"message"`
+	Firstname     string `json:"firstname"`
+	Lastname      string `json:"lastname"`
+	Title         string `json:"title"`
+	Companyname   string `json:"companyname"`
+	Phone         string `json:"phone"`
+	Email         string `json:"email"`
+	ValidateEmail string `json:"validate_email"`
+	Message       string `json:"message"`
+	DealType      string `json:"dealtype"`
+	DealCountry   string `json:"dealcountry"`
 }
 
 type Translator struct {
