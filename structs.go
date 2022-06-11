@@ -46,26 +46,25 @@ type RetStruct struct {
 }
 
 type WorkflowApp struct {
-	Name          string `json:"name" yaml:"name" required:true datastore:"name"`
-	IsValid       bool   `json:"is_valid" yaml:"is_valid" required:true datastore:"is_valid"`
-	ID            string `json:"id" yaml:"id,omitempty" required:false datastore:"id"`
-	Link          string `json:"link" yaml:"link" required:false datastore:"link,noindex"`
-	AppVersion    string `json:"app_version" yaml:"app_version" required:true datastore:"app_version"`
-	SharingConfig string `json:"sharing_config" yaml:"sharing_config" datastore:"sharing_config"`
-	Generated     bool   `json:"generated" yaml:"generated" required:false datastore:"generated"`
-	Downloaded    bool   `json:"downloaded" yaml:"downloaded" required:false datastore:"downloaded"`
-	Sharing       bool   `json:"sharing" yaml:"sharing" required:false datastore:"sharing"`
-	Verified      bool   `json:"verified" yaml:"verified" required:false datastore:"verified"`
-	Invalid       bool   `json:"invalid" yaml:"invalid" required:false datastore:"invalid"`
-	Activated     bool   `json:"activated" yaml:"activated" required:false datastore:"activated"`
-	Tested        bool   `json:"tested" yaml:"tested" required:false datastore:"tested"`
-	Hash          string `json:"hash" datastore:"hash" yaml:"hash"` // api.yaml+dockerfile+src/app.py for apps
-	PrivateID     string `json:"private_id" yaml:"private_id" required:false datastore:"private_id"`
-	Description   string `json:"description" datastore:"description,noindex" required:false yaml:"description"`
-	Environment   string `json:"environment" datastore:"environment" required:true yaml:"environment"`
-	SmallImage    string `json:"small_image" datastore:"small_image,noindex" required:false yaml:"small_image"`
-	LargeImage    string `json:"large_image" datastore:"large_image,noindex" yaml:"large_image" required:false`
-	ContactInfo   struct {
+	Name        string `json:"name" yaml:"name" required:true datastore:"name"`
+	AppVersion  string `json:"app_version" yaml:"app_version" required:true datastore:"app_version"`
+	ID          string `json:"id" yaml:"id,omitempty" required:false datastore:"id"`
+	Link        string `json:"link" yaml:"link" required:false datastore:"link,noindex"`
+	IsValid     bool   `json:"is_valid" yaml:"is_valid" required:true datastore:"is_valid"`
+	Generated   bool   `json:"generated" yaml:"generated" required:false datastore:"generated"`
+	Downloaded  bool   `json:"downloaded" yaml:"downloaded" required:false datastore:"downloaded"`
+	Sharing     bool   `json:"sharing" yaml:"sharing" required:false datastore:"sharing"`
+	Verified    bool   `json:"verified" yaml:"verified" required:false datastore:"verified"`
+	Invalid     bool   `json:"invalid" yaml:"invalid" required:false datastore:"invalid"`
+	Activated   bool   `json:"activated" yaml:"activated" required:false datastore:"activated"`
+	Tested      bool   `json:"tested" yaml:"tested" required:false datastore:"tested"`
+	Hash        string `json:"hash" datastore:"hash" yaml:"hash"` // api.yaml+dockerfile+src/app.py for apps
+	PrivateID   string `json:"private_id" yaml:"private_id" required:false datastore:"private_id"`
+	Description string `json:"description" datastore:"description,noindex" required:false yaml:"description"`
+	Environment string `json:"environment" datastore:"environment" required:true yaml:"environment"`
+	SmallImage  string `json:"small_image" datastore:"small_image,noindex" required:false yaml:"small_image"`
+	LargeImage  string `json:"large_image" datastore:"large_image,noindex" yaml:"large_image" required:false`
+	ContactInfo struct {
 		Name string `json:"name" datastore:"name" yaml:"name"`
 		Url  string `json:"url" datastore:"url" yaml:"url"`
 	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
@@ -88,6 +87,7 @@ type WorkflowApp struct {
 	Versions       []AppVersion        `json:"versions" datastore:"versions"`
 	LoopVersions   []string            `json:"loop_versions" datastore:"loop_versions"`
 	Owner          string              `json:"owner" datastore:"owner" yaml:"owner"`
+	SharingConfig  string              `json:"sharing_config" yaml:"sharing_config" datastore:"sharing_config"`
 	Public         bool                `json:"public" datastore:"public"`
 	PublishedId    string              `json:"published_id" datastore:"published_id"`
 	ChildIds       []string            `json:"child_ids" datastore:"child_ids"`
@@ -95,6 +95,8 @@ type WorkflowApp struct {
 	ReferenceUrl   string              `json:"reference_url" datastore:"reference_url"`
 	ActionFilePath string              `json:"action_file_path" datastore:"action_file_path"`
 	Documentation  string              `json:"documentation" datastore:"documentation,noindex"`
+	Template       bool                `json:"template" datastore:"template,noindex"`
+	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
 }
 
 type AppVersion struct {
@@ -3388,4 +3390,28 @@ type IdTokenCheck struct {
 	Uti   string `json:"uti"`
 	Ver   string `json:"ver"`
 	Org   Org    `json:"org"`
+}
+
+type WidgetMeta struct {
+	Color string `json:"color"`
+}
+
+type WidgetPointData struct {
+	Key      string     `json:"key"`
+	Data     int64      `json:"data"`
+	MetaData WidgetMeta `json:"metadata"`
+}
+
+type WidgetPoint struct {
+	Key  string            `json:"key"`
+	Data []WidgetPointData `json:"data"`
+}
+
+type Widget struct {
+	Success    bool          `json:"success"`
+	Id         string        `json:"id"`
+	Title      string        `json:"title"`
+	Dashboard  string        `json:"dashboard"`
+	WidgetType string        `json:"widget_type"`
+	Data       []WidgetPoint `json:"data"`
 }
