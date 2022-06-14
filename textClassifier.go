@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/adrg/strutil"
@@ -215,4 +216,38 @@ func RunTextClassifier(ctx context.Context, workflowExecution WorkflowExecution)
 			log.Printf("[WARNING] Failed to update main execution %s", workflowExecution.ExecutionId)
 		}
 	}
+}
+
+// Finds IPs, domains and hashes (for now)
+func RunIOCFinder(ctx context.Context, workflowExecution WorkflowExecution) {
+
+	numBlock := "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
+	regexPattern := numBlock + "\\." + numBlock + "\\." + numBlock + "\\." + numBlock
+	ips := regexp.MustCompile(regexPattern)
+
+	domains := regexp.MustCompile(`^(([a-zA-Z]{1})|([a-zA-Z]{1}[a-zA-Z]{1})|([a-zA-Z]{1}[0-9]{1})|([0-9]{1}[a-zA-Z]{1})|([a-zA-Z0-9][a-zA-Z0-9-_]{1,61}[a-zA-Z0-9]))\.([a-zA-Z]{2,6}|[a-zA-Z0-9-]{2,30}\.[a-zA-Z]{2,3})$`)
+
+	//urls := regexp.MustCompile(`(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})`)
+	//urls := regexp.MustCompile(`(https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|www\.[a-zA-Z0-9][a-zA-Z0-9-]+[a-zA-Z0-9]\.[^\s]{2,}|https?:\/\/(?:www\.|(?!www))[a-zA-Z0-9]+\.[^\s]{2,}|www\.[a-zA-Z0-9]+\.[^\s]{2,})`)
+
+	md5s := regexp.MustCompile(`[a-f0-9]{32}`)
+	sha256s := regexp.MustCompile(`[A-Fa-f0-9]{64}`)
+
+	foundIps := []string{}
+	foundDomains := []string{}
+	foundMd5s := []string{}
+	foundSha256s := []string{}
+	for _, result := range workflowExecution.Results {
+		// Too big?
+		//if len(result.Result) > 1000000 {
+		//	continue
+		//}
+
+		foundIps = append(foundIps, ips.FindAllString(result.Result, -1)...)
+		foundDomains = append(foundDomains, domains.FindAllString(result.Result, -1)...)
+		foundMd5s = append(foundMd5s, md5s.FindAllString(result.Result, -1)...)
+		foundSha256s = append(foundSha256s, sha256s.FindAllString(result.Result, -1)...)
+	}
+
+	fmt.Printf("[DEBUG][%s] IPS: %#v, Domains: %#v, Md5s: %#v, Sha256s: %#v", workflowExecution.ExecutionId, foundIps, foundDomains, foundMd5s, foundSha256s)
 }
