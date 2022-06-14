@@ -7325,6 +7325,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			}
 	*/
 
+	updateUser := false
 	if project.Environment == "cloud" {
 		//log.Printf("[DEBUG] Are they using SSO?")
 		// If it fails, allow login if password correct?
@@ -7347,21 +7348,59 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if found {
-						log.Printf("Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
+						log.Printf("[WARNING] Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
 						org = newOrg
 					}
 				}
 			}
 
-			//log.Printf("SAML in org for user %s: %#v", userdata.Username, org.SSOConfig)
 			if len(org.SSOConfig.SSOEntrypoint) > 0 {
 				log.Printf("[DEBUG] Should redirect user %s in org %s to SSO login at %s", userdata.Username, userdata.ActiveOrg.Id, org.SSOConfig.SSOEntrypoint)
 				// https://trial-7276434.okta.com/app/trial-7276434_shuffle_1/exk10dgh8tZNCaXGC697/sso/saml
 
+				// Check if the user has other orgs that can be swapped to - if so SWAP
+				userDomain := strings.Split(userdata.Username, "@")
+				for _, tmporg := range userdata.Orgs {
+					innerorg, err := GetOrg(ctx, tmporg)
+					if err != nil {
+						continue
+					}
+
+					if innerorg.Id == userdata.ActiveOrg.Id {
+						continue
+					}
+
+					if len(innerorg.ManagerOrgs) > 0 {
+						continue
+					}
+
+					// Not your own org
+					if innerorg.Org == userdata.Username || strings.Contains(innerorg.Name, "@") {
+						continue
+					}
+
+					if len(userDomain) >= 2 {
+						if strings.Contains(strings.ToLower(innerorg.Org), strings.ToLower(userDomain[1])) {
+							continue
+						}
+					}
+
+					// Shouldn't contain the domain of the users' email
+					log.Printf("[DEBUG] Found org for %s (%s) to check into instead of running SSO: %s", userdata.Username, userdata.Id, innerorg.Name)
+					userdata.ActiveOrg.Id = innerorg.Id
+					userdata.ActiveOrg.Name = innerorg.Name
+
+					updateUser = true
+					break
+
+				}
+
 				// user controllable field hmm :)
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "SSO_REDIRECT", "url": "%s"}`, org.SSOConfig.SSOEntrypoint)))
-				return
+				if !updateUser {
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "SSO_REDIRECT", "url": "%s"}`, org.SSOConfig.SSOEntrypoint)))
+					return
+				}
 			}
 		}
 	}
@@ -7381,6 +7420,16 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Username and/or password is incorrect"}`)))
 		return
+	}
+
+	if updateUser {
+		err = SetUser(ctx, &userdata, false)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating user when auto-setting new org: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Something went wrong with the SSO redirect system"}`)))
+			return
+		}
 	}
 
 	if userdata.LoginType == "SSO" {
