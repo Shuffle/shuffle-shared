@@ -2093,8 +2093,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, errors.New("Invalid format for apikey")
 		}
 
-		// fml
-		//log.Println(apikeyCheck)
+		if len(apikeyCheck[1]) < 36 {
+			return User{}, errors.New("Apikey must be at least 36 characters long (UUID)")
+		}
 
 		// This is annoying af
 		newApikey := apikeyCheck[1]

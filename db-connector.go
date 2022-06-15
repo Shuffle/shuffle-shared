@@ -4371,6 +4371,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 				},
 			},
 		}
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
 			return User{}, err
@@ -4426,6 +4427,10 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 
 		users = []User{}
 		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.ApiKey != apikey {
+				continue
+			}
+
 			users = append(users, hit.Source)
 		}
 
