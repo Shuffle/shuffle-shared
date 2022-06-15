@@ -218,7 +218,8 @@ func RunTextClassifier(ctx context.Context, workflowExecution WorkflowExecution)
 	}
 }
 
-// Finds IPs, domains and hashes (for now)
+// Finds IPs, domains and hashes
+// Point is to test out how we can create a structured database of these, correlate with, and store them
 func RunIOCFinder(ctx context.Context, workflowExecution WorkflowExecution) {
 
 	numBlock := "(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])"
