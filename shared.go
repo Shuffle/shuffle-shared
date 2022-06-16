@@ -7598,7 +7598,6 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 		//log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
 	}
 
-	backendUrl = "https://99f9-84-210-195-113.ngrok.io"
 	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
 
 	// Callback to itself
@@ -9143,10 +9142,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						if result.Status == "ABORTED" || result.Status == "FAILURE" || result.Status == "SKIPPED" {
 							workflowExecution.Result = workflowExecution.Workflow.DefaultReturnValue
 							if len(workflowExecution.ExecutionParent) > 0 {
-								log.Printf("FOUND SUBFLOW WITH EXECUTIONPARENT %s!", workflowExecution.ExecutionParent)
-
 								// 1. Find the parent workflow
 								// 2. Find the parent's existing value
+
+								log.Printf("[DEBUG] FOUND SUBFLOW WITH EXECUTIONPARENT %s!", workflowExecution.ExecutionParent)
 							}
 						} else {
 							valueToReturn = workflowExecution.Result
