@@ -7571,7 +7571,6 @@ func checkUsername(Username string) error {
 // Let's do it anyway, since it seems like the best way to scale
 // without remoting problems and the like.
 func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
-	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, VALUE: %s", executionParent, parentAuth, parentNode, returnValue)
 
 	// Was an error here. Now defined to run with http://shuffle-backend:5001 by default
 	backendUrl := os.Getenv("BASE_URL")
@@ -7596,8 +7595,11 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 		// From worker:
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
-		log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
+		//log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
 	}
+
+	backendUrl = "https://99f9-84-210-195-113.ngrok.io"
+	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
 
 	// Callback to itself
 	if len(backendUrl) == 0 {
@@ -9146,7 +9148,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								// 1. Find the parent workflow
 								// 2. Find the parent's existing value
 							}
+						} else {
+							valueToReturn = workflowExecution.Result
 						}
+
 						break
 					}
 				}
