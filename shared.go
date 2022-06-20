@@ -13067,6 +13067,26 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	// Added fixes for e.g. URL's ending in /
+	fixes := []string{"url"}
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
+		if strings.ToLower(action.AppName) == "http" {
+			continue
+		}
+
+		for paramIndex, param := range action.Parameters {
+			if !param.Configuration {
+				continue
+			}
+
+			if ArrayContains(fixes, strings.ToLower(param.Name)) {
+				if strings.HasSuffix(param.Value, "/") {
+					workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = param.Value[0 : len(param.Value)-1]
+				}
+			}
+		}
+	}
+
 	// Not necessary with comments at all
 	workflowExecution.Workflow.Comments = []Comment{}
 	removeTriggers := []string{}

@@ -278,20 +278,22 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 				continue
 			}
 
+			//parsedKey := strings.Replace(key, "-", "_", -1)
+			parsedKey := FixFunctionName(key, "")
 			if value.Value.In == "header" {
-				queryString += fmt.Sprintf(", %s=\"\"", key)
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
 				if len(extraHeaders) > 0 {
 					extraHeaders += "\n        "
 				}
 
-				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, key, key, key)
+				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
 			} else if value.Value.In == "query" {
 				log.Printf("Handling extra queries for %#v", value.Value)
-				queryString += fmt.Sprintf(", %s=\"\"", key)
+				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
 				if len(extraQueries) > 0 {
 					extraQueries += "\n        "
 				}
-				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, key, key, key)
+				extraQueries += fmt.Sprintf(`if %s != " ": params["%s"] = %s`, parsedKey, key, parsedKey)
 			} else {
 				//log.Printf("[WARNING] Can't handle type %s", value.Value.In)
 			}
@@ -301,12 +303,14 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// FIXME - this might break - need to check if ? or & should be set as query
 	parameterData := ""
 	if len(optionalQueries) > 0 {
-		//log.Printf("OPTIONAL %#v", optionalQueries)
 		//if len(queryString
 		queryString += ", "
 		for index, query := range optionalQueries {
 			// Check if it's a part of the URL already
-			queryString += fmt.Sprintf("%s=\"\"", query)
+
+			parsedQuery := FixFunctionName(query, "")
+			queryString += fmt.Sprintf("%s=\"\"", parsedQuery)
+
 			if index != len(optionalQueries)-1 {
 				queryString += ", "
 			}
@@ -324,7 +328,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
                 except:
                     pass
 
-            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, query, query, query, query, query, query, query)
+            params[requests.utils.quote("%s")] = requests.utils.quote(%s)`, parsedQuery, parsedQuery, parsedQuery, parsedQuery, parsedQuery, query, parsedQuery)
 		}
 	} else {
 		//log.Printf("No optional queries?")
@@ -667,8 +671,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "note") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(strings.ToLower(functionname), "validate") {
+		log.Printf("\n%s", data)
 	}
 
 	return functionname, data
