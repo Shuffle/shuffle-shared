@@ -229,7 +229,12 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 			err = res.UnmarshalHits(&newRecords)
 			if err != nil {
 				log.Printf("[WARNING] Failed unmarshaling from Algolia creator workflow: %s", err)
-				return searchCreator, err
+
+				if len(newRecords) > 0 && len(newRecords[0].ObjectID) > 0 {
+					log.Printf("[INFO] Workflow search ID: %#v", newRecords[0].ObjectID)
+				} else {
+					return searchCreator, err
+				}
 			}
 
 			//log.Printf("[DEBUG] Got %d records for workflow sub", len(newRecords))
