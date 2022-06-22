@@ -10933,7 +10933,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 			param.Name = strings.Replace(param.Name, "_", " ", -1)
 			param.Name = strings.Title(param.Name)
 
-			value := fmt.Sprintf("Param %s can't be empty. Fill all required parameters.", param.Name)
+			value := fmt.Sprintf("Param %s can't be empty. Please fill all required parameters (orange outline). If you don't know the value, input space in the field.", param.Name)
 			log.Printf("[WARNING] During single exec: %s", value)
 			return workflowExecution, errors.New(value)
 		}

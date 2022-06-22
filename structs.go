@@ -60,7 +60,6 @@ type WorkflowApp struct {
 	Tested      bool   `json:"tested" yaml:"tested" required:false datastore:"tested"`
 	Hash        string `json:"hash" datastore:"hash" yaml:"hash"` // api.yaml+dockerfile+src/app.py for apps
 	PrivateID   string `json:"private_id" yaml:"private_id" required:false datastore:"private_id"`
-	Description string `json:"description" datastore:"description,noindex" required:false yaml:"description"`
 	Environment string `json:"environment" datastore:"environment" required:true yaml:"environment"`
 	SmallImage  string `json:"small_image" datastore:"small_image,noindex" required:false yaml:"small_image"`
 	LargeImage  string `json:"large_image" datastore:"large_image,noindex" yaml:"large_image" required:false`
@@ -77,25 +76,31 @@ type WorkflowApp struct {
 		SourceFolder      string `json:"source_folder" datastore:"source_folder"`
 		DestinationFolder string `json:"destination_folder" datastore:"destination_folder"`
 	} `json:"folder_mount" datastore:"folder_mount"`
-	Actions        []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
-	Authentication Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
-	Tags           []string            `json:"tags" yaml:"tags" required:false datastore:"activated"`
-	Categories     []string            `json:"categories" yaml:"categories" required:false datastore:"categories"`
-	Created        int64               `json:"created" datastore:"created"`
-	Edited         int64               `json:"edited" datastore:"edited"`
-	LastRuntime    int64               `json:"last_runtime" datastore:"last_runtime"`
-	Versions       []AppVersion        `json:"versions" datastore:"versions"`
-	LoopVersions   []string            `json:"loop_versions" datastore:"loop_versions"`
-	Owner          string              `json:"owner" datastore:"owner" yaml:"owner"`
-	SharingConfig  string              `json:"sharing_config" yaml:"sharing_config" datastore:"sharing_config"`
-	Public         bool                `json:"public" datastore:"public"`
-	PublishedId    string              `json:"published_id" datastore:"published_id"`
-	ChildIds       []string            `json:"child_ids" datastore:"child_ids"`
-	ReferenceOrg   string              `json:"reference_org" datastore:"reference_org"`
-	ReferenceUrl   string              `json:"reference_url" datastore:"reference_url"`
-	ActionFilePath string              `json:"action_file_path" datastore:"action_file_path"`
-	Documentation  string              `json:"documentation" datastore:"documentation,noindex"`
-	Template       bool                `json:"template" datastore:"template,noindex"`
+	Actions                  []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
+	Authentication           Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
+	Tags                     []string            `json:"tags" yaml:"tags" required:false datastore:"activated"`
+	Categories               []string            `json:"categories" yaml:"categories" required:false datastore:"categories"`
+	Created                  int64               `json:"created" datastore:"created"`
+	Edited                   int64               `json:"edited" datastore:"edited"`
+	LastRuntime              int64               `json:"last_runtime" datastore:"last_runtime"`
+	Versions                 []AppVersion        `json:"versions" datastore:"versions"`
+	LoopVersions             []string            `json:"loop_versions" datastore:"loop_versions"`
+	Owner                    string              `json:"owner" datastore:"owner" yaml:"owner"`
+	SharingConfig            string              `json:"sharing_config" yaml:"sharing_config" datastore:"sharing_config"`
+	Public                   bool                `json:"public" datastore:"public"`
+	PublishedId              string              `json:"published_id" datastore:"published_id"`
+	ChildIds                 []string            `json:"child_ids" datastore:"child_ids"`
+	ReferenceOrg             string              `json:"reference_org" datastore:"reference_org"`
+	ReferenceUrl             string              `json:"reference_url" datastore:"reference_url"`
+	ActionFilePath           string              `json:"action_file_path" datastore:"action_file_path"`
+	Template                 bool                `json:"template" datastore:"template,noindex"`
+	Documentation            string              `json:"documentation" datastore:"documentation,noindex"`
+	Description              string              `json:"description" datastore:"description,noindex"`
+	DocumentationDownloadUrl string              `json:"documentation_download_url" datastore:"documentation_download_url"`
+	Blogpost                 string              `json:"blogpost" yaml:"blogpost" datastore:"blogpost"`
+	Video                    string              `json:"video" yaml:"video" datastore:"video"`
+	PrimaryUsecases          []string            `json:"primary_usecases" yaml:"primary_usecases"  datastore:"primary_usecases"`
+	CompanyURL               string              `json:"company_url" datastore:"company_url" required:false yaml:"company_url"`
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
 }
 
