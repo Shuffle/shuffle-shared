@@ -7580,6 +7580,8 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
+
+		backendUrl = "http://localhost:5002"
 	}
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
@@ -7825,7 +7827,7 @@ func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode 
 }
 
 // Re-validating whether the workflow is done or not IF a result should be found.
-func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowExecution, executed []string) {
+func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowExecution, executed []string, retries int64) {
 	var err error
 
 	execution := &WorkflowExecution{}
@@ -7842,7 +7844,7 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 	}
 
 	if execution.Status != "EXECUTING" {
-		log.Printf("\n\n[WARNING] Workflow is finished, but with status: %s\n\n", execution.Status)
+		log.Printf("[WARNING] Workflow is finished, but with status: %s", execution.Status)
 		return
 	}
 
@@ -7887,15 +7889,27 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 		}
 
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
-		go ResendActionResult(cacheData, 0)
+		//go ResendActionResult(cacheData, 0)
+		log.Printf("\n\n[DEBUG] Should rerun (2)? %s\n\n", actionResult.Action.ID)
+		ResendActionResult(cacheData, retries)
 	}
 }
 
-func ResendActionResult(actionData []byte, retries int) {
-	topClient := &http.Client{
-		Transport: &http.Transport{
-			Proxy: nil,
-		},
+func ResendActionResult(actionData []byte, retries int64) {
+	if project.Environment == "cloud" && retries == 0 {
+		retries = 4
+
+		//var res ActionResult
+		//err := json.Unmarshal(actionData, &res)
+		//if err == nil {
+		//	log.Printf("[WARNING] Cloud - skipping rerun with %d retries for %s (%s)", retries, res.Action.Label, res.Action.ID)
+		//}
+
+		//return
+	}
+
+	if retries >= 5 {
+		return
 	}
 
 	backendUrl := os.Getenv("BASE_URL")
@@ -7905,6 +7919,8 @@ func ResendActionResult(actionData []byte, retries int) {
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
+
+		backendUrl = fmt.Sprintf("http://localhost:5002")
 	}
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -7943,7 +7959,7 @@ func ResendActionResult(actionData []byte, retries int) {
 		backendUrl = "http://localhost:5001"
 	}
 
-	streamUrl := fmt.Sprintf("%s/api/v1/streams?rerun=true", backendUrl)
+	streamUrl := fmt.Sprintf("%s/api/v1/streams?rerun=true&retries=%d", backendUrl, retries+1)
 	req, err := http.NewRequest(
 		"POST",
 		streamUrl,
@@ -7951,7 +7967,7 @@ func ResendActionResult(actionData []byte, retries int) {
 	)
 
 	if err != nil {
-		log.Printf("[WARNING] Error building resend action request - retries: %d, err: %s", retries, err)
+		log.Printf("[ERROR] Error building resend action request - retries: %d, err: %s", retries, err)
 
 		if project.Environment != "cloud" && retries < 5 {
 			if strings.Contains(fmt.Sprintf("%s", err), "cannot assign requested address") {
@@ -7965,22 +7981,31 @@ func ResendActionResult(actionData []byte, retries int) {
 		return
 	}
 
-	_, err = topClient.Do(req)
+	//Timeout: 3 * time.Second,
+	client := &http.Client{
+		Transport: &http.Transport{
+			Proxy: nil,
+		},
+	}
+
+	_, err = client.Do(req)
 	if err != nil {
-		log.Printf("[WARNING] Error running resend action request - retries: %d, err: %s", retries, err)
+		log.Printf("[ERROR] Error running resend action request - retries: %d, err: %s", retries, err)
 
-		// How to self repair? Quit and restart the worker?
-		// This means worker is buggy when talking to itself
-		if project.Environment != "cloud" && retries < 5 {
-			if strings.Contains(fmt.Sprintf("%s", err), "cannot assign requested address") {
-				time.Sleep(5 * time.Second)
-				retries = retries + 1
+		if !strings.Contains(fmt.Sprintf("%s", err), "context deadline") && !strings.Contains(fmt.Sprintf("%s", err), "Client.Timeout exceeded") {
+			// How to self repair? Quit and restart the worker?
+			// This means worker is buggy when talking to itself
+			if project.Environment != "cloud" && retries < 5 {
+				if strings.Contains(fmt.Sprintf("%s", err), "cannot assign requested address") {
+					time.Sleep(5 * time.Second)
+					retries = retries + 1
 
-				ResendActionResult(actionData, retries)
+					ResendActionResult(actionData, retries)
+				}
+			} else if project.Environment != "cloud" && retries >= 5 {
+				//panic("No more sockets available. Restarting worker to self-repair.")
+				log.Printf("[WARNING] Should we quit out on worker and start a new? How can we remove socket boundry?")
 			}
-		} else if project.Environment != "cloud" && retries >= 5 {
-			//panic("No more sockets available. Restarting worker to self-repair.")
-			log.Printf("[WARNING] Should we quit out on worker and start a new? How can we remove socket boundry?")
 		}
 
 		return
@@ -7996,7 +8021,7 @@ func ResendActionResult(actionData []byte, retries int) {
 }
 
 // Updateparam is a check to see if the execution should be continuously validated
-func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool) (*WorkflowExecution, bool, error) {
+func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
 	if actionResult.Action.ID == "" {
 		//log.Printf("[ERROR] Failed handling EMPTY action %#v. Usually happens during worker run that sets everything?", actionResult)
 		return &workflowExecution, true, nil
@@ -8061,9 +8086,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		if setExecVar {
 			log.Printf("[DEBUG] Updating exec variable %s with new value of length %d", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+
 			if len(workflowExecution.Results) > 0 {
 				lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
-				log.Printf("LAST: %s", lastResult)
+				_ = lastResult
+				//log.Printf("LAST: %s", lastResult)
 			}
 
 			actionResult.Action.ExecutionVariable.Value = actionResult.Result
@@ -8417,7 +8444,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// Add an else for HTTP request errors with success "false"
 			// These could be "silent" issues
 			if actionResult.Status == "FAILURE" {
-				log.Printf("[DEBUG] Result is %s. Making notification.", actionResult.Status)
+				log.Printf("[DEBUG] Result is %s for %s (%s). Making notification.", actionResult.Status, actionResult.Action.Label, actionResult.Action.ID)
 				err = CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Error in Workflow %#v", workflowExecution.Workflow.Name),
@@ -8437,7 +8464,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		childNodes := []string{}
 		if workflowExecution.Workflow.Configuration.ExitOnError {
 			// Find underlying nodes and add them
-			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Should set workflowExecution and exit all running functions", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
+			log.Printf("[WARNING] Actionresult is %s for node %s (%s) in execution %s. Should set workflowExecution and exit all running functions", actionResult.Status, actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId)
 			workflowExecution.Status = actionResult.Status
 			workflowExecution.LastNode = actionResult.Action.ID
 
@@ -8532,7 +8559,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 							if !sourceNodeFound {
 								// FIXME: Shouldn't add skip for child nodes of these nodes. Check if this node is parent of upcoming nodes.
-								log.Printf("\n\n NOT setting node %s to SKIPPED", nodeId)
+								//log.Printf("\n\n NOT setting node %s to SKIPPED", nodeId)
 								skipNodeAdd = true
 
 								if !ArrayContains(visited, nodeId) && !ArrayContains(executed, nodeId) {
@@ -8702,10 +8729,13 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					streamUrl := fmt.Sprintf("http://localhost:5001/api/v1/streams")
 					if project.Environment == "cloud" {
 						streamUrl = fmt.Sprintf("https://shuffler.io/api/v1/streams")
-						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
-					}
 
-					//log.Printf("[DEBUG] Sending result for action as skipped")
+						if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+							streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/api/v1/streams", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+						}
+
+						streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
+					}
 
 					req, err := http.NewRequest(
 						"POST",
@@ -8996,7 +9026,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			actionVarName := workflowExecution.Results[outerindex].Action.ExecutionVariable.Name
 			// Finds potential execution arguments
 			if len(actionVarName) > 0 {
-				log.Printf("EXECUTION VARIABLE LOCAL: %s", actionVarName)
+				//log.Printf("EXECUTION VARIABLE LOCAL: %s", actionVarName)
 				for index, execvar := range workflowExecution.ExecutionVariables {
 					if execvar.Name == actionVarName {
 						// Sets the value for the variable
@@ -9370,7 +9400,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			//time.AfterFunc(1*time.Second, func() {
 			//})
 			// Running them right away?
-			validateFinishedExecution(ctx, workflowExecution, foundNotExecuted)
+			validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
 		} else {
 			//log.Printf("\n\n[WARNING] Rerunning checks for whether the execution is done at all.\n\n")
 
@@ -9408,8 +9438,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					continue
 				}
 
-				//log.Printf("\n\n[DEBUG] Should rerun? %s\n\n", action.ID)
-				go ResendActionResult(cacheData, 0)
+				log.Printf("\n\n[DEBUG] Should rerun (1)? %s\n\n", action.ID)
+				//go ResendActionResult(cacheData, 0)
+				ResendActionResult(cacheData, retries)
 			}
 		}
 	}
