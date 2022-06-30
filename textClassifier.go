@@ -218,6 +218,17 @@ func RunTextClassifier(ctx context.Context, workflowExecution WorkflowExecution)
 	}
 }
 
+func runDedup(inputArr []string) []string {
+	newarr := []string{}
+	for _, value := range inputArr {
+		if !ArrayContains(newarr, value) {
+			newarr = append(newarr, value)
+		}
+	}
+
+	return newarr
+}
+
 // Finds IPs, domains and hashes
 // Point is to test out how we can create a structured database of these, correlate with, and store them
 func RunIOCFinder(ctx context.Context, workflowExecution WorkflowExecution) {
@@ -249,6 +260,11 @@ func RunIOCFinder(ctx context.Context, workflowExecution WorkflowExecution) {
 		foundMd5s = append(foundMd5s, md5s.FindAllString(result.Result, -1)...)
 		foundSha256s = append(foundSha256s, sha256s.FindAllString(result.Result, -1)...)
 	}
+
+	foundIps = runDedup(foundIps)
+	foundDomains = runDedup(foundDomains)
+	foundMd5s = runDedup(foundMd5s)
+	foundSha256s = runDedup(foundSha256s)
 
 	fmt.Printf("[DEBUG][%s] IPS: %#v, Domains: %#v, Md5s: %#v, Sha256s: %#v", workflowExecution.ExecutionId, foundIps, foundDomains, foundMd5s, foundSha256s)
 }
