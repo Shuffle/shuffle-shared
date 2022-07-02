@@ -2043,7 +2043,7 @@ func GetGmailMessageAttachment(ctx context.Context, gmailClient *http.Client, us
 		return GmailAttachment{}, err
 	}
 
-	log.Printf("ATTACHMENT MAIL WITH SIZE %d", message.Size)
+	//log.Printf("ATTACHMENT MAIL WITH SIZE %d", message.Size)
 
 	//if len(profile.EmailAddress) == 0 {
 	//	return GmailMessageStruct{}, errors.New("Couldn't find your email profile")
@@ -2447,7 +2447,7 @@ func handleIndividualEmailUploads(ctx context.Context, gmailClient *http.Client,
 
 		parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
 		if err != nil {
-			log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s (1)", part.Body.AttachmentID, message.ID)
+			log.Printf("[WARNING] Failed base64 decoding file bytes %s in message %s (1)", part.Body.AttachmentID, message.ID)
 			if len(parsedData) == 0 {
 				continue
 			}

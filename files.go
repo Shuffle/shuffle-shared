@@ -134,7 +134,7 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 
 	// Shitty way to build it, but works before scale. Need ES search mechanism for namespaces
 
-	log.Printf("[INFO] Got %d files and %d namespaces for org %s", len(files), len(fileResponse.Namespaces), user.ActiveOrg.Id)
+	log.Printf("[INFO] Got %d files and %d namespace(s) for org %s", len(files), len(fileResponse.Namespaces), user.ActiveOrg.Id)
 	newBody, err := json.Marshal(fileResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshaling files: %s", err)
@@ -579,7 +579,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
-			log.Printf("Bad file authentication in get: %s", err)
+			log.Printf("[WARNING] Bad file authentication in get for ID %s: %s", fileId, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -920,10 +920,9 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	newFileValue, err := handleKeyEncryption(contents, parsedKey)
 	if err != nil {
 		log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
+		newContents = contents
 	} else {
 		newContents = []byte(newFileValue)
-		file.FileSize = int64(len(newContents))
-		file.ContentType = http.DetectContentType(newContents)
 		file.Encrypted = true
 	}
 
@@ -947,7 +946,7 @@ func uploadFile(ctx context.Context, file *File, contents []byte) error {
 	sha256Sum := sha256.Sum256(contents)
 
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s", file.Id)
+		log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s. Content length: %d", file.Id, len(contents))
 		file.StorageArea = "google_storage"
 
 		//applocation := fmt.Sprintf("gs://%s/triggers/outlooktrigger.zip", bucketName)
@@ -985,7 +984,10 @@ func uploadFile(ctx context.Context, file *File, contents []byte) error {
 	file.Status = "active"
 	file.Md5sum = md5
 	file.Sha256sum = fmt.Sprintf("%x", sha256Sum)
-	log.Printf("[INFO] MD5 for file %s (%s) is %s and SHA256 is %s. Type: %s", file.Filename, file.Id, file.Md5sum, file.Sha256sum, file.ContentType)
+	file.FileSize = int64(len(contents))
+	file.ContentType = http.DetectContentType(contents)
+
+	log.Printf("[INFO] MD5 for file %s (%s) is %s and SHA256 is %s. Type: %s and size: %d", file.Filename, file.Id, file.Md5sum, file.Sha256sum, file.ContentType, file.FileSize)
 
 	err := SetFile(ctx, *file)
 	if err != nil {
