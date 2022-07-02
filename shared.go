@@ -7581,7 +7581,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
 
-		//backendUrl = "http://localhost:5002"
+		backendUrl = "http://localhost:5002"
 	}
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
@@ -7990,8 +7990,8 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
 		//go ResendActionResult(cacheData, 0)
-		log.Printf("\n\n[DEBUG] Should rerun (2)? %s\n\n", actionResult.Action.ID)
-		ResendActionResult(cacheData, retries)
+		log.Printf("\n\n[DEBUG] Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
+		go ResendActionResult(cacheData, retries)
 	}
 }
 
@@ -8021,7 +8021,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
 
-		//backendUrl = fmt.Sprintf("http://localhost:5002")
+		backendUrl = fmt.Sprintf("http://localhost:5002")
 	}
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -8873,7 +8873,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/api/v1/streams", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 						}
 
-						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
+						streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
 					}
 
 					req, err := http.NewRequest(
@@ -8900,7 +8900,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						continue
 					}
 
-					log.Printf("[DEBUG] Skipped body return (%d): %s", newresp.StatusCode, string(body))
+					log.Printf("[DEBUG] Skipped body return from %s (%d): %s", streamUrl, newresp.StatusCode, string(body))
+					if strings.Contains(string(body), "already finished") {
+						log.Printf("[WARNING] Data couldn't be re-inputted for %s.", foundAction.Label)
+						return &workflowExecution, true, errors.New(fmt.Sprintf("Failed updating skipped action %s", foundAction.Label))
+					}
 				}
 			}
 		}
@@ -9588,7 +9592,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					continue
 				}
 
-				log.Printf("\n\n[DEBUG] Should rerun (1)? %s\n\n", action.ID)
+				log.Printf("\n\n[DEBUG] Should rerun (1)? %s (%s - %s)\n\n", action.Name, action.Label, action.ID)
 				go ResendActionResult(cacheData, 0)
 				//go ResendActionResult(cacheData, 4)
 			}
@@ -10678,7 +10682,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 
 	parsedData, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
-		log.Printf("[ERROR] Failed base64 decode for an auth key %s: %s", data, err)
+		log.Printf("[ERROR] Failed base64 decode for an auth key %s: %s. Data: %s", data, err, string(data))
 		return []byte{}, err
 	}
 
