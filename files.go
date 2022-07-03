@@ -631,7 +631,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	downloadPath := file.DownloadPath
 
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		log.Printf("[INFO] Trying to get file %s from google storage", file.Id)
+		log.Printf("[AUDIT] %s (%s) downloaded file %s from google storage", user.Username, user.Id, file.Id)
 
 		bucket := project.StorageClient.Bucket(orgFileBucket)
 		obj := bucket.Object(file.DownloadPath)

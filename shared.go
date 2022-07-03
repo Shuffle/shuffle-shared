@@ -7581,7 +7581,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
 
-		backendUrl = "http://localhost:5002"
+		//backendUrl = "http://localhost:5002"
 	}
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
@@ -8021,7 +8021,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
 
-		backendUrl = fmt.Sprintf("http://localhost:5002")
+		//backendUrl = fmt.Sprintf("http://localhost:5002")
 	}
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -8873,7 +8873,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/api/v1/streams", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 						}
 
-						streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
+						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
 					}
 
 					req, err := http.NewRequest(
@@ -9735,7 +9735,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					for _, action := range workflowExecution.Workflow.Actions {
 						actionData, err := json.Marshal(action)
 						if err == nil {
-							log.Printf("Action Size (%s): %d", action.Label, len(actionData))
+							log.Printf("[DEBUG] Action Size for %s (%s - %s): %d", action.Label, action.Name, action.ID, len(actionData))
 						}
 					}
 
