@@ -7581,7 +7581,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
 
-		//backendUrl = "http://localhost:5002"
+		backendUrl = "http://localhost:5002"
 	}
 
 	// FIXME: This MAY fail at scale due to not being able to get the right worker
@@ -8021,7 +8021,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
 
-		//backendUrl = fmt.Sprintf("http://localhost:5002")
+		backendUrl = fmt.Sprintf("http://localhost:5002")
 	}
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -8818,28 +8818,30 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			//log.Printf("\n\n\n[WARNING] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", foundAction.Label, foundAction.ID)
 
 			foundCount := 0
-			skippedCount := 0
+			skippedBranches := []string{}
 			for _, checkBranch := range workflowExecution.Workflow.Branches {
 				if checkBranch.DestinationID == foundAction.ID {
 					foundCount += 1
 
 					// Check if they're all skipped or not
 					if checkBranch.SourceID == actionResult.Action.ID {
-						skippedCount += 1
+						skippedBranches = append(skippedBranches, checkBranch.SourceID)
 						continue
 					}
 
 					// Not found = not counted yet
 					for _, res := range workflowExecution.Results {
-						if res.Action.ID == checkBranch.SourceID {
-							skippedCount += 1
+						if res.Action.ID == checkBranch.SourceID && res.Status != "SUCCESS" && res.Status != "FINISHED" {
+							skippedBranches = append(skippedBranches, checkBranch.SourceID)
 							break
 						}
 					}
 				}
 			}
 
-			//log.Printf("[WARNING] Found %d branches. %d skipped. If equal, make the node skipped", foundCount, skippedCount)
+			skippedCount := len(skippedBranches)
+
+			//log.Printf("\n\n[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %#v\n\n", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
@@ -8873,7 +8875,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/api/v1/streams", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 						}
 
-						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
+						streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
 					}
 
 					req, err := http.NewRequest(
