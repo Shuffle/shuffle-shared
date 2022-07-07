@@ -668,7 +668,7 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 	newres := ResultChecker{
 		Success: true,
 		Reason:  dataURI,
-		Extra:   randomStr,
+		Extra:   strings.ReplaceAll(secret, "=", "A"),
 	}
 
 	newjson, err := json.Marshal(newres)
