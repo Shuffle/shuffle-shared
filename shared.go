@@ -7990,8 +7990,27 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
 		//go ResendActionResult(cacheData, 0)
-		log.Printf("\n\n[DEBUG] Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
-		go ResendActionResult(cacheData, retries)
+		log.Printf("\n\n[DEBUG] DISABLED: Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
+		workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		//go ResendActionResult(cacheData, retries)
+	}
+
+	saveToDb := false
+	extra := 0
+	for _, trigger := range execution.Workflow.Triggers {
+		//log.Printf("Appname trigger (0): %s", trigger.AppName)
+		if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+			extra += 1
+		}
+	}
+
+	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
+		saveToDb = true
+	}
+
+	err = SetWorkflowExecution(ctx, workflowExecution, saveToDb)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting execution after rerun 2: %s", err)
 	}
 }
 
@@ -9542,9 +9561,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		if len(foundNotExecuted) > 0 {
-			//log.Printf("\n\n[ERROR] Couldnt be found, even when executed: %s. Get it from cache and append as result? Will start a function to validate in 10 seconds.\n\n", foundNotExecuted)
-			//time.AfterFunc(1*time.Second, func() {
-			//})
 			// Running them right away?
 			validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
 		} else {
@@ -13558,7 +13574,7 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetAppRequirements() string {
-	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.3\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
+	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.5\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
 }
 
 // Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth

@@ -632,6 +632,11 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 			}
 		}
 
+		continueCount := true
+		if extra > 0 {
+			continueCount = false
+		}
+
 		for _, trigger := range workflowExecution.Workflow.Triggers {
 			//log.Printf("Appname trigger (0): %s", trigger.AppName)
 			if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
@@ -646,7 +651,9 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 				}
 
 				if !found {
-					extra += 1
+					if continueCount {
+						extra += 1
+					}
 				} else {
 					triggersHandled = append(triggersHandled, trigger.ID)
 				}
