@@ -366,6 +366,11 @@ type GithubContributions struct {
 	Docs      ContributionCount `datastore:"docs" json:"docs"`
 }
 
+type LoginInfo struct {
+	IP        string `json:"ip" datastore:"ip"`
+	Timestamp int64  `json:"timestamp" datastore:"timestamp"`
+}
+
 type User struct {
 	Username          string        `datastore:"Username" json:"username"`
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -395,6 +400,9 @@ type User struct {
 	// Starting web3 integration
 	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
 	PublicProfile PublicProfile `datastore:"public_profile" json:"public_profile"`
+
+	// Tracking logins and such
+	LoginInfo []LoginInfo `datastore:"login_info" json:"login_info"`
 }
 
 type EthInfo struct {

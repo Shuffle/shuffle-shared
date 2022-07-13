@@ -13562,11 +13562,14 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 	ret, err := project.Es.Info()
 	if err != nil {
 		log.Printf("[ERROR] Failed connecting to ES: %s", err)
+		resp.WriteHeader(ret.StatusCode)
+		resp.Write([]byte("Bad response from ES (1). Check logs for more details."))
+		return
 	}
 
 	if ret.StatusCode >= 300 {
 		resp.WriteHeader(ret.StatusCode)
-		resp.Write([]byte("Bad response from ES"))
+		resp.Write([]byte(fmt.Sprintf("Bad response from ES - Status code %d", ret.StatusCode)))
 		return
 	}
 
