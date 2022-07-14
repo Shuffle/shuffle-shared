@@ -1420,6 +1420,80 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	return workflow, nil
 }
 
+func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error) {
+	nameKey := "org_statistics"
+
+	workflow := &ExecutionInfo{}
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &workflow)
+			if err == nil {
+				return workflow, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		//log.Printf("GETTING ES USER %s",
+		//res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
+		//if err != nil {
+		//	log.Printf("[WARNING] Error: %s", err)
+		//	return workflow, err
+		//}
+
+		//defer res.Body.Close()
+		//if res.StatusCode == 404 {
+		//	return workflow, errors.New("Workflow doesn't exist")
+		//}
+
+		//defer res.Body.Close()
+		//respBody, err := ioutil.ReadAll(res.Body)
+		//if err != nil {
+		//	return workflow, err
+		//}
+
+		//wrapped := WorkflowWrapper{}
+		//err = json.Unmarshal(respBody, &wrapped)
+		//if err != nil {
+		//	return workflow, err
+		//}
+
+		//workflow = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
+		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
+				err = nil
+			} else {
+				return workflow, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(workflow)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
+			return workflow, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+		}
+	}
+
+	return workflow, nil
+}
+
 func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) {
 	var workflows []Workflow
 	limit := 30
