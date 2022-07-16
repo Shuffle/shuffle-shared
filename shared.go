@@ -2856,11 +2856,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
-		Role     string   `json:"role"`
-		Username string   `json:"username"`
-		UserId   string   `json:"user_id"`
-		EthInfo  EthInfo  `json:"eth_info"`
-		Suborgs  []string `json:"suborgs"`
+		Firstname string   `json:"firstname"`
+		Lastname  string   `json:"lastname"`
+		Role      string   `json:"role"`
+		Username  string   `json:"username"`
+		UserId    string   `json:"user_id"`
+		EthInfo   EthInfo  `json:"eth_info"`
+		Suborgs   []string `json:"suborgs"`
 	}
 
 	ctx := getContext(request)
@@ -2981,6 +2983,14 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		if foundUser.Role == "" {
 			foundUser.Role = defaultRole
 		}
+	}
+
+	if len(t.Firstname) > 0 {
+		foundUser.PersonalInfo.Firstname = t.Firstname
+	}
+
+	if len(t.Lastname) > 0 {
+		foundUser.PersonalInfo.Lastname = t.Lastname
 	}
 
 	if len(t.EthInfo.Account) > 0 {
@@ -6379,6 +6389,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type ReturnData struct {
+		CompanyType string    `json:"company_type" datastore:"company_type"`
 		Image       string    `json:"image" datastore:"image"`
 		Name        string    `json:"name" datastore:"name"`
 		Description string    `json:"description" datastore:"description"`
@@ -6411,7 +6422,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
-		log.Printf("User can't edit the org")
+		log.Printf("[WARNING] User can't edit org %#v (active: %#v)", fileId, user.ActiveOrg.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
 		return
@@ -6420,7 +6431,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	ctx := getContext(request)
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
-		log.Printf("Organization doesn't exist: %s", err)
+		log.Printf("[WARNING] Organization doesn't exist: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -6453,17 +6464,38 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	org.Image = tmpData.Image
-	org.Name = tmpData.Name
-	org.Description = tmpData.Description
-	org.Defaults = tmpData.Defaults
+	if len(tmpData.Image) > 0 {
+		org.Image = tmpData.Image
+	}
 
-	savedCert := fixCertificate(tmpData.SSOConfig.SSOCertificate)
+	if len(tmpData.Name) > 0 {
+		org.Name = tmpData.Name
+	}
 
-	log.Printf("[INFO] Stripped down cert from %d to %d", len(tmpData.SSOConfig.SSOCertificate), len(savedCert))
+	if len(tmpData.Description) > 0 {
+		org.Description = tmpData.Description
+	}
 
-	org.SSOConfig = tmpData.SSOConfig
-	org.SSOConfig.SSOCertificate = savedCert
+	if len(tmpData.Defaults.AppDownloadRepo) > 0 || len(tmpData.Defaults.AppDownloadBranch) > 0 || len(tmpData.Defaults.WorkflowDownloadRepo) > 0 || len(tmpData.Defaults.WorkflowDownloadBranch) > 0 || len(tmpData.Defaults.NotificationWorkflow) > 0 {
+		org.Defaults = tmpData.Defaults
+	}
+
+	if len(tmpData.CompanyType) > 0 {
+		org.CompanyType = tmpData.CompanyType
+	}
+
+	//if len(tmpData.SSOConfig) > 0 {
+	if len(tmpData.SSOConfig.SSOEntrypoint) > 0 || len(tmpData.SSOConfig.OpenIdClientId) > 0 || len(tmpData.SSOConfig.OpenIdClientSecret) > 0 || len(tmpData.SSOConfig.OpenIdAuthorization) > 0 || len(tmpData.SSOConfig.OpenIdToken) > 0 {
+		org.SSOConfig = tmpData.SSOConfig
+	}
+
+	if len(tmpData.SSOConfig.SSOCertificate) > 0 {
+		savedCert := fixCertificate(tmpData.SSOConfig.SSOCertificate)
+
+		log.Printf("[INFO] Stripped down cert from %d to %d", len(tmpData.SSOConfig.SSOCertificate), len(savedCert))
+
+		org.SSOConfig.SSOCertificate = savedCert
+	}
 
 	if len(org.Defaults.NotificationWorkflow) > 0 && len(org.Defaults.NotificationWorkflow) != 36 {
 		log.Printf("[WARNING] Notification Workflow ID %s is not valid.", org.Defaults.NotificationWorkflow)
@@ -10770,7 +10802,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 	if err != nil {
-		log.Printf("[INFO] User can't edit the org")
+		log.Printf("[INFO] Failed getting the execution: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
 		return
@@ -10884,7 +10916,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
-		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		log.Printf("[WARNING] Organization doesn't exist: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -10892,7 +10924,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 	if err != nil {
-		log.Printf("[INFO] User can't edit the org")
+		log.Printf("[WARNING] Failed getting exec: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
 		return

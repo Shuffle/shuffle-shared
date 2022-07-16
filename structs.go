@@ -371,6 +371,12 @@ type LoginInfo struct {
 	Timestamp int64  `json:"timestamp" datastore:"timestamp"`
 }
 
+type PersonalInfo struct {
+	Firstname string `datastore:"firstname" json:"firstname"`
+	Lastname  string `datastore:"lastname" json:"lastname"`
+	Role      string `datastore:"role" json:"role"`
+}
+
 type User struct {
 	Username          string        `datastore:"Username" json:"username"`
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -402,7 +408,8 @@ type User struct {
 	PublicProfile PublicProfile `datastore:"public_profile" json:"public_profile"`
 
 	// Tracking logins and such
-	LoginInfo []LoginInfo `datastore:"login_info" json:"login_info"`
+	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
+	PersonalInfo PersonalInfo `datastore:"personal_info" json:"personal_info"`
 }
 
 type EthInfo struct {
@@ -632,6 +639,7 @@ type Priority struct {
 type Org struct {
 	Name              string                `json:"name" datastore:"name"`
 	Description       string                `json:"description" datastore:"description"`
+	CompanyType       string                `json:"company_type" datastore:"company_type"`
 	Image             string                `json:"image" datastore:"image,noindex"`
 	Id                string                `json:"id" datastore:"id"`
 	Org               string                `json:"org" datastore:"org"`
@@ -2018,6 +2026,7 @@ type HandleInfo struct {
 	Success      bool            `json:"success"`
 	Admin        string          `json:"admin"`
 	Username     string          `json:"username"`
+	Name         string          `json:"name"`
 	Tutorials    []string        `json:"tutorials"`
 	ActiveApps   []string        `json:"active_apps"`
 	Id           string          `json:"id"`
