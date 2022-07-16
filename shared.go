@@ -2856,6 +2856,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
+		Tutorial  string   `json:"tutorial" datastore:"tutorial"`
 		Firstname string   `json:"firstname"`
 		Lastname  string   `json:"lastname"`
 		Role      string   `json:"role"`
@@ -2983,6 +2984,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		if foundUser.Role == "" {
 			foundUser.Role = defaultRole
 		}
+	}
+
+	if len(t.Tutorial) > 0 {
+		foundUser.PersonalInfo.Tutorials = append(foundUser.PersonalInfo.Tutorials, t.Tutorial)
 	}
 
 	if len(t.Firstname) > 0 {
@@ -6389,9 +6394,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type ReturnData struct {
-		CompanyType string    `json:"company_type" datastore:"company_type"`
-		Image       string    `json:"image" datastore:"image"`
+		Tutorial    string    `json:"tutorial" datastore:"tutorial"`
 		Name        string    `json:"name" datastore:"name"`
+		Image       string    `json:"image" datastore:"image"`
+		CompanyType string    `json:"company_type" datastore:"company_type"`
 		Description string    `json:"description" datastore:"description"`
 		OrgId       string    `json:"org_id" datastore:"org_id"`
 		Defaults    Defaults  `json:"defaults" datastore:"defaults"`
@@ -6482,6 +6488,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if len(tmpData.CompanyType) > 0 {
 		org.CompanyType = tmpData.CompanyType
+	}
+
+	if len(tmpData.Tutorial) > 0 {
+
 	}
 
 	//if len(tmpData.SSOConfig) > 0 {

@@ -372,9 +372,10 @@ type LoginInfo struct {
 }
 
 type PersonalInfo struct {
-	Firstname string `datastore:"firstname" json:"firstname"`
-	Lastname  string `datastore:"lastname" json:"lastname"`
-	Role      string `datastore:"role" json:"role"`
+	Firstname string   `datastore:"firstname" json:"firstname"`
+	Lastname  string   `datastore:"lastname" json:"lastname"`
+	Role      string   `datastore:"role" json:"role"`
+	Tutorials []string `datastore:"tutorials" json:"tutorials"`
 }
 
 type User struct {
