@@ -24,7 +24,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 )
 
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
@@ -795,6 +795,92 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	}
 }
 
+func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		fileId = location[4]
+	}
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("INITIAL Api authentication failed in file upload: %s", err)
+		orgId, err := fileAuthentication(request)
+		if err != nil {
+			log.Printf("Bad file authentication in create file: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		user.ActiveOrg.Id = orgId
+		user.Username = "Execution File API"
+	}
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to upload file: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
+	ctx := getContext(request)
+	file, err := GetFile(ctx, fileId)
+	log.Printf("file obj", file)
+	if err != nil {
+		log.Printf("File %s not found: %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	found := false
+	if file.OrgId == user.ActiveOrg.Id {
+		found = true
+	} else {
+		for _, item := range user.Orgs {
+			if item == file.OrgId {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		log.Printf("User %s doesn't have access to %s", user.Username, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Println("Failed reading body")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to read data"}`)))
+		return
+	}
+	file.FileSize = int64(len(body))
+	file.ContentType = http.DetectContentType(body)
+	file.Encrypted = true // not sure about what this does, maybe it has something to do with datastore encrypted column and stores file as encrypted in cloud storage?
+	file.LastEditor = user.Username
+	file.IsEdited = true
+	err = uploadFile(ctx, file, body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to upload file: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed file upload in Shuffle"}`))
+		return
+	}
+	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
 func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -911,6 +997,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 
 	file.FileSize = int64(len(contents))
 	file.ContentType = http.DetectContentType(contents)
+	file.OriginalMd5sum = Md5sum(contents)
 
 	buf.Reset()
 
@@ -938,7 +1025,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+	resp.Write([]byte(`{"success": true}`))
 }
 
 func uploadFile(ctx context.Context, file *File, contents []byte) error {
@@ -965,7 +1052,7 @@ func uploadFile(ctx context.Context, file *File, contents []byte) error {
 	} else if file.StorageArea == "s3" {
 		log.Printf("SHOULD UPLOAD TO S3!")
 	} else {
-		f, err := os.OpenFile(file.DownloadPath, os.O_WRONLY|os.O_CREATE, os.ModePerm)
+		f, err := os.OpenFile(file.DownloadPath, os.O_TRUNC|os.O_CREATE, os.ModePerm) //Changing from os.O_WRONGLY
 		if err != nil {
 			// Rolling back file
 			file.Status = "created"

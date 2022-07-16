@@ -1032,33 +1032,36 @@ type Notification struct {
 }
 
 type File struct {
-	Id           string   `json:"id" datastore:"id"`
-	Type         string   `json:"type" datastore:"type"`
-	CreatedAt    int64    `json:"created_at" datastore:"created_at"`
-	UpdatedAt    int64    `json:"updated_at" datastore:"updated_at"`
-	MetaAccessAt int64    `json:"meta_access_at" datastore:"meta_access_at"`
-	DownloadAt   int64    `json:"last_downloaded" datastore:"last_downloaded"`
-	Description  string   `json:"description" datastore:"description"`
-	ExpiresAt    string   `json:"expires_at" datastore:"expires_at"`
-	Status       string   `json:"status" datastore:"status"`
-	Filename     string   `json:"filename" datastore:"filename"`
-	URL          string   `json:"url" datastore:"org"`
-	OrgId        string   `json:"org_id" datastore:"org_id"`
-	WorkflowId   string   `json:"workflow_id" datastore:"workflow_id"`
-	Workflows    []string `json:"workflows" datastore:"workflows"`
-	DownloadPath string   `json:"download_path" datastore:"download_path"`
-	Md5sum       string   `json:"md5_sum" datastore:"md5_sum"`
-	Sha256sum    string   `json:"sha256_sum" datastore:"sha256_sum"`
-	FileSize     int64    `json:"filesize" datastore:"filesize"`
-	Duplicate    bool     `json:"duplicate" datastore:"duplicate"`
-	Subflows     []string `json:"subflows" datastore:"subflows"`
-	StorageArea  string   `json:"storage_area" datastore:"storage_area"`
-	Etag         int      `json:"etag" datastore:"etag"`
-	ContentType  string   `json:"content_type" datastore:"content_type"`
-	UpdatedBy    string   `json:"updated_by" datastore:"updated_by"`
-	CreatedBy    string   `json:"created_by" datastore:"created_by"`
-	Namespace    string   `json:"namespace" datastore:"namespace"`
-	Encrypted    bool     `json:"encrypted" datastore:"encrypted"`
+	Id             string   `json:"id" datastore:"id"`
+	Type           string   `json:"type" datastore:"type"`
+	CreatedAt      int64    `json:"created_at" datastore:"created_at"`
+	UpdatedAt      int64    `json:"updated_at" datastore:"updated_at"`
+	MetaAccessAt   int64    `json:"meta_access_at" datastore:"meta_access_at"`
+	DownloadAt     int64    `json:"last_downloaded" datastore:"last_downloaded"`
+	Description    string   `json:"description" datastore:"description"`
+	ExpiresAt      string   `json:"expires_at" datastore:"expires_at"`
+	Status         string   `json:"status" datastore:"status"`
+	Filename       string   `json:"filename" datastore:"filename"`
+	URL            string   `json:"url" datastore:"org"`
+	OrgId          string   `json:"org_id" datastore:"org_id"`
+	WorkflowId     string   `json:"workflow_id" datastore:"workflow_id"`
+	Workflows      []string `json:"workflows" datastore:"workflows"`
+	DownloadPath   string   `json:"download_path" datastore:"download_path"`
+	Md5sum         string   `json:"md5_sum" datastore:"md5_sum"`
+	Sha256sum      string   `json:"sha256_sum" datastore:"sha256_sum"`
+	FileSize       int64    `json:"filesize" datastore:"filesize"`
+	Duplicate      bool     `json:"duplicate" datastore:"duplicate"`
+	Subflows       []string `json:"subflows" datastore:"subflows"`
+	StorageArea    string   `json:"storage_area" datastore:"storage_area"`
+	Etag           int      `json:"etag" datastore:"etag"`
+	ContentType    string   `json:"content_type" datastore:"content_type"`
+	UpdatedBy      string   `json:"updated_by" datastore:"updated_by"`
+	CreatedBy      string   `json:"created_by" datastore:"created_by"`
+	Namespace      string   `json:"namespace" datastore:"namespace"`
+	Encrypted      bool     `json:"encrypted" datastore:"encrypted"`
+	IsEdited       bool     `json:"isedited" datastore:"isedited"`
+	LastEditor     string   `json:"lasteditor" datastore:"lasteditor"`
+	OriginalMd5sum string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
 }
 
 type AppAuthenticationStorage struct {
