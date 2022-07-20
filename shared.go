@@ -8033,8 +8033,12 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
 		//go ResendActionResult(cacheData, 0)
 		log.Printf("\n\n[DEBUG] DISABLED: Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
-		workflowExecution.Results = append(workflowExecution.Results, actionResult)
-		//go ResendActionResult(cacheData, retries)
+
+		if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+			go ResendActionResult(cacheData, retries)
+		} else {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		}
 	}
 
 	saveToDb := false
