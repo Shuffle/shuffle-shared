@@ -6497,6 +6497,31 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	}
 
+	if len(tmpData.Priority) > 0 {
+		if len(org.MainPriority) == 0 {
+			org.MainPriority = tmpData.Priority
+		}
+
+		org.MainPriority = "1. Collect"
+
+		found := false
+		for _, prio := range org.Priorities {
+			if prio.Name == tmpData.Priority {
+				found = true
+			}
+		}
+
+		if !found {
+			org.Priorities = append(org.Priorities, Priority{
+				Name:        tmpData.Priority,
+				Description: fmt.Sprintf("Priority %s decided by user.", tmpData.Priority),
+				Type:        "usecases",
+				Active:      true,
+				URL:         fmt.Sprintf("/usecases"),
+			})
+		}
+	}
+
 	//if len(tmpData.SSOConfig) > 0 {
 	if len(tmpData.SSOConfig.SSOEntrypoint) > 0 || len(tmpData.SSOConfig.OpenIdClientId) > 0 || len(tmpData.SSOConfig.OpenIdClientSecret) > 0 || len(tmpData.SSOConfig.OpenIdAuthorization) > 0 || len(tmpData.SSOConfig.OpenIdToken) > 0 {
 		org.SSOConfig = tmpData.SSOConfig
@@ -13997,6 +14022,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 
 	// System for replacing an app if it's not defined
 	if value.ID != "remove" {
+
 		app, err = GetApp(ctx, value.ID, user, false)
 		if err != nil {
 			log.Printf("[WARNING] Error getting app %s in set framework: %s", value.ID, err)
