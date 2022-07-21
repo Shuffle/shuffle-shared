@@ -2037,11 +2037,13 @@ type HandleInfo struct {
 	Avatar       string          `json:"avatar"`
 	Orgs         []OrgMini       `json:"orgs"`
 	ActiveOrg    OrgMini         `json:"active_org"`
-	Cookies      []SessionCookie `json:"session_cookie"`
 	EthInfo      EthInfo         `json:"eth_info"`
 	ChatDisabled bool            `json:"chat_disabled"`
 	Priorities   []Priority      `json:"priorities" datastore:"priorities"`
+	Cookies      []SessionCookie `json:"cookies" datastore:"cookies"`
 }
+
+//Cookies      []SessionCookie `json:"session_cookie"`
 
 type BuildLaterStruct struct {
 	Tags  []string

@@ -2987,7 +2987,9 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(t.Tutorial) > 0 {
-		foundUser.PersonalInfo.Tutorials = append(foundUser.PersonalInfo.Tutorials, t.Tutorial)
+		if !ArrayContains(foundUser.PersonalInfo.Tutorials, t.Tutorial) {
+			foundUser.PersonalInfo.Tutorials = append(foundUser.PersonalInfo.Tutorials, t.Tutorial)
+		}
 	}
 
 	if len(t.Firstname) > 0 {
@@ -7513,7 +7515,22 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] MFA login for user %s (%s)!", userdata.Username, userdata.Id)
 	}
 
+	tutorialsFinished := userdata.PersonalInfo.Tutorials
+	//if len(org.SecurityFramework.SIEM.Name) > 0 || len(org.SecurityFramework.Network.Name) > 0 || len(org.SecurityFramework.EDR.Name) > 0 || len(org.SecurityFramework.Cases.Name) > 0 || len(org.SecurityFramework.IAM.Name) > 0 || len(org.SecurityFramework.Assets.Name) > 0 || len(org.SecurityFramework.Intel.Name) > 0 || len(org.SecurityFramework.Communication.Name) > 0 {
+	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
+	//}
+
+	returnValue := HandleInfo{
+		Success:   true,
+		Tutorials: tutorialsFinished,
+	}
+
 	loginData := `{"success": true}`
+	newData, err := json.Marshal(returnValue)
+	if err == nil {
+		loginData = string(newData)
+	}
+
 	if len(userdata.Session) != 0 {
 		log.Println("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
@@ -7525,7 +7542,18 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		})
 
 		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
+		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+			Key:        "session_token",
+			Value:      userdata.Session,
+			Expiration: expiration.Unix(),
+		})
+
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, userdata.Session, expiration.Unix())
+		newData, err := json.Marshal(returnValue)
+		if err == nil {
+			loginData = string(newData)
+		}
+
 		err = SetSession(ctx, userdata, userdata.Session)
 		if err != nil {
 			log.Printf("[WARNING] Error adding session to database: %s", err)
@@ -7562,7 +7590,17 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+			Key:        "session_token",
+			Value:      sessionToken,
+			Expiration: expiration.Unix(),
+		})
+
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
+		newData, err := json.Marshal(returnValue)
+		if err == nil {
+			loginData = string(newData)
+		}
 	}
 
 	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
