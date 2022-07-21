@@ -6497,9 +6497,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	}
 
+	sendOrgUpdaterHook := false
 	if len(tmpData.Priority) > 0 {
 		if len(org.MainPriority) == 0 {
 			org.MainPriority = tmpData.Priority
+			sendOrgUpdaterHook = true
 		}
 
 		org.MainPriority = "1. Collect"
@@ -6553,6 +6555,37 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	// Only send for cloud
+	if sendOrgUpdaterHook && project.Environment == "cloud" {
+		signupWebhook := os.Getenv("WEBSITE_ORG_WEBHOOK")
+		if strings.HasPrefix(signupWebhook, "http") {
+			mappedData, err := json.Marshal(org)
+			if err != nil {
+				log.Printf("[WARNING] Marshal error for org sending: %s", err)
+			} else {
+				req, err := http.NewRequest(
+					"POST",
+					signupWebhook,
+					bytes.NewBuffer(mappedData),
+				)
+
+				client := &http.Client{
+					Timeout: 3 * time.Second,
+				}
+
+				req.Header.Add("Content-Type", "application/json")
+				res, err := client.Do(req)
+				if err != nil {
+					log.Printf("[ERROR] Failed request to signup webhook FOR ORG (2): %s", err)
+				} else {
+					log.Printf("[INFO] Successfully ran org priority webhook")
+				}
+
+				_ = res
+			}
+		}
 	}
 
 	log.Printf("[INFO] Successfully updated org %s (%s)", org.Name, org.Id)
