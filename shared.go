@@ -6403,6 +6403,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		CompanyType string    `json:"company_type" datastore:"company_type"`
 		Description string    `json:"description" datastore:"description"`
 		OrgId       string    `json:"org_id" datastore:"org_id"`
+		Priority    string    `json:"priority" datastore:"priority"`
 		Defaults    Defaults  `json:"defaults" datastore:"defaults"`
 		SSOConfig   SSOConfig `json:"sso_config" datastore:"sso_config"`
 	}
@@ -6561,6 +6562,23 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if sendOrgUpdaterHook && project.Environment == "cloud" {
 		signupWebhook := os.Getenv("WEBSITE_ORG_WEBHOOK")
 		if strings.HasPrefix(signupWebhook, "http") {
+			curIndex := -1
+			for orgIndex, orguser := range org.Users {
+				if orguser.Id == user.Id {
+					curIndex = orgIndex
+				}
+			}
+
+			if curIndex >= 0 {
+				user.Password = ""
+				user.Session = ""
+				user.ApiKey = ""
+				user.LoginInfo = []LoginInfo{}
+				user.PrivateApps = []WorkflowApp{}
+
+				org.Users[curIndex] = user
+			}
+
 			mappedData, err := json.Marshal(org)
 			if err != nil {
 				log.Printf("[WARNING] Marshal error for org sending: %s", err)
