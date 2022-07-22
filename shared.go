@@ -6505,8 +6505,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			sendOrgUpdaterHook = true
 		}
 
-		org.MainPriority = "1. Collect"
-
 		found := false
 		for _, prio := range org.Priorities {
 			if prio.Name == tmpData.Priority {
