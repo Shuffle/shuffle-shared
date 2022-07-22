@@ -973,7 +973,7 @@ type Category struct {
 	Count       int64  `json:"count" datastore:"count"`
 	ID          string `json:"id" datastore:"id"`
 	Description string `json:"description" datastore:"description,noindex"`
-	LargeImage  string `json:"large_image,omitempty" datastore:"large_image,noindex"`
+	LargeImage  string `json:"large_image" datastore:"large_image,noindex"`
 }
 
 type Categories struct {

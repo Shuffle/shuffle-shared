@@ -14039,9 +14039,11 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	type parsedValue struct {
-		Type string `json:"type"`
-		Name string `json:"name"`
-		ID   string `json:"id"`
+		Type        string `json:"type"`
+		Name        string `json:"name"`
+		ID          string `json:"id"`
+		LargeImage  string `json:"large_image"`
+		Description string `json:"description"`
 	}
 
 	var value parsedValue
@@ -14074,13 +14076,22 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 
 		app, err = GetApp(ctx, value.ID, user, false)
 		if err != nil {
-			log.Printf("[WARNING] Error getting app %s in set framework: %s", value.ID, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+
+			if project.Environment == "cloud" {
+				log.Printf("[ERROR] Error getting app %s in set framework: %s", value.ID, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			} else {
+				// Forwarded from Algolia in the frontend
+				app.Name = value.Name
+				app.ID = value.Name
+				app.Description = value.Description
+				app.LargeImage = value.LargeImage
+			}
 		}
 
-		if !app.Sharing && app.Public {
+		if project.Environment == "cloud" && !app.Sharing && app.Public {
 			log.Printf("[WARNING] Error setting app %s for org %s as it's not public.", value.ID, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
@@ -14132,7 +14143,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		org.SecurityFramework.Communication.ID = app.ID
 		org.SecurityFramework.Communication.LargeImage = app.LargeImage
 	} else {
-		log.Printf("[WARNING] No handler for type %s in sec  framework", value.Type)
+		log.Printf("[WARNING] No handler for type %s in app framework", value.Type)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
