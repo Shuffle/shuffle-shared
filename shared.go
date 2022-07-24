@@ -6558,6 +6558,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if len(tmpData.CompanyType) > 0 {
 		org.CompanyType = tmpData.CompanyType
+
+		if len(org.CompanyType) == 0 {
+			sendOrgUpdaterHook = true
+		}
 	}
 
 	if len(tmpData.Tutorial) > 0 {
