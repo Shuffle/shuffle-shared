@@ -3667,6 +3667,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	startnodeFound := false
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	newOrgApps := []string{}
+	org := &Org{}
 	for _, action := range workflow.Actions {
 		//log.Printf("ENV: %s", action.Environment)
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
@@ -3744,8 +3745,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		idFound := false
 		nameVersionFound := false
 		nameFound := false
+		discoveredApp := WorkflowApp{}
 		for _, innerApp := range workflowapps {
 			if innerApp.ID == action.AppID {
+				discoveredApp = innerApp
 				//log.Printf("[INFO] ID, Name AND version for %s:%s (%s) was FOUND", action.AppName, action.AppVersion, action.AppID)
 				action.Sharing = innerApp.Sharing
 				action.Public = innerApp.Public
@@ -3756,7 +3759,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if innerApp.Name == action.AppName && innerApp.AppVersion == action.AppVersion {
-				//log.Printf("NAME AND VERSION FOUND (overwritten)!")
+				discoveredApp = innerApp
+
 				action.AppID = innerApp.ID
 				action.Sharing = innerApp.Sharing
 				action.Public = innerApp.Public
@@ -3767,6 +3771,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if innerApp.Name == action.AppName {
+				discoveredApp = innerApp
+
 				action.AppID = innerApp.ID
 				action.Sharing = innerApp.Sharing
 				action.Public = innerApp.Public
@@ -3821,8 +3827,68 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
+		//log.Printf("CATeGORY: ", discoveredApp.Categories)
+
 		//log.Printf("ENVIRONMENT: %s", action.Environment)
 		newActions = append(newActions, action)
+
+		// FIXMe: Should be authenticated first?
+		if len(discoveredApp.Categories) > 0 {
+			category := discoveredApp.Categories[0]
+
+			if org.Id == "" {
+				org, err = GetOrg(ctx, user.ActiveOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting org: %s", err)
+					continue
+				}
+			}
+
+			if strings.ToLower(category) == "siem" && org.SecurityFramework.SIEM.ID == "" {
+				org.SecurityFramework.SIEM.Name = discoveredApp.Name
+				org.SecurityFramework.SIEM.Description = discoveredApp.Description
+				org.SecurityFramework.SIEM.ID = discoveredApp.ID
+				org.SecurityFramework.SIEM.LargeImage = discoveredApp.LargeImage
+			} else if strings.ToLower(category) == "network" && org.SecurityFramework.Network.ID == "" {
+				org.SecurityFramework.Network.Name = discoveredApp.Name
+				org.SecurityFramework.Network.Description = discoveredApp.Description
+				org.SecurityFramework.Network.ID = discoveredApp.ID
+				org.SecurityFramework.Network.LargeImage = discoveredApp.LargeImage
+			} else if strings.ToLower(category) == "edr" || strings.ToLower(category) == "edr & av" && org.SecurityFramework.EDR.ID == "" {
+				org.SecurityFramework.EDR.Name = discoveredApp.Name
+				org.SecurityFramework.EDR.Description = discoveredApp.Description
+				org.SecurityFramework.EDR.ID = discoveredApp.ID
+				org.SecurityFramework.EDR.LargeImage = discoveredApp.LargeImage
+			} else if strings.ToLower(category) == "cases" && org.SecurityFramework.Cases.ID == "" {
+				org.SecurityFramework.Cases.Name = discoveredApp.Name
+				org.SecurityFramework.Cases.Description = discoveredApp.Description
+				org.SecurityFramework.Cases.ID = discoveredApp.ID
+				org.SecurityFramework.Cases.LargeImage = discoveredApp.LargeImage
+			} else if strings.ToLower(category) == "iam" && org.SecurityFramework.IAM.ID == "" {
+				org.SecurityFramework.IAM.Name = discoveredApp.Name
+				org.SecurityFramework.IAM.Description = discoveredApp.Description
+				org.SecurityFramework.IAM.ID = discoveredApp.ID
+				org.SecurityFramework.IAM.LargeImage = discoveredApp.LargeImage
+			} else if strings.ToLower(category) == "assets" && org.SecurityFramework.Assets.ID == "" {
+				org.SecurityFramework.Assets.Name = discoveredApp.Name
+				org.SecurityFramework.Assets.Description = discoveredApp.Description
+				org.SecurityFramework.Assets.ID = discoveredApp.ID
+				org.SecurityFramework.Assets.LargeImage = discoveredApp.LargeImage
+			} else if strings.ToLower(category) == "intel" && org.SecurityFramework.Intel.ID == "" {
+				org.SecurityFramework.Intel.Name = discoveredApp.Name
+				org.SecurityFramework.Intel.Description = discoveredApp.Description
+				org.SecurityFramework.Intel.ID = discoveredApp.ID
+				org.SecurityFramework.Intel.LargeImage = discoveredApp.LargeImage
+			} else if strings.ToLower(category) == "comms" && org.SecurityFramework.Communication.ID == "" {
+				org.SecurityFramework.Communication.Name = discoveredApp.Name
+				org.SecurityFramework.Communication.Description = discoveredApp.Description
+				org.SecurityFramework.Communication.ID = discoveredApp.ID
+				org.SecurityFramework.Communication.LargeImage = discoveredApp.LargeImage
+			} else {
+				//log.Printf("[WARNING] No handler for type %s in app framework", category)
+			}
+		}
+
 	}
 
 	if !startnodeFound {
