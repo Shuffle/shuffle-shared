@@ -6540,6 +6540,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	sendOrgUpdaterHook := false
 	if len(tmpData.Image) > 0 {
 		org.Image = tmpData.Image
 	}
@@ -6565,10 +6566,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(tmpData.Tutorial) > 0 {
-
+		if tmpData.Tutorial == "welcome" {
+			sendOrgUpdaterHook = true
+		}
 	}
 
-	sendOrgUpdaterHook := false
 	if len(tmpData.Priority) > 0 {
 		if len(org.MainPriority) == 0 {
 			org.MainPriority = tmpData.Priority
