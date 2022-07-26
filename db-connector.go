@@ -2020,6 +2020,23 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	data.Edited = timeNow
+	newUsers := []User{}
+	for _, user := range data.Users {
+		user.Password = ""
+		user.Session = ""
+		user.PrivateApps = []WorkflowApp{}
+		user.MFA = MFAInfo{}
+		user.Authentication = []UserAuth{}
+
+		user.EthInfo = EthInfo{}
+		user.PublicProfile = PublicProfile{}
+		user.LoginInfo = []LoginInfo{}
+		user.PersonalInfo = PersonalInfo{}
+
+		newUsers = append(newUsers, user)
+	}
+
+	data.Users = newUsers
 
 	// clear session_token and API_token for user
 	if project.DbType == "elasticsearch" {

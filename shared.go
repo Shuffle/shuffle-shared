@@ -1211,8 +1211,13 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[WARNING] Failed setting app %s for org %s during appauth", org.Id)
 				} else {
-					cacheKey := fmt.Sprintf("apps_%s", user.Id)
-					DeleteCache(ctx, cacheKey)
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
+					DeleteCache(ctx, "all_apps")
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 				}
 			} else {
 				log.Printf("[INFO] Org %s already has app %s active.", user.ActiveOrg.Id, app.ID)
@@ -3500,6 +3505,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	type PublicCheck struct {
+		UserEditing bool   `json:"user_editing"`
+		Public      bool   `json:"public"`
+		Owner       string `json:"owner"`
+	}
+
 	correctUser := false
 	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
 		if tmpworkflow.Public {
@@ -3508,11 +3519,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			// /users/creators/username
 			// Just making sure
 			if project.Environment == "cloud" {
-				username := "frikky"
 				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
 				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, tmpworkflow.ID)
 				if err != nil {
-					log.Printf("[WARNING] User with name %s could not be found (app update): %s", username, err)
+					log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s", user.Id, tmpworkflow.ID, err)
 					// Check workflow if it
 
 					resp.WriteHeader(401)
@@ -3520,18 +3530,31 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
-				if algoliaUser.ObjectID == user.Id || ArrayContains(algoliaUser.Synonyms, user.Id) {
-					//log.Printf("[WARNING] User %s (%s) has access to edit! Keep it public!!", user.Username, user.Id)
-					correctUser = true
-					tmpworkflow.Public = true
-					workflow.Public = true
+				wf2 := PublicCheck{}
+				err = json.Unmarshal([]byte(body), &wf2)
+				if err != nil {
+					log.Printf("[ERROR] Failed workflow unmarshaling (save - 2): %s", err)
+				}
 
+				if algoliaUser.ObjectID == user.Id || ArrayContains(algoliaUser.Synonyms, user.Id) {
+					log.Printf("[WARNING] User %s (%s) has access to edit %s! Keep it public!!", user.Username, user.Id, workflow.ID)
+
+					// Means the owner is using the workflow for their org
+					if wf2.UserEditing == false {
+						correctUser = false
+					} else {
+						correctUser = true
+						tmpworkflow.Public = true
+						workflow.Public = true
+					}
 				}
 			}
 
+			// FIX: Should check if this workflow has already been saved?
 			if !correctUser {
 				log.Printf("[INFO] User %s is saving the public workflow %s", user.Username, tmpworkflow.ID)
 				workflow = *tmpworkflow
+				workflow.PublishedId = workflow.ID
 				workflow.ID = uuid.NewV4().String()
 				workflow.Public = false
 				workflow.Owner = user.Id
@@ -3548,6 +3571,42 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					resp.WriteHeader(401)
 					resp.Write([]byte(`{"success": false}`))
 					return
+				}
+				org, err := GetOrg(ctx, user.ActiveOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting org for cache release for public wf: %s", err)
+				} else {
+					for _, loopUser := range org.Users {
+						DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
+						DeleteCache(ctx, fmt.Sprintf("apps_%s", loopUser.Id))
+						DeleteCache(ctx, fmt.Sprintf("user_%s", loopUser.Id))
+					}
+
+					// Activate all that aren't already there
+					changed := false
+					for _, action := range workflow.Actions {
+						log.Printf("App: %#v, Public: %#v", action.AppID, action.Public)
+						if !ArrayContains(org.ActiveApps, action.AppID) {
+							org.ActiveApps = append(org.ActiveApps, action.AppID)
+							changed = true
+						}
+					}
+
+					if changed {
+						log.Printf("UPDATed: %#v!!", org.ActiveApps)
+						err = SetOrg(ctx, *org, org.Id)
+						if err != nil {
+							log.Printf("[ERROR] Failed updating active app list for org %s (%s): %s", org.Name, org.Id, err)
+						} else {
+							DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+							DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+							DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+							DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
+							DeleteCache(ctx, "all_apps")
+							DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+							DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+						}
+					}
 				}
 
 				resp.WriteHeader(200)
@@ -3616,7 +3675,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.DefaultReturnValue
 	}
 
-	log.Printf("[INFO] Saving workflow %s with %d actions and %d triggers", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
+	log.Printf("[INFO] Saving workflow %s with %d action(s) and %d trigger(s)", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
 	if len(workflow.ExecutingOrg.Id) == 0 {
 		log.Printf("[INFO] Setting executing org for workflow")
 		user.ActiveOrg.Users = []UserMini{}
@@ -3897,7 +3956,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	// Automatically adding new apps
 	if len(newOrgApps) > 0 {
-		log.Printf("Adding new apps to org: %#v", newOrgApps)
+		log.Printf("[WARNING] Adding new apps to org: %#v", newOrgApps)
 		org, err := GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
 			added := false
@@ -3913,8 +3972,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
 				} else {
-					cacheKey := fmt.Sprintf("apps_%s", user.Id)
-					DeleteCache(ctx, cacheKey)
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
+					DeleteCache(ctx, "all_apps")
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 				}
 			}
 		}
@@ -4655,8 +4719,21 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-	DeleteCache(ctx, cacheKey)
+	if org.Id == "" {
+		org, err = GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org during wf save of %s (org: %s): %s", workflow.ID, user.ActiveOrg.Id, err)
+		}
+	}
+
+	// This may cause some issues with random slow loads with cross & suborgs, but that's fine (for now)
+	// FIX: Should only happen for users with this org as the active one
+	// Org-based workflows may also work
+	if org.Id != "" {
+		for _, loopUser := range org.Users {
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
+		}
+	}
 
 	//totalOldActions := len(tmpworkflow.Actions)
 	//totalNewActions := len(workflow.Actions)
@@ -5797,11 +5874,11 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				err = deactivateApp(ctx, user, app)
 				if err == nil {
 					log.Printf("[INFO] App %s was deactivated for org %s", app.ID, user.ActiveOrg.Id)
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 					DeleteCache(ctx, "all_apps")
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 					resp.WriteHeader(200)
@@ -6349,10 +6426,10 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 				Name: parentOrg.Name,
 			},
 		},
-		SyncFeatures:    parentOrg.SyncFeatures,
 		CloudSyncActive: parentOrg.CloudSyncActive,
 		CreatorOrg:      tmpData.OrgId,
 	}
+	//SyncFeatures:    parentOrg.SyncFeatures,
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
 		Name: tmpData.Name,
@@ -6361,7 +6438,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetOrg(ctx, newOrg, newOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id)
+		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -7383,7 +7460,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
 			exit := true
-			log.Printf("Check published: %#v", app.PublishedId)
+			log.Printf("[INFO] Check published: %#v", app.PublishedId)
 			if len(app.PublishedId) > 0 {
 
 				// FIXME: is this privacy / vulnerability?
@@ -11477,10 +11554,15 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	location := strings.Split(request.URL.String(), "/")
-	if len(location) != 5 {
+	if len(location) < 5 {
 		resp.WriteHeader(404)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/docs/workflows.md"`)))
 		return
+	}
+
+	log.Printf("Location: %s", location[4])
+	if strings.Contains(location[4], "?") {
+		location[4] = strings.Split(location[4], "?")[0]
 	}
 
 	ctx := getContext(request)
@@ -11497,6 +11579,17 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	repo := "shuffle-docs"
 	path := "docs"
 	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
+
+	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
+	downloadLocation, downloadOk := request.URL.Query()["location"]
+	if downloadOk {
+		if downloadLocation[0] == "openapi" {
+			newpath := fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", strings.ToLower(location[4]))
+			log.Printf("NEWPATH: %s", newpath)
+
+			docPath = newpath
+		}
+	}
 
 	httpClient := &http.Client{}
 	req, err := http.NewRequest(
@@ -14233,11 +14326,16 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false, "reason": "Failed updating organization info. Please contact us if this persists."}`))
 		return
 	} else {
-		cacheKey := fmt.Sprintf("apps_%s", user.Id)
-		DeleteCache(ctx, cacheKey)
+		DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+		DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+		DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+		DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
+		DeleteCache(ctx, "all_apps")
+		DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+		DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 	}
 
-	log.Printf("[DEBUG] Successfully updated type %s to app %s (%s) for org %s (%s)!", value.Type, app.Name, app.ID, org.Name, org.Id)
+	log.Printf("[DEBUG] Successfully updated app framework type %s to app %s (%s) for org %s (%s)!", value.Type, app.Name, app.ID, org.Name, org.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -14920,7 +15018,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 					return usecase.List[i].Priority > usecase.List[j].Priority
 				})
 
-				log.Printf("[DEBUG] Priorities for %s", usecase.Name)
+				//log.Printf("[DEBUG] Priorities for %s", usecase.Name)
 				for _, subusecase := range usecase.List {
 					// Check if it has a workflow attached to it too?
 					//log.Printf("%s = %d. Matches: %d", subusecase.Name, subusecase.Priority, len(subusecase.Matches))
