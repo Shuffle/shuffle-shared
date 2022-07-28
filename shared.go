@@ -12477,7 +12477,11 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	// SAML
 	//entryPoint := "https://dev-23367303.okta.com/app/dev-23367303_shuffletest_1/exk1vg1j7bYUYEG0k5d7/sso/saml"
 	redirectUrl := "http://localhost:3001/workflows"
-	backendUrl := os.Getenv("BASE_URL")
+	backendUrl := os.Getenv("SSO_REDIRECT_URL")
+	if len(backendUrl) == 0 && len(os.Getenv("BASE_URL")) > 0 {
+		backendUrl = os.Getenv("BASE_URL")
+	}
+
 	if len(backendUrl) > 0 {
 		redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
 	}
