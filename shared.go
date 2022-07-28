@@ -2506,6 +2506,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			// Removed because of exports. These are needed there.
 			//action.LargeImage = ""
 			//action.SmallImage = ""
+			action.ReferenceUrl = ""
 			newActions = append(newActions, action)
 		}
 
@@ -3947,7 +3948,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				//log.Printf("[WARNING] No handler for type %s in app framework", category)
 			}
 		}
-
 	}
 
 	if !startnodeFound {
@@ -5500,9 +5500,9 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.Errors = []string{}
 	}
 
-	//for _, action := range workflow.Actions {
-	//	log.Printf("Environment: %s", action.Environment)
-	//}
+	for key, _ := range workflow.Actions {
+		workflow.Actions[key].ReferenceUrl = ""
+	}
 
 	body, err := json.Marshal(workflow)
 	if err != nil {
@@ -7365,6 +7365,8 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	app.ReferenceUrl = ""
+
 	//if IsValid       bool   `json:"is_valid" yaml:"is_valid" required:true datastore:"is_valid"`
 	// Sharing       bool   `json:"sharing" yaml:"sharing" required:false datastore:"sharing"`
 	//log.Printf("Sharing: %s", app.Sharing)
@@ -7492,6 +7494,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		parsedApi, err := GetOpenApiDatastore(ctx, fileId)
 		if err != nil {
 			log.Printf("[INFO] OpenApi doesn't exist for (1): %s - err: %s. Returning basic app.", fileId, err)
+
 			resp.WriteHeader(200)
 			resp.Write(appdata)
 			return
@@ -13296,6 +13299,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	newActions := []Action{}
 	defaultResults := []ActionResult{}
 
+	if project.Environment == "cloud" {
+		//apps, err := GetPrioritizedApps(ctx, user)
+		//if err != nil {
+		//	log.Printf("[WARNING] Error: Failed getting apps during setup: %s", err)
+		//}
+	}
+
 	allAuths := []AppAuthenticationStorage{}
 	for _, action := range workflowExecution.Workflow.Actions {
 		//action.LargeImage = ""
@@ -13305,6 +13315,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Fill in apikey?
 		if project.Environment == "cloud" {
+
 			if (action.AppName == "Shuffle Tools" || action.AppName == "email") && action.Name == "send_email_shuffle" || action.Name == "send_sms_shuffle" {
 				for paramKey, param := range action.Parameters {
 					// Autoreplace in general, even if there is a key. Overwrite previous configs to ensure this becomes the norm. Frontend also matches.
@@ -13347,7 +13358,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 				}
 			}
-
 		}
 		//log.Println(action.Environment)
 
