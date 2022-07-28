@@ -3463,6 +3463,10 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		return appAuth, err
 	}
 
+	if len(refreshToken) == 0 && refresh {
+		refresh = false
+	}
+
 	respBody := []byte{}
 	if !refresh {
 		req, err := http.NewRequest(
@@ -3494,6 +3498,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			return appAuth, errors.New(fmt.Sprintf("Bad status code: %d. Message: %s", newresp.StatusCode, respBody))
 		}
 	} else {
+		//log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
+
 		if len(refreshToken) == 0 {
 			log.Printf("[ERROR] No refresh token acquired for %s", refreshUrl)
 			return appAuth, errors.New("No refresh token specified during initial auth.")
@@ -3546,7 +3552,9 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		appAuth.Fields = newAuth
 	}
 
-	//log.Printf("\n\nRESPONSE: %s\n\n", string(respBody))
+	if strings.Contains(string(respBody), "error") {
+		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nV: %#v", string(respBody), v.Encode())
+	}
 	var oauthResp Oauth2Resp
 	err = json.Unmarshal(respBody, &oauthResp)
 	if err != nil {

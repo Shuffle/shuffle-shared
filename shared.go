@@ -11560,7 +11560,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("Location: %s", location[4])
 	if strings.Contains(location[4], "?") {
 		location[4] = strings.Split(location[4], "?")[0]
 	}
@@ -11585,8 +11584,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	if downloadOk {
 		if downloadLocation[0] == "openapi" {
 			newpath := fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", strings.ToLower(location[4]))
-			log.Printf("NEWPATH: %s", newpath)
-
 			docPath = newpath
 		}
 	}
@@ -13476,9 +13473,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							allAuths[authIndex] = newAuth
 
 							// Does the oauth2 replacement
-							//for _, param := range curAuth.Fields {
 							newParams = []WorkflowAppActionParameter{}
 							for _, param := range newAuth.Fields {
+								//log.Printf("FIELD: %s", param.Key, param.Value)
 								if param.Key != "url" && param.Key != "access_token" {
 									//log.Printf("Skipping key %s (2)", param.Key)
 									continue
@@ -13491,7 +13488,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							}
 						}
 					}
-
 				}
 
 				for _, param := range action.Parameters {
