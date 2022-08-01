@@ -433,7 +433,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	//verifyParam := ""
 	//verifyWrapper := ""
 	//verifyAddin := ""
-	verifyParam := ", ssl_verify=False"
+	// Added to_file as of July 2022
+	verifyParam := ", ssl_verify=False, to_file=False"
 	verifyWrapper := `if type(ssl_verify) == str: ssl_verify = False if ssl_verify.lower() == "false" or ssl_verify == "0" else True`
 	verifyAddin := ", verify=ssl_verify"
 
@@ -543,10 +544,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Handles default return value
-	handleFileString := "try:\n            \n            print(ret.json())\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            print(f\"[WARNING] JSON Exception in return: {e}\")\n            return ret.text\n        except Exception as e:\n            print(f\"[WARNING] Exception in return: {e}\")\n            return ret.text"
-	if handleFile {
-		handleFileString = fmt.Sprintf("new_file = [{\"filename\": \"%s_generated\", \"data\": ret.text}]\n        return_value = self.set_files(new_file)\n        return json.dumps({\"success\": True, \"file_id\": return_value[0], \"file_size\": len(ret.text)})", swagger.Info.Title)
-	}
+	handleFileString := "try:\n            print(ret.json())\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            print(f\"[WARNING] JSON Exception in return: {e}\")\n            return ret.text\n        except Exception as e:\n            print(f\"[WARNING] Exception in return: {e}\")\n            return ret.text"
+	//if handleFile {
+	//	handleFileString = fmt.Sprintf("new_file = [{\"filename\": \"%s_generated\", \"data\": ret.text}]\n        return_value = self.set_files(new_file)\n        return json.dumps({\"success\": True, \"file_id\": return_value[0], \"file_size\": len(ret.text)})", swagger.Info.Title)
+	//}
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" {
@@ -567,6 +568,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         %s
         %s
         %s
+        if str(to_file).lower() == "true":
+            to_file = True
+        else:
+            to_file = False
+
         if "http:/" in url and not "http://" in url:
             url = url.replace("http:/", "http://", -1)
         if "https:/" in url and not "https://" in url:
@@ -643,6 +649,18 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         except Exception as e:
             print(f"[WARNING] Something went wrong when adding extra returns (2). {e}")
 
+        if to_file:
+            filedata = {
+                "filename": "response",
+                "data": ret.content,
+            }
+    
+            fileret = self.set_files([filedata])
+            if len(fileret) == 1:
+                return {"success": True, "file_id": fileret[0], "status": ret.status_code}
+    
+            return fileret
+
         %s
 		`,
 		functionname,
@@ -671,8 +689,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "validate") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(strings.ToLower(functionname), "codegen") {
+		log.Printf("\n%s", data)
 	}
 
 	return functionname, data
@@ -1111,6 +1129,21 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		Multiline:   false,
 		Required:    false,
 		Example:     "True",
+		Options: []string{
+			"False",
+			"True",
+		},
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	optionalParameters = append(optionalParameters, WorkflowAppActionParameter{
+		Name:        "to_file",
+		Description: "Choose if we should write the result straight to a file or not",
+		Multiline:   false,
+		Required:    false,
+		Example:     "False",
 		Options: []string{
 			"False",
 			"True",

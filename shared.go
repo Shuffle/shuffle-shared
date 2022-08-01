@@ -4386,35 +4386,47 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			newActions = append(newActions, action)
 		} else {
 			curapp := WorkflowApp{}
+
+			// ID first, then name + version
+			// If it can't find param, it will swap it over farther down
 			for _, app := range workflowapps {
 				if app.ID == action.AppID {
 					curapp = app
 					break
 				}
+			}
 
-				// Has to NOT be generated
-				if app.Name == action.AppName {
-					if app.AppVersion == action.AppVersion {
+			if curapp.ID == "" {
+				for _, app := range workflowapps {
+					if app.ID == action.AppID {
 						curapp = app
 						break
-					} else if ArrayContains(app.LoopVersions, action.AppVersion) {
-						// Get the real app
-						for _, item := range app.Versions {
-							if item.Version == action.AppVersion {
-								//log.Printf("Should get app %s - %s", item.Version, item.ID)
+					}
 
-								tmpApp, err := GetApp(ctx, item.ID, user, false)
-								if err != nil && tmpApp.ID == "" {
-									log.Printf("[WARNING] Failed getting app %s (%s): %s", app.Name, item.ID, err)
+					// Has to NOT be generated
+					if app.Name == action.AppName {
+						if app.AppVersion == action.AppVersion {
+							curapp = app
+							break
+						} else if ArrayContains(app.LoopVersions, action.AppVersion) {
+							// Get the real app
+							for _, item := range app.Versions {
+								if item.Version == action.AppVersion {
+									//log.Printf("Should get app %s - %s", item.Version, item.ID)
+
+									tmpApp, err := GetApp(ctx, item.ID, user, false)
+									if err != nil && tmpApp.ID == "" {
+										log.Printf("[WARNING] Failed getting app %s (%s): %s", app.Name, item.ID, err)
+									}
+
+									curapp = *tmpApp
+									break
 								}
-
-								curapp = *tmpApp
-								break
 							}
-						}
 
-						//curapp = app
-						break
+							//curapp = app
+							break
+						}
 					}
 				}
 			}
@@ -4439,7 +4451,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App %s doesn't exist"}`, action.AppName)))
 				//return
 			} else {
-				// Check tosee if the appaction is valid
+				// Check to see if the appaction is valid
 				curappaction := WorkflowAppAction{}
 				for _, curAction := range curapp.Actions {
 					if action.Name == curAction.Name {
@@ -4448,8 +4460,38 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
+				if curappaction.Name != action.Name {
+					// FIXME: Check if another app with the same name has the action here
+					// Then update the ID? May be related to updated apps etc.
+					//log.Printf("Couldn't find action - checking similar apps")
+					for _, app := range workflowapps {
+						if app.ID == curapp.ID {
+							continue
+						}
+
+						// Has to NOT be generated
+						if app.Name == action.AppName && app.AppVersion == action.AppVersion {
+							for _, curAction := range app.Actions {
+								if action.Name == curAction.Name {
+									log.Printf("[DEBUG] Found app %s (NOT %s) with the param: %s", app.ID, curapp.ID, curAction.Name)
+									curappaction = curAction
+									action.AppID = app.ID
+									curapp = app
+									break
+								}
+							}
+						}
+
+						if curappaction.Name == action.Name {
+							break
+						}
+					}
+				}
+
 				// Check to see if the action is valid
 				if curappaction.Name != action.Name {
+					// FIXME: Find the actual active app?
+
 					log.Printf("[ERROR] Action %s in app %s doesn't exist.", action.Name, curapp.Name)
 					thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)
 					workflow.Errors = append(workflow.Errors, thisError)
@@ -4510,7 +4552,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								//log.Printf("[WARNING] Appaction %s with required param '%s' is empty. Can't save.", action.Name, param.Name)
 								thisError := fmt.Sprintf("%s is missing required parameter %s", action.Label, param.Name)
 								if handleOauth {
-									log.Printf("[WARNING] Handling oauth2 app saving, hence not throwing warnings (1)")
+									//log.Printf("[WARNING] Handling oauth2 app saving, hence not throwing warnings (1)")
 									//workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (1)", action.Name))
 								} else {
 									action.Errors = append(action.Errors, thisError)
