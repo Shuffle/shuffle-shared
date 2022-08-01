@@ -2862,14 +2862,15 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
-		Tutorial  string   `json:"tutorial" datastore:"tutorial"`
-		Firstname string   `json:"firstname"`
-		Lastname  string   `json:"lastname"`
-		Role      string   `json:"role"`
-		Username  string   `json:"username"`
-		UserId    string   `json:"user_id"`
-		EthInfo   EthInfo  `json:"eth_info"`
-		Suborgs   []string `json:"suborgs"`
+		Tutorial    string   `json:"tutorial" datastore:"tutorial"`
+		Firstname   string   `json:"firstname"`
+		Lastname    string   `json:"lastname"`
+		Role        string   `json:"role"`
+		Username    string   `json:"username"`
+		UserId      string   `json:"user_id"`
+		EthInfo     EthInfo  `json:"eth_info"`
+		CompanyRole string   `json:"company_role"`
+		Suborgs     []string `json:"suborgs"`
 	}
 
 	ctx := getContext(request)
@@ -2916,6 +2917,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	orgUpdater := true
+	log.Printf("Role: %#v", t.Role)
 	if len(t.Role) > 0 && (t.Role != "admin" && t.Role != "user" && t.Role != "org-reader") {
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
@@ -3004,6 +3006,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	if len(t.Lastname) > 0 {
 		foundUser.PersonalInfo.Lastname = t.Lastname
+	}
+
+	if len(t.CompanyRole) > 0 {
+		foundUser.PersonalInfo.Role = t.CompanyRole
 	}
 
 	if len(t.EthInfo.Account) > 0 {
