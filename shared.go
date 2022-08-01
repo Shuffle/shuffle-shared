@@ -3823,30 +3823,38 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				idFound = true
 				break
 			}
+		}
 
-			if innerApp.Name == action.AppName && innerApp.AppVersion == action.AppVersion {
-				discoveredApp = innerApp
+		if !idFound {
+			for _, innerApp := range workflowapps {
+				if innerApp.Name == action.AppName && innerApp.AppVersion == action.AppVersion {
+					discoveredApp = innerApp
 
-				action.AppID = innerApp.ID
-				action.Sharing = innerApp.Sharing
-				action.Public = innerApp.Public
-				action.Generated = innerApp.Generated
-				action.ReferenceUrl = innerApp.ReferenceUrl
-				nameVersionFound = true
-				break
+					action.AppID = innerApp.ID
+					action.Sharing = innerApp.Sharing
+					action.Public = innerApp.Public
+					action.Generated = innerApp.Generated
+					action.ReferenceUrl = innerApp.ReferenceUrl
+					nameVersionFound = true
+					break
+				}
 			}
+		}
 
-			if innerApp.Name == action.AppName {
-				discoveredApp = innerApp
+		if !idFound {
+			for _, innerApp := range workflowapps {
+				if innerApp.Name == action.AppName {
+					discoveredApp = innerApp
 
-				action.AppID = innerApp.ID
-				action.Sharing = innerApp.Sharing
-				action.Public = innerApp.Public
-				action.Generated = innerApp.Generated
-				action.ReferenceUrl = innerApp.ReferenceUrl
+					action.AppID = innerApp.ID
+					action.Sharing = innerApp.Sharing
+					action.Public = innerApp.Public
+					action.Generated = innerApp.Generated
+					action.ReferenceUrl = innerApp.ReferenceUrl
 
-				nameFound = true
-				break
+					nameFound = true
+					break
+				}
 			}
 		}
 
@@ -3856,6 +3864,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			} else {
 				log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
 				handled := false
+
 				if project.Environment == "cloud" {
 					appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
 					if err == nil && len(appid) > 0 {
@@ -4403,6 +4412,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if curapp.ID == "" {
+				log.Printf("Didn't find the App ID for %s", action.AppID)
 				for _, app := range workflowapps {
 					if app.ID == action.AppID {
 						curapp = app
@@ -4435,6 +4445,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						}
 					}
 				}
+			} else {
+				log.Printf("[DEBUG] Found correct App ID for %s", action.AppID)
 			}
 
 			//log.Printf("CURAPP: %#v:%s", curapp.Name, curapp.AppVersion)
