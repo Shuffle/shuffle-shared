@@ -2,7 +2,7 @@ module stitcher
 
 go 1.15
 
-replace github.com/frikky/shuffle-shared => ../
+//replace github.com/shuffle/shuffle-shared => ../
 
 require (
 	cloud.google.com/go/storage v1.14.0
@@ -15,7 +15,7 @@ require (
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.4.0 // indirect
 	github.com/elastic/go-elasticsearch/v8 v8.0.0-20210519083322-55daf7425ecb // indirect
-	github.com/frikky/shuffle-shared v0.1.16
+	github.com/shuffle/shuffle-shared v0.2.77
 	github.com/go-git/go-git/v5 v5.4.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect

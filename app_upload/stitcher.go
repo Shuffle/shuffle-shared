@@ -5,7 +5,7 @@ package main
 // This can be used to update normal apps, but app-creator apps should be updated by the shaffuru/functions/cloud_scripts/update_functions.go script in case there is a new App SDK.
 
 import (
-	"github.com/frikky/shuffle-shared"
+	"github.com/shuffle/shuffle-shared"
 
 	"archive/zip"
 	"bytes"
@@ -817,8 +817,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "shuffle-subflow"
-	appversion := "1.0.0"
+	appname := "shuffle-tools"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

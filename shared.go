@@ -190,6 +190,11 @@ var usecaseData = `[
                 "items": {}
             },
             {
+                "name": "Memory Analysis (Volatility)",
+								"priority": 50,
+                "items": {}
+            },
+            {
                 "name": "IDS & IPS (Snort/Surricata)",
 								"priority": 50,
                 "items": {}
@@ -3683,10 +3688,22 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[INFO] Saving workflow %s with %d action(s) and %d trigger(s)", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
-	if len(workflow.ExecutingOrg.Id) == 0 {
-		log.Printf("[INFO] Setting executing org for workflow")
-		user.ActiveOrg.Users = []UserMini{}
-		workflow.ExecutingOrg = user.ActiveOrg
+
+	if len(user.ActiveOrg.Id) > 0 {
+		if len(workflow.ExecutingOrg.Id) == 0 {
+			log.Printf("[INFO] Setting executing org for workflow to %s", user.ActiveOrg.Id)
+			user.ActiveOrg.Users = []UserMini{}
+			workflow.ExecutingOrg = user.ActiveOrg
+		}
+
+		//if len(workflow.Org) == 0 {
+		//	user.ActiveOrg.Users = []UserMini{}
+		//	//workflow.Org = user.ActiveOrg
+		//}
+
+		if len(workflow.OrgId) == 0 {
+			workflow.OrgId = user.ActiveOrg.Id
+		}
 	}
 
 	newActions := []Action{}
@@ -4412,7 +4429,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if curapp.ID == "" {
-				log.Printf("Didn't find the App ID for %s", action.AppID)
+				//log.Printf("[WARNING] Didn't find the App ID for %s", action.AppID)
 				for _, app := range workflowapps {
 					if app.ID == action.AppID {
 						curapp = app
@@ -4446,7 +4463,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			} else {
-				log.Printf("[DEBUG] Found correct App ID for %s", action.AppID)
+				//log.Printf("[DEBUG] Found correct App ID for %s", action.AppID)
 			}
 
 			//log.Printf("CURAPP: %#v:%s", curapp.Name, curapp.AppVersion)
@@ -10675,7 +10692,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 
 		swaggerv3, err := openapi2conv.ToV3Swagger(&swagger)
 		if err != nil {
-			log.Printf("Failed converting from openapi2 to 3: %s", err)
+			log.Printf("[WARNING] Failed converting from openapi2 to 3: %s", err)
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed converting from openapi2 to openapi3: %s"}`, err)))
 			return

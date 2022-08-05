@@ -902,6 +902,7 @@ type Schedule struct {
 	Id                string `json:"id" datastore:"id"`
 	OrgId             string `json:"org_id" datastore:"org_id"`
 	Environment       string `json:"environment" datastore:"environment"`
+	Start             string `json:"start" datastore:"start"`
 }
 
 type Comment struct {
@@ -2104,9 +2105,17 @@ type DataToSend struct {
 	RedirectUri  string `url:"redirect_uri" json:"redirect_uri"`
 }
 
+type BaseFile struct {
+	Name string `json:"name"`
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+
 type FileResponse struct {
-	Files      []File   `json:"files" datastore:"files"`
-	Namespaces []string `json:"namespaces" datastore:"namespaces"`
+	Success    bool       `json:"success" datastore:"success"`
+	Files      []File     `json:"files,omitempty" datastore:"files"`
+	Namespaces []string   `json:"namespaces,omitempty" datastore:"namespaces"`
+	List       []BaseFile `json:"list,omitempty" datastore:"list"`
 }
 
 type SSOConfig struct {
