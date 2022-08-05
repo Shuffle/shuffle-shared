@@ -121,6 +121,7 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	fileResponse := FileResponse{
+		Success:    true,
 		Files:      files,
 		Namespaces: []string{"default"},
 	}
@@ -403,7 +404,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		namespace = strings.Split(namespace, "?")[0]
 	}
 
-	log.Printf("\n\n[INFO] User is trying to download files from namespace %s\n\n", namespace)
+	namespace = strings.Replace(namespace, "%20", " ", -1)
 
 	// 1. Check user directly
 	// 2. Check workflow execution authorization
@@ -413,7 +414,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
-			log.Printf("Bad file authentication in get namespace %s: %s", namespace, err)
+			log.Printf("[WARNING] Bad file authentication in get namespace %s: %s", namespace, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -422,6 +423,8 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		user.ActiveOrg.Id = orgId
 		user.Username = "Execution File API"
 	}
+
+	log.Printf("[INFO] User %s (%s) is trying to download files from namespace %#v", user.Username, user.Id, namespace)
 
 	ctx := getContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, namespace)
@@ -439,20 +442,53 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	fileResponse := FileResponse{
 		Files:      []File{},
 		Namespaces: []string{namespace},
+		List:       []BaseFile{},
 	}
 
 	for _, file := range files {
 		if file.Status != "active" {
-			log.Printf("File %s (%s) is not active", file.Filename, file.Id)
+			log.Printf("[DEBUG] File %s (%s) is not active", file.Filename, file.Id)
 			continue
 		}
 
+		if file.Namespace == "" {
+			file.Namespace = "default"
+		}
+
+		//log.Printf("File namespace: %s", file.Namespace)
 		if file.Namespace == namespace && file.OrgId == user.ActiveOrg.Id {
 			fileResponse.Files = append(fileResponse.Files, file)
+
+			fileResponse.List = append(fileResponse.List, BaseFile{
+				Name: file.Filename,
+				ID:   file.Id,
+				Type: file.Type,
+			})
 		}
 	}
 
-	log.Printf("Found %d (%d) files for namespace %s", len(files), len(fileResponse.Files), namespace)
+	log.Printf("[DEBUG] Found %d (%d:%d) files for namespace %s", len(files), len(fileResponse.Files), len(fileResponse.List), namespace)
+
+	ids, idsok := request.URL.Query()["ids"]
+	if idsok {
+		log.Printf("[DEBUG] IDS: %#v", ids)
+		if ids[0] == "true" {
+			fileResponse.Success = true
+			fileResponse.Files = []File{}
+
+			newBody, err := json.Marshal(fileResponse)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshaling files (2) for user %s (%s): %s", user.Username, user.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to marshal files (2)"}`))
+				return
+			}
+
+			resp.WriteHeader(200)
+			resp.Write([]byte(newBody))
+			return
+		}
+	}
 
 	//zipfile := fmt.Sprintf("%s.zip", namespace)
 	buf := new(bytes.Buffer)
@@ -524,7 +560,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 	err = zipWriter.Close()
 	if err != nil {
-		log.Printf("Packing failed to close zip file writer: %v", err)
+		log.Printf("[WARNING] Packing failed to close zip file writer: %v", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -537,7 +573,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("Packed %d files from namespace %s into the zip", packed, namespace)
+	log.Printf("[DEBUG] Packed %d files from namespace %s into the zip for %s (%s)", packed, namespace, user.Username, user.Id)
 	FileHeader := make([]byte, 512)
 	FileContentType := http.DetectContentType(FileHeader)
 	resp.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zip", namespace))
@@ -800,6 +836,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
+
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -811,6 +848,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		}
 		fileId = location[4]
 	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("INITIAL Api authentication failed in file upload: %s", err)
@@ -824,22 +862,31 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		user.ActiveOrg.Id = orgId
 		user.Username = "Execution File API"
 	}
+
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to upload file: %s (%s)", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
+
 	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
 	ctx := getContext(request)
 	file, err := GetFile(ctx, fileId)
 	log.Printf("file obj", file)
 	if err != nil {
 		log.Printf("File %s not found: %s", fileId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	if file.Status != "active" {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "File must be active. Use /upload API first"}`))
+		return
+	}
+
 	found := false
 	if file.OrgId == user.ActiveOrg.Id {
 		found = true
@@ -851,12 +898,14 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
 	if !found {
 		log.Printf("User %s doesn't have access to %s", user.Username, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Println("Failed reading body")
@@ -864,11 +913,13 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to read data"}`)))
 		return
 	}
+
 	file.FileSize = int64(len(body))
 	file.ContentType = http.DetectContentType(body)
 	file.Encrypted = true // not sure about what this does, maybe it has something to do with datastore encrypted column and stores file as encrypted in cloud storage?
 	file.LastEditor = user.Username
 	file.IsEdited = true
+
 	err = uploadFile(ctx, file, body)
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file: %s", err)
@@ -876,6 +927,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed file upload in Shuffle"}`))
 		return
 	}
+
 	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
