@@ -1949,6 +1949,11 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
+
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
 	} else {
 		backendUrl = "http://127.0.0.1:5001"
 	}
@@ -4117,6 +4122,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					baseUrl := "https://shuffler.io"
 					if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 						baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+					}
+
+					if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+						baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 					}
 
 					if project.Environment != "cloud" {
@@ -7219,6 +7228,10 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 	}
 
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
 	currentUrl := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", baseUrl, newId)
 	startNode := requestdata.Start
 	if requestdata.Environment == "cloud" && project.Environment != "cloud" {
@@ -7965,6 +7978,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
 
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
 		//backendUrl = "http://localhost:5002"
 	}
 
@@ -8426,6 +8443,10 @@ func ResendActionResult(actionData []byte, retries int64) {
 
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
+
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 		}
 
 		//backendUrl = fmt.Sprintf("http://localhost:5002")
@@ -9280,6 +9301,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 						if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 							streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/api/v1/streams", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+						}
+
+						if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+							streamUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 						}
 
 						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
@@ -12571,6 +12596,10 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/workflows", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
+
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 		}
 	}
 

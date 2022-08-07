@@ -406,6 +406,8 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 			if err := memcache.Set(ctx, item); err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 					log.Printf("[WARNING] Failed setting cache for %s (2): %s", name, err)
+				} else {
+					log.Printf("[WARNING] Something bad with App Engine context for memcache: %s", err)
 				}
 			}
 		}
