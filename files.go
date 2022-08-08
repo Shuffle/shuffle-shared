@@ -920,7 +920,8 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	file.LastEditor = user.Username
 	file.IsEdited = true
 
-	err = uploadFile(ctx, file, body)
+	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+	err = uploadFile(ctx, file, parsedKey, body)
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file: %s", err)
 		resp.WriteHeader(500)
@@ -1007,7 +1008,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !found {
-		log.Printf("User %s doesn't have access to %s", user.Username, fileId)
+		log.Printf("[WARNING] User %s doesn't have access to %s", user.Username, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1054,20 +1055,9 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	buf.Reset()
 
 	// Handle file encryption if an encryption key is set
-	newContents := contents
+
 	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-	newFileValue, err := handleKeyEncryption(contents, parsedKey)
-	if err != nil {
-		log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
-		newContents = contents
-	} else {
-		newContents = []byte(newFileValue)
-		file.Encrypted = true
-	}
-
-	log.Printf("[DEBUG] Got old length %d vs encrypted length %d", len(contents), len(newFileValue))
-
-	err = uploadFile(ctx, file, newContents)
+	err = uploadFile(ctx, file, parsedKey, contents)
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file: %s", err)
 		resp.WriteHeader(500)
@@ -1080,9 +1070,24 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
-func uploadFile(ctx context.Context, file *File, contents []byte) error {
+func uploadFile(ctx context.Context, file *File, encryptionKey string, contents []byte) error {
 	md5 := Md5sum(contents)
 	sha256Sum := sha256.Sum256(contents)
+
+	if len(encryptionKey) > 0 {
+		newContents := contents
+		newFileValue, err := handleKeyEncryption(contents, encryptionKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
+			newContents = contents
+		} else {
+			newContents = []byte(newFileValue)
+			file.Encrypted = true
+		}
+
+		log.Printf("[DEBUG] Got old length %d vs encrypted length %d", len(contents), len(newFileValue))
+		contents = newContents
+	}
 
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
 		log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s. Content length: %d", file.Id, len(contents))
@@ -1177,10 +1182,11 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type FileStructure struct {
-		Filename   string `json:"filename"`
-		OrgId      string `json:"org_id"`
-		WorkflowId string `json:"workflow_id"`
-		Namespace  string `json:"namespace"`
+		Filename   string   `json:"filename"`
+		OrgId      string   `json:"org_id"`
+		WorkflowId string   `json:"workflow_id"`
+		Namespace  string   `json:"namespace"`
+		Tags       []string `json:"tags"`
 	}
 
 	var curfile FileStructure
@@ -1193,7 +1199,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Loads of validation below
-	if len(curfile.OrgId) == 0 || len(curfile.WorkflowId) == 0 {
+	if len(curfile.OrgId) == 0 {
 		log.Printf("[ERROR] Missing field during fileupload. Required: filename, org_id, workflow_id")
 		log.Printf("INPUT: %s", string(body))
 		resp.WriteHeader(401)
@@ -1214,7 +1220,8 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	var workflow *Workflow
-	if curfile.WorkflowId == "global" {
+	if curfile.WorkflowId == "global" || curfile.WorkflowId == "" {
+		curfile.WorkflowId = "global"
 		// PS: Not a security issue.
 		// Files are global anyway, but the workflow_id is used to identify origin
 		log.Printf("[INFO] Uploading filename %s for org %s as global file.", curfile.Filename, curfile.OrgId)
@@ -1324,6 +1331,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		Subflows:     duplicateWorkflows,
 		StorageArea:  "local",
 		Namespace:    curfile.Namespace,
+		Tags:         curfile.Tags,
 	}
 
 	if project.Environment == "cloud" {

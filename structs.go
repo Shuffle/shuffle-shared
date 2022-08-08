@@ -1053,6 +1053,7 @@ type File struct {
 	FileSize       int64    `json:"filesize" datastore:"filesize"`
 	Duplicate      bool     `json:"duplicate" datastore:"duplicate"`
 	Subflows       []string `json:"subflows" datastore:"subflows"`
+	Tags           []string `json:"tags" datastore:"tags"`
 	StorageArea    string   `json:"storage_area" datastore:"storage_area"`
 	Etag           int      `json:"etag" datastore:"etag"`
 	ContentType    string   `json:"content_type" datastore:"content_type"`

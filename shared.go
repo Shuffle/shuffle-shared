@@ -405,6 +405,7 @@ func Md5sum(data []byte) string {
 	hasher := md5.New()
 	hasher.Write(data)
 	newmd5 := hex.EncodeToString(hasher.Sum(nil))
+
 	return newmd5
 }
 
