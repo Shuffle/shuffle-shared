@@ -680,6 +680,7 @@ type Defaults struct {
 	WorkflowDownloadRepo   string `json:"workflow_download_repo" datastore:"workflow_download_repo"`
 	WorkflowDownloadBranch string `json:"workflow_download_branch" datastore:"workflow_download_branch"`
 	NotificationWorkflow   string `json:"notification_workflow" datastore:"notification_workflow"`
+	DocumentationReference string `json:"documentation_reference" datastore:"documentation_reference"`
 }
 
 type CacheKeyData struct {
