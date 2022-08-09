@@ -280,6 +280,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 			//parsedKey := strings.Replace(key, "-", "_", -1)
 			parsedKey := FixFunctionName(key, "")
+
 			if value.Value.In == "header" {
 				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
 				if len(extraHeaders) > 0 {
@@ -368,12 +369,13 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
 				// This might suck lol
-				key := "?"
-				if strings.Contains(url, "?") {
-					key = "&"
-				}
+				//key := "?"
+				//if strings.Contains(url, "?") {
+				//	key = "&"
+				//}
 
-				authenticationSetup = fmt.Sprintf("if apikey != \" \": url+=f\"%s%s={apikey}\"", key, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+				//authenticationSetup = fmt.Sprintf("if apikey != \" \": url+=f\"%s%s={apikey}\"", key, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+				authenticationSetup = fmt.Sprintf("if apikey != \" \": params[\"%s\"] = requests.utils.quote(apikey)", swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
 			}
 
 		} else if swagger.Components.SecuritySchemes["Oauth2"] != nil {
@@ -488,30 +490,33 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	preparedHeaders := "request_headers={}"
 	if len(headers) > 0 {
-		preparedHeaders = "request_headers={"
-		for count, header := range headers {
-			headerSplit := strings.Split(header, "=")
-			added := false
-			if len(headerSplit) == 2 {
-				if strings.Contains(preparedHeaders, headerSplit[0]) {
-					continue
+		if method == "post" && len(fileField) > 0 {
+		} else {
+			preparedHeaders = "request_headers={"
+			for count, header := range headers {
+				headerSplit := strings.Split(header, "=")
+				added := false
+				if len(headerSplit) == 2 {
+					if strings.Contains(preparedHeaders, headerSplit[0]) {
+						continue
+					}
+
+					headerSplit[0] = strings.Replace(headerSplit[0], "\"", "", -1)
+					headerSplit[0] = strings.Replace(headerSplit[0], "'", "", -1)
+					headerSplit[1] = strings.Replace(headerSplit[1], "\"", "", -1)
+					headerSplit[1] = strings.Replace(headerSplit[1], "'", "", -1)
+
+					preparedHeaders += fmt.Sprintf(`"%s": "%s"`, headerSplit[0], headerSplit[1])
+					added = true
 				}
 
-				headerSplit[0] = strings.Replace(headerSplit[0], "\"", "", -1)
-				headerSplit[0] = strings.Replace(headerSplit[0], "'", "", -1)
-				headerSplit[1] = strings.Replace(headerSplit[1], "\"", "", -1)
-				headerSplit[1] = strings.Replace(headerSplit[1], "'", "", -1)
-
-				preparedHeaders += fmt.Sprintf(`"%s": "%s"`, headerSplit[0], headerSplit[1])
-				added = true
+				if count != len(headers)-1 && added {
+					preparedHeaders += ","
+				}
 			}
 
-			if count != len(headers)-1 && added {
-				preparedHeaders += ","
-			}
+			preparedHeaders += "}"
 		}
-
-		preparedHeaders += "}"
 	}
 
 	fileBalance := ""
@@ -689,8 +694,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "codegen") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(strings.ToLower(functionname), "scan") {
+		log.Printf("\n%s", data)
 	}
 
 	return functionname, data
