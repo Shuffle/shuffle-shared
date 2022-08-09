@@ -694,8 +694,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "scan") {
-		log.Printf("\n%s", data)
+	if strings.Contains(strings.ToLower(functionname), "alarms") {
+		//log.Printf("\n%s", data)
 	}
 
 	return functionname, data
@@ -1675,6 +1675,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
+		optionalParam.Name = strings.ToLower(optionalParam.Name)
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
@@ -1863,6 +1864,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
+		optionalParam.Name = strings.ToLower(optionalParam.Name)
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
@@ -2036,6 +2038,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
+		optionalParam.Name = strings.ToLower(optionalParam.Name)
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
@@ -2210,6 +2213,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
+		optionalParam.Name = strings.ToLower(optionalParam.Name)
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
@@ -2416,6 +2420,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
+		optionalParam.Name = strings.ToLower(optionalParam.Name)
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
@@ -2595,6 +2600,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
+		optionalParam.Name = strings.ToLower(optionalParam.Name)
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
@@ -2770,6 +2776,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	// ensuring that they end up last in the specification
 	// (order is ish important for optional params) - they need to be last.
 	for _, optionalParam := range optionalParameters {
+		optionalParam.Name = strings.ToLower(optionalParam.Name)
 		action.Parameters = append(action.Parameters, optionalParam)
 	}
 
