@@ -2826,6 +2826,18 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		log.Printf("[WARNING] Failed marshalling user: %s", err)
 		return nil
 	}
+
+	log.Printf("[INFO] Updating user %s (%s) with data length %d", user.Username, user.Id, len(data))
+	if len(data) > 1000000 {
+		user.PrivateApps = []WorkflowApp{}
+
+		data, err = json.Marshal(user)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling user (2): %s", err)
+			return nil
+		}
+	}
+
 	if project.DbType == "elasticsearch" {
 		err = indexEs(ctx, nameKey, parsedKey, data)
 		if err != nil {
@@ -6789,4 +6801,67 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 	}
 
 	return deals, nil
+}
+
+func GetAppStats(ctx context.Context, id string) (*Conversionevents, error) {
+	stats := &Conversionevents{}
+
+	nameKey := "app_stats"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &stats)
+			if err == nil {
+				return stats, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for appstats: %s", err)
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		return &Conversionevents{}, errors.New("es api not supported yet")
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
+			log.Printf("[WARNING] Error in appstats loading of %s: %s", err)
+		}
+	}
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(stats)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getappstats: %s", err)
+			return stats, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getappstats: %s", err)
+		}
+	}
+
+	return stats, nil
+}
+
+// Finds custom oauth2 secret etc. based on
+func GetHostedOAuth(ctx context.Context, id string) (*DataToSend, error) {
+	stats := &DataToSend{}
+
+	nameKey := "oauth2_storage"
+	if project.DbType == "elasticsearch" {
+		return &DataToSend{}, errors.New("es api not supported for custom oauth")
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
+			log.Printf("[WARNING] Error in oauth2 key loading of ID %s: %s", id, err)
+		}
+	}
+
+	return stats, nil
 }

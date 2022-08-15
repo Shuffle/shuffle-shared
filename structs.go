@@ -2099,12 +2099,14 @@ type Oauth2Openapi struct {
 
 // The data to be parsed
 type DataToSend struct {
-	Code         string `url:"code" json:"code"`
-	GrantType    string `url:"grant_type" json:"grant_type"`
-	ClientSecret string `url:"client_secret" json:"client_secret"`
-	ClientId     string `url:"client_id" json:"client_id"`
-	Scope        string `url:"scope" json:"scope"`
-	RedirectUri  string `url:"redirect_uri" json:"redirect_uri"`
+	Code         string `url:"code" json:"code"  datastore:"code"`
+	GrantType    string `url:"grant_type" json:"grant_type"  datastore:"grant_type"`
+	ClientSecret string `url:"client_secret" json:"client_secret"  datastore:"client_secret"`
+	ClientId     string `url:"client_id" json:"client_id"  datastore:"client_id"`
+	Scope        string `url:"scope" json:"scope"  datastore:"scope"`
+	RedirectUri  string `url:"redirect_uri" json:"redirect_uri" datastore:"id"`
+	Name         string `url:"name" json:"name,omitempty"  datastore:"name"`
+	Id           string `url:"id" json:"id,omitempty" datastore:"id"`
 }
 
 type BaseFile struct {
@@ -3432,18 +3434,18 @@ type IdTokenCheck struct {
 }
 
 type WidgetMeta struct {
-	Color string `json:"color"`
+	Color string `json:"color" datastore:"color"`
 }
 
 type WidgetPointData struct {
-	Key      string     `json:"key"`
-	Data     int64      `json:"data"`
-	MetaData WidgetMeta `json:"metadata"`
+	Key      string     `json:"key" datastore:"key"`
+	Data     int64      `json:"data" datastore:"data"`
+	MetaData WidgetMeta `json:"metadata" datastore:"metadata"`
 }
 
 type WidgetPoint struct {
-	Key  string            `json:"key"`
-	Data []WidgetPointData `json:"data"`
+	Key  string            `json:"key"  datastore:"key"`
+	Data []WidgetPointData `json:"data"  datastore:"data"`
 }
 
 type Widget struct {
@@ -3453,4 +3455,14 @@ type Widget struct {
 	Dashboard  string        `json:"dashboard"`
 	WidgetType string        `json:"widget_type"`
 	Data       []WidgetPoint `json:"data"`
+}
+
+type Conversionevents struct {
+	Id         string        `json:"id" datastore:"id"`
+	Name       string        `json:"name" datastore:"name"`
+	Type       string        `json:"type" datastore:"type"`
+	Total      int           `json:"total" datastore:"total"`
+	Click      int           `json:"click" datastore:"click"`
+	Conversion int           `json:"conversion" datastore:"conversion"`
+	Events     []WidgetPoint `json:"events" datastore:"events"`
 }

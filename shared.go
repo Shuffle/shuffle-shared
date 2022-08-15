@@ -1273,9 +1273,10 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 		_, err = RunOauth2Request(ctx, user, appAuth, false)
 		if err != nil {
+			parsederror := strings.Replace(fmt.Sprintf("%s", err), "\"", "\\\"", -1)
 			log.Printf("[WARNING] Failed oauth2 request (3): %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed authorization: %s"}`, err)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed authorization: %s"}`, parsederror)))
 			return
 		}
 

@@ -3450,6 +3450,13 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	log.Printf("[DEBUG] Make request to %s for Oauth2 token. User: %s (%s)", url, user.Username, user.Id)
+	if len(requestData.ClientSecret) == 0 && len(requestData.ClientId) > 0 {
+		log.Printf("[INFO] Should query db for secret")
+		oauth2data, err := GetHostedOAuth(ctx, requestData.ClientId)
+		if err == nil && len(oauth2data.ClientSecret) > 0 {
+			requestData.ClientSecret = oauth2data.ClientSecret
+		}
+	}
 
 	if len(url) == 0 {
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
