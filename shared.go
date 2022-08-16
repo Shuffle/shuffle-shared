@@ -3542,11 +3542,33 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, tmpworkflow.ID)
 				if err != nil {
 					log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s", user.Id, tmpworkflow.ID, err)
-					// Check workflow if it
 
-					resp.WriteHeader(401)
-					resp.Write([]byte(`{"success": false}`))
-					return
+					// Check if current user is one of the few allowed
+					// This can only happen if the workflow doesn't already have an owner
+					log.Printf("CUR USER: %#v\n\n%s", user.PublicProfile, os.Getenv("GITHUB_USER_ALLOWLIST"))
+					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
+					found := false
+					if user.PublicProfile.Public && len(allowList) > 0 {
+						allowListSplit := strings.Split(allowList, ",")
+						for _, username := range allowListSplit {
+							if username == user.PublicProfile.GithubUsername {
+								algoliaUser, err = HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
+								if err != nil {
+									log.Printf("New error: %s", err)
+								}
+
+								found = true
+								break
+							}
+						}
+
+					}
+
+					if !found {
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false}`))
+						return
+					}
 				}
 
 				wf2 := PublicCheck{}
