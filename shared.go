@@ -3560,6 +3560,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								found = true
 								break
 							}
+
 						}
 
 					}
@@ -7861,6 +7862,11 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
 	//}
 
+	userdata.LoginInfo = []LoginInfo{LoginInfo{
+		IP:        request.RemoteAddr,
+		Timestamp: time.Now().Unix(),
+	}}
+
 	returnValue := HandleInfo{
 		Success:   true,
 		Tutorials: tutorialsFinished,
@@ -7900,6 +7906,14 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Error adding session to database: %s", err)
 		} else {
 			//log.Printf("[DEBUG] Updated session in backend")
+		}
+
+		err = SetUser(ctx, &userdata, false)
+		if err != nil {
+			log.Printf("[ERROR] Failed updating user when setting session (2): %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
 		}
 
 		resp.WriteHeader(200)

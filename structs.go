@@ -349,10 +349,16 @@ type PublicProfile struct {
 	GithubTwitter       string              `datastore:"github_twitter" json:"github_twitter"`
 	WorkStatus          string              `datastore:"work_status" json:"work_status"`
 	Banner              string              `datastore:"banner" json:"banner"`
-	Skills              []string            `datastore:"skills" json:"skills"`
 	GithubContributions GithubContributions `datastore:"github_contributions" json:"github_contributions"`
 	ShuffleEarnings     string              `datastore:"shuffle_earnings" json:"shuffle_earnings"`
 	ShuffleRanking      string              `datastore:"shuffle_ranking" json:"shuffle_ranking"`
+
+	Skills          []string        `json:"skills"`
+	Synonyms        []string        `json:"synonyms"`
+	Workflows       int64           `json:"workflows"`
+	Apps            int64           `json:"apps"`
+	SpecializedApps []MinimizedApps `json:"specialized_apps"`
+	Verified        bool            `json:"verified"`
 }
 
 type ContributionCount struct {
@@ -962,12 +968,13 @@ type Workflow struct {
 		Name string `json:"name" datastore:"name" yaml:"name"`
 		Url  string `json:"url" datastore:"url" yaml:"url"`
 	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
-	PublishedId string     `json:"published_id" yaml:"published_id"`
-	Subflows    []Workflow `json:"subflows,omitempty" yaml:"subflows"`
-	UsecaseIds  []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
-	Blogpost    string     `json:"blogpost" yaml:"blogpost"`
-	Video       string     `json:"video" yaml:"video"`
-	Status      string     `json:"status" datastore:"status"`
+	PublishedId  string     `json:"published_id" yaml:"published_id"`
+	Subflows     []Workflow `json:"subflows,omitempty" yaml:"subflows"`
+	UsecaseIds   []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
+	Blogpost     string     `json:"blogpost" yaml:"blogpost"`
+	Video        string     `json:"video" yaml:"video"`
+	Status       string     `json:"status" datastore:"status"`
+	WorkflowType string     `json:"workflow_type" datastore:"workflow_type"`
 }
 
 type Category struct {
@@ -1125,12 +1132,25 @@ type ExecutionVariableWrapper struct {
 	Extra        int                 `json:"extra"`
 }
 
+type MinimizedApps struct {
+	Name     string `json:"name"`
+	Image    string `json:"image"`
+	Category string `json:"category"`
+}
+
 type AlgoliaSearchCreator struct {
-	ObjectID   string   `json:"objectID"`
-	TimeEdited int64    `json:"time_edited"`
-	Username   string   `json:"username"`
-	Image      string   `json:"image"`
-	Synonyms   []string `json:"synonyms"`
+	ObjectID        string          `json:"objectID"`
+	TimeEdited      int64           `json:"time_edited"`
+	Username        string          `json:"username"`
+	Image           string          `json:"image"`
+	Banner          string          `datastore:"banner" json:"banner"`
+	Skills          []string        `json:"skills"`
+	Synonyms        []string        `json:"synonyms"`
+	Workflows       int64           `json:"workflows"`
+	Apps            int64           `json:"apps"`
+	SpecializedApps []MinimizedApps `json:"specialized_apps"`
+	Verified        bool            `json:"verified"`
+	WorkStatus      string          `datastore:"work_status" json:"work_status"`
 }
 
 type AlgoliaSearchWorkflow struct {
@@ -3466,4 +3486,23 @@ type Conversionevents struct {
 	Click      int           `json:"click" datastore:"click"`
 	Conversion int           `json:"conversion" datastore:"conversion"`
 	Events     []WidgetPoint `json:"events" datastore:"events"`
+}
+
+type UsecaseStep struct {
+	WorkflowId string `json:"workflow_id"`
+	AppId      string `json:"app_id"`
+	AppName    string `json:"app_name"`
+	AppVersion string `json:"app_version"`
+	Text       string `json:"text"`
+	Image      string `json:"image"`
+	Type       string `json:"type"`
+	ActionType string `json:"action_type"`
+}
+
+type UsecaseMerge struct {
+	Name        string        `json:"id"`
+	Id          string        `json:"name"`
+	Source      UsecaseStep   `json:"source"`
+	Middle      []UsecaseStep `json:"middle"`
+	Destination UsecaseStep   `json:"destination"`
 }
