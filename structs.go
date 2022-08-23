@@ -359,6 +359,7 @@ type PublicProfile struct {
 	Apps            int64           `json:"apps"`
 	SpecializedApps []MinimizedApps `json:"specialized_apps"`
 	Verified        bool            `json:"verified"`
+	Social          []string        `json:"social"`
 }
 
 type ContributionCount struct {
@@ -1151,6 +1152,7 @@ type AlgoliaSearchCreator struct {
 	SpecializedApps []MinimizedApps `json:"specialized_apps"`
 	Verified        bool            `json:"verified"`
 	WorkStatus      string          `datastore:"work_status" json:"work_status"`
+	Social          []string        `datastore:"social" json:"social"`
 }
 
 type AlgoliaSearchWorkflow struct {

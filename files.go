@@ -745,7 +745,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		log.Printf("[INFO] Downloadpath: %s", downloadPath)
 		Openfile, err := os.Open(downloadPath)
-		defer Openfile.Close() //Close after function return
+
 		if err != nil {
 			file.Status = "deleted"
 			err = SetFile(ctx, *file)
@@ -762,27 +762,30 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if file.Encrypted {
-			log.Printf("[DEBUG] Should handle file decryption of %s.", fileId)
-			allText := []byte{}
+		log.Printf("[DEBUG] Should handle file decryption of %s.", fileId)
+		allText := []byte{}
 
-			buf := make([]byte, 1024)
-			for {
-				n, err := Openfile.Read(buf)
-				if err == io.EOF {
-					break
-				}
-
-				if err != nil {
-					continue
-				}
-
-				if n > 0 {
-					//fmt.Println(string(buf[:n]))
-					allText = append(allText, buf[:n]...)
-				}
+		buf := make([]byte, 1024)
+		for {
+			n, err := Openfile.Read(buf)
+			if err == io.EOF {
+				break
 			}
 
+			if err != nil {
+				log.Printf("[WARNING] Problem in file loop: %#v", err)
+				continue
+			}
+
+			if n > 0 {
+				//fmt.Println(string(buf[:n]))
+				allText = append(allText, buf[:n]...)
+			}
+		}
+
+		Openfile.Close()
+
+		if file.Encrypted {
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
@@ -792,42 +795,30 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 				allText = []byte(data)
 			}
 
-			FileContentType := http.DetectContentType(allText)
-			FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
-			//Send the headers
-			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
-			resp.Header().Set("Content-Type", FileContentType)
-			resp.Header().Set("Content-Length", FileSize)
-
-			reader := bytes.NewReader(allText)
-			io.Copy(resp, reader)
-			return
 		} else {
-			log.Printf("[DEBUG] Not decrypting file before download.")
+			log.Printf("[DEBUG] Not decrypting file before download of %s with length %d", file.Filename, len(allText))
 		}
 
-		//File is found, create and send the correct headers
-		//Get the Content-Type of the file
-		//Create a buffer to store the header of the file in
-		//Copy the headers into the FileHeader buffer
-		//Get content type of file
-		FileHeader := make([]byte, 512)
-		Openfile.Read(FileHeader)
-		FileContentType := http.DetectContentType(FileHeader)
-
-		//Get the file size
-		FileStat, _ := Openfile.Stat()                     //Get info from file
-		FileSize := strconv.FormatInt(FileStat.Size(), 10) //Get file size as a string
+		FileContentType := http.DetectContentType(allText)
+		FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
 
 		//Send the headers
 		resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
 		resp.Header().Set("Content-Type", FileContentType)
 		resp.Header().Set("Content-Length", FileSize)
 
-		//Send the file
-		//We read 512 bytes from the file already, so we reset the offset back to 0
-		Openfile.Seek(0, 0)
-		io.Copy(resp, Openfile) //'Copy' the file to the client
+		//resp.Write([]byte(allText))
+
+		//log.Printf("Md5: %#v", md5)
+		reader := bytes.NewReader(allText)
+		_, err = io.Copy(resp, reader)
+		if err != nil {
+			log.Printf("[ERROR] Failed copying info to request in download of %s: %s", file.Filename, err)
+		} else {
+			log.Printf("[INFO] Downloading %d bytes from file %s", len(allText), file.Filename)
+		}
+
+		return
 	}
 }
 
@@ -1014,7 +1005,6 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] STATUS: %s", file.Status)
 	if file.Status != "created" {
 		log.Printf("File status isn't created. Can't upload.")
 		resp.WriteHeader(401)
@@ -1085,8 +1075,10 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 			file.Encrypted = true
 		}
 
-		log.Printf("[DEBUG] Got old length %d vs encrypted length %d", len(contents), len(newFileValue))
+		log.Printf("[DEBUG] Got old length %d vs encrypted length %d", len(contents), len(newContents))
 		contents = newContents
+
+		file.FileSize = int64(len(contents))
 	}
 
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
@@ -1109,7 +1101,8 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 	} else if file.StorageArea == "s3" {
 		log.Printf("SHOULD UPLOAD TO S3!")
 	} else {
-		f, err := os.OpenFile(file.DownloadPath, os.O_TRUNC|os.O_CREATE, os.ModePerm) //Changing from os.O_WRONGLY
+		f, err := os.OpenFile(file.DownloadPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+
 		if err != nil {
 			// Rolling back file
 			file.Status = "created"
@@ -1117,11 +1110,18 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 
 			log.Printf("[ERROR] Failed uploading and creating file: %s", err)
 			return err
+		} else {
+			log.Printf("[INFO] File path %#v was made. Next step is to upload bytes: %d", file.DownloadPath, len(contents))
 		}
 
 		defer f.Close()
 		reader := bytes.NewReader(contents)
-		io.Copy(f, reader)
+		_, err = io.Copy(f, reader)
+		if err != nil {
+			log.Printf("[ERROR] Failed loading file contents into file %#v: %s", file.DownloadPath, err)
+		} else {
+			log.Printf("[INFO] Added %d bytes to file %s", len(contents), file.DownloadPath)
+		}
 	}
 
 	// FIXME: Set this one to 200 anyway? Can't download file then tho..
