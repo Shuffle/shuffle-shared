@@ -1151,8 +1151,9 @@ type AlgoliaSearchCreator struct {
 	Apps            int64           `json:"apps"`
 	SpecializedApps []MinimizedApps `json:"specialized_apps"`
 	Verified        bool            `json:"verified"`
-	WorkStatus      string          `datastore:"work_status" json:"work_status"`
 	Social          []string        `datastore:"social" json:"social"`
+	WorkStatus      string          `datastore:"work_status" json:"work_status"`
+	Url             string          `datastore:"url" json:"url"`
 }
 
 type AlgoliaSearchWorkflow struct {
