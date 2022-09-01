@@ -608,7 +608,6 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 	//log.Println(trigger.Id)
 	//log.Println(senderUser)
 	//log.Println(trigger.Type)
-	//log.Printf("STARTNODE: %s", trigger.Start)
 	log.Printf("[INFO] Attempting to set up gmail trigger for %s", senderUser)
 	if trigger.WorkflowId == "" || trigger.Id == "" || senderUser == "" || trigger.Type == "" {
 		log.Printf("[INFO] All oauth items need to contain data to register a new state")
@@ -790,7 +789,6 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 	log.Println(trigger.Id)
 	log.Println(senderUser)
 	log.Println(trigger.Type)
-	log.Printf("STARTNODE: %s", trigger.Start)
 
 	log.Printf("[INFO] Attempting to set up outlook trigger for %s", senderUser)
 	if trigger.WorkflowId == "" || trigger.Id == "" || senderUser == "" || trigger.Type == "" {
@@ -3458,6 +3456,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	}
 
+	log.Printf("[DEBUG] Verbose Requestdata: Sending request to %#v with requestdata %#v", url, requestData)
 	if len(url) == 0 {
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
 	}

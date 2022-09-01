@@ -11724,10 +11724,25 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
 	downloadLocation, downloadOk := request.URL.Query()["location"]
+	version, versionOk := request.URL.Query()["version"]
+	log.Printf("\n\n INSIDe Download path: %s with version %#v!\n\n", downloadLocation, version)
 	if downloadOk {
+
 		if downloadLocation[0] == "openapi" {
-			newpath := fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", strings.ToLower(location[4]))
-			docPath = newpath
+			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", strings.ToLower(location[4]))
+
+		} else if downloadLocation[0] == "python" && versionOk {
+			newname := strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "-")
+
+			if version[0] == "1.0.0" {
+				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)
+
+			} else {
+				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/README.md", newname)
+
+			}
+
+			log.Printf("Should download python app for version %s: %s", version[0], docPath)
 		}
 	}
 

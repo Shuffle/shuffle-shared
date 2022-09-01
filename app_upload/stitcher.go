@@ -817,7 +817,7 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "microsoft-identity-and-access"
+	appname := "outlook_exchange"
 	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {

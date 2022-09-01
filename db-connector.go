@@ -3808,6 +3808,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			newAllApps, err := GetAllWorkflowApps(ctx, maxLen, depth+1)
 			if err != nil {
 				log.Printf("[WARNING] Failed to get subapps after cleanup")
+				allApps = newAllApps
 			} else {
 				allApps = newAllApps
 			}
@@ -3889,6 +3890,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 }
 
 func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, env string) error {
+	env = strings.ReplaceAll(env, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
 	// New struct, to not add body, author etc
@@ -3916,6 +3918,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 }
 
 func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionRequestWrapper, error) {
+	id = strings.ReplaceAll(id, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", id)
 	executions := []ExecutionRequest{}
 
