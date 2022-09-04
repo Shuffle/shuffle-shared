@@ -994,7 +994,7 @@ type Categories struct {
 	Network       Category `json:"network" datastore:"network"`
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
-	IAM           Category `json:"IAM" datastore:"IAM"`
+	IAM           Category `json:"iam" datastore:"IAM"`
 	Other         Category `json:"other" datastore:"other"`
 }
 
@@ -1175,6 +1175,7 @@ type AlgoliaSearchWorkflow struct {
 	Priority         int               `json:"priority"`
 	SourceIPLower    string            `json:"source_ip,omitempty"`
 	SourceIP         string            `json:"SourceIP,omitempty"`
+	Type             string            `json:"type"`
 	CreatorInfo      CreatorInfo       `json:"creator_info,omitempty"`
 	ActionReferences []ActionReference `json:"action_references,omitempty"`
 }

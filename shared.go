@@ -3777,6 +3777,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	orgUpdated := false
 	startnodeFound := false
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	newOrgApps := []string{}
@@ -3949,9 +3950,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
-		//log.Printf("CATeGORY: ", discoveredApp.Categories)
-
-		//log.Printf("ENVIRONMENT: %s", action.Environment)
 		newActions = append(newActions, action)
 
 		// FIXMe: Should be authenticated first?
@@ -3971,44 +3969,62 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				org.SecurityFramework.SIEM.Description = discoveredApp.Description
 				org.SecurityFramework.SIEM.ID = discoveredApp.ID
 				org.SecurityFramework.SIEM.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else if strings.ToLower(category) == "network" && org.SecurityFramework.Network.ID == "" {
 				org.SecurityFramework.Network.Name = discoveredApp.Name
 				org.SecurityFramework.Network.Description = discoveredApp.Description
 				org.SecurityFramework.Network.ID = discoveredApp.ID
 				org.SecurityFramework.Network.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else if strings.ToLower(category) == "edr" || strings.ToLower(category) == "edr & av" && org.SecurityFramework.EDR.ID == "" {
 				org.SecurityFramework.EDR.Name = discoveredApp.Name
 				org.SecurityFramework.EDR.Description = discoveredApp.Description
 				org.SecurityFramework.EDR.ID = discoveredApp.ID
 				org.SecurityFramework.EDR.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else if strings.ToLower(category) == "cases" && org.SecurityFramework.Cases.ID == "" {
 				org.SecurityFramework.Cases.Name = discoveredApp.Name
 				org.SecurityFramework.Cases.Description = discoveredApp.Description
 				org.SecurityFramework.Cases.ID = discoveredApp.ID
 				org.SecurityFramework.Cases.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else if strings.ToLower(category) == "iam" && org.SecurityFramework.IAM.ID == "" {
 				org.SecurityFramework.IAM.Name = discoveredApp.Name
 				org.SecurityFramework.IAM.Description = discoveredApp.Description
 				org.SecurityFramework.IAM.ID = discoveredApp.ID
 				org.SecurityFramework.IAM.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else if strings.ToLower(category) == "assets" && org.SecurityFramework.Assets.ID == "" {
+				log.Printf("Setting assets?")
 				org.SecurityFramework.Assets.Name = discoveredApp.Name
 				org.SecurityFramework.Assets.Description = discoveredApp.Description
 				org.SecurityFramework.Assets.ID = discoveredApp.ID
 				org.SecurityFramework.Assets.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else if strings.ToLower(category) == "intel" && org.SecurityFramework.Intel.ID == "" {
 				org.SecurityFramework.Intel.Name = discoveredApp.Name
 				org.SecurityFramework.Intel.Description = discoveredApp.Description
 				org.SecurityFramework.Intel.ID = discoveredApp.ID
 				org.SecurityFramework.Intel.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else if strings.ToLower(category) == "comms" && org.SecurityFramework.Communication.ID == "" {
 				org.SecurityFramework.Communication.Name = discoveredApp.Name
 				org.SecurityFramework.Communication.Description = discoveredApp.Description
 				org.SecurityFramework.Communication.ID = discoveredApp.ID
 				org.SecurityFramework.Communication.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
 			} else {
 				//log.Printf("[WARNING] No handler for type %s in app framework", category)
 			}
+
 		}
 	}
 
@@ -4019,8 +4035,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Automatically adding new apps
 	if len(newOrgApps) > 0 {
 		log.Printf("[WARNING] Adding new apps to org: %#v", newOrgApps)
-		org, err := GetOrg(ctx, user.ActiveOrg.Id)
-		if err == nil {
+
+		if org.Id == "" {
+			org, err = GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org during new app update for %s: %s", user.ActiveOrg.Id, err)
+			}
+		}
+
+		if org.Id != "" {
 			added := false
 			for _, newApp := range newOrgApps {
 				if !ArrayContains(org.ActiveApps, newApp) {
@@ -4030,19 +4053,20 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if added {
-				err = SetOrg(ctx, *org, org.Id)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
-				} else {
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
-					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
-					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
-					DeleteCache(ctx, "all_apps")
-					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
-					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-				}
+				orgUpdated = true
+				//err = SetOrg(ctx, *org, org.Id)
+				//if err != nil {
+				//	log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
+				//} else {
+				DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
+				DeleteCache(ctx, "all_apps")
+				DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+				DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			}
+			//}
 		}
 	}
 
@@ -4843,6 +4867,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if org.Id != "" {
 		for _, loopUser := range org.Users {
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
+		}
+	}
+
+	if orgUpdated {
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org when autoadding apps and updating framework on save workflow save (%s): %s", workflow.ID, err)
+		} else {
+			log.Printf("[DEBUG] Successfully updated org %s during save of %s for user %s (%s", user.ActiveOrg.Id, workflow.ID, user.Username, user.Id)
 		}
 	}
 
