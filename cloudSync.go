@@ -97,6 +97,41 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (string, error)
 	return "", nil
 }
 
+func HandleAlgoliaWorkflowSearchByApp(ctx context.Context, appname string) ([]AlgoliaSearchWorkflow, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return []AlgoliaSearchWorkflow{}, errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("workflows")
+
+	appSearch := fmt.Sprintf("%s", appname)
+	res, err := algoliaIndex.Search(appSearch)
+	if err != nil {
+		log.Printf("[WARNING] Failed app searching Algolia for creators: %s", err)
+		return []AlgoliaSearchWorkflow{}, err
+	}
+
+	var newRecords []AlgoliaSearchWorkflow
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia with app creators: %s", err)
+		return []AlgoliaSearchWorkflow{}, err
+	}
+	//log.Printf("[INFO] Algolia hits for %s: %d", appSearch, len(newRecords))
+
+	allRecords := []AlgoliaSearchWorkflow{}
+	for _, newRecord := range newRecords {
+		allRecords = append(allRecords, newRecord)
+
+	}
+
+	return allRecords, nil
+}
+
 func HandleAlgoliaWorkflowSearchByUser(ctx context.Context, userId string) ([]AlgoliaSearchWorkflow, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
