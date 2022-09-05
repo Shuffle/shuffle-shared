@@ -449,13 +449,22 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 			foundApps, err := HandleAlgoliaAppSearchByUser(ctx, action.AppName)
 			if err == nil && len(foundApps) > 0 {
 				actionRefs = append(actionRefs, ActionReference{
-					Name:     foundApps[0].Name,
-					Id:       foundApps[0].ObjectID,
-					ImageUrl: foundApps[0].ImageUrl,
+					Name:       foundApps[0].Name,
+					Id:         foundApps[0].ObjectID,
+					ImageUrl:   foundApps[0].ImageUrl,
+					ActionName: []string{action.Name},
 				})
 			}
 
 			actions = append(actions, action.AppName)
+		} else {
+			for refIndex, ref := range actionRefs {
+				if ref.Name == action.AppName {
+					if !ArrayContains(ref.ActionName, action.Name) {
+						actionRefs[refIndex].ActionName = append(actionRefs[refIndex].ActionName, action.Name)
+					}
+				}
+			}
 		}
 	}
 

@@ -1182,9 +1182,10 @@ type AlgoliaSearchWorkflow struct {
 }
 
 type ActionReference struct {
-	Name     string `json:"name"`
-	Id       string `json:"id"`
-	ImageUrl string `json:"image_url"`
+	Name       string   `json:"name"`
+	Id         string   `json:"id"`
+	ImageUrl   string   `json:"image_url"`
+	ActionName []string `json:"action_name"`
 }
 
 type CreatorInfo struct {
