@@ -4841,7 +4841,14 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Only happens if the workflow is public and being edited
 	if correctUser {
 		workflow.Public = true
-		log.Printf("[DEBUG] User %s (%s) updated their public workflow %s (%s)", user.Username, user.Id, workflow.Name, workflow.ID)
+
+		// Should save it in Algolia too?
+		_, err = handleAlgoliaWorkflowUpdate(ctx, workflow)
+		if err != nil {
+			log.Printf("[ERROR] Failed finding publicly changed workflow %s for user %s (%s)", workflow.ID, user.Username, user.Id)
+		} else {
+			log.Printf("[DEBUG] User %s (%s) updated their public workflow %s (%s)", user.Username, user.Id, workflow.Name, workflow.ID)
+		}
 	}
 
 	err = SetWorkflow(ctx, workflow, fileId)

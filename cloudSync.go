@@ -362,3 +362,129 @@ func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) 
 	log.Printf("[INFO] SUCCESSFULLY UPLOADED creator %s with ID %s TO ALGOLIA!", user.Username, user.Id)
 	return user.Id, nil
 }
+
+func GetWorkflowPriority(workflow Workflow) int {
+	return 5
+}
+
+func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string, error) {
+	log.Printf("[INFO] Should try to UPLOAD the Workflow to Algolia")
+
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("workflows")
+
+	//res, err := algoliaIndex.Search("%s", api.ID)
+	res, err := algoliaIndex.Search(workflow.Name)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchWorkflow
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia workflow upload: %s", err)
+		return "", err
+	}
+
+	found := false
+	record := AlgoliaSearchWorkflow{}
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == workflow.ID {
+			log.Printf("[INFO] Workflow Object %s already exists in Algolia", workflow.ID)
+			record = newRecord
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return "", errors.New(fmt.Sprintf("Couldn't find public workflow for ID %s", workflow.ID))
+	}
+
+	record.TimeEdited = int64(time.Now().Unix())
+	categories := []string{}
+	actions := []string{}
+	triggers := []string{}
+	actionRefs := []ActionReference{}
+	for _, action := range workflow.Actions {
+		if !ArrayContains(actions, action.AppName) {
+			// Using this API as the original is kinda stupid
+			foundApps, err := HandleAlgoliaAppSearchByUser(ctx, action.AppName)
+			if err == nil && len(foundApps) > 0 {
+				actionRefs = append(actionRefs, ActionReference{
+					Name:     foundApps[0].Name,
+					Id:       foundApps[0].ObjectID,
+					ImageUrl: foundApps[0].ImageUrl,
+				})
+			}
+
+			actions = append(actions, action.AppName)
+		}
+	}
+
+	for _, trigger := range workflow.Triggers {
+		if !ArrayContains(triggers, trigger.TriggerType) {
+			triggers = append(triggers, trigger.TriggerType)
+		}
+	}
+
+	if workflow.WorkflowType != "" {
+		record.Type = workflow.WorkflowType
+	}
+
+	//Name:             workflow.Name,
+	//Description:      workflow.Description,
+	//ImageUrl:         publicUrl,
+	//Actions:          actions,
+	//Triggers:         triggers,
+	//ActionAmount:     len(workflow.Actions),
+	//TriggerAmount:    len(workflow.Triggers),
+	//Variables:        len(workflow.WorkflowVariables),
+	//Tags:             workflow.Tags,
+	//Categories:       categories,
+	//AccessibleBy:     []string{},
+	//ObjectID:         workflow.ID,
+	//TimeEdited:       timeNow,
+	//Invalid:          !workflow.IsValid,
+	//Creator:          owner,
+	//Priority:         priority,
+	//SourceIP:         sourceIP,
+	//Type:             workflow.WorkflowType,
+	//ActionReferences: actionRefs,
+
+	record.Name = workflow.Name
+	record.Description = workflow.Description
+	record.Triggers = triggers
+	record.Actions = actions
+	record.TriggerAmount = len(triggers)
+	record.ActionAmount = len(actions)
+	record.Tags = workflow.Tags
+	record.Categories = categories
+	record.ActionReferences = actionRefs
+
+	record.Priority = GetWorkflowPriority(workflow)
+
+	records := []AlgoliaSearchWorkflow{
+		record,
+	}
+
+	//log.Printf("[WARNING] Returning before upload with data %#v", records)
+	//return records[0].ObjectID, nil
+	//return "", errors.New("Not prepared yet!")
+
+	_, err = algoliaIndex.SaveObjects(records)
+	if err != nil {
+		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		return "", err
+	}
+
+	return workflow.ID, nil
+}
