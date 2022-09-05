@@ -363,8 +363,37 @@ func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) 
 	return user.Id, nil
 }
 
+// Shitty temorary system
+// Adding schedule to run over with another algorithm
+// as well as this one, as to increase priority based on popularity:
+// searches, clicks & conversions (CTR)
 func GetWorkflowPriority(workflow Workflow) int {
-	return 5
+	prio := 0
+	if len(workflow.Tags) > 2 {
+		prio += 1
+	}
+
+	if len(workflow.Name) > 5 {
+		prio += 1
+	}
+
+	if len(workflow.Description) > 100 {
+		prio += 1
+	}
+
+	if len(workflow.WorkflowType) > 0 {
+		prio += 1
+	}
+
+	if len(workflow.UsecaseIds) > 0 {
+		prio += 3
+	}
+
+	if len(workflow.Comments) >= 2 {
+		prio += 2
+	}
+
+	return prio
 }
 
 func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string, error) {
@@ -381,7 +410,7 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 	algoliaIndex := algClient.InitIndex("workflows")
 
 	//res, err := algoliaIndex.Search("%s", api.ID)
-	res, err := algoliaIndex.Search(workflow.Name)
+	res, err := algoliaIndex.Search(workflow.ID)
 	if err != nil {
 		log.Printf("[WARNING] Failed searching Algolia: %s", err)
 		return "", err
@@ -440,28 +469,9 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 		record.Type = workflow.WorkflowType
 	}
 
-	//Name:             workflow.Name,
-	//Description:      workflow.Description,
-	//ImageUrl:         publicUrl,
-	//Actions:          actions,
-	//Triggers:         triggers,
-	//ActionAmount:     len(workflow.Actions),
-	//TriggerAmount:    len(workflow.Triggers),
-	//Variables:        len(workflow.WorkflowVariables),
-	//Tags:             workflow.Tags,
-	//Categories:       categories,
-	//AccessibleBy:     []string{},
-	//ObjectID:         workflow.ID,
-	//TimeEdited:       timeNow,
-	//Invalid:          !workflow.IsValid,
-	//Creator:          owner,
-	//Priority:         priority,
-	//SourceIP:         sourceIP,
-	//Type:             workflow.WorkflowType,
-	//ActionReferences: actionRefs,
-
 	record.Name = workflow.Name
 	record.Description = workflow.Description
+	record.UsecaseIds = workflow.UsecaseIds
 	record.Triggers = triggers
 	record.Actions = actions
 	record.TriggerAmount = len(triggers)
@@ -482,7 +492,7 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 
 	_, err = algoliaIndex.SaveObjects(records)
 	if err != nil {
-		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		log.Printf("[WARNING] Algolia Object update err: %s", err)
 		return "", err
 	}
 

@@ -1176,6 +1176,7 @@ type AlgoliaSearchWorkflow struct {
 	SourceIPLower    string            `json:"source_ip,omitempty"`
 	SourceIP         string            `json:"SourceIP,omitempty"`
 	Type             string            `json:"type"`
+	UsecaseIds       []string          `json:"usecase_ids"`
 	CreatorInfo      CreatorInfo       `json:"creator_info,omitempty"`
 	ActionReferences []ActionReference `json:"action_references,omitempty"`
 }
