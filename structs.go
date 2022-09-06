@@ -721,13 +721,13 @@ type PaymentSubscription struct {
 }
 
 type SyncUsage struct {
+	WorkflowExecutions SyncDataUsage `json:"workflow_executions" datastore:"workflow_executions"`
 	Webhook            SyncDataUsage `json:"webhook" datastore:"webhook"`
 	Schedules          SyncDataUsage `json:"schedules" datastore:"schedules"`
 	UserInput          SyncDataUsage `json:"user_input" datastore:"user_input"`
 	SendMail           SyncDataUsage `json:"send_mail" datastore:"send_mail"`
 	SendSms            SyncDataUsage `json:"send_sms" datastore:"send_sms"`
 	EmailTrigger       SyncDataUsage `json:"email_trigger" datastore:"email_trigger"`
-	WorkflowExecutions SyncDataUsage `json:"workflow_executions" datastore:"workflow_executions"`
 	Autocomplete       SyncDataUsage `json:"autocomplete" datastore:"autocomplete"`
 	Authentication     SyncDataUsage `json:"authentication" datastore:"authentication"`
 	Schedule           SyncDataUsage `json:"schedule" datastore:"schedule"`
@@ -756,6 +756,9 @@ type NewValue struct {
 }
 
 type SyncFeatures struct {
+	AppExecutions      SyncData `json:"app_executions" datastore:"app_executions"`
+	MultiEnv           SyncData `json:"multi_env" datastore:"multi_env"`
+	MultiTenant        SyncData `json:"multi_tenant" datastore:"multi_tenant"`
 	Webhook            SyncData `json:"webhook" datastore:"webhook"`
 	Schedules          SyncData `json:"schedules" datastore:"schedules"`
 	UserInput          SyncData `json:"user_input" datastore:"user_input"`
@@ -763,13 +766,10 @@ type SyncFeatures struct {
 	SendSms            SyncData `json:"send_sms" datastore:"send_sms"`
 	Updates            SyncData `json:"updates" datastore:"updates"`
 	EmailTrigger       SyncData `json:"email_trigger" datastore:"email_trigger"`
-	MultiEnv           SyncData `json:"multi_env" datastore:"multi_env"`
-	MultiTenant        SyncData `json:"multi_tenant" datastore:"multi_tenant"`
 	Notifications      SyncData `json:"notifications" datastore:"notifications"`
-	AppExecutions      SyncData `json:"app_executions" datastore:"app_executions"`
-	WorkflowExecutions SyncData `json:"workflow_executions" datastore:"workflow_executions"`
 	Workflows          SyncData `json:"workflows" datastore:"workflows"`
 	Autocomplete       SyncData `json:"autocomplete" datastore:"autocomplete"`
+	WorkflowExecutions SyncData `json:"workflow_executions" datastore:"workflow_executions"`
 	Authentication     SyncData `json:"authentication" datastore:"authentication"`
 	Schedule           SyncData `json:"schedule" datastore:"schedule"`
 	Apps               SyncData `json:"apps" datastore:"apps"`
@@ -780,7 +780,8 @@ type SyncData struct {
 	Type           string `json:"type,omitempty" datastore:"type"`
 	Name           string `json:"name,omitempty" datastore:"name"`
 	Description    string `json:"description,omitempty" datastore:"description"`
-	Limit          int64  `json:"limit,omitempty" datastore:"limit"`
+	Usage          int64  `json:"usage" datastore:"usage"`
+	Limit          int64  `json:"limit" datastore:"limit"`
 	StartDate      int64  `json:"start_date,omitempty" datastore:"start_date"`
 	EndDate        int64  `json:"end_date,omitempty" datastore:"end_date"`
 	DataCollection int64  `json:"data_collection,omitempty" datastore:"data_collection"`

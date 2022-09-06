@@ -817,18 +817,13 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	_ = admin
 	if !userFound {
-		log.Printf("[WARNING] User %s isn't a part of org %s (get)", user.Id, org.Id)
+		log.Printf("[ERROR] User %s (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 		return
 
 	}
-
-	org.Users = []User{}
-	org.SyncConfig.Apikey = ""
-	org.SyncConfig.Source = ""
 
 	if !admin {
 		org.Defaults = Defaults{}
@@ -837,11 +832,67 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.ManagerOrgs = []OrgMini{}
 		org.ChildOrgs = []OrgMini{}
 		org.Invites = []string{}
+	} else {
+		org.SyncFeatures.AppExecutions.Description = "The amount of Apps within Workflows you can run per month. This limit can be exceeded when running workflows without a trigger (manual execution)."
+		org.SyncFeatures.WorkflowExecutions.Description = "N/A. See App Executions"
+		org.SyncFeatures.Webhook.Description = "Webhooks are Triggers that take an HTTP input to start a workflow. Read docs for more."
+		org.SyncFeatures.Schedules.Description = "Schedules are Triggers that run on an interval defined by you. Read docs for more."
+		org.SyncFeatures.MultiEnv.Description = "Multiple Environments are used to run automation in different physical locations. Change from /admin?tab=environments"
+		org.SyncFeatures.MultiTenant.Description = "Multiple Tenants can be used to segregate information for each MSSP Customer. Change from /admin?tab=suborgs"
+
+		log.Printf("LIMIT: %#v", org.SyncFeatures.AppExecutions.Limit)
+		orgChanged := false
+		if org.SyncFeatures.AppExecutions.Limit == 0 || org.SyncFeatures.AppExecutions.Limit == 1500 {
+			org.SyncFeatures.AppExecutions.Limit = 5000
+			orgChanged = true
+		}
+
+		if org.SyncFeatures.SendMail.Limit == 0 {
+			org.SyncFeatures.SendMail.Limit = 100
+			orgChanged = true
+		}
+
+		if org.SyncFeatures.SendSms.Limit == 0 {
+			org.SyncFeatures.SendSms.Limit = 30
+			orgChanged = true
+		}
+
+		org.SyncFeatures.EmailTrigger.Limit = 0
+		if org.SyncFeatures.MultiEnv.Limit == 0 {
+			org.SyncFeatures.MultiEnv.Limit = 1
+			orgChanged = true
+		}
+
+		org.SyncFeatures.EmailTrigger.Limit = 0
+
+		if orgChanged {
+			log.Printf("[DEBUG] Org features for %s (%s) changed. Updating.", org.Name, org.Id)
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating org during org loading")
+			}
+		}
+
+		info, err := GetOrgStatistics(ctx, fileId)
+		if err == nil {
+			org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
+		}
+
+		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
+		envs, err := GetEnvironments(ctx, fileId)
+		if err == nil {
+			log.Printf("Envs: %#v", len(envs))
+			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
+		}
 	}
+
+	org.Users = []User{}
+	org.SyncConfig.Apikey = ""
+	org.SyncConfig.Source = ""
 
 	newjson, err := json.Marshal(org)
 	if err != nil {
-		log.Printf("Failed unmarshal of org: %s", err)
+		log.Printf("[ERROR] Failed unmarshal of org %s (%s): %s", org.Name, org.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
 		return
@@ -13279,20 +13330,27 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			workflowExecution.Start = execution.Start
 
 			found := false
+			newStartnode := ""
 			for _, action := range workflow.Actions {
 				if action.ID == execution.Start {
 					found = true
 					break
 				}
+
+				if action.IsStartNode {
+					newStartnode = action.ID
+				}
 			}
 
 			if !found {
-				log.Printf("[ERROR] Action %s was NOT found! Exiting execution.", execution.Start)
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Startnode %s was not found in actions", workflow.Start), errors.New(fmt.Sprintf("Startnode %s was not found in actions", workflow.Start))
+				if len(newStartnode) > 0 {
+					execution.Start = newStartnode
+				} else {
+					log.Printf("[ERROR] Action %s was NOT found, and no other startnode found! Exiting execution.", execution.Start)
+					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Startnode %s was not found in actions", workflow.Start), errors.New(fmt.Sprintf("Startnode %s was not found in actions", workflow.Start))
+				}
 			}
 		} else if len(execution.Start) > 0 {
-			//log.Printf("[INFO] !")
-			//log.Printf("[ERROR] START ACTION %s IS WRONG ID LENGTH %d!", execution.Start, len(execution.Start))
 			//return WorkflowExecution{}, fmt.Sprintf("Startnode %s was not found in actions", execution.Start), errors.New(fmt.Sprintf("Startnode %s was not found in actions", execution.Start))
 		}
 
@@ -13481,7 +13539,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if !startnodeFound {
-		log.Printf("[INFO] Couldn't find startnode %s. Remapping to %#v", workflowExecution.Start, newStartnode)
+		log.Printf("[WARNING] Couldn't find startnode %#v among %d actions. Remapping to %#v", workflowExecution.Start, len(workflowExecution.Workflow.Actions), newStartnode)
 
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode

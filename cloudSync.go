@@ -507,3 +507,36 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 
 	return workflow.ID, nil
 }
+
+// Returns an error if the users' org is over quota
+func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
+	log.Printf("[DEBUG] Validating usage of org %#v", orgId)
+
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		return org, errors.New(fmt.Sprintf("Failed getting the organization %s: %s", orgId, err))
+	}
+
+	info, err := GetOrgStatistics(ctx, orgId)
+	if err == nil {
+		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
+		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
+			org.SyncFeatures.AppExecutions.Limit = 5000
+		} else {
+			// FIXME: Not strictly enforcing other limits yet
+			// Should just warn our team about them going over
+			org.SyncFeatures.AppExecutions.Limit = 15000000000
+		}
+
+		// FIXME: When inside this, check if usage should be sent to the user
+		if org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit {
+			return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this.", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit))
+		}
+
+		return org, nil
+	} else {
+		log.Printf("[WARNING] Failed finding executions for org %s (%s)", org.Name, org.Id)
+	}
+
+	return org, nil
+}
