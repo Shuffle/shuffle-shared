@@ -410,6 +410,7 @@ type User struct {
 	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
 	LoginType         string        `datastore:"login_type" json:"login_type"`
 	GeneratedUsername string        `datastore:"generated_username" json:"generated_username"`
+	SessionLogin      bool          `datastore:"session_login" json:"session_login"` // Whether or not it's logged in with session
 
 	// Starting web3 integration
 	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
@@ -2057,21 +2058,23 @@ type SessionCookie struct {
 }
 
 type HandleInfo struct {
-	Success        bool            `json:"success"`
-	Admin          string          `json:"admin"`
-	Username       string          `json:"username"`
-	PublicUsername string          `json:"public_username"`
-	Name           string          `json:"name"`
-	Tutorials      []string        `json:"tutorials"`
-	ActiveApps     []string        `json:"active_apps"`
-	Id             string          `json:"id"`
-	Avatar         string          `json:"avatar"`
-	Orgs           []OrgMini       `json:"orgs"`
-	ActiveOrg      OrgMini         `json:"active_org"`
-	EthInfo        EthInfo         `json:"eth_info"`
-	ChatDisabled   bool            `json:"chat_disabled"`
-	Priorities     []Priority      `json:"priorities" datastore:"priorities"`
-	Cookies        []SessionCookie `json:"cookies" datastore:"cookies"`
+	Success            bool            `json:"success"`
+	Admin              string          `json:"admin"`
+	Username           string          `json:"username"`
+	PublicUsername     string          `json:"public_username"`
+	Name               string          `json:"name"`
+	Tutorials          []string        `json:"tutorials"`
+	ActiveApps         []string        `json:"active_apps"`
+	Id                 string          `json:"id"`
+	Avatar             string          `json:"avatar"`
+	Orgs               []OrgMini       `json:"orgs"`
+	ActiveOrg          OrgMini         `json:"active_org"`
+	EthInfo            EthInfo         `json:"eth_info"`
+	ChatDisabled       bool            `json:"chat_disabled"`
+	Priorities         []Priority      `json:"priorities" datastore:"priorities"`
+	Cookies            []SessionCookie `json:"cookies" datastore:"cookies"`
+	AppExecutionsLimit int64           `json:"app_execution_limit"`
+	AppExecutionsUsage int64           `json:"app_execution_usage"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`

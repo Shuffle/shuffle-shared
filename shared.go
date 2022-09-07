@@ -2276,6 +2276,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		//	return User{}, errors.New("[WARNING] Wrong session token")
 		//}
 
+		user.SessionLogin = true
+
 		// Means session exists, but
 		return *user, nil
 	}
