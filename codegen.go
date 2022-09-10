@@ -279,7 +279,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			}
 
 			//parsedKey := strings.Replace(key, "-", "_", -1)
-			parsedKey := FixFunctionName(key, "")
+			parsedKey := FixFunctionName(key, "", true)
 
 			if value.Value.In == "header" {
 				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
@@ -309,7 +309,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		for index, query := range optionalQueries {
 			// Check if it's a part of the URL already
 
-			parsedQuery := FixFunctionName(query, "")
+			parsedQuery := FixFunctionName(query, "", true)
 			queryString += fmt.Sprintf("%s=\"\"", parsedQuery)
 
 			if index != len(optionalQueries)-1 {
@@ -1412,15 +1412,11 @@ func DeployAppToDatastore(ctx context.Context, workflowapp WorkflowApp) error {
 // FIXME:
 // https://docs.python.org/3.2/reference/lexical_analysis.html#identifiers
 // This is used to build the python functions.
-func FixFunctionName(functionName, actualPath string) string {
+func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 	if len(functionName) == 0 {
 		functionName = actualPath
 	}
 
-	// REGEX THIS SHIT
-	// ROFL
-
-	//log.Printf("Fixing function name for %s", functionName)
 	functionName = strings.Replace(functionName, ".", "", -1)
 	functionName = strings.Replace(functionName, ",", "", -1)
 	functionName = strings.Replace(functionName, ".", "", -1)
@@ -1449,7 +1445,9 @@ func FixFunctionName(functionName, actualPath string) string {
 	functionName = strings.Replace(functionName, " ", "_", -1)
 	functionName = strings.Replace(functionName, "-", "_", -1)
 
-	functionName = strings.ToLower(functionName)
+	if lowercase == true {
+		functionName = strings.ToLower(functionName)
+	}
 
 	return functionName
 }
@@ -1513,7 +1511,7 @@ func ValidateParameterName(name string) string {
 
 func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := FixFunctionName(path.Connect.Summary, actualPath)
+	functionName := FixFunctionName(path.Connect.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Connect.Description, baseUrl)
@@ -1690,7 +1688,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 
 func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := FixFunctionName(path.Get.Summary, actualPath)
+	functionName := FixFunctionName(path.Get.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Get.Description, baseUrl)
@@ -1879,7 +1877,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 
 func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := FixFunctionName(path.Head.Summary, actualPath)
+	functionName := FixFunctionName(path.Head.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Head.Description, baseUrl)
@@ -2053,7 +2051,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 
 func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := FixFunctionName(path.Delete.Summary, actualPath)
+	functionName := FixFunctionName(path.Delete.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Delete.Description, baseUrl)
@@ -2229,7 +2227,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
 	//log.Printf("PATH: %s", actualPath)
-	functionName := FixFunctionName(path.Post.Summary, actualPath)
+	functionName := FixFunctionName(path.Post.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Post.Description, baseUrl)
@@ -2440,7 +2438,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 
 func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := FixFunctionName(path.Patch.Summary, actualPath)
+	functionName := FixFunctionName(path.Patch.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Patch.Description, baseUrl)
@@ -2615,7 +2613,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 
 func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []WorkflowAppActionParameter, path *openapi3.PathItem, actualPath string, optionalParameters []WorkflowAppActionParameter) (WorkflowAppAction, string) {
 	// What to do with this, hmm
-	functionName := FixFunctionName(path.Put.Summary, actualPath)
+	functionName := FixFunctionName(path.Put.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Put.Description, baseUrl)

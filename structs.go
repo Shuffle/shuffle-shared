@@ -756,24 +756,31 @@ type NewValue struct {
 	Id                  string `json:"id" datastore:"id"`
 }
 
+type MailLevel struct {
+	Type       string `json:"type"`
+	Percentage int64  `json:"percentage"`
+	LastSent   int64  `json:"last_sent"`
+}
+
 type SyncFeatures struct {
-	AppExecutions      SyncData `json:"app_executions" datastore:"app_executions"`
-	MultiEnv           SyncData `json:"multi_env" datastore:"multi_env"`
-	MultiTenant        SyncData `json:"multi_tenant" datastore:"multi_tenant"`
-	Webhook            SyncData `json:"webhook" datastore:"webhook"`
-	Schedules          SyncData `json:"schedules" datastore:"schedules"`
-	UserInput          SyncData `json:"user_input" datastore:"user_input"`
-	SendMail           SyncData `json:"send_mail" datastore:"send_mail"`
-	SendSms            SyncData `json:"send_sms" datastore:"send_sms"`
-	Updates            SyncData `json:"updates" datastore:"updates"`
-	EmailTrigger       SyncData `json:"email_trigger" datastore:"email_trigger"`
-	Notifications      SyncData `json:"notifications" datastore:"notifications"`
-	Workflows          SyncData `json:"workflows" datastore:"workflows"`
-	Autocomplete       SyncData `json:"autocomplete" datastore:"autocomplete"`
-	WorkflowExecutions SyncData `json:"workflow_executions" datastore:"workflow_executions"`
-	Authentication     SyncData `json:"authentication" datastore:"authentication"`
-	Schedule           SyncData `json:"schedule" datastore:"schedule"`
-	Apps               SyncData `json:"apps" datastore:"apps"`
+	MailSent           []MailLevel `json:"mail_sent" datastore:"mail_sent"`
+	AppExecutions      SyncData    `json:"app_executions" datastore:"app_executions"`
+	MultiEnv           SyncData    `json:"multi_env" datastore:"multi_env"`
+	MultiTenant        SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
+	Webhook            SyncData    `json:"webhook" datastore:"webhook"`
+	Schedules          SyncData    `json:"schedules" datastore:"schedules"`
+	UserInput          SyncData    `json:"user_input" datastore:"user_input"`
+	SendMail           SyncData    `json:"send_mail" datastore:"send_mail"`
+	SendSms            SyncData    `json:"send_sms" datastore:"send_sms"`
+	Updates            SyncData    `json:"updates" datastore:"updates"`
+	EmailTrigger       SyncData    `json:"email_trigger" datastore:"email_trigger"`
+	Notifications      SyncData    `json:"notifications" datastore:"notifications"`
+	Workflows          SyncData    `json:"workflows" datastore:"workflows"`
+	Autocomplete       SyncData    `json:"autocomplete" datastore:"autocomplete"`
+	WorkflowExecutions SyncData    `json:"workflow_executions" datastore:"workflow_executions"`
+	Authentication     SyncData    `json:"authentication" datastore:"authentication"`
+	Schedule           SyncData    `json:"schedule" datastore:"schedule"`
+	Apps               SyncData    `json:"apps" datastore:"apps"`
 }
 
 type SyncData struct {

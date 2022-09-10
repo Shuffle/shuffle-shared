@@ -3627,6 +3627,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	// How does this work with the SDK?
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
+	appAuth.Active = true
 	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting up app auth %s: %s (oauth2)", appAuth.Id, err)

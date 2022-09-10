@@ -2183,6 +2183,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 				}
 
+				user.SessionLogin = false
 				return *user, nil
 			}
 		} else {
@@ -2210,6 +2211,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
+		user.SessionLogin = false
 		err = SetCache(ctx, newApikey, b)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
@@ -11818,19 +11820,26 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
 	downloadLocation, downloadOk := request.URL.Query()["location"]
 	version, versionOk := request.URL.Query()["version"]
-	log.Printf("\n\n INSIDe Download path: %s with version %#v!\n\n", downloadLocation, version)
-	if downloadOk {
+	realPath := ""
+	log.Printf("\n\n INSIDe Download path (%s): %s with version %#v!\n\n", location[4], downloadLocation, version)
 
+	if downloadOk {
 		if downloadLocation[0] == "openapi" {
-			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", strings.ToLower(location[4]))
+			newname := strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "_")
+			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", newname)
+			realPath = fmt.Sprintf("https://github.com/Shuffle/openapi-apps/blob/master/docs/%s.md", newname)
 
 		} else if downloadLocation[0] == "python" && versionOk {
+			// Apparently this uses dashes for no good reason?
+			// Should maybe move everything over to underscores later?
 			newname := strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "-")
 
 			if version[0] == "1.0.0" {
 				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)
+				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/1.0.0/README.md", newname)
 
 			} else {
+				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/README.md", newname)
 				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/README.md", newname)
 
 			}
@@ -11838,6 +11847,8 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("Should download python app for version %s: %s", version[0], docPath)
 		}
 	}
+
+	log.Printf("Docpath: %s", docPath)
 
 	httpClient := &http.Client{}
 	req, err := http.NewRequest(
@@ -11870,13 +11881,18 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
 	}
 
+	parsedLink := fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s.md", owner, repo, path, location[4])
+	if len(realPath) > 0 {
+		parsedLink = realPath
+	}
+
 	client := github.NewClient(nil)
 	githubResp := GithubResp{
 		Name:         location[4],
 		Contributors: []GithubAuthor{},
 		Edited:       "",
 		ReadTime:     len(body) / 10 / 250,
-		Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s.md", owner, repo, path, location[4]),
+		Link:         parsedLink,
 	}
 
 	if githubResp.ReadTime == 0 {
