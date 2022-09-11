@@ -985,6 +985,7 @@ type Workflow struct {
 	Video        string     `json:"video" yaml:"video"`
 	Status       string     `json:"status" datastore:"status"`
 	WorkflowType string     `json:"workflow_type" datastore:"workflow_type"`
+	Generated    bool       `json:"generated" datastore:"generated"`
 }
 
 type Category struct {
@@ -3522,4 +3523,8 @@ type UsecaseMerge struct {
 	Source      UsecaseStep   `json:"source"`
 	Middle      []UsecaseStep `json:"middle"`
 	Destination UsecaseStep   `json:"destination"`
+	OrgId       string        `json:"org_id"`
+	Username    string        `json:"username"`
+	UserId      string        `json:"user_id"`
+	Timestamp   int64         `json:"timestamp"`
 }
