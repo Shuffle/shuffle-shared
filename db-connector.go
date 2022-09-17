@@ -3163,9 +3163,8 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 	} else {
 		//log.Printf("\n\nQuerying ALL for org %s\n\n", orgId)
-		//q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(2)
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("archived =", false).Limit(2)
-
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(10)
+		//q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("archived =", false).Limit(10)
 		_, err := project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
 			return []Environment{}, err

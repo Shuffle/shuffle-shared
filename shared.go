@@ -840,7 +840,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.MultiEnv.Description = "Multiple Environments are used to run automation in different physical locations. Change from /admin?tab=environments"
 		org.SyncFeatures.MultiTenant.Description = "Multiple Tenants can be used to segregate information for each MSSP Customer. Change from /admin?tab=suborgs"
 
-		log.Printf("LIMIT: %#v", org.SyncFeatures.AppExecutions.Limit)
+		//log.Printf("LIMIT: %#v", org.SyncFeatures.AppExecutions.Limit)
 		orgChanged := false
 		if org.SyncFeatures.AppExecutions.Limit == 0 || org.SyncFeatures.AppExecutions.Limit == 1500 {
 			org.SyncFeatures.AppExecutions.Limit = 5000
@@ -881,7 +881,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.MultiTenant.Usage = int64(len(org.ChildOrgs) + 1)
 		envs, err := GetEnvironments(ctx, fileId)
 		if err == nil {
-			log.Printf("Envs: %#v", len(envs))
+			//log.Printf("Envs: %#v", len(envs))
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
 		}
 	}
@@ -1093,12 +1093,6 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": true, "data": []}`))
 		return
 	}
-
-	//for _, env := range allworkflowappAuths {
-	//	for _, param := range env.Fields {
-	//		log.Printf("ENV: %#v", param)
-	//	}
-	//}
 
 	// Cleanup for frontend
 	newAuth := []AppAuthenticationStorage{}
@@ -1516,18 +1510,22 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
-		if err != nil {
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
-			return
-		}
+		//foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		//if err != nil {
+		//	resp.WriteHeader(401)
+		//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed find your organization"}`)))
+		//	return
+		//}
 
-		if !foundOrg.SyncFeatures.MultiEnv.Active {
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Adding multiple environments requires an active hybrid, enterprise or MSSP subscription"}`)))
-			return
-		}
+		// FIXME: Removed need for syncfeatures to be enabled
+		// September 2022
+		//_ = foundOrg
+
+		//if !foundOrg.SyncFeatures.MultiEnv.Active {
+		//	resp.WriteHeader(401)
+		//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Adding multiple environments requires an active hybrid, enterprise or MSSP subscription"}`)))
+		//	return
+		//}
 	}
 
 	// Validate input here
@@ -1546,10 +1544,10 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if project.Environment == "cloud" && env.Type != "cloud" && len(env.Name) < 10 {
-			log.Printf("[ERROR] Skipping env %s because length is shorter than 10", env.Name)
-			continue
-		}
+		//if project.Environment == "cloud" && env.Type != "cloud" && len(env.Name) < 10 {
+		//	log.Printf("[ERROR] Skipping env %s because length is shorter than 10", env.Name)
+		//	continue
+		//}
 
 		if defaults > 0 {
 			env.Default = false
@@ -1564,14 +1562,6 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	newEnvironments = parsedEnvs
 
-	// Clear old data? Removed for archiving purpose. No straight deletion
-	log.Printf("[INFO] Deleting %d environments before resetting!", len(environments))
-	nameKey := "Environments"
-	for _, item := range environments {
-		DeleteKey(ctx, nameKey, item.Id)
-		DeleteKey(ctx, nameKey, item.Name)
-	}
-
 	openEnvironments := 0
 	for _, item := range newEnvironments {
 		if !item.Archived {
@@ -1581,17 +1571,37 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	if openEnvironments < 1 {
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Can't archive all environments"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Can't archive all environments. Not deleting."}`))
 		return
 	}
 
+	// Clear old data? Removed for archiving purpose. No straight deletion
+	log.Printf("[INFO] Deleting %d original environments before resetting. To be added: %d!", len(environments), len(newEnvironments))
+	nameKey := "Environments"
+	for _, item := range environments {
+		DeleteKey(ctx, nameKey, item.Id)
+		DeleteKey(ctx, nameKey, item.Name)
+	}
+
 	for _, item := range newEnvironments {
+		for _, subenv := range environments {
+			if item.Name == subenv.Name || item.Id == subenv.Id {
+				item.Auth = subenv.Auth
+				break
+			}
+		}
+
+		item.RunningIp = ""
 		if item.OrgId != user.ActiveOrg.Id {
 			item.OrgId = user.ActiveOrg.Id
 		}
 
 		if len(item.Id) == 0 {
 			item.Id = uuid.NewV4().String()
+		}
+
+		if len(item.Auth) == 0 {
+			item.Auth = uuid.NewV4().String()
 		}
 
 		err = SetEnvironment(ctx, &item)
@@ -1601,6 +1611,9 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
+	cacheKey := fmt.Sprintf("Environments_%s", user.ActiveOrg.Id)
+	DeleteCache(ctx, cacheKey)
 
 	log.Printf("[INFO] Set %d new environments for org %s", len(newEnvironments), user.ActiveOrg.Id)
 
@@ -2120,10 +2133,16 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			environment.Id = uuid.NewV4().String()
 		}
 
-		newEnvironments = append(newEnvironments, environment)
-		//if environment.Default {
-		//	break
-		//}
+		found := false
+		for _, oldEnv := range newEnvironments {
+			if oldEnv.Name == environment.Name {
+				found = true
+			}
+		}
+
+		if !found {
+			newEnvironments = append(newEnvironments, environment)
+		}
 	}
 
 	newjson, err := json.Marshal(newEnvironments)
@@ -3807,13 +3826,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		},
 	}
 
-	if project.Environment != "cloud" {
-		environments, err = GetEnvironments(ctx, user.ActiveOrg.Id)
-		if err != nil {
-			log.Printf("[WARNING] Failed getting environments for org %s", user.ActiveOrg.Id)
-			environments = []Environment{}
-		}
+	//if project.Environment != "cloud" {
+	environments, err = GetEnvironments(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting environments for org %s", user.ActiveOrg.Id)
+		environments = []Environment{}
 	}
+	//}
 
 	//log.Printf("ENVIRONMENTS: %#v", environments)
 	defaultEnv := ""
@@ -3838,7 +3857,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	newOrgApps := []string{}
 	org := &Org{}
 	for _, action := range workflow.Actions {
-		//log.Printf("ENV: %s", action.Environment)
+		log.Printf("ENV: %#v", action.Environment)
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
 			continue
 		}
@@ -3886,10 +3905,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		} else {
 			warned := []string{}
+			found := false
 			for _, env := range environments {
-				found := false
 				if env.Name == action.Environment {
-					found = false
+					found = true
 					if env.Archived {
 						log.Printf("[DEBUG] Environment %s is archived. Changing to default.")
 						action.Environment = defaultEnv
@@ -3897,15 +3916,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					break
 				}
+			}
 
-				if !found {
-					if ArrayContains(warned, action.Environment) {
-						log.Printf("[DEBUG] Environment %s isn't available. Changing to default.", action.Environment)
-						warned = append(warned, action.Environment)
-					}
-
-					action.Environment = defaultEnv
+			if !found {
+				if ArrayContains(warned, action.Environment) {
+					log.Printf("[DEBUG] Environment %s isn't available. Changing to default.", action.Environment)
+					warned = append(warned, action.Environment)
 				}
+
+				action.Environment = defaultEnv
 			}
 		}
 
@@ -5259,10 +5278,12 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		// Will get from cache 2nd time so this is fine.
 		if user.Id == item.Id {
 			item.Orgs = user.Orgs
+			item.Active = user.Active
+			item.MFA = user.MFA
 		} else {
 			foundUser, err := GetUser(ctx, item.Id)
 			if err == nil {
-				// Only add IF the admin querying it has access, meaning only show what you yourself have access to
+				// Only add IF the admin querying it has access, meaning only show what you yourself have access toMFAInfo
 				allOrgs := []string{}
 				for _, orgname := range foundUser.Orgs {
 					found := false
@@ -5281,6 +5302,9 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 				//log.Printf("[DEBUG] Added %d org(s) for user %s (%s) - get users", len(allOrgs), foundUser.Username, foundUser.Id)
 
+				item.MFA = foundUser.MFA
+				item.Verified = foundUser.Verified
+				item.Active = foundUser.Active
 				item.Orgs = allOrgs
 			}
 		}
@@ -8465,7 +8489,6 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 	var err error
 
 	execution := &WorkflowExecution{}
-	//log.Printf("ENV: %s", project.Environment)
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "worker" || project.Environment == "") {
 		//log.Printf("[DEBUG] Defaulting to current workflow in worker")
 		execution = &workflowExecution
@@ -11803,7 +11826,12 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := getContext(request)
+	downloadLocation, downloadOk := request.URL.Query()["location"]
 	cacheKey := fmt.Sprintf("docs_%s", location[4])
+	if downloadOk {
+		cacheKey = fmt.Sprintf("%s_%s", cacheKey, downloadLocation[0])
+	}
+
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
@@ -11818,7 +11846,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
 
 	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
-	downloadLocation, downloadOk := request.URL.Query()["location"]
 	version, versionOk := request.URL.Query()["version"]
 	realPath := ""
 	log.Printf("\n\n INSIDe Download path (%s): %s with version %#v!\n\n", location[4], downloadLocation, version)
@@ -11848,7 +11875,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("Docpath: %s", docPath)
+	//log.Printf("Docpath: %s", docPath)
 
 	httpClient := &http.Client{}
 	req, err := http.NewRequest(
@@ -13634,7 +13661,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 		}
-		//log.Println(action.Environment)
 
 		if action.Environment == "" {
 			return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Environment is not defined for %s", action.Name), errors.New("Environment not defined!")
@@ -14099,7 +14125,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	imageNames := []string{}
 	cloudExec := false
 	for _, action := range workflowExecution.Workflow.Actions {
-		//log.Printf("[DEBUG] ENV: %s", action.Environment)
 
 		// Verify if the action environment exists and append
 		found := false
