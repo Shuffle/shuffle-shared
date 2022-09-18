@@ -3857,7 +3857,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	newOrgApps := []string{}
 	org := &Org{}
 	for _, action := range workflow.Actions {
-		log.Printf("ENV: %#v", action.Environment)
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
 			continue
 		}
@@ -11848,7 +11847,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
 	version, versionOk := request.URL.Query()["version"]
 	realPath := ""
-	log.Printf("\n\n INSIDe Download path (%s): %s with version %#v!\n\n", location[4], downloadLocation, version)
+	//log.Printf("\n\n INSIDe Download path (%s): %s with version %#v!\n\n", location[4], downloadLocation, version)
 
 	if downloadOk {
 		if downloadLocation[0] == "openapi" {
