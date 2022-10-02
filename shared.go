@@ -839,6 +839,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.Schedules.Description = "Schedules are Triggers that run on an interval defined by you. Read docs for more."
 		org.SyncFeatures.MultiEnv.Description = "Multiple Environments are used to run automation in different physical locations. Change from /admin?tab=environments"
 		org.SyncFeatures.MultiTenant.Description = "Multiple Tenants can be used to segregate information for each MSSP Customer. Change from /admin?tab=suborgs"
+		//org.SyncFeatures.MultiTenant.Description = "Multiple Tenants can be used to segregate information for each MSSP Customer. Change from /admin?tab=suborgs"
 
 		//log.Printf("LIMIT: %#v", org.SyncFeatures.AppExecutions.Limit)
 		orgChanged := false
@@ -2125,6 +2126,29 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get environments"}`))
 		return
+	}
+
+	// Always make Cloud the default environment
+	// If there are multiple
+	if project.Environment == "cloud" {
+		defaults := []int{}
+		for envIndex, environment := range environments {
+			if environment.Default {
+				defaults = append(defaults, envIndex)
+			}
+		}
+
+		if len(defaults) > 1 {
+			log.Printf("Should fix %#v defaults", defaults)
+			for _, index := range defaults {
+				if environments[index].Name == "Cloud" {
+					continue
+				} else {
+					environments[index].Default = false
+				}
+			}
+		}
+
 	}
 
 	newEnvironments := []Environment{}
@@ -7776,7 +7800,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Handling login of %s", data.Username)
+	log.Printf("[AUDIT] Handling login of %s", data.Username)
 
 	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
 	err = checkUsername(data.Username)
@@ -7921,7 +7945,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if userdata.Id == "" && userdata.Username == "" {
-		log.Printf(`[WARNING] Username %s isn't valid. Amount of users checked: %d (2)`, data.Username, len(users))
+		log.Printf(`[ERROR] Username %s isn't valid. Amount of users checked: %d (2)`, data.Username, len(users))
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Username and/or password is incorrect"}`)))
 		return
@@ -7980,10 +8004,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
 	//}
 
-	userdata.LoginInfo = []LoginInfo{LoginInfo{
+	userdata.LoginInfo = append(userdata.LoginInfo, LoginInfo{
 		IP:        request.RemoteAddr,
 		Timestamp: time.Now().Unix(),
-	}}
+	})
 
 	returnValue := HandleInfo{
 		Success:   true,
@@ -10667,7 +10691,7 @@ func handleJSONObject(object interface{}, key, totalObject string) string {
 
 		currentObject += "], "
 	default:
-		log.Printf("[ERROR] Missing handler for type %s - key: %s", t, key)
+		log.Printf("[ERROR] Missing handler for type %#v in app framework - key: %s", t, key)
 	}
 
 	totalObject += currentObject
@@ -14575,6 +14599,14 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 
 	_ = org
 
+	if value.Type == "email" {
+		value.Type = "comms"
+	}
+
+	if value.Type == "eradication" {
+		value.Type = "edr"
+	}
+
 	// 1. Check if the app exists and the user has access to it. If public/sharing ->
 	if strings.ToLower(value.Type) == "siem" {
 		org.SecurityFramework.SIEM.Name = app.Name
@@ -14617,7 +14649,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		org.SecurityFramework.Communication.ID = app.ID
 		org.SecurityFramework.Communication.LargeImage = app.LargeImage
 	} else {
-		log.Printf("[WARNING] No handler for type %s in app framework", value.Type)
+		log.Printf("[WARNING] No handler for type %#v in app framework during update of app %#v", value.Type, app.Name)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
