@@ -507,7 +507,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("ExecutionId can't be empty.")
 	}
 
-	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
+	//DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
 
 	/*
 	   for valueIndex, value := range workflowExecution.Results {

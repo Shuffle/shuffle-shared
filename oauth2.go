@@ -3456,7 +3456,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	}
 
-	log.Printf("[DEBUG] Verbose Requestdata: Sending request to %#v with requestdata %#v", url, requestData)
+	//log.Printf("[DEBUG] Verbose Requestdata: Sending request to %#v with requestdata %#v", url, requestData)
 	if len(url) == 0 {
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
 	}

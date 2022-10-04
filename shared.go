@@ -2397,14 +2397,31 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(data)
 }
 
-func GetResult(workflowExecution WorkflowExecution, id string) ActionResult {
+func GetResult(ctx context.Context, workflowExecution WorkflowExecution, id string) (WorkflowExecution, ActionResult) {
 	for _, actionResult := range workflowExecution.Results {
 		if actionResult.Action.ID == id {
-			return actionResult
+			return workflowExecution, actionResult
 		}
 	}
 
-	return ActionResult{}
+	//log.Printf("[WARNING] No result found for %s - add here too?", id)
+	cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, id)
+	cache, err := GetCache(ctx, cacheId)
+	if err == nil {
+		//log.Printf("[DEBUG] Already found %s executed, but not in list.. Adding!\n\n\n\n\n", id)
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err == nil {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+			SetWorkflowExecution(ctx, workflowExecution, false)
+			return workflowExecution, actionResult
+		}
+	}
+
+	return workflowExecution, ActionResult{}
 }
 
 func GetAction(workflowExecution WorkflowExecution, id, environment string) Action {
@@ -8570,7 +8587,8 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
 		//go ResendActionResult(cacheData, 0)
-		log.Printf("\n\n[DEBUG] DISABLED: Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
+		log.Printf("[DEBUG] Should rerun (2)? %s (%s - %s)", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
+		//go ResendActionResult(cacheData, retries)
 
 		if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 			go ResendActionResult(cacheData, retries)
@@ -9795,7 +9813,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[INFO] Updating %s in workflow %s from %s to %s", actionResult.Action.ID, workflowExecution.ExecutionId, workflowExecution.Results[outerindex].Status, actionResult.Status)
 			workflowExecution.Results[outerindex] = actionResult
 		} else {
-			log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
+			//log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
 			workflowExecution.Results = append(workflowExecution.Results, actionResult)
 			//if subresult.Status == "SKIPPED" subresult.Status != "FAILURE" {
 		}
@@ -10202,9 +10220,15 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					continue
 				}
 
-				log.Printf("\n\n[DEBUG] Should rerun (1)? %s (%s - %s)\n\n", action.Name, action.Label, action.ID)
-				go ResendActionResult(cacheData, 0)
-				//go ResendActionResult(cacheData, 4)
+				log.Printf("[DEBUG] Should rerun (1)? %s (%s - %s)", action.Label, action.Name, action.ID)
+				// If reruns, make sure it waits a bit for the next executions?
+				// This may cause one action that actually finished to get its result sent AFTER the next one, leading to missing information in subsequent nodes.
+				workflowExecution.Results = append(workflowExecution.Results, actionResult)
+				if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+					go ResendActionResult(cacheData, 0)
+				} else {
+					workflowExecution.Results = append(workflowExecution.Results, actionResult)
+				}
 			}
 		}
 	}
