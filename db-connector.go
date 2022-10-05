@@ -502,12 +502,11 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
 	//log.Printf("\n\n\nRESULT: %s\n\n\n", workflowExecution.Status)
+	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
 		log.Printf("[WARNING] Workflowexeciton executionId can't be empty.")
 		return errors.New("ExecutionId can't be empty.")
 	}
-
-	//DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
 
 	/*
 	   for valueIndex, value := range workflowExecution.Results {
@@ -524,7 +523,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	   		}
 	*/
 
-	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
@@ -546,6 +544,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
 		//log.Printf("[WARNING] SHOULD skip DB saving for execution")
 		return nil
+	} else {
+		// Deleting cache so that listing can work well
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
 	}
 
 	// New struct, to not add body, author etc

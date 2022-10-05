@@ -3425,6 +3425,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		if field.Key == "scope" {
 			requestData.Scope = field.Value
+			log.Printf("SCOPE: %s", field.Value)
 		}
 
 		if field.Key == "redirect_uri" {
@@ -3513,7 +3514,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 
 		requestRefreshUrl := fmt.Sprintf("%s", refreshUrl)
-		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
+		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(strings.Replace(requestData.Scope, " ", "%20", -1), ",", "%20", -1), requestData.ClientId, requestData.ClientSecret)
 		//log.Printf("[DEBUG] Refresh URL: %s\n", requestRefreshUrl)
 		req, err := http.NewRequest(
 			"POST",
