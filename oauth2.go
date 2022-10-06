@@ -3425,7 +3425,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		if field.Key == "scope" {
 			requestData.Scope = field.Value
-			log.Printf("SCOPE: %s", field.Value)
+			//log.Printf("SCOPE: %s", field.Value)
 		}
 
 		if field.Key == "redirect_uri" {
@@ -3450,7 +3450,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	log.Printf("[DEBUG] Make request to %s for Oauth2 token. User: %s (%s)", url, user.Username, user.Id)
 	if len(requestData.ClientSecret) == 0 && len(requestData.ClientId) > 0 {
-		log.Printf("[INFO] Should query db for secret")
+		log.Printf("[INFO] Should query db for secret based on ID %s", requestData.ClientId)
 		oauth2data, err := GetHostedOAuth(ctx, requestData.ClientId)
 		if err == nil && len(oauth2data.ClientSecret) > 0 {
 			requestData.ClientSecret = oauth2data.ClientSecret
@@ -3468,6 +3468,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	v, err := query.Values(requestData)
 	if err != nil {
+		log.Printf("[ERROR] Failed parsing Oauth2 values: %s", err)
 		return appAuth, err
 	}
 
@@ -3484,12 +3485,14 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		)
 
 		if err != nil {
+			log.Printf("[ERROR] Failed setting up Oauth2 request for %s: %s", url, err)
 			return appAuth, err
 		}
 
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		newresp, err := client.Do(req)
 		if err != nil {
+			log.Printf("[ERROR] Failed running Oauth2 request for %s: %s", url, err)
 			return appAuth, err
 		}
 
@@ -3498,12 +3501,13 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		body, err := ioutil.ReadAll(newresp.Body)
 		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling body from Oauth2 request for %s: %s", url, err)
 			return appAuth, err
 		}
-		respBody = body
 
+		respBody = body
 		if newresp.StatusCode >= 300 {
-			return appAuth, errors.New(fmt.Sprintf("Bad status code: %d. Message: %s", newresp.StatusCode, respBody))
+			return appAuth, errors.New(fmt.Sprintf("Bad status code for URL %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 	} else {
 		//log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
@@ -3514,7 +3518,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 
 		requestRefreshUrl := fmt.Sprintf("%s", refreshUrl)
-		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(strings.Replace(requestData.Scope, " ", "%20", -1), ",", "%20", -1), requestData.ClientId, requestData.ClientSecret)
+		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
 		//log.Printf("[DEBUG] Refresh URL: %s\n", requestRefreshUrl)
 		req, err := http.NewRequest(
 			"POST",
@@ -3544,7 +3548,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		if newresp.StatusCode >= 300 {
 			// Printing on error to handle in future instances
 			log.Printf("[ERROR] Oauth2 data for %s: %#v", requestRefreshUrl, newresp)
-			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh: %d. Message: %s", newresp.StatusCode, respBody))
+			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh for URL %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 
 		// Overwriting auth
