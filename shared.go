@@ -2515,8 +2515,10 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 			log.Printf("[AUDIT] User %s is accessing %s (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow execs)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -2526,7 +2528,20 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	// Query for the specifci workflowId
 	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
 	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId)
-	workflowExecutions, err := GetAllWorkflowExecutions(ctx, fileId)
+	maxAmount := 100
+	top, topOk := request.URL.Query()["top"]
+	if topOk && len(top) > 0 {
+		val, err := strconv.Atoi(top[0])
+		if err == nil {
+			maxAmount = val
+		}
+	}
+
+	if maxAmount > 1000 {
+		maxAmount = 1000
+	}
+
+	workflowExecutions, err := GetAllWorkflowExecutions(ctx, fileId, maxAmount)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting executions for %s", fileId)
 		resp.WriteHeader(401)
@@ -5747,10 +5762,12 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
-		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
+
+			// Only for Read-Only. No executions or impersonations.
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %#v, Active: %#v, SupportAccess: %#v, Username: %#v", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -8543,6 +8560,40 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 	if execution.Status != "EXECUTING" {
 		log.Printf("[WARNING] Workflow is finished, but with status: %s", execution.Status)
 		return
+	}
+
+	// Make sure to deduplicate and update before checking
+	for _, action := range workflowExecution.Workflow.Actions {
+		found := false
+		for _, result := range workflowExecution.Results {
+			if result.Action.ID == action.ID {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
+		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
+		cache, err := GetCache(ctx, cacheId)
+		if err != nil {
+			//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+			continue
+		}
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err != nil {
+			continue
+		} else {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		}
 	}
 
 	foundNotExecuted := []string{}
@@ -14768,7 +14819,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
-		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)

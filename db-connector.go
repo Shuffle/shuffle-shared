@@ -523,6 +523,40 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	   		}
 	*/
 
+	// Make sure to de-duplicate before saving and checking things
+	for _, action := range workflowExecution.Workflow.Actions {
+		found := false
+		for _, result := range workflowExecution.Results {
+			if result.Action.ID == action.ID {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
+		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
+		cache, err := GetCache(ctx, cacheId)
+		if err != nil {
+			//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+			continue
+		}
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err != nil {
+			continue
+		} else {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		}
+	}
+
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
@@ -547,6 +581,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	} else {
 		// Deleting cache so that listing can work well
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
 	}
 
 	// New struct, to not add body, author etc
@@ -5664,10 +5700,10 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 	return executions, nil
 }
 
-func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {
+func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int) ([]WorkflowExecution, error) {
 	index := "workflowexecution"
 
-	cacheKey := fmt.Sprintf("%s_%s", index, workflowId)
+	cacheKey := fmt.Sprintf("%s_%s_%d", index, workflowId, amount)
 	var err error
 	var executions []WorkflowExecution
 	if project.CacheDb {
@@ -5690,7 +5726,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"size": 100,
+			"size": amount,
 			"sort": map[string]interface{}{
 				"started_at": map[string]interface{}{
 					"order": "desc",
@@ -5770,7 +5806,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string) ([]Workflo
 		//totalMaxSize := 22369621 // Total of App Engine max /3*2
 		totalMaxSize := 11184810
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
-		max := 50
+		max := 100
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)

@@ -410,7 +410,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("INITIAL Api authentication failed in file download: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
@@ -722,7 +722,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			FileContentType := http.DetectContentType(allText)
 			FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
 			//Send the headers
-			log.Printf("Content Type: %#v", FileContentType)
+			//log.Printf("Content Type: %#v", FileContentType)
 			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
 			resp.Header().Set("Content-Type", FileContentType)
 			resp.Header().Set("Content-Length", FileSize)
@@ -864,7 +864,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
 	ctx := getContext(request)
 	file, err := GetFile(ctx, fileId)
-	log.Printf("file obj", file)
+	//log.Printf("file obj", file)
 	if err != nil {
 		log.Printf("File %s not found: %s", fileId, err)
 		resp.WriteHeader(400)
@@ -891,7 +891,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !found {
-		log.Printf("User %s doesn't have access to %s", user.Username, fileId)
+		log.Printf("[AUDIT] User %s doesn't have access to file %s", user.Username, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -899,7 +899,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("Failed reading body")
+		log.Println("[ERROR] Failed reading file body: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to read data"}`)))
 		return
@@ -1006,7 +1006,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if file.Status != "created" {
-		log.Printf("File status isn't created. Can't upload.")
+		log.Printf("[WARNING] File status isn't created. Can't upload.")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "This file already has data."}`))
 		return
@@ -1036,6 +1036,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	var buf bytes.Buffer
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
+	log.Printf("\n\nFILE: %s\n\n", contents)
 	//log.Printf("File content: %s\n%x", string(contents))
 
 	file.FileSize = int64(len(contents))

@@ -127,7 +127,7 @@ func RunTextClassifier(ctx context.Context, workflowExecution WorkflowExecution)
 	// Onlyitems is here in case we JUST want to look for specific keys. Could be per action, app or workflow
 	onlyItems := []string{}
 	maxCheck := 10
-	workflowExecutions, err := GetAllWorkflowExecutions(ctx, workflowExecution.Workflow.ID)
+	workflowExecutions, err := GetAllWorkflowExecutions(ctx, workflowExecution.Workflow.ID, 50)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting executions for %s in text classifier: %s", workflowExecution.Workflow.ID, err)
 		return
