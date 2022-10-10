@@ -347,7 +347,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 		} else if swagger.Components.SecuritySchemes["BasicAuth"] != nil {
 			authenticationParameter = ", username_basic, password_basic"
-			authenticationAddin = ", auth=(username_basic, password_basic)"
+			authenticationSetup = "auth=None\n        if username_basic or password_basic:\n            if \"Authorization\" not in headers and \"Basic\" not in headers and not \"Bearer\" in headers:\n                auth = requests.auth.HTTPBasicAuth(username_basic, password_basic)"
+			//authenticationAddin = ", auth=(username_basic, password_basic)"
+			authenticationAddin = ", auth=auth"
 
 		} else if swagger.Components.SecuritySchemes["ApiKeyAuth"] != nil {
 			authenticationParameter = ", apikey"
@@ -549,10 +551,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Handles default return value
-	handleFileString := "try:\n            print(ret.json())\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            print(f\"[WARNING] JSON Exception in return: {e}\")\n            return ret.text\n        except Exception as e:\n            print(f\"[WARNING] Exception in return: {e}\")\n            return ret.text"
-	//if handleFile {
-	//	handleFileString = fmt.Sprintf("new_file = [{\"filename\": \"%s_generated\", \"data\": ret.text}]\n        return_value = self.set_files(new_file)\n        return json.dumps({\"success\": True, \"file_id\": return_value[0], \"file_size\": len(ret.text)})", swagger.Info.Title)
-	//}
+	//handleFileString := "try:\n            print(ret.json())\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            print(f\"[WARNING] JSON Exception in return: {e}\")\n            return ret.text\n        except Exception as e:\n            print(f\"[WARNING] Exception in return: {e}\")\n            return ret.text"
+
+	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.txt"
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" {
@@ -674,10 +675,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		urlInline,
 		url,
 		verifyWrapper,
-		authenticationSetup,
 		extraHeaders,
 		extraQueries,
 		headerParserCode,
+		authenticationSetup,
 		queryData,
 		queryParserCode,
 		bodyFormatter,
@@ -694,7 +695,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "alarms") {
+	if strings.Contains(strings.ToLower(functionname), "detection") {
 		//log.Printf("\n%s", data)
 	}
 
@@ -743,7 +744,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		//log.Printf("EXAMPLE: %s", example)
 	}
 
-	api.AppVersion = "1.0.0"
+	api.AppVersion = "1.1.0"
 	api.Environment = "Shuffle"
 	api.SmallImage = ""
 	api.LargeImage = ""

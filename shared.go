@@ -4044,9 +4044,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				if project.Environment == "cloud" {
 					appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
-					if err == nil && len(appid) > 0 {
+					if err == nil && len(appid.ObjectID) > 0 {
 						//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
-						tmpApp, err := GetApp(ctx, appid, user, false)
+						tmpApp, err := GetApp(ctx, appid.ObjectID, user, false)
 						if err == nil {
 							handled = true
 							action.AppID = tmpApp.ID

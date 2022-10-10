@@ -62,12 +62,12 @@ func executeCloudAction(action CloudSyncJob, apikey string) error {
 	return nil
 }
 
-func HandleAlgoliaAppSearch(ctx context.Context, appname string) (string, error) {
+func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchApp, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
 	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
 		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
-		return "", errors.New("Algolia keys not defined")
+		return AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
 	}
 
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
@@ -76,25 +76,26 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (string, error)
 	res, err := algoliaIndex.Search(appname)
 	if err != nil {
 		log.Printf("[WARNING] Failed searching Algolia: %s", err)
-		return "", err
+		return AlgoliaSearchApp{}, err
 	}
 
 	var newRecords []AlgoliaSearchApp
 	err = res.UnmarshalHits(&newRecords)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshaling from Algolia: %s", err)
-		return "", err
+		return AlgoliaSearchApp{}, err
 	}
 
 	log.Printf("[INFO] Algolia hits for %s: %d", appname, len(newRecords))
 	for _, newRecord := range newRecords {
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
-		if newApp == appname {
-			return newRecord.ObjectID, nil
+		if newApp == appname || newRecord.ObjectID == appname {
+			//return newRecord.ObjectID, nil
+			return newRecord, nil
 		}
 	}
 
-	return "", nil
+	return AlgoliaSearchApp{}, nil
 }
 
 func HandleAlgoliaWorkflowSearchByApp(ctx context.Context, appname string) ([]AlgoliaSearchWorkflow, error) {
