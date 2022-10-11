@@ -443,7 +443,6 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	timeNow := int64(time.Now().Unix())
 	workflowapp.Edited = timeNow
-	workflowapp.HasCloudFunction = false
 
 	if workflowapp.Created == 0 {
 		workflowapp.Created = timeNow

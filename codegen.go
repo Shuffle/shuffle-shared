@@ -1515,6 +1515,13 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	functionName := FixFunctionName(path.Connect.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+
+	if strings.Contains(baseUrl, "_shuffle_replace_") {
+		//log.Printf("[DEBUG] : %s", baseUrl)
+		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		baseUrl = m.ReplaceAllString(baseUrl, "")
+	}
+
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Connect.Description, baseUrl)
 	action := WorkflowAppAction{
 		Description: newDesc,
@@ -1526,11 +1533,6 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 	}
 
 	action.Returns.Schema.Type = "string"
-	if strings.Contains(baseUrl, "_shuffle_replace_") {
-		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
-		baseUrl = m.ReplaceAllString(baseUrl, "")
-	}
 	handleFile := false
 
 	//log.Println(path.Parameters)
@@ -1692,6 +1694,13 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	functionName := FixFunctionName(path.Get.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+
+	if strings.Contains(baseUrl, "_shuffle_replace_") {
+		//log.Printf("[DEBUG] : %s", baseUrl)
+		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		baseUrl = m.ReplaceAllString(baseUrl, "")
+	}
+
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Get.Description, baseUrl)
 	action := WorkflowAppAction{
 		Description: newDesc,
@@ -1703,11 +1712,6 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	}
 
 	action.Returns.Schema.Type = "string"
-	if strings.Contains(baseUrl, "_shuffle_replace_") {
-		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
-		baseUrl = m.ReplaceAllString(baseUrl, "")
-	}
 
 	// Check if it should return as file (binary)
 	// FIXME: Don't JUST specif text/plain to allow this.
@@ -1881,6 +1885,13 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	functionName := FixFunctionName(path.Head.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+
+	if strings.Contains(baseUrl, "_shuffle_replace_") {
+		//log.Printf("[DEBUG] : %s", baseUrl)
+		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		baseUrl = m.ReplaceAllString(baseUrl, "")
+	}
+
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Head.Description, baseUrl)
 	action := WorkflowAppAction{
 		Description: newDesc,
@@ -1892,11 +1903,6 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	}
 
 	action.Returns.Schema.Type = "string"
-	if strings.Contains(baseUrl, "_shuffle_replace_") {
-		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
-		baseUrl = m.ReplaceAllString(baseUrl, "")
-	}
 	handleFile := false
 
 	//log.Println(path.Parameters)
@@ -2055,6 +2061,13 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	functionName := FixFunctionName(path.Delete.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+
+	if strings.Contains(baseUrl, "_shuffle_replace_") {
+		//log.Printf("[DEBUG] : %s", baseUrl)
+		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		baseUrl = m.ReplaceAllString(baseUrl, "")
+	}
+
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Delete.Description, baseUrl)
 	action := WorkflowAppAction{
 		Description: newDesc,
@@ -2066,11 +2079,6 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	}
 
 	action.Returns.Schema.Type = "string"
-	if strings.Contains(baseUrl, "_shuffle_replace_") {
-		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
-		baseUrl = m.ReplaceAllString(baseUrl, "")
-	}
 	handleFile := false
 
 	//log.Println(path.Parameters)
@@ -2231,6 +2239,12 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	functionName := FixFunctionName(path.Post.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+	if strings.Contains(baseUrl, "_shuffle_replace_") {
+		//log.Printf("[DEBUG] : %s", baseUrl)
+		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		baseUrl = m.ReplaceAllString(baseUrl, "")
+	}
+
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Post.Description, baseUrl)
 	action := WorkflowAppAction{
 		Description: newDesc,
@@ -2242,11 +2256,6 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	}
 
 	action.Returns.Schema.Type = "string"
-	if strings.Contains(baseUrl, "_shuffle_replace_") {
-		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
-		baseUrl = m.ReplaceAllString(baseUrl, "")
-	}
 	handleFile := false
 
 	// Parameters:  []WorkflowAppActionParameter{},
@@ -2617,6 +2626,13 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	functionName := FixFunctionName(path.Put.Summary, actualPath, true)
 
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
+
+	if strings.Contains(baseUrl, "_shuffle_replace_") {
+		//log.Printf("[DEBUG] : %s", baseUrl)
+		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		baseUrl = m.ReplaceAllString(baseUrl, "")
+	}
+
 	newDesc := fmt.Sprintf("%s\n\n%s", path.Put.Description, baseUrl)
 	action := WorkflowAppAction{
 		Description: newDesc,
@@ -2628,11 +2644,6 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	}
 
 	action.Returns.Schema.Type = "string"
-	if strings.Contains(baseUrl, "_shuffle_replace_") {
-		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
-		baseUrl = m.ReplaceAllString(baseUrl, "")
-	}
 	handleFile := false
 
 	//log.Println(path.Parameters)
