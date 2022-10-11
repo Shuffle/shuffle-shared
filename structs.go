@@ -101,6 +101,7 @@ type WorkflowApp struct {
 	Video                    string              `json:"video" yaml:"video" datastore:"video"`
 	PrimaryUsecases          []string            `json:"primary_usecases" yaml:"primary_usecases"  datastore:"primary_usecases"`
 	CompanyURL               string              `json:"company_url" datastore:"company_url" required:false yaml:"company_url"`
+	HasCloudFunction         bool                `json:"hascloudfunction" yaml:"hascloudfunction" required:false datastore:"hascloudfunction"`
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
 }
 

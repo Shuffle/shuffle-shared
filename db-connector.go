@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+
 	//"strconv"
 	//"encoding/binary"
 	"strings"
@@ -21,9 +22,10 @@ import (
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
 	"github.com/frikky/go-elasticsearch/v8/esapi"
+	uuid "github.com/satori/go.uuid"
+
 	//"github.com/frikky/kin-openapi/openapi3"
 	"github.com/patrickmn/go-cache"
-	"github.com/satori/go.uuid"
 	"google.golang.org/api/iterator"
 
 	"cloud.google.com/go/storage"
@@ -441,6 +443,8 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	timeNow := int64(time.Now().Unix())
 	workflowapp.Edited = timeNow
+	workflowapp.HasCloudFunction = false
+
 	if workflowapp.Created == 0 {
 		workflowapp.Created = timeNow
 	}
