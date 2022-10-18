@@ -196,7 +196,7 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("\n\n[INFO] User is trying to GET File Meta for %s\n\n", fileId)
+	//log.Printf("[INFO] User is trying to GET File Meta for %s", fileId)
 
 	// 1. Verify if the user has access to the file: org_id and workflow
 	log.Printf("[INFO] Should GET FILE META for %s if user has access", fileId)

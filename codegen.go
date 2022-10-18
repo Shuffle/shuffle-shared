@@ -525,15 +525,19 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	fileAdder := ``
 	fileGrabber := ``
 	fileParameter := ``
+	contentTypeRemoval := "pass"
 	if method == "post" && len(fileField) > 0 {
 		fileParameter = ", file_id"
-		fileGrabber = `filedata = self.get_file(file_id)`
+		//fileGrabber = "filedata = self.get_file(file_id)\n        print(f\"FILEDATA: {filedata}\")"
+		fileGrabber = "filedata = self.get_file(file_id)"
+		contentTypeRemoval = "del request_headers[contentType]"
 
 		// This indentation is confusing (but correct) ROFL
 		fileAdder = fmt.Sprintf(`if not filedata["success"]:
             return {"success": False, "reason": f"{file_id} is not a valid File ID"}
 
         files = {"%s": (filedata["filename"], filedata["data"])}`, fileField)
+
 		fileBalance = ", files=files"
 	}
 
@@ -553,7 +557,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// Handles default return value
 	//handleFileString := "try:\n            print(ret.json())\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            print(f\"[WARNING] JSON Exception in return: {e}\")\n            return ret.text\n        except Exception as e:\n            print(f\"[WARNING] Exception in return: {e}\")\n            return ret.text"
 
-	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.txt"
+	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.text"
 
 	parsedDataCurlParser := ""
 	if method == "post" || method == "patch" || method == "put" {
@@ -596,10 +600,15 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
             pass
 
        	found = False
+        contentType = "" 
        	for key, value in request_headers.items():
             if key.lower() == "user-agent": 
                	found = True 
-               	break	
+            if key.lower() == "content-type": 
+               	contentType = key 
+                
+        if len(contentType) > 0:
+            %s
 
        	if not found:	
             request_headers["User-Agent"] = "Shuffle Automation"
@@ -684,6 +693,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		bodyFormatter,
 		fileGrabber,
 		fileAdder,
+		contentTypeRemoval,
 		strings.ToUpper(method),
 		parsedDataCurlParser,
 		method,
