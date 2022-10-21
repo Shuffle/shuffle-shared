@@ -518,11 +518,11 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return org, errors.New(fmt.Sprintf("Failed getting the organization %s: %s", orgId, err))
 	}
 
-	//if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-	//	log.Printf("[DEBUG] Execution for %s is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.")
-	//	return org, nil
-	//}
-	//parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
+	// Allows parent & childorgs to run as much as they want. No limitations
+	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
+		log.Printf("[DEBUG] Execution for %s is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.")
+		return org, nil
+	}
 
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
