@@ -7748,12 +7748,16 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Id != app.Owner {
+	// Modified to make it so users admins in same org can modify an app
+	log.Printf("User: %s, role: %s, org: %#v vs %#v", user.Username, user.Role, user.ActiveOrg.Id, app.ReferenceOrg)
+	if user.Id == app.Owner || (user.Role == "admin" && user.ActiveOrg.Id == app.ReferenceOrg) {
+		log.Printf("[DEBUG] Got app %s with user %s (%s) in org %s", app.ID, user.Username, user.Id, user.ActiveOrg.Id)
+	} else {
 		if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
 			exit := true
-			log.Printf("[INFO] Check published: %#v", app.PublishedId)
+			//log.Printf("[INFO] Check published: %#v", app.PublishedId)
 			if len(app.PublishedId) > 0 {
 
 				// FIXME: is this privacy / vulnerability?
