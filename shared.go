@@ -801,7 +801,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	org, err := GetOrg(ctx, fileId)
 	if err != nil {
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting org users"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
 		return
 	}
 
@@ -909,6 +909,17 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting login request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	c, err := request.Cookie("session_token")
@@ -2202,7 +2213,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		apikeyCheck := strings.Split(apikey, " ")
 		if len(apikeyCheck) != 2 {
-			log.Printf("[WARNING] Invalid format for apikey.")
+			log.Printf("[WARNING] Invalid format for apikey: %s", apikeyCheck)
 			return User{}, errors.New("Invalid format for apikey")
 		}
 
@@ -2282,6 +2293,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		sessionToken := c.Value
 		session, err := GetSession(ctx, sessionToken)
 		if err != nil {
+			log.Printf("[DEBUG] No valid session token. Setting cookie to expire.")
 			http.SetCookie(resp, &http.Cookie{
 				Name:    "session_token",
 				Value:   sessionToken,
@@ -5307,7 +5319,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org in get users: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting org users"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org when listing users"}`))
 		return
 	}
 
@@ -7826,10 +7838,84 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(appdata)
 }
 
+func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
+	proxyScheme := "https"
+	proxyHost := fmt.Sprintf("shuffler.io")
+
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	//fmt.Fprint(resp, "OK")
+	//http.Redirect(resp, request, "https://europe-west2-shuffler.cloudfunctions.net/ShuffleSSR", 303)
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		log.Printf("[ERROR] Issue in SSR body proxy: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("BODY: %s", string(body))
+
+	//req.Body = ioutil.NopCloser(bytes.NewReader(body))
+	url := fmt.Sprintf("%s://%s%s", proxyScheme, proxyHost, req.RequestURI)
+	log.Printf("[DEBUG] Request (%s) Proxy request URL: %s. More: %s", req.Method, url, req.URL.String())
+
+	proxyReq, err := http.NewRequest(req.Method, url, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[ERROR] Failed handling proxy request: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// We may want to filter some headers, otherwise we could just use a shallow copy
+	proxyReq.Header = make(http.Header)
+	for h, val := range req.Header {
+		proxyReq.Header[h] = val
+	}
+
+	newresp, err := httpClient.Do(proxyReq)
+	if err != nil {
+		log.Printf("[ERROR] Issue in SSR newresp for %s - should retry: %s", url, err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	defer newresp.Body.Close()
+
+	urlbody, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	//log.Printf("RESP: %s", urlbody)
+	for key, value := range newresp.Header {
+		//log.Printf("%s %s", key, value)
+		for _, item := range value {
+			w.Header().Set(key, item)
+		}
+	}
+
+	w.WriteHeader(newresp.StatusCode)
+	w.Write(urlbody)
+}
+
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting login request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	// Gets a struct of Username, password
