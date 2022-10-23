@@ -389,7 +389,7 @@ type PersonalInfo struct {
 type User struct {
 	Username          string        `datastore:"Username" json:"username"`
 	Password          string        `datastore:"password,noindex" password:"password,omitempty"`
-	Session           string        `datastore:"session,noindex" json:"session,omitempty"`
+	Session           string        `datastore:"session" json:"session,omitempty"`
 	Verified          bool          `datastore:"verified,noindex" json:"verified"`
 	SupportAccess     bool          `datastore:"support_access" json:"support_access"`
 	PrivateApps       []WorkflowApp `datastore:"privateapps" json:"privateapps":`

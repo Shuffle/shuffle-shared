@@ -2291,9 +2291,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	c, err := request.Cookie("session_token")
 	if err == nil {
 		sessionToken := c.Value
-		session, err := GetSession(ctx, sessionToken)
+		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[DEBUG] No valid session token. Setting cookie to expire.")
+			log.Printf("[DEBUG] No valid session token for ID %s. Setting cookie to expire.", sessionToken)
 			http.SetCookie(resp, &http.Cookie{
 				Name:    "session_token",
 				Value:   sessionToken,
@@ -2304,18 +2304,18 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
-		user, err := GetUser(ctx, session.UserId)
-		if err != nil {
-			log.Printf("[INFO] User with Identifier %s doesn't exist: %s", session.UserId, err)
-			http.SetCookie(resp, &http.Cookie{
-				Name:    "session_token",
-				Value:   sessionToken,
-				Expires: time.Now().Add(-100 * time.Hour),
-				MaxAge:  -1,
-			})
+		//user, err := GetUser(ctx, session.UserId)
+		//if err != nil {
+		//	log.Printf("[INFO] User with Identifier %s doesn't exist: %s", session.UserId, err)
+		//	http.SetCookie(resp, &http.Cookie{
+		//		Name:    "session_token",
+		//		Value:   sessionToken,
+		//		Expires: time.Now().Add(-100 * time.Hour),
+		//		MaxAge:  -1,
+		//	})
 
-			return User{}, err
-		}
+		//	return User{}, err
+		//}
 
 		if len(user.Id) == 0 && len(user.Username) == 0 {
 			http.SetCookie(resp, &http.Cookie{
@@ -2338,7 +2338,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		user.SessionLogin = true
 
 		// Means session exists, but
-		return *user, nil
+		return user, nil
 	}
 
 	// Key = apikey
@@ -7854,8 +7854,6 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	log.Printf("BODY: %s", string(body))
 
 	//req.Body = ioutil.NopCloser(bytes.NewReader(body))
 	url := fmt.Sprintf("%s://%s%s", proxyScheme, proxyHost, req.RequestURI)

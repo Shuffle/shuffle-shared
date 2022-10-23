@@ -4510,6 +4510,102 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 	return curUser, nil
 }
 
+func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
+	// Query for the specific API-key in users
+	nameKey := "Users"
+	var users []User
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"session": sessionId,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return User{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get api keys): %s", err)
+			return User{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return User{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return User{}, nil
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return User{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return User{}, err
+		}
+
+		wrapped := UserSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return User{}, err
+		}
+
+		users = []User{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.Session != sessionId {
+				continue
+			}
+
+			users = append(users, hit.Source)
+		}
+
+	} else {
+		log.Printf("[DEBUG] Searching for session %s", sessionId)
+		q := datastore.NewQuery(nameKey).Filter("session =", sessionId).Limit(1)
+		_, err := project.Dbclient.GetAll(ctx, q, &users)
+		if err != nil && len(users) == 0 {
+			log.Printf("[WARNING] Error getting session: %s", err)
+			return User{}, err
+		}
+	}
+
+	if len(users) == 0 {
+		log.Printf("[WARNING] No users found for apikey %s", sessionId)
+		return User{}, errors.New("No users found for this apikey")
+	}
+
+	return users[0], nil
+}
+
 func GetApikey(ctx context.Context, apikey string) (User, error) {
 	// Query for the specific API-key in users
 	nameKey := "Users"
