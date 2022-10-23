@@ -384,6 +384,8 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	resp.Header().Set("Vary", "Origin")
 	if len(origin) > 0 {
 		resp.Header().Set("Access-Control-Allow-Origin", origin[0])
+		//resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
+		//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
 	} else {
 		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:4201")
 	}
@@ -8062,11 +8064,17 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Println("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
 
-		http.SetCookie(resp, &http.Cookie{
+		newCookie := &http.Cookie{
 			Name:    "session_token",
 			Value:   userdata.Session,
 			Expires: expiration,
-		})
+		}
+
+		if project.Environment == "cloud" {
+			newCookie.Domain = ".shuffler.io"
+		}
+
+		http.SetCookie(resp, newCookie)
 
 		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
@@ -8104,11 +8112,17 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		sessionToken := uuid.NewV4().String()
 		expiration := time.Now().Add(3600 * time.Second)
-		http.SetCookie(resp, &http.Cookie{
+		newCookie := &http.Cookie{
 			Name:    "session_token",
 			Value:   sessionToken,
 			Expires: expiration,
-		})
+		}
+
+		if project.Environment == "cloud" {
+			newCookie.Domain = ".shuffler.io"
+		}
+
+		http.SetCookie(resp, newCookie)
 
 		// ADD TO DATABASE
 		err = SetSession(ctx, userdata, sessionToken)
@@ -12710,11 +12724,18 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//if len(user.Session) == 0 {
 				log.Printf("[INFO] User does NOT have session - creating")
 				sessionToken := uuid.NewV4().String()
-				http.SetCookie(resp, &http.Cookie{
+
+				newCookie := http.Cookie{
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-				})
+				}
+
+				if project.Environment == "cloud" {
+					newCookie.Domain = ".shuffler.io"
+				}
+
+				http.SetCookie(resp, &newCookie)
 
 				err = SetSession(ctx, user, sessionToken)
 				if err != nil {
@@ -12753,11 +12774,17 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//if len(user.Session) == 0 {
 				log.Printf("[INFO] User does NOT have session - creating")
 				sessionToken := uuid.NewV4().String()
-				http.SetCookie(resp, &http.Cookie{
+				newCookie := &http.Cookie{
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-				})
+				}
+
+				if project.Environment == "cloud" {
+					newCookie.Domain = ".shuffler.io"
+				}
+
+				http.SetCookie(resp, newCookie)
 
 				err = SetSession(ctx, user, sessionToken)
 				if err != nil {
@@ -12831,11 +12858,18 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	//if len(user.Session) == 0 {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
-	http.SetCookie(resp, &http.Cookie{
+
+	newCookie := &http.Cookie{
 		Name:    "session_token",
 		Value:   sessionToken,
 		Expires: expiration,
-	})
+	}
+
+	if project.Environment == "cloud" {
+		newCookie.Domain = ".shuffler.io"
+	}
+
+	http.SetCookie(resp, newCookie)
 
 	err = SetSession(ctx, *newUser, sessionToken)
 	if err != nil {
@@ -13086,11 +13120,17 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				//if len(user.Session) == 0 {
 				log.Printf("[INFO] User does NOT have session - creating")
 				sessionToken := uuid.NewV4().String()
-				http.SetCookie(resp, &http.Cookie{
+				newCookie := &http.Cookie{
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-				})
+				}
+
+				if project.Environment == "cloud" {
+					newCookie.Domain = ".shuffler.io"
+				}
+
+				http.SetCookie(resp, newCookie)
 
 				err = SetSession(ctx, user, sessionToken)
 				if err != nil {
@@ -13132,11 +13172,17 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				//if len(user.Session) == 0 {
 				log.Printf("[INFO] User does NOT have session - creating")
 				sessionToken := uuid.NewV4().String()
-				http.SetCookie(resp, &http.Cookie{
+				newCookie := &http.Cookie{
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-				})
+				}
+
+				if project.Environment == "cloud" {
+					newCookie.Domain = ".shuffler.io"
+				}
+
+				http.SetCookie(resp, newCookie)
 
 				err = SetSession(ctx, user, sessionToken)
 				if err != nil {
@@ -13212,11 +13258,17 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	//if len(user.Session) == 0 {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
-	http.SetCookie(resp, &http.Cookie{
+	newCookie := &http.Cookie{
 		Name:    "session_token",
 		Value:   sessionToken,
 		Expires: expiration,
-	})
+	}
+
+	if project.Environment == "cloud" {
+		newCookie.Domain = ".shuffler.io"
+	}
+
+	http.SetCookie(resp, newCookie)
 
 	err = SetSession(ctx, *newUser, sessionToken)
 	if err != nil {
