@@ -676,6 +676,8 @@ type Org struct {
 	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework""`
 	Priorities        []Priority            `json:"priorities" datastore:"priorities"`
 	MainPriority      string                `json:"main_priority" datastore:"main_priority"`
+	Region            string                `json:"region" datastore:"region"`
+	RegionUrl         string                `json:"region_url" datastore:"region_url"`
 }
 
 type PartnerInfo struct {
@@ -2080,10 +2082,11 @@ type HandleInfo struct {
 	ActiveOrg          OrgMini         `json:"active_org"`
 	EthInfo            EthInfo         `json:"eth_info"`
 	ChatDisabled       bool            `json:"chat_disabled"`
-	Priorities         []Priority      `json:"priorities" datastore:"priorities"`
-	Cookies            []SessionCookie `json:"cookies" datastore:"cookies"`
+	Priorities         []Priority      `json:"priorities"`
+	Cookies            []SessionCookie `json:"cookies"`
 	AppExecutionsLimit int64           `json:"app_execution_limit"`
 	AppExecutionsUsage int64           `json:"app_execution_usage"`
+	RegionUrl          string          `json:"region_url"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
