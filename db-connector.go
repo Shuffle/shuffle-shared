@@ -2893,6 +2893,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 
 	DeleteCache(ctx, user.ApiKey)
 	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
@@ -4511,6 +4512,24 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 }
 
 func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
+	cacheKey := fmt.Sprintf("session_%s", sessionId)
+	user := &User{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &user)
+			if err == nil && len(user.Id) > 0 {
+				//log.Printf("Found user in cache for session %s", sessionId)
+				return *user, nil
+			} else {
+				return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
+			}
+		} else {
+		}
+	}
+
 	// Query for the specific API-key in users
 	nameKey := "Users"
 	var users []User
@@ -4589,7 +4608,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		}
 
 	} else {
-		log.Printf("[DEBUG] Searching for session %s", sessionId)
+		//log.Printf("[DEBUG] Searching for session %s", sessionId)
 		q := datastore.NewQuery(nameKey).Filter("session =", sessionId).Limit(1)
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
@@ -4601,6 +4620,19 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	if len(users) == 0 {
 		log.Printf("[WARNING] No users found for apikey %s", sessionId)
 		return User{}, errors.New("No users found for this apikey")
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(users[0])
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getSession: %s", err)
+			return User{}, err
+		}
+
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting session cache for user %s: %s", sessionId, err)
+		}
 	}
 
 	return users[0], nil

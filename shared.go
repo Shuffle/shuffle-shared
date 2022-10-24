@@ -916,7 +916,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting login request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
@@ -924,19 +924,30 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 	c, err := request.Cookie("session_token")
 	if err == nil {
-		http.SetCookie(resp, &http.Cookie{
+
+		newCookie := &http.Cookie{
 			Name:    "session_token",
 			Value:   c.Value,
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
-		})
+		}
+		if project.Environment == "cloud" {
+			newCookie.Domain = ".shuffler.io"
+		}
+
+		http.SetCookie(resp, newCookie)
 	} else {
-		http.SetCookie(resp, &http.Cookie{
+		newCookie := &http.Cookie{
 			Name:    "session_token",
 			Value:   "",
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
-		})
+		}
+
+		if project.Environment == "cloud" {
+			newCookie.Domain = ".shuffler.io"
+		}
+		http.SetCookie(resp, newCookie)
 	}
 
 	userInfo, err := HandleApiAuthentication(resp, request)
@@ -2294,12 +2305,19 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
 			log.Printf("[DEBUG] No valid session token for ID %s. Setting cookie to expire.", sessionToken)
-			http.SetCookie(resp, &http.Cookie{
+
+			newCookie := &http.Cookie{
 				Name:    "session_token",
 				Value:   sessionToken,
 				Expires: time.Now().Add(-100 * time.Hour),
 				MaxAge:  -1,
-			})
+			}
+
+			if project.Environment == "cloud" {
+				newCookie.Domain = ".shuffler.io"
+			}
+
+			http.SetCookie(resp, newCookie)
 
 			return User{}, err
 		}
@@ -2318,12 +2336,19 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		//}
 
 		if len(user.Id) == 0 && len(user.Username) == 0 {
-			http.SetCookie(resp, &http.Cookie{
+
+			newCookie := &http.Cookie{
 				Name:    "session_token",
 				Value:   sessionToken,
 				Expires: time.Now().Add(-100 * time.Hour),
 				MaxAge:  -1,
-			})
+			}
+
+			if project.Environment == "cloud" {
+				newCookie.Domain = ".shuffler.io"
+			}
+
+			http.SetCookie(resp, newCookie)
 
 			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 		}
@@ -2998,6 +3023,17 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Update User request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	userInfo, err := HandleApiAuthentication(resp, request)
@@ -5167,6 +5203,17 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting API GEN request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in apigen: %s", err)
@@ -5401,6 +5448,17 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Password Change request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	if request.Body == nil {
@@ -6480,6 +6538,17 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	user, err := HandleApiAuthentication(resp, request)
@@ -7897,6 +7966,14 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 
 	w.WriteHeader(newresp.StatusCode)
 	w.Write(urlbody)
+
+	// Need to clear cache in case user gets updated in db
+	// with a new session and such. This only forces a new search
+	ctx := getContext(req)
+	c, err := req.Cookie("session_token")
+	if err == nil {
+		DeleteCache(ctx, fmt.Sprintf("session_%s", c.Value))
+	}
 }
 
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
@@ -7910,7 +7987,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting login request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
