@@ -2553,7 +2553,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	// FIXME - have a check for org etc too..
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
-			log.Printf("[AUDIT] User %s is accessing %s (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
+			log.Printf("[AUDIT] User %s is accessing workflow %#v (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
 		} else {
@@ -7832,11 +7832,13 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Modified to make it so users admins in same org can modify an app
-	log.Printf("User: %s, role: %s, org: %#v vs %#v", user.Username, user.Role, user.ActiveOrg.Id, app.ReferenceOrg)
+	//log.Printf("User: %s, role: %s, org: %#v vs %#v", user.Username, user.Role, user.ActiveOrg.Id, app.ReferenceOrg)
 	if user.Id == app.Owner || (user.Role == "admin" && user.ActiveOrg.Id == app.ReferenceOrg) {
 		log.Printf("[DEBUG] Got app %s with user %s (%s) in org %s", app.ID, user.Username, user.Id, user.ActiveOrg.Id)
 	} else {
-		if user.Role == "admin" && app.Owner == "" {
+		if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Support & Admin user %s (%s) got access to app %s (cloud only)", user.Username, user.Id, app.ID)
+		} else if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
 			exit := true
@@ -10596,18 +10598,19 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			if err == nil {
 				//log.Printf("Execution size: %d", len(jsonString))
 				if len(jsonString) > 1000000 {
-					for _, action := range workflowExecution.Workflow.Actions {
-						actionData, err := json.Marshal(action)
-						if err == nil {
-							log.Printf("[DEBUG] Action Size for %s (%s - %s): %d", action.Label, action.Name, action.ID, len(actionData))
-						}
-					}
+					//for _, action := range workflowExecution.Workflow.Actions {
+					//	actionData, err := json.Marshal(action)
+					//	if err == nil {
+					//		//log.Printf("[DEBUG] Action Size for %s (%s - %s): %d", action.Label, action.Name, action.ID, len(actionData))
+					//	}
+					//}
 
 					for resultIndex, result := range workflowExecution.Results {
-						resultData, err := json.Marshal(result)
+						//resultData, err := json.Marshal(result)
+						//_ = resultData
 						actionData, err := json.Marshal(result.Action)
 						if err == nil {
-							log.Printf("Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
+							//log.Printf("Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
 						}
 
 						if len(actionData) > 10000 {
@@ -11104,7 +11107,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 
 		swaggerdata, err := json.Marshal(swagger)
 		if err != nil {
-			log.Printf("Failed unmarshaling v3 data: %s", err)
+			log.Printf("[WARNING] Failed unmarshaling v3 data: %s", err)
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling swaggerv3 data: %s"}`, err)))
 			return
@@ -11117,7 +11120,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		ctx := getContext(request)
 		err = SetOpenApiDatastore(ctx, idstring, parsed)
 		if err != nil {
-			log.Printf("Failed uploading openapi to datastore: %s", err)
+			log.Printf("[WARNING] Failed uploading openapi to datastore: %s", err)
 			resp.WriteHeader(422)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
 			return

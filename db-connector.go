@@ -1034,12 +1034,12 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 						if err == nil {
 							log.Printf("[DEBUG] Got app %s (%s) with %d actions from file (cache)", workflowApp.Name, workflowApp.ID, len(tmpApp.Actions))
 							workflowApp = &tmpApp
+							return workflowApp, nil
 						} else {
-							log.Printf("[DEBUG] Failed remote loading app  %s (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
+							log.Printf("[DEBUG] Failed remote loading app %s (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
 						}
 					}
 
-					return workflowApp, nil
 				}
 			} else {
 				//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
