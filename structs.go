@@ -893,9 +893,10 @@ type Trigger struct {
 		X float64 `json:"x" datastore:"x"`
 		Y float64 `json:"y" datastore:"y"`
 	} `json:"position"`
-	Priority       int    `json:"priority" datastore:"priority"`
-	SourceWorkflow string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
-	ExecutionDelay int64  `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
+	Priority       int         `json:"priority" datastore:"priority"`
+	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
+	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
 }
 
 type Branch struct {

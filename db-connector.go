@@ -29,12 +29,15 @@ import (
 	"google.golang.org/api/iterator"
 
 	"cloud.google.com/go/storage"
+	gomemcache "github.com/bradfitz/gomemcache/memcache"
 	"google.golang.org/appengine/memcache"
 
 	elasticsearch "github.com/frikky/go-elasticsearch/v8"
 )
 
 var requestCache *cache.Cache
+var memcached = os.Getenv("SHUFFLE_MEMCACHED")
+var mc = gomemcache.New(memcached)
 
 var maxCacheSize = 1020000
 
@@ -178,6 +181,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 	// 2. Update it
 	dbDumpInterval := uint8(dumpInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
+	//if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
 	if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
 		item := &memcache.Item{
 			Key:        key,
@@ -283,7 +287,49 @@ func DeleteCache(ctx context.Context, name string) error {
 
 // Cache handlers
 func GetCache(ctx context.Context, name string) (interface{}, error) {
+
 	if project.Environment == "cloud" {
+		if len(memcached) > 0 {
+			item, err := mc.Get(name)
+			if err == gomemcache.ErrCacheMiss {
+				//log.Printf("[DEBUG] Cache miss for %#v: %s", name, err)
+			} else if err != nil {
+				log.Printf("[WARNING] Failed cache err: %s", err)
+			} else {
+				//log.Printf("[INFO] Got new cache: %#v", item)
+
+				if len(item.Value) == maxCacheSize {
+					totalData := item.Value
+					keyCount := 1
+					keyname := fmt.Sprintf("%s_%d", name, keyCount)
+					for {
+						if item, err := mc.Get(keyname); err == gomemcache.ErrCacheMiss {
+							break
+						} else {
+							totalData = append(totalData, item.Value...)
+
+							//log.Printf("%d - %d = ", len(item.Value), maxCacheSize)
+							if len(item.Value) != maxCacheSize {
+								break
+							}
+						}
+
+						keyCount += 1
+						keyname = fmt.Sprintf("%s_%d", name, keyCount)
+					}
+
+					// Random~ high number
+					if len(totalData) > 10062147 {
+						log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
+					}
+					return totalData, nil
+				} else {
+					return item.Value, nil
+				}
+
+			}
+		}
+
 		if item, err := memcache.Get(ctx, name); err == memcache.ErrCacheMiss {
 		} else if err != nil {
 			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", name, err))
@@ -377,7 +423,20 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 					Expiration: time.Minute * 30,
 				}
 
-				if err := memcache.Set(ctx, item); err != nil {
+				var err error
+				if len(memcached) > 0 {
+					newitem := &gomemcache.Item{
+						Key:        keyname,
+						Value:      parsedData,
+						Expiration: 1800,
+					}
+
+					err = mc.Set(newitem)
+				} else {
+					err = memcache.Set(ctx, item)
+				}
+
+				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 						log.Printf("[WARNING] Failed setting cache for %s (1): %s", keyname, err)
 					}
@@ -405,7 +464,20 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 				Expiration: time.Minute * 30,
 			}
 
-			if err := memcache.Set(ctx, item); err != nil {
+			var err error
+			if len(memcached) > 0 {
+				newitem := &gomemcache.Item{
+					Key:        name,
+					Value:      data,
+					Expiration: 1800,
+				}
+
+				err = mc.Set(newitem)
+			} else {
+				err = memcache.Set(ctx, item)
+			}
+
+			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 					log.Printf("[WARNING] Failed setting cache for %s (2): %s", name, err)
 				} else {
@@ -6504,6 +6576,9 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		CloudUrl:      "https://shuffler.io",
 		BucketName:    "shuffler.appspot.com",
 	}
+
+	// docker run -p 11211:11211 --name memcache -d memcached -m 100
+	log.Printf("[DEBUG] Starting with memcached address %#v. If this is empty, fallback to appengine", memcached)
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(dbType) == "elasticsearch" || strings.ToLower(dbType) == "opensearch" {

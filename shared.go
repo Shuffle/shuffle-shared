@@ -370,7 +370,7 @@ var usecaseData = `[
 ]`
 
 func getContext(request *http.Request) context.Context {
-	if project.Environment == "cloud" {
+	if project.Environment == "cloud" && len(memcached) == 0 {
 		return appengine.NewContext(request)
 	}
 
@@ -1316,7 +1316,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (set oauth2)", user.Username, workflow.ID)
 			} else if workflow.Public {
-				log.Printf("[AUDIT] Letting user %s access workflow %s FOR AUTH because it's public", user.Username, workflow.ID)
+				log.Printf("[AUDIT] Letting user %#v access workflow %s FOR AUTH because it's public", user.Username, workflow.ID)
 			} else {
 				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
 				resp.WriteHeader(401)
@@ -3725,7 +3725,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					// Check if current user is one of the few allowed
 					// This can only happen if the workflow doesn't already have an owner
-					log.Printf("CUR USER: %#v\n\n%s", user.PublicProfile, os.Getenv("GITHUB_USER_ALLOWLIST"))
+					//log.Printf("CUR USER: %#v\n\n%s", user.PublicProfile, os.Getenv("GITHUB_USER_ALLOWLIST"))
 					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
 					found := false
 					if user.PublicProfile.Public && len(allowList) > 0 {
@@ -3787,6 +3787,97 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				workflow.OrgId = user.ActiveOrg.Id
 				workflow.PreviouslySaved = false
 
+				newTriggers := []Trigger{}
+				changedIds := map[string]string{}
+				for _, trigger := range workflow.Triggers {
+					log.Printf("TriggerID: %#v", trigger.ID)
+					newId := uuid.NewV4().String()
+					trigger.Environment = "cloud"
+
+					hookAuth := ""
+					customResponse := ""
+					for paramIndex, param := range trigger.Parameters {
+						if param.Name == "url" {
+							trigger.Parameters[paramIndex].Value = fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", newId)
+						}
+
+						if param.Name == "auth_headers" {
+							hookAuth = param.Value
+						}
+
+						if param.Name == "custom_response_body" {
+							customResponse = param.Value
+						}
+					}
+
+					if trigger.TriggerType != "SCHEDULE" {
+
+						trigger.Status = "running"
+
+						if trigger.TriggerType == "WEBHOOK" {
+							hook := Hook{
+								Id:        newId,
+								Start:     workflow.Start,
+								Workflows: []string{workflow.ID},
+								Info: Info{
+									Name:        trigger.Name,
+									Description: trigger.Description,
+									Url:         fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", newId),
+								},
+								Type:   "webhook",
+								Owner:  user.Username,
+								Status: "running",
+								Actions: []HookAction{
+									HookAction{
+										Type:  "workflow",
+										Name:  trigger.Name,
+										Id:    workflow.ID,
+										Field: "",
+									},
+								},
+								Running:        true,
+								OrgId:          user.ActiveOrg.Id,
+								Environment:    "cloud",
+								Auth:           hookAuth,
+								CustomResponse: customResponse,
+							}
+
+							log.Printf("[DEBUG] Starting hook %s for user %s (%s) during Workflow Save for %s", hook.Id, user.Username, user.Id, workflow.ID)
+							err = SetHook(ctx, hook)
+							if err != nil {
+								log.Printf("[WARNING] Failed setting hook during workflow copy of %s: %s", workflow.ID, err)
+								resp.WriteHeader(401)
+								resp.Write([]byte(`{"success": false}`))
+								return
+							}
+						}
+					}
+
+					changedIds[trigger.ID] = newId
+
+					trigger.ID = newId
+					//log.Printf("New id for %s: %s", trigger.TriggerType, trigger.ID)
+					newTriggers = append(newTriggers, trigger)
+				}
+
+				newBranches := []Branch{}
+				for _, branch := range workflow.Branches {
+					for key, value := range changedIds {
+						if branch.SourceID == key {
+							branch.SourceID = value
+						}
+
+						if branch.DestinationID == key {
+							branch.DestinationID = value
+						}
+					}
+
+					newBranches = append(newBranches, branch)
+				}
+
+				workflow.Branches = newBranches
+				workflow.Triggers = newTriggers
+
 				err = SetWorkflow(ctx, workflow, workflow.ID)
 				if err != nil {
 					log.Printf("[WARNING] Failed saving NEW version of public %s for user %s: %s", tmpworkflow.ID, user.Username, err)
@@ -3807,7 +3898,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					// Activate all that aren't already there
 					changed := false
 					for _, action := range workflow.Actions {
-						log.Printf("App: %#v, Public: %#v", action.AppID, action.Public)
+						//log.Printf("App: %#v, Public: %#v", action.AppID, action.Public)
 						if !ArrayContains(org.ActiveApps, action.AppID) {
 							org.ActiveApps = append(org.ActiveApps, action.AppID)
 							changed = true
@@ -3815,7 +3906,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if changed {
-						log.Printf("UPDATed: %#v!!", org.ActiveApps)
 						err = SetOrg(ctx, *org, org.Id)
 						if err != nil {
 							log.Printf("[ERROR] Failed updating active app list for org %s (%s): %s", org.Name, org.Id, err)
@@ -8396,7 +8486,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		//log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
 	}
 
-	log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
+	//log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
 
 	// Callback to itself
 	if len(backendUrl) == 0 {
@@ -8668,7 +8758,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				sendRequest = true
 			} else {
-				//log.Printf("[DEBUG] Should UPDATE parentResult: %s", string(parsedActionValue))
 				foundResult.Result = string(parsedActionValue)
 				resultData, err = json.Marshal(foundResult)
 				if err != nil {
@@ -15025,20 +15114,21 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	//ctx := getContext(request)
+	ctx := context.Background()
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow."}`))
 		return
 	}
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (stream edit workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
-			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting user %#v access workflow %s for streaming because it's public", user.Username, workflow.ID)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
@@ -15051,12 +15141,16 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	resp.Header().Set("Connection", "Keep-Alive")
 	resp.Header().Set("X-Content-Type-Options", "nosniff")
-	fw := flushWriter{w: resp}
-	if f, ok := resp.(http.Flusher); ok {
-		fw.f = f
-	} else {
-		log.Printf("[WARNING] Failed initializing flushwriter!")
+
+	conn, ok := resp.(http.Flusher)
+	if !ok {
+		log.Printf("[ERROR] Flusher error: %s", ok)
+		http.Error(resp, "Streaming supported on AppEngine", http.StatusInternalServerError)
+		return
 	}
+
+	resp.Header().Set("Content-Type", "text/event-stream")
+	resp.WriteHeader(http.StatusOK)
 
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
 	previousCache := []byte{}
@@ -15065,18 +15159,30 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			if string(previousCache) == string(cacheData) {
-				//log.Printf("[DEBUG] Still same cache for %s", user.Id)
+				//log.Printf("[DEBUG] Still same cache for %#v", user.Id)
 			} else {
 				// A way to only check for data from other people
-				if !strings.Contains(string(cacheData), user.Id) {
-					fw.Write(cacheData)
+				if (len(user.Id) > 0 && !strings.Contains(string(cacheData), user.Id)) || len(user.Id) == 0 {
+					//fw.Write(cacheData)
+					//w.Write(cacheData)
+
+					_, err := fmt.Fprintf(resp, string(cacheData))
+					if err != nil {
+						log.Printf("[ERROR] Failed in writing stream to user: %s", err)
+					} else {
+						previousCache = cacheData
+						conn.Flush()
+					}
+
+				} else {
+					//log.Printf("[ERROR] NEW cache for %#v (2) - NOT sending: %s.", user.Id, cacheData)
+
+					previousCache = cacheData
 				}
 
-				log.Printf("[DEBUG] NEW cache for %s", user.Id)
-				previousCache = cacheData
 			}
 		} else {
-			log.Printf("[DEBUG] Nothing in cache.")
+			//log.Printf("[DEBUG] Failed getting cache for %#v: %s", user.Id, err)
 		}
 
 		time.Sleep(500 * time.Millisecond)
@@ -15123,7 +15229,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow."}`))
 		return
 	}
 
@@ -15150,7 +15256,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 
 	// Literally just dumping them in, as they're supposed to be overwritten continuously
 	// PS: This is NOT an ideal process, and broadcasting should be handled differently
-	log.Printf("Body: %s", string(body))
+	//log.Printf("Body to update: %s", string(body))
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
 	err = SetCache(ctx, sessionKey, body)
 	if err != nil {
