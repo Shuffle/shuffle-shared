@@ -4590,22 +4590,22 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 
 func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	cacheKey := fmt.Sprintf("session_%s", sessionId)
-	//user := &User{}
-	//if project.CacheDb {
-	//	cache, err := GetCache(ctx, cacheKey)
-	//	if err == nil {
-	//		cacheData := []byte(cache.([]uint8))
-	//		//log.Printf("CACHEDATA: %#v", cacheData)
-	//		err = json.Unmarshal(cacheData, &user)
-	//		if err == nil && len(user.Id) > 0 {
-	//			//log.Printf("Found user in cache for session %s", sessionId)
-	//			return *user, nil
-	//		} else {
-	//			return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
-	//		}
-	//	} else {
-	//	}
-	//}
+	user := &User{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %#v", cacheData)
+			err = json.Unmarshal(cacheData, &user)
+			if err == nil && len(user.Id) > 0 {
+				//log.Printf("Found user in cache for session %s", sessionId)
+				return *user, nil
+			} else {
+				return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
+			}
+		} else {
+		}
+	}
 
 	// Query for the specific API-key in users
 	nameKey := "Users"
