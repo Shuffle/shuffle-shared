@@ -923,8 +923,11 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	c, err := request.Cookie("session_token")
-	if err == nil {
+	if err != nil {
+		c, err = request.Cookie("__session")
+	}
 
+	if err == nil {
 		newCookie := &http.Cookie{
 			Name:    "session_token",
 			Value:   c.Value,
@@ -936,6 +939,10 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		http.SetCookie(resp, newCookie)
+
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
+
 	} else {
 		newCookie := &http.Cookie{
 			Name:    "session_token",
@@ -947,6 +954,10 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		if project.Environment == "cloud" {
 			newCookie.Domain = ".shuffler.io"
 		}
+
+		http.SetCookie(resp, newCookie)
+
+		newCookie.Name = "__session"
 		http.SetCookie(resp, newCookie)
 	}
 
@@ -2300,6 +2311,11 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	}
 
 	c, err := request.Cookie("session_token")
+	// Compatibility issues
+	if err != nil {
+		c, err = request.Cookie("__session")
+	}
+
 	if err == nil {
 		sessionToken := c.Value
 		user, err := GetSessionNew(ctx, sessionToken)
@@ -2317,6 +2333,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				newCookie.Domain = ".shuffler.io"
 			}
 
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
 			http.SetCookie(resp, newCookie)
 
 			return User{}, err
@@ -2348,6 +2367,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				newCookie.Domain = ".shuffler.io"
 			}
 
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
 			http.SetCookie(resp, newCookie)
 
 			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
@@ -5908,7 +5930,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
 		return
 	}
 
@@ -8063,6 +8085,10 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	// with a new session and such. This only forces a new search
 	ctx := getContext(req)
 	c, err := req.Cookie("session_token")
+	if err != nil {
+		c, err = req.Cookie("__session")
+	}
+
 	if err == nil {
 		DeleteCache(ctx, fmt.Sprintf("session_%s", c.Value))
 	}
@@ -8329,9 +8355,18 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		http.SetCookie(resp, newCookie)
 
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
+
 		//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", userdata.Session)
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 			Key:        "session_token",
+			Value:      userdata.Session,
+			Expiration: expiration.Unix(),
+		})
+
+		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+			Key:        "__session",
 			Value:      userdata.Session,
 			Expiration: expiration.Unix(),
 		})
@@ -8394,6 +8429,12 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 			Key:        "session_token",
+			Value:      sessionToken,
+			Expiration: expiration.Unix(),
+		})
+
+		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+			Key:        "__session",
 			Value:      sessionToken,
 			Expiration: expiration.Unix(),
 		})
@@ -12990,6 +13031,9 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				http.SetCookie(resp, &newCookie)
 
+				newCookie.Name = "__session"
+				http.SetCookie(resp, &newCookie)
+
 				err = SetSession(ctx, user, sessionToken)
 				if err != nil {
 					log.Printf("[WARNING] Error creating session for user: %s", err)
@@ -13037,6 +13081,9 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Domain = ".shuffler.io"
 				}
 
+				http.SetCookie(resp, newCookie)
+
+				newCookie.Name = "__session"
 				http.SetCookie(resp, newCookie)
 
 				err = SetSession(ctx, user, sessionToken)
@@ -13122,6 +13169,9 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		newCookie.Domain = ".shuffler.io"
 	}
 
+	http.SetCookie(resp, newCookie)
+
+	newCookie.Name = "__session"
 	http.SetCookie(resp, newCookie)
 
 	err = SetSession(ctx, *newUser, sessionToken)
@@ -13385,6 +13435,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 				http.SetCookie(resp, newCookie)
 
+				newCookie.Name = "__session"
+				http.SetCookie(resp, newCookie)
+
 				err = SetSession(ctx, user, sessionToken)
 				if err != nil {
 					log.Printf("[WARNING] Error creating session for user: %s", err)
@@ -13435,6 +13488,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					newCookie.Domain = ".shuffler.io"
 				}
 
+				http.SetCookie(resp, newCookie)
+
+				newCookie.Name = "__session"
 				http.SetCookie(resp, newCookie)
 
 				err = SetSession(ctx, user, sessionToken)
@@ -13521,6 +13577,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		newCookie.Domain = ".shuffler.io"
 	}
 
+	http.SetCookie(resp, newCookie)
+
+	newCookie.Name = "__session"
 	http.SetCookie(resp, newCookie)
 
 	err = SetSession(ctx, *newUser, sessionToken)
@@ -15198,7 +15257,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	//// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream): %s. Continuing because it may be public.", err)
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow (stream update): %s. Continuing because it may be public.", err)
 	}
 
 	location := strings.Split(request.URL.String(), "/")
@@ -15236,10 +15295,12 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+
 		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow stream)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return

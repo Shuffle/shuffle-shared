@@ -272,7 +272,12 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 // Cache handlers
 func DeleteCache(ctx context.Context, name string) error {
 	if project.Environment == "cloud" {
-		return memcache.Delete(ctx, name)
+		if len(memcached) > 0 {
+			return mc.Delete(name)
+		} else {
+			return memcache.Delete(ctx, name)
+		}
+
 	} else if project.Environment == "onprem" {
 		requestCache.Delete(name)
 		return nil
@@ -4585,22 +4590,22 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 
 func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	cacheKey := fmt.Sprintf("session_%s", sessionId)
-	user := &User{}
-	if project.CacheDb {
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
-			err = json.Unmarshal(cacheData, &user)
-			if err == nil && len(user.Id) > 0 {
-				//log.Printf("Found user in cache for session %s", sessionId)
-				return *user, nil
-			} else {
-				return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
-			}
-		} else {
-		}
-	}
+	//user := &User{}
+	//if project.CacheDb {
+	//	cache, err := GetCache(ctx, cacheKey)
+	//	if err == nil {
+	//		cacheData := []byte(cache.([]uint8))
+	//		//log.Printf("CACHEDATA: %#v", cacheData)
+	//		err = json.Unmarshal(cacheData, &user)
+	//		if err == nil && len(user.Id) > 0 {
+	//			//log.Printf("Found user in cache for session %s", sessionId)
+	//			return *user, nil
+	//		} else {
+	//			return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
+	//		}
+	//	} else {
+	//	}
+	//}
 
 	// Query for the specific API-key in users
 	nameKey := "Users"
@@ -4690,7 +4695,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	}
 
 	if len(users) == 0 {
-		log.Printf("[WARNING] No users found for apikey %s", sessionId)
+		log.Printf("[WARNING] No users found for session %s", sessionId)
 		return User{}, errors.New("No users found for this apikey")
 	}
 
