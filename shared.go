@@ -911,14 +911,20 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	ctx := getContext(request)
+
+	runReturn := false
+	userInfo, usererr := HandleApiAuthentication(resp, request)
+	log.Printf("[AUDIT] Logging out user %s (%s)", userInfo.Username, userInfo.Id)
+
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
+
 			RedirectUserRequest(resp, request)
-			return
 		}
 	}
 
@@ -961,41 +967,25 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		http.SetCookie(resp, newCookie)
 	}
 
-	userInfo, err := HandleApiAuthentication(resp, request)
-	if err != nil {
+	if runReturn == true {
+		DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
+		DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
+		DeleteCache(ctx, userInfo.Session)
+
+		log.Printf("[INFO] Returning from logout request after cache cleanup")
+
+		return
+	}
+
+	if usererr != nil {
 		log.Printf("[WARNING] Api authentication failed in handleLogout: %s", err)
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": true, "reason": "Not logged in"}`))
 		return
 	}
 
-	ctx := getContext(request)
-	session, err := GetSession(ctx, userInfo.Session)
-	if err != nil {
-		log.Printf("[WARNING] Session %#v doesn't exist: %s", session, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "No session"}`))
-		return
-	}
-
-	err = SetSession(ctx, userInfo, "")
-	if err != nil {
-		log.Printf("[WARNING] Error removing session in logout: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed reseting sessions"}`))
-		return
-	}
-
-	err = DeleteKey(ctx, "sessions", userInfo.Session)
-	if err != nil {
-		log.Printf("Error deleting key %s for %s: %s", userInfo.Session, userInfo.Username, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
-		return
-	}
-
-	cacheKey := fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username))
-	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
+	DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
 	DeleteCache(ctx, userInfo.Session)
 
 	userInfo.Session = ""
@@ -2174,7 +2164,6 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(defaults) > 1 {
-			log.Printf("Should fix %#v defaults", defaults)
 			for _, index := range defaults {
 				if environments[index].Name == "Cloud" {
 					continue
@@ -2329,9 +2318,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				MaxAge:  -1,
 			}
 
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-			}
+			//if project.Environment == "cloud" {
+			//	newCookie.Domain = ".shuffler.io"
+			//}
 
 			http.SetCookie(resp, newCookie)
 
