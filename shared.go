@@ -14666,7 +14666,7 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetAppRequirements() string {
-	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.5\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
+	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.6\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
 }
 
 // Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth
