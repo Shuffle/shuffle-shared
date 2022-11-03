@@ -206,8 +206,6 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("[INFO] User is trying to GET File Meta for %s", fileId)
-
 	// 1. Verify if the user has access to the file: org_id and workflow
 	log.Printf("[INFO] Should GET FILE META for %s if user has access", fileId)
 	ctx := getContext(request)
@@ -280,8 +278,6 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("\n\n[INFO] User is trying to delete file %s\n\n", fileId)
-
 	// 1. Check user directly
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
@@ -290,7 +286,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
-			log.Printf("[ERROR] Bad file authentication in get: %s", err)
+			log.Printf("[ERROR] Bad file authentication in delete: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -299,6 +295,8 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		user.ActiveOrg.Id = orgId
 		user.Username = "Execution File API"
 	}
+
+	log.Printf("[INFO] User %s (%s) is attempting to delete file %s\n\n", user.Username, user.Id, fileId)
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to delete files: %s (%s)", user.Username, user.Id)
