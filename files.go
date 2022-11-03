@@ -296,7 +296,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
-	log.Printf("[INFO] User %s (%s) is attempting to delete file %s\n\n", user.Username, user.Id, fileId)
+	log.Printf("[INFO] User %s (%s) is attempting to delete file %s", user.Username, user.Id, fileId)
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to delete files: %s (%s)", user.Username, user.Id)
