@@ -3635,7 +3635,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	appAuth.Active = true
 	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed setting up app auth %s: %s (oauth2)", appAuth.Id, err)
+		log.Printf("[WARNING] Failed setting up app auth %s for refresh: %s (oauth2)", appAuth.Id, err)
 		return appAuth, err
 	}
 

@@ -30,6 +30,16 @@ import (
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
 var orgFileBucket = "shuffle_org_files"
 
+func init() {
+	if len(os.Getenv("SHUFFLE_ORG_BUCKET")) > 0 {
+		orgFileBucket = os.Getenv("SHUFFLE_ORG_BUCKET")
+	} else {
+		// Using standard bucket
+	}
+
+	log.Printf("[DEBUG] Inside Files Init with bucket name %#v", orgFileBucket)
+}
+
 func fileAuthentication(request *http.Request) (string, error) {
 	executionId, ok := request.URL.Query()["execution_id"]
 	if ok && len(executionId) > 0 {
@@ -334,9 +344,16 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME: Actually delete the file.
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		log.Printf("[DEBUG] Deleted file %s from Google cloud storage", fileId)
+		bucket := project.StorageClient.Bucket(orgFileBucket)
+		obj := bucket.Object(file.DownloadPath)
+		err := obj.Delete(ctx)
+		if err != nil {
+			log.Printf("[ERROR] FAILED to delete file %s from Google cloud storage. Removing frontend reference anyway. Err: %s", fileId, err)
+		} else {
+			log.Printf("[DEBUG] Deleted file %s from Google cloud storage", fileId)
+		}
+
 	} else {
 		if fileExists(file.DownloadPath) {
 			err = os.Remove(file.DownloadPath)
@@ -673,7 +690,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		obj := bucket.Object(file.DownloadPath)
 		fileReader, err := obj.NewReader(ctx)
 		if err != nil {
-			log.Printf("[ERROR] Reader error: %s", err)
+			log.Printf("[ERROR] Reader error for %s in bucket %s: %s", downloadPath, orgFileBucket, err)
 
 			file.Status = "deleted"
 			err = SetFile(ctx, *file)
@@ -1125,7 +1142,6 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 		}
 	}
 
-	// FIXME: Set this one to 200 anyway? Can't download file then tho..
 	file.Status = "active"
 	file.Md5sum = md5
 	file.Sha256sum = fmt.Sprintf("%x", sha256Sum)
