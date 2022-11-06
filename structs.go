@@ -3502,13 +3502,19 @@ type Widget struct {
 }
 
 type Conversionevents struct {
-	Id         string        `json:"id" datastore:"id"`
-	Name       string        `json:"name" datastore:"name"`
-	Type       string        `json:"type" datastore:"type"`
-	Total      int           `json:"total" datastore:"total"`
-	Click      int           `json:"click" datastore:"click"`
-	Conversion int           `json:"conversion" datastore:"conversion"`
-	Events     []WidgetPoint `json:"events" datastore:"events"`
+	Id          string        `json:"id" datastore:"id"`
+	Name        string        `json:"name" datastore:"name"`
+	Type        string        `json:"type" datastore:"type"`
+	Events      []WidgetPoint `json:"events" datastore:"events"`
+	Invalid     bool          `json:"invalid" datastore:"invalid"`
+	Verified    bool          `json:"verified" datastore:"verified"`
+	Orgs        int           `json:"orgs" datastore:"orgs"`
+	Searches    int           `json:"searches" datastore:"searches"`
+	Clicks      int           `json:"clicks" datastore:"clicks"`
+	Conversions int           `json:"conversions" datastore:"conversions"`
+	Forks       int           `json:"forks" datastore:"forks"`
+	EditedForks int           `json:"edited_forks" datastore:"edited_forks"`
+	Success     bool          `json:"success"`
 }
 
 type UsecaseStep struct {

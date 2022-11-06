@@ -7084,7 +7084,7 @@ func GetAppStats(ctx context.Context, id string) (*Conversionevents, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
-			log.Printf("[WARNING] Error in appstats loading of %s: %s", err)
+			log.Printf("[WARNING] Error in appstats loading of %s: %s", id, err)
 		}
 	}
 
