@@ -3574,18 +3574,41 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		return appAuth, err
 	}
 
+	// Cleans up the existing keys before adding new ones
 	if len(oauthResp.AccessToken) > 0 {
-		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+		newauth := []AuthenticationStore{}
+		for _, item := range appAuth.Fields {
+			if item.Key == "access_token" {
+				continue
+			}
+
+			newauth = append(newauth, item)
+		}
+
+		newauth = append(newauth, AuthenticationStore{
 			Key:   "access_token",
 			Value: oauthResp.AccessToken,
 		})
+
+		appAuth.Fields = newauth
 	}
 
 	if len(oauthResp.RefreshToken) > 0 {
-		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+		newauth := []AuthenticationStore{}
+		for _, item := range appAuth.Fields {
+			if item.Key == "refresh_token" {
+				continue
+			}
+
+			newauth = append(newauth, item)
+		}
+
+		newauth = append(newauth, AuthenticationStore{
 			Key:   "refresh_token",
 			Value: oauthResp.RefreshToken,
 		})
+
+		appAuth.Fields = newauth
 	}
 
 	if len(oauthUrl) > 0 {
