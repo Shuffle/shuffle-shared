@@ -1155,7 +1155,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
-		log.Printf("[DEBUG] Actions in %s (%s): %d", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions))
+		log.Printf("[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
 		if err != nil || len(workflowApp.Actions) == 0 {
 			log.Printf("[WARNING] Failed getting app in GetApp with ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
@@ -2458,11 +2458,12 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		err := project.Dbclient.Get(ctx, key, api)
+		//if (err != nil || len(api.Body) == 0) && !strings.Contains(fmt.Sprintf("%s", err), "no such") {
 		if err != nil || len(api.Body) == 0 {
 			//project.BucketName := "shuffler.appspot.com"
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
 			//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-			log.Printf("[DEBUG] Couldn't find openapi for %s. Checking filepath gs://%s/%s (size too big)", id, project.BucketName, fullParsedPath)
+			log.Printf("[DEBUG] Couldn't find openapi for %s. Checking filepath gs://%s/%s (size too big). Error: %s", id, project.BucketName, fullParsedPath, err)
 
 			client, err := storage.NewClient(ctx)
 			if err != nil {

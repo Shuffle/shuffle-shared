@@ -7905,22 +7905,24 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			if len(parsedApi.ID) > 0 {
-				parsedApi.Success = true
-			} else {
-				parsedApi.Success = false
-			}
+			if len(parsedApi.Body) > 0 {
+				if len(parsedApi.ID) > 0 {
+					parsedApi.Success = true
+				} else {
+					parsedApi.Success = false
+				}
 
-			//log.Printf("PARSEDAPI: %#v", parsedApi)
-			openapidata, err := json.Marshal(parsedApi)
-			if err != nil {
-				log.Printf("[WARNING] Error parsing api json: %s", err)
-				resp.WriteHeader(422)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling new parsed swagger: %s"}`, err)))
-				return
-			}
+				//log.Printf("PARSEDAPI: %#v", parsedApi)
+				openapidata, err := json.Marshal(parsedApi)
+				if err != nil {
+					log.Printf("[WARNING] Error parsing api json: %s", err)
+					resp.WriteHeader(422)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling new parsed swagger: %s"}`, err)))
+					return
+				}
 
-			appReturn.OpenAPI = openapidata
+				appReturn.OpenAPI = openapidata
+			}
 		}
 
 		appdata, err = json.Marshal(appReturn)
