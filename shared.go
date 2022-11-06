@@ -8952,6 +8952,60 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 		log.Printf("[DEBUG] Should rerun (2)? %s (%s - %s)", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
 		//go ResendActionResult(cacheData, retries)
 
+		if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
+
+			setExecVar := true
+			//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %#v", actionResult.Result)
+			if strings.Contains(actionResult.Result, "\"success\":") {
+				type SubflowMapping struct {
+					Success bool `json:"success"`
+				}
+
+				var subflowData SubflowMapping
+				err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+				if err != nil {
+					log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
+					setExecVar = false
+				} else {
+					if subflowData.Success == false {
+						setExecVar = false
+					}
+				}
+			}
+
+			if len(actionResult.Result) == 0 {
+				setExecVar = false
+			}
+
+			if setExecVar {
+				log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (3)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+
+				if len(workflowExecution.Results) > 0 {
+					lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
+					_ = lastResult
+					//log.Printf("LAST: %s", lastResult)
+				}
+
+				actionResult.Action.ExecutionVariable.Value = actionResult.Result
+
+				foundIndex := -1
+				for i, executionVariable := range workflowExecution.ExecutionVariables {
+					if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+						foundIndex = i
+						break
+					}
+				}
+
+				if foundIndex >= 0 {
+					workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+				} else {
+					workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+				}
+			} else {
+				log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+			}
+		}
+
 		if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 			go ResendActionResult(cacheData, retries)
 		} else {
@@ -9207,8 +9261,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
+		if len(actionResult.Result) == 0 {
+			setExecVar = false
+		}
+
 		if setExecVar {
-			log.Printf("[DEBUG] Updating exec variable %s with new value of length %d", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+			log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (2)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 
 			if len(workflowExecution.Results) > 0 {
 				lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
@@ -9893,7 +9951,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						continue
 					}
 
-					log.Printf("[DEBUG] Skipped body return from %s (%d): %s", streamUrl, newresp.StatusCode, string(body))
+					//log.Printf("[DEBUG] Skipped body return from %s (%d): %s", streamUrl, newresp.StatusCode, string(body))
 					if strings.Contains(string(body), "already finished") {
 						log.Printf("[WARNING] Data couldn't be re-inputted for %s.", foundAction.Label)
 						return &workflowExecution, true, errors.New(fmt.Sprintf("Failed updating skipped action %s", foundAction.Label))
@@ -10166,7 +10224,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				for index, execvar := range workflowExecution.ExecutionVariables {
 					if execvar.Name == actionVarName {
 						// Sets the value for the variable
-						workflowExecution.ExecutionVariables[index].Value = actionResult.Result
+
+						if len(actionResult.Result) > 0 {
+							log.Printf("\n\n[DEBUG] SET EXEC VAR\n\n", execvar.Name)
+							workflowExecution.ExecutionVariables[index].Value = actionResult.Result
+						} else {
+							log.Printf("\n\n[DEBUG] SKIPPING EXEC VAR\n\n")
+						}
+
 						break
 					}
 				}
@@ -10585,6 +10650,60 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				log.Printf("[DEBUG] Should rerun (1)? %s (%s - %s)", action.Label, action.Name, action.ID)
 				// If reruns, make sure it waits a bit for the next executions?
 				// This may cause one action that actually finished to get its result sent AFTER the next one, leading to missing information in subsequent nodes.
+				if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
+
+					setExecVar := true
+					//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %#v", actionResult.Result)
+					if strings.Contains(actionResult.Result, "\"success\":") {
+						type SubflowMapping struct {
+							Success bool `json:"success"`
+						}
+
+						var subflowData SubflowMapping
+						err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+						if err != nil {
+							log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
+							setExecVar = false
+						} else {
+							if subflowData.Success == false {
+								setExecVar = false
+							}
+						}
+					}
+
+					if len(actionResult.Result) == 0 {
+						setExecVar = false
+					}
+
+					if setExecVar {
+						log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (1)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+
+						if len(workflowExecution.Results) > 0 {
+							lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
+							_ = lastResult
+							//log.Printf("LAST: %s", lastResult)
+						}
+
+						actionResult.Action.ExecutionVariable.Value = actionResult.Result
+
+						foundIndex := -1
+						for i, executionVariable := range workflowExecution.ExecutionVariables {
+							if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+								foundIndex = i
+								break
+							}
+						}
+
+						if foundIndex >= 0 {
+							workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+						} else {
+							workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+						}
+					} else {
+						log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+					}
+				}
+
 				workflowExecution.Results = append(workflowExecution.Results, actionResult)
 				if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 					go ResendActionResult(cacheData, 0)

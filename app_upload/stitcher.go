@@ -817,7 +817,7 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "shuffle-subflow"
+	appname := "vulndb"
 	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
