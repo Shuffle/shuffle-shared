@@ -7121,3 +7121,19 @@ func GetHostedOAuth(ctx context.Context, id string) (*DataToSend, error) {
 
 	return stats, nil
 }
+
+func GetCreatorStats(ctx context.Context, creatorName string) ([]CreatorStats, error) {
+	var stats []CreatorStats
+	nameKey := "creator_stats"
+
+	log.Printf("Looking for name %s", creatorName)
+
+	q := datastore.NewQuery(nameKey).Filter("github_username =", creatorName)
+	_, err := project.Dbclient.GetAll(ctx, q, &stats)
+	if err != nil && len(stats) == 0 {
+		log.Printf("[WARNING] Failed getting stats for creator: %s", creatorName)
+		return stats, err
+	}
+
+	return stats, nil
+}

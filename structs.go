@@ -3540,3 +3540,13 @@ type UsecaseMerge struct {
 	UserId      string        `json:"user_id"`
 	Timestamp   int64         `json:"timestamp"`
 }
+
+type CreatorStats struct {
+	github_username    string   `json:"githubUsername"`
+	apps_count         int      `json:"appsCount"`
+	most_clicked_app   string   `json:"mostClickedApp`
+	most_conversed_app string   `json:"mostConversedApp`
+	verified           string   `json:"verified"`
+	workflows          string   `json:"workflows"`
+	app_stats          struct{} `json:"appStats"`
+}
