@@ -369,7 +369,7 @@ var usecaseData = `[
     }
 ]`
 
-func getContext(request *http.Request) context.Context {
+func GetContext(request *http.Request) context.Context {
 	if project.Environment == "cloud" && len(memcached) == 0 {
 		return appengine.NewContext(request)
 	}
@@ -515,7 +515,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	foundUser, err := GetUser(ctx, user.Id)
 	if err != nil {
 		log.Printf("[ERROR] Can't find user %s (set 2fa): %s", user.Id, err)
@@ -687,7 +687,7 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	//user.MFA.PreviousCode = authLink
 	user.MFA.PreviousCode = secret
 	err = SetUser(ctx, &user, true)
@@ -719,7 +719,7 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	if user.Role != "global_admin" {
 		orgs := []OrgMini{}
 		for _, item := range user.Orgs {
@@ -797,7 +797,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	org, err := GetOrg(ctx, fileId)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -911,7 +911,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 
 	runReturn := false
 	userInfo, usererr := HandleApiAuthentication(resp, request)
@@ -1048,7 +1048,7 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME - continue the search here with github repos etc.
 	// Caching might be smart :D
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflowapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Error: Failed getting workflowapps: %s", err)
@@ -1105,7 +1105,7 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	//	resp.Write([]byte(`{"success": false}`))
 	//	return
 	//}
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get all app auth: %s", err)
@@ -1195,7 +1195,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	if len(appAuth.Id) == 0 {
 		appAuth.Id = uuid.NewV4().String()
 	} else {
@@ -1444,7 +1444,7 @@ func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[5]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	nameKey := "workflowappauth"
 	auth, err := GetWorkflowAppAuthDatastore(ctx, fileId)
 	if err != nil {
@@ -1506,7 +1506,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Println("[WARNING] Failed getting environments: %s", err)
@@ -1692,7 +1692,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	environmentName := fileId
 	if len(fileId) != 36 {
 		log.Printf("[DEBUG] Environment length %d for %s is not good for reruns. Attempting to find the actual ID for it", len(fileId), fileId)
@@ -1797,7 +1797,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	environmentName := fileId
 	if len(fileId) != 36 {
 		log.Printf("[DEBUG] Environment length %d for %s is not good for executions aborts. Attempting to find the actual ID for it", len(fileId), fileId)
@@ -2149,7 +2149,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting environments")
@@ -2243,7 +2243,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		ctx := getContext(request)
+		ctx := GetContext(request)
 		cache, err := GetCache(ctx, newApikey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -2294,7 +2294,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 	// One time API keys
 	authorizationArr, ok := request.URL.Query()["authorization"]
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	if ok {
 		authorization := ""
 		if len(authorizationArr) > 0 {
@@ -2428,7 +2428,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	//}
 
 	// FIXME - FIX AUTH WITH APP
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	parsedApi, err := GetOpenApiDatastore(ctx, id)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting OpenAPI: %s", err)
@@ -2557,7 +2557,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
@@ -2658,7 +2658,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	var workflows []Workflow
 
 	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
@@ -2771,7 +2771,7 @@ func DeleteWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("Failed getting the workflow locally: %s", err)
@@ -2891,7 +2891,7 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	auth, err := GetWorkflowAppAuthDatastore(ctx, fileId)
 	if err != nil {
 		log.Printf("Authget error: %s", err)
@@ -3012,7 +3012,7 @@ func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting schedules: %s", err)
@@ -3081,7 +3081,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		Suborgs     []string `json:"suborgs"`
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	var t newUserStruct
 	err = json.Unmarshal(body, &t)
 	if err != nil {
@@ -3427,7 +3427,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.OrgId = user.ActiveOrg.Id
 	//log.Printf("TRIGGERS: %d", len(workflow.Triggers))
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	//err = increaseStatisticsField(ctx, "total_workflows", workflow.ID, 1, workflow.OrgId)
 	//if err != nil {
 	//	log.Printf("Failed to increase total workflows stats: %s", err)
@@ -3693,7 +3693,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Here to check access rights
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	tmpworkflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow locally (save workflow): %s", err)
@@ -5329,7 +5329,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("IN APIKEY GENERATION")
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	if request.Method == "GET" {
 		newUserInfo, err := GenerateApikey(ctx, userInfo)
 		if err != nil {
@@ -5467,7 +5467,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org in get users: %s", err)
@@ -5642,7 +5642,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	foundUser := User{}
 	if !curUserFound {
 		users, err := FindUser(ctx, strings.ToLower(strings.TrimSpace(t.Username)))
@@ -5788,7 +5788,7 @@ func SendHookResult(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	hook, err := GetHook(ctx, workflowId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting hook %s (send): %s", workflowId, err)
@@ -5855,7 +5855,7 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	hook, err := GetHook(ctx, workflowId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting hook %s (get hook): %s", workflowId, err)
@@ -5919,7 +5919,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
@@ -6014,7 +6014,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		userId = location[4]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	userId, err := url.QueryUnescape(userId)
 	if err != nil {
 		log.Printf("[WARNING] Failed decoding user %s: %s", userId, err)
@@ -6171,7 +6171,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app (update app): %s", fileId)
@@ -6333,7 +6333,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app %s: %s", app.Name, err)
@@ -6483,7 +6483,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
@@ -6717,7 +6717,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	foundOrg := false
 	for _, org := range user.Orgs {
 		if org == tmpData.OrgId {
@@ -6858,7 +6858,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	parentOrg, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[WARNING] Organization %s doesn't exist: %s", tmpData.OrgId, err)
@@ -7068,7 +7068,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[WARNING] Organization doesn't exist: %s", err)
@@ -7298,7 +7298,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflowExecution, err := GetWorkflowExecution(ctx, executionId)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting execution (abort) %s: %s", executionId, err)
@@ -7579,7 +7579,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	var requestdata requestData
 	err = json.Unmarshal([]byte(body), &requestdata)
 	if err != nil {
@@ -7747,7 +7747,7 @@ func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	hook, err := GetHook(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting hook %s (delete): %s", fileId, err)
@@ -7834,7 +7834,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
@@ -8090,7 +8090,7 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 
 	// Need to clear cache in case user gets updated in db
 	// with a new session and such. This only forces a new search
-	ctx := getContext(req)
+	ctx := GetContext(req)
 	c, err := req.Cookie("session_token")
 	if err != nil {
 		c, err = req.Cookie("__session")
@@ -8136,7 +8136,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	users, err := FindUser(ctx, data.Username)
 	if err != nil && len(users) == 0 {
 		log.Printf("[WARNING] Failed getting user %s during login", data.Username)
@@ -10958,7 +10958,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
 	if location[1] == "api" {
@@ -11373,7 +11373,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			Body: string(swaggerdata),
 		}
 
-		ctx := getContext(request)
+		ctx := GetContext(request)
 		err = SetOpenApiDatastore(ctx, idstring, parsed)
 		if err != nil {
 			log.Printf("[WARNING] Failed uploading openapi to datastore: %s", err)
@@ -11863,7 +11863,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
@@ -11985,7 +11985,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
@@ -12361,7 +12361,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		location[4] = strings.Split(location[4], "?")[0]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	downloadLocation, downloadOk := request.URL.Query()["location"]
 	cacheKey := fmt.Sprintf("docs_%s", location[4])
 	if downloadOk {
@@ -12528,7 +12528,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	cacheKey := "docs_list"
 	cache, err := GetCache(ctx, cacheKey)
 	result := FileList{}
@@ -12929,7 +12929,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	// http://localhost:5001/api/v1/login_openid#id_token=asdasd&session_state=asde9d78d8-6535-45fe-848d-0efa9f119595
 
 	//code -> Token
-	ctx := getContext(request)
+	ctx := GetContext(request)
 
 	skipValidation := false
 	openidUser := OpenidUserinfo{}
@@ -13474,7 +13474,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("\n\n%d - CERT: %s\n\n", len(baseCertificate), baseCertificate)
 	parsedX509Key := fixCertificate(baseCertificate)
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	matchingOrgs, err := GetOrgByField(ctx, "sso_config.sso_certificate", parsedX509Key)
 	if err != nil {
 		log.Printf("[DEBUG] BYTES FROM REQUEST (DEBUG): %s", string(bytesXML))
@@ -14816,7 +14816,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	log.Printf("[DEBUG] Inside execute validation!")
 
 	if request.Method == "POST" {
-		ctx := getContext(request)
+		ctx := GetContext(request)
 		workflowExecution := &WorkflowExecution{}
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
 		if sourceExecutionOk {
@@ -15060,7 +15060,7 @@ func GetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Error getting org: %s", err)
@@ -15122,7 +15122,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Error getting org in set framework: %s", err)
@@ -15299,7 +15299,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//ctx := getContext(request)
+	//ctx := GetContext(request)
 	ctx := context.Background()
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
@@ -15409,7 +15409,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
@@ -15471,7 +15471,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	// FIXME: Load for the specific org and have structs for it all
 	_ = user
 
-	//ctx := getContext(request)
+	//ctx := GetContext(request)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(usecaseData))
@@ -15520,7 +15520,7 @@ func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 	usecase.Name = url.QueryEscape(usecase.Name)
 	log.Printf("[DEBUG] Updated usecase %s as user %s (%s)", usecase.Name, user.Username, user.Id)
 	usecase.EditedBy = user.Id
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	err = SetUsecase(ctx, usecase)
 	if err != nil {
 		log.Printf("[ERROR] Failed updating usecase: %s", err)
@@ -15560,7 +15560,7 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		name = location[5]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	usecase, err := GetUsecase(ctx, name)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting usecase %s: %s", name, err)

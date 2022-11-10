@@ -152,7 +152,7 @@ func LoadCollections(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	runLoadCollections(ctx, topClient)
 
 	/*
@@ -211,7 +211,7 @@ func HandleGetCollection(resp http.ResponseWriter, request *http.Request) {
 	collectionName := fileId
 	log.Printf("[DEBUG] Getting collection %s for user %s (%s)", collectionName, user.Username, user.Id)
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	returnAssets, err := GetOpenseaAssets(ctx, collectionName)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting collection %s: %s", collectionName, err)

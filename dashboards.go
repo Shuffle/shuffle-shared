@@ -152,7 +152,7 @@ func HandleNewWidget(resp http.ResponseWriter, request *http.Request) {
 	_ = body
 
 	/*
-		ctx := getContext(request)
+		ctx := GetContext(request)
 		var requestdata requestData
 		err = json.Unmarshal([]byte(body), &requestdata)
 		if err != nil {
@@ -305,7 +305,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	org, err := GetOrg(ctx, orgId)
 	if err != nil {
 		resp.WriteHeader(401)

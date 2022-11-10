@@ -43,7 +43,7 @@ func init() {
 func fileAuthentication(request *http.Request) (string, error) {
 	executionId, ok := request.URL.Query()["execution_id"]
 	if ok && len(executionId) > 0 {
-		ctx := getContext(request)
+		ctx := GetContext(request)
 		workflowExecution, err := GetWorkflowExecution(ctx, executionId[0])
 		if err != nil {
 			log.Printf("[ERROR] Couldn't find execution ID %s", executionId[0])
@@ -117,7 +117,7 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, "")
 	if err != nil && len(files) == 0 {
 		log.Printf("[ERROR] Failed to get files: %s", err)
@@ -208,7 +208,7 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 
 	// 1. Verify if the user has access to the file: org_id and workflow
 	log.Printf("[INFO] Should GET FILE META for %s if user has access", fileId)
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[INFO] File %s not found: %s", fileId, err)
@@ -307,7 +307,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 	// 1. Verify if the user has access to the file: org_id and workflow
 	log.Printf("[INFO] Should DELETE file %s if user has access", fileId)
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[INFO] File %s not found: %s", fileId, err)
@@ -441,7 +441,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s (%s) is trying to download files from namespace %#v", user.Username, user.Id, namespace)
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, namespace)
 	if err != nil && len(files) == 0 {
 		log.Printf("[ERROR] Failed to get files: %s", err)
@@ -643,7 +643,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[AUDIT] User %s (%s) downloading file %s for org %s", user.Username, user.Id, fileId, user.ActiveOrg.Id)
 
 	// 1. Verify if the user has access to the file: org_id and workflow
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[ERROR] File %s not found: %s", fileId, err)
@@ -877,7 +877,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	//log.Printf("file obj", file)
 	if err != nil {
@@ -992,7 +992,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("File %s not found: %s", fileId, err)
@@ -1222,7 +1222,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	if user.ActiveOrg.Id != curfile.OrgId {
 		log.Printf("[ERROR] User can't access org %s", curfile.OrgId)
 		resp.WriteHeader(401)

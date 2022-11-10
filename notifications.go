@@ -63,7 +63,7 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	notification, err := GetNotification(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting notification %s for user %s: %s", fileId, user.Id, err)
@@ -120,7 +120,7 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	notifications, err := GetUserNotifications(ctx, user.Id)
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications (clear): %s", err)
@@ -173,7 +173,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	notifications, err := GetUserNotifications(ctx, user.Id)
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications: %s", err)

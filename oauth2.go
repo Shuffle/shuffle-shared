@@ -358,7 +358,7 @@ func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	url := fmt.Sprintf("http://%s%s/set_authentication", request.Host, request.URL.EscapedPath())
 	if project.Environment == "cloud" && os.Getenv("CLOUD_ENVIRONMENT") != "local" {
 		url = fmt.Sprintf("https://%s%s/set_authentication", request.Host, request.URL.EscapedPath())
@@ -515,7 +515,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] Redirect URI: %s", url)
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	_, accessToken, err := GetGmailClient(ctx, code, OauthToken{}, url)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - gmail register: %s", err)
@@ -701,7 +701,7 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] REDIRECT URI: %s", url)
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	_, accessToken, err := GetOutlookClient(ctx, code, OauthToken{}, url)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - outlook register: %s", err)
@@ -880,7 +880,7 @@ func HandleGetSpecificTrigger(resp http.ResponseWriter, request *http.Request) {
 		workflowId = strings.Split(workflowId, "?")[0]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	trigger, err := GetTriggerAuth(ctx, workflowId)
 	if err != nil {
 		log.Printf("[INFO] Trigger %s doesn't exist - specific trigger.", workflowId)
@@ -1330,7 +1330,7 @@ func HandleDeleteGmailSub(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow locally (delete outlook): %s", err)
@@ -1426,7 +1426,7 @@ func HandleDeleteOutlookSub(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow locally (delete outlook): %s", err)
@@ -1498,7 +1498,7 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 		workflowId = location[4]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow locally (outlook sub): %s", err)
@@ -1779,7 +1779,7 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 		workflowId = location[4]
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow locally (gmail sub): %s", err)
@@ -2523,7 +2523,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 
 	// This History ID will match the ID that is received when the subscription is configured.
 	findHistory.MessageId = parsedMessage.Message.MessageId
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	subscription, err := GetSubscriptionRecipient(ctx, findHistory.EmailAddress)
 	if err != nil {
 		log.Printf("[WARNING] Failed finding gmail history for email %s: %s. Cancel subscription?", findHistory.EmailAddress, err)
@@ -3219,7 +3219,7 @@ func HandleGetGmailFolders(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	trigger, err := GetTriggerAuth(ctx, triggerId)
 	if err != nil {
 		log.Printf("[AUDIT] Trigger %s doesn't exist - gmail folders.", triggerId)
@@ -3316,7 +3316,7 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := getContext(request)
+	ctx := GetContext(request)
 	trigger, err := GetTriggerAuth(ctx, triggerId)
 	if err != nil {
 		log.Printf("[AUDIT] Trigger %s doesn't exist - outlook folders.", triggerId)
