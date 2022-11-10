@@ -942,6 +942,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		}
 		if project.Environment == "cloud" {
 			newCookie.Domain = ".shuffler.io"
+			newCookie.Secure = true
+			newCookie.HttpOnly = true
 		}
 
 		http.SetCookie(resp, newCookie)
@@ -959,6 +961,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 		if project.Environment == "cloud" {
 			newCookie.Domain = ".shuffler.io"
+			newCookie.Secure = true
+			newCookie.HttpOnly = true
 		}
 
 		http.SetCookie(resp, newCookie)
@@ -2323,9 +2327,11 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				MaxAge:  -1,
 			}
 
-			//if project.Environment == "cloud" {
-			//	newCookie.Domain = ".shuffler.io"
-			//}
+			if project.Environment == "cloud" {
+				newCookie.Domain = ".shuffler.io"
+				newCookie.Secure = true
+				newCookie.HttpOnly = true
+			}
 
 			http.SetCookie(resp, newCookie)
 
@@ -2359,6 +2365,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			if project.Environment == "cloud" {
 				newCookie.Domain = ".shuffler.io"
+				newCookie.Secure = true
+				newCookie.HttpOnly = true
 			}
 
 			http.SetCookie(resp, newCookie)
@@ -8089,7 +8097,8 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	w.Write(urlbody)
 
 	// Need to clear cache in case user gets updated in db
-	// with a new session and such. This only forces a new search
+	// with a new session and such. This only forces a new search,
+	// and shouldn't get them logged out
 	ctx := GetContext(req)
 	c, err := req.Cookie("session_token")
 	if err != nil {
@@ -8358,6 +8367,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		if project.Environment == "cloud" {
 			newCookie.Domain = ".shuffler.io"
+			newCookie.Secure = true
+			newCookie.HttpOnly = true
 		}
 
 		http.SetCookie(resp, newCookie)
@@ -8415,6 +8426,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		if project.Environment == "cloud" {
 			newCookie.Domain = ".shuffler.io"
+			newCookie.Secure = true
+			newCookie.HttpOnly = true
 		}
 
 		http.SetCookie(resp, newCookie)
@@ -13153,6 +13166,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				if project.Environment == "cloud" {
 					newCookie.Domain = ".shuffler.io"
+					newCookie.Secure = true
+					newCookie.HttpOnly = true
 				}
 
 				http.SetCookie(resp, &newCookie)
@@ -13205,6 +13220,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				if project.Environment == "cloud" {
 					newCookie.Domain = ".shuffler.io"
+					newCookie.Secure = true
+					newCookie.HttpOnly = true
 				}
 
 				http.SetCookie(resp, newCookie)
@@ -13293,6 +13310,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		newCookie.Domain = ".shuffler.io"
+		newCookie.Secure = true
+		newCookie.HttpOnly = true
 	}
 
 	http.SetCookie(resp, newCookie)
@@ -13557,6 +13576,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 				if project.Environment == "cloud" {
 					newCookie.Domain = ".shuffler.io"
+					newCookie.Secure = true
+					newCookie.HttpOnly = true
 				}
 
 				http.SetCookie(resp, newCookie)
@@ -13612,6 +13633,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 				if project.Environment == "cloud" {
 					newCookie.Domain = ".shuffler.io"
+					newCookie.Secure = true
+					newCookie.HttpOnly = true
 				}
 
 				http.SetCookie(resp, newCookie)
@@ -13701,6 +13724,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		newCookie.Domain = ".shuffler.io"
+		newCookie.Secure = true
+		newCookie.HttpOnly = true
 	}
 
 	http.SetCookie(resp, newCookie)
