@@ -3462,6 +3462,29 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
 	}
 
+	if len(requestData.Resource) == 0 {
+		if strings.Contains(url, "microsoft") {
+			log.Printf("[DEBUG] Should look to add add resource to the query data for URL %s. Resource: %#v", url, requestData.Resource)
+			foundScope := ""
+			for _, scope := range strings.Split(requestData.Scope, " ") {
+				if strings.Contains(string(scope), "https://") {
+					foundScope = string(scope)
+					break
+				}
+			}
+
+			if len(foundScope) > 0 {
+				scopeSplit := strings.Split(foundScope, "/")
+
+				if len(scopeSplit) > 2 {
+					//requestData.Resource = "https://management.azure.com/"
+					requestData.Resource = strings.Join(scopeSplit[0:3], "/") + "/"
+					log.Printf("[DEBUG] Set resource to be %#v from SCOPES: %#v", requestData.Resource, requestData.Scope)
+				}
+			}
+		}
+	}
+
 	// To send: POST
 	// URL sample: https://login.microsoftonline.com/b6eb57ed-ecfc-4af2-b0ff-467a2e2c806f/oauth2/v2.0/token
 	// Data to be sent: requestData formatted?
@@ -3570,8 +3593,12 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	var oauthResp Oauth2Resp
 	err = json.Unmarshal(respBody, &oauthResp)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshaling (appauth oauth2): %s", err)
-		return appAuth, err
+		if len(oauthResp.AccessToken) == 0 {
+			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2): %s. Data: %s", respBody, err)
+			return appAuth, err
+		} else {
+			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2) (2): %s. Continuing anyway as we have an access token", err)
+		}
 	}
 
 	// Cleans up the existing keys before adding new ones

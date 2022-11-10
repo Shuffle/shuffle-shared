@@ -2109,12 +2109,12 @@ type SubflowData struct {
 
 // AuthenticationStore with oauth2
 type Oauth2Resp struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	TokenType    string `json:"token_type"`
-	Scope        string `json:"scope"`
-	ExpiresIn    int    `json:"expires_in"`
-	ExtExpiresIn int    `json:"ext_expires_in"`
+	AccessToken  string `json:"access_token" url:"access_token,omitempty"`
+	RefreshToken string `json:"refresh_token" url:"refresh_token,omitempty"`
+	TokenType    string `json:"token_type" url:"token_type,omitempty"`
+	Scope        string `json:"scope" url:"scope,omitempty"`
+	ExpiresIn    int    `json:"expires_in" url:"expires_in,omitempty"`
+	ExtExpiresIn int    `json:"ext_expires_in" url:"ext_expires_in,omitempty"`
 }
 
 type OpenidUserinfo struct {
@@ -2143,14 +2143,15 @@ type Oauth2Openapi struct {
 
 // The data to be parsed
 type DataToSend struct {
-	Code         string `url:"code" json:"code"  datastore:"code"`
-	GrantType    string `url:"grant_type" json:"grant_type"  datastore:"grant_type"`
-	ClientSecret string `url:"client_secret" json:"client_secret"  datastore:"client_secret"`
-	ClientId     string `url:"client_id" json:"client_id"  datastore:"client_id"`
-	Scope        string `url:"scope" json:"scope"  datastore:"scope"`
-	RedirectUri  string `url:"redirect_uri" json:"redirect_uri" datastore:"id"`
-	Name         string `url:"name" json:"name,omitempty"  datastore:"name"`
-	Id           string `url:"id" json:"id,omitempty" datastore:"id"`
+	Code         string `json:"code"  datastore:"code" url:"code,omitempty"`
+	GrantType    string `json:"grant_type"  datastore:"grant_type" url:"grant_type,omitempty"`
+	ClientSecret string `json:"client_secret"  datastore:"client_secret" url:"client_secret,omitempty"`
+	ClientId     string `json:"client_id"  datastore:"client_id" url:"client_id,omitempty"`
+	Scope        string `json:"scope"  datastore:"scope" url:"scope,omitempty"`
+	RedirectUri  string `json:"redirect_uri" datastore:"id" url:"redirect_uri,omitempty"`
+	Name         string `json:"name,omitempty"  datastore:"name" url:"name,omitempty"`
+	Id           string `json:"id,omitempty" datastore:"id" url:"id,omitempty"`
+	Resource     string `json:"resource,omitempty" datastore:"resource" url:"resource,omitempty"`
 }
 
 type BaseFile struct {
