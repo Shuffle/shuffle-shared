@@ -925,6 +925,10 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
 
 			RedirectUserRequest(resp, request)
+			// FIXME: Allow superfluous cleanups?
+			// Point is: should it continue running the logout to
+			// ensure cookies are cleared?
+			// Keeping it for now to ensure cleanup.
 		}
 	}
 
@@ -6684,13 +6688,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//if user.Role != "admin" {
-	//	log.Printf("Not admin.")
-	//	resp.WriteHeader(401)
-	//	resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
-	//	return
-	//}
-
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -6699,8 +6696,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type ReturnData struct {
-		OrgId string `json:"org_id" datastore:"org_id"`
-		//Name  string `json:"name" datastore:"name"`
+		OrgId     string `json:"org_id" datastore:"org_id"`
+		RegionUrl string `json:"region_url" datastore:"region_url"`
 	}
 
 	var tmpData ReturnData
@@ -6749,6 +6746,17 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Add instantswap of backend
+	// This could in theory be built out open source as well
+	regionUrl := ""
+	if project.Environment == "cloud" {
+		regionUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "cloud" && len(org.RegionUrl) > 0 && !strings.Contains(org.RegionUrl, "\"") {
+		regionUrl = org.RegionUrl
+	}
+
 	userFound := false
 	usr := User{}
 	for _, orgUsr := range org.Users {
@@ -6784,16 +6792,14 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Cleanup cache for the user
-	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-	DeleteCache(ctx, cacheKey)
-	cacheKey = fmt.Sprintf("apps_%s", user.Id)
-	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully added new suborg. Refresh to see it."}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully added new suborg. Refresh to see it.", "region_url": "%s"}`, regionUrl)))
 
 }
 
