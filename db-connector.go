@@ -271,12 +271,12 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 
 // Cache handlers
 func DeleteCache(ctx context.Context, name string) error {
+	if len(memcached) > 0 {
+		return mc.Delete(name)
+	}
+
 	if project.Environment == "cloud" {
-		if len(memcached) > 0 {
-			return mc.Delete(name)
-		} else {
-			return memcache.Delete(ctx, name)
-		}
+		return memcache.Delete(ctx, name)
 
 	} else if project.Environment == "onprem" {
 		requestCache.Delete(name)
@@ -292,48 +292,49 @@ func DeleteCache(ctx context.Context, name string) error {
 
 // Cache handlers
 func GetCache(ctx context.Context, name string) (interface{}, error) {
+	if len(memcached) > 0 {
+		item, err := mc.Get(name)
+		if err == gomemcache.ErrCacheMiss {
+			//log.Printf("[DEBUG] Cache miss for %#v: %s", name, err)
+		} else if err != nil {
+			log.Printf("[WARNING] Failed cache err: %s", err)
+		} else {
+			//log.Printf("[INFO] Got new cache: %#v", item)
 
-	if project.Environment == "cloud" {
-		if len(memcached) > 0 {
-			item, err := mc.Get(name)
-			if err == gomemcache.ErrCacheMiss {
-				//log.Printf("[DEBUG] Cache miss for %#v: %s", name, err)
-			} else if err != nil {
-				log.Printf("[WARNING] Failed cache err: %s", err)
-			} else {
-				//log.Printf("[INFO] Got new cache: %#v", item)
+			if len(item.Value) == maxCacheSize {
+				totalData := item.Value
+				keyCount := 1
+				keyname := fmt.Sprintf("%s_%d", name, keyCount)
+				for {
+					if item, err := mc.Get(keyname); err == gomemcache.ErrCacheMiss {
+						break
+					} else {
+						totalData = append(totalData, item.Value...)
 
-				if len(item.Value) == maxCacheSize {
-					totalData := item.Value
-					keyCount := 1
-					keyname := fmt.Sprintf("%s_%d", name, keyCount)
-					for {
-						if item, err := mc.Get(keyname); err == gomemcache.ErrCacheMiss {
+						//log.Printf("%d - %d = ", len(item.Value), maxCacheSize)
+						if len(item.Value) != maxCacheSize {
 							break
-						} else {
-							totalData = append(totalData, item.Value...)
-
-							//log.Printf("%d - %d = ", len(item.Value), maxCacheSize)
-							if len(item.Value) != maxCacheSize {
-								break
-							}
 						}
-
-						keyCount += 1
-						keyname = fmt.Sprintf("%s_%d", name, keyCount)
 					}
 
-					// Random~ high number
-					if len(totalData) > 10062147 {
-						log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
-					}
-					return totalData, nil
-				} else {
-					return item.Value, nil
+					keyCount += 1
+					keyname = fmt.Sprintf("%s_%d", name, keyCount)
 				}
 
+				// Random~ high number
+				if len(totalData) > 10062147 {
+					log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
+				}
+				return totalData, nil
+			} else {
+				return item.Value, nil
 			}
 		}
+
+		return "", errors.New(fmt.Sprintf("No cache found in MEMCACHED for %s", name))
+	}
+
+	if project.Environment == "cloud" {
 
 		if item, err := memcache.Get(ctx, name); err == memcache.ErrCacheMiss {
 		} else if err != nil {
@@ -394,7 +395,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 	// Maxsize ish~
 
 	// Splitting into multiple cache items
-	if project.Environment == "cloud" {
+	if project.Environment == "cloud" || len(memcache) > 0 {
 		comparisonNumber := 50
 		if len(data) > maxCacheSize*comparisonNumber {
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
@@ -1311,12 +1312,9 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	return sub, nil
 }
 
-// FIXME: Not necessarily functional sadly.
-// Unused for the most part.
 func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error) {
 	//log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
 	env := &Environment{}
-	environments := []Environment{}
 	nameKey := "Environments"
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
@@ -1445,7 +1443,6 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		}
 	}
 
-	_ = environments
 	//log.Printf("[DEBUG] Got hit: %#v", env)
 
 	if project.CacheDb {
@@ -3303,7 +3300,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 
 		if project.Environment == "cloud" {
 			item.Name = "Cloud"
-			item.Type = "onprem"
+			item.Type = "cloud"
 		}
 
 		err := SetEnvironment(ctx, &item)
@@ -3311,6 +3308,15 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			log.Printf("[WARNING] Failed setting up new environment")
 		} else {
 			environments = append(environments, item)
+		}
+	}
+
+	// Fixing environment return search problems
+	for envIndex, env := range environments {
+		if env.Name == "Cloud" {
+			environments[envIndex].Type = "cloud"
+		} else if env.Name == "Shuffle" {
+			environments[envIndex].Type = "onprem"
 		}
 	}
 
