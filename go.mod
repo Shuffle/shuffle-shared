@@ -10,6 +10,7 @@ require (
 	github.com/Masterminds/semver v1.5.0
 	github.com/adrg/strutil v0.2.3
 	github.com/algolia/algoliasearch-client-go/v3 v3.18.1
+	github.com/bradfitz/gomemcache v0.0.0-20221031212613-62deef7fc822 // indirect
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
 	github.com/frikky/go-elasticsearch/v8 v8.13.1
 	github.com/frikky/kin-openapi v0.41.0
