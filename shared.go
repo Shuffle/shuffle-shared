@@ -5,13 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+
+	"gopkg.in/yaml.v3"
+
 	//"os/exec"
 	"regexp"
 	"strconv"
@@ -33,6 +35,7 @@ import (
 	"crypto/sha1"
 
 	"github.com/bradfitz/slice"
+	uuid "github.com/satori/go.uuid"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/frikky/kin-openapi/openapi2"
@@ -40,7 +43,6 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 
 	"github.com/google/go-github/v28/github"
-	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/appengine"
 )
