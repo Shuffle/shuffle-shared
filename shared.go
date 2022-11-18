@@ -3957,7 +3957,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID
 		} else {
-			log.Printf("[WARNING] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -5686,7 +5686,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !orgFound {
-			log.Printf("[INFO] User %s is admin, but can't change user's password outside their own org.", userInfo.Id)
+			log.Printf("[AUDIT] User %s (%s) is admin, but can't change user's (%s) password outside their own org.", userInfo.Username, userInfo.Id, foundUser.Username)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 			return
@@ -6064,7 +6064,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !orgFound {
-		log.Printf("[WARNING] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
+		log.Printf("[AUDIT] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 		return
