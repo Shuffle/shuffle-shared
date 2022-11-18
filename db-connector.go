@@ -63,7 +63,9 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 	nameKey := "org_statistics"
 	orgStatistics := &ExecutionInfo{}
 
-	if project.Environment == "cloud" {
+	if project.Environment != "cloud" {
+		log.Printf("[DEBUG] Not cloud. Not dumping cache stats for datatype %s.", dataType)
+	} else {
 		tx, err := project.Dbclient.NewTransaction(ctx)
 		if err != nil {
 			log.Printf("[WARNING] Error in cache dump: %#v", err)
@@ -172,72 +174,141 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while
 func IncrementCache(ctx context.Context, orgId, dataType string) {
-	if project.Environment != "cloud" {
-		return
-	}
 
 	// Dump to disk every 0x19
 	// 1. Get the existing value
 	// 2. Update it
 	dbDumpInterval := uint8(dumpInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
-	//if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
-	if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
-		item := &memcache.Item{
-			Key:        key,
-			Value:      []byte(string(1)),
-			Expiration: time.Minute * 300,
+	if len(memcached) > 0 {
+		item, err := mc.Get(key)
+		if err == gomemcache.ErrCacheMiss {
+			log.Printf("[DEBUG] Increment memcache miss for %#v: %s", key, err)
+
+			item := &gomemcache.Item{
+				Key:        key,
+				Value:      []byte(string(1)),
+				Expiration: 18000,
+			}
+
+			if err := mc.Set(item); err != nil {
+				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+			}
+
+		} else if err != nil {
+			log.Printf("[ERROR] Failed increment memcache err: %s", err)
+		} else {
+			if item == nil || item.Value == nil {
+				item = &gomemcache.Item{
+					Key:        key,
+					Value:      []byte(string(1)),
+					Expiration: 18000,
+				}
+
+				log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
+			}
+
+			if len(item.Value) == 1 {
+				num := item.Value[0]
+				//log.Printf("Item: %#v", num)
+
+				num += 1
+				//log.Printf("Item2: %#v", num)
+				if num >= dbDumpInterval {
+					// Memcache dump first to keep the counter going for other executions
+					num = 0
+
+					item := &gomemcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: 18000,
+					}
+					if err := mc.Set(item); err != nil {
+						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+					}
+
+					IncrementCacheDump(ctx, orgId, dataType)
+				} else {
+					//log.Printf("NOT Dumping!")
+
+					item := &gomemcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: 18000,
+					}
+
+					if err := mc.Set(item); err != nil {
+						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+					}
+				}
+			} else {
+				log.Printf("[ERROR] Length of value is longer than 1")
+			}
 		}
 
-		if err := memcache.Set(ctx, item); err != nil {
-			log.Printf("[ERROR] Failed setting cache for key %s: %s", orgId, err)
-		}
 	} else {
-		if item == nil || item.Value == nil {
-			item = &memcache.Item{
+		if project.Environment != "cloud" {
+			return
+		}
+
+		//if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
+		if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
+			item := &memcache.Item{
 				Key:        key,
 				Value:      []byte(string(1)),
 				Expiration: time.Minute * 300,
 			}
 
-			log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
-		}
-
-		if len(item.Value) == 1 {
-			num := item.Value[0]
-			//log.Printf("Item: %#v", num)
-
-			num += 1
-			//log.Printf("Item2: %#v", num)
-			if num >= dbDumpInterval {
-				// Memcache dump first to keep the counter going for other executions
-				num = 0
-
-				item := &memcache.Item{
+			if err := memcache.Set(ctx, item); err != nil {
+				log.Printf("[ERROR] Failed setting cache for key %s: %s", orgId, err)
+			}
+		} else {
+			if item == nil || item.Value == nil {
+				item = &memcache.Item{
 					Key:        key,
-					Value:      []byte(string(num)),
+					Value:      []byte(string(1)),
 					Expiration: time.Minute * 300,
 				}
-				if err := memcache.Set(ctx, item); err != nil {
-					log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
-				}
 
-				IncrementCacheDump(ctx, orgId, dataType)
-			} else {
-				//log.Printf("NOT Dumping!")
-
-				item := &memcache.Item{
-					Key:        key,
-					Value:      []byte(string(num)),
-					Expiration: time.Minute * 300,
-				}
-				if err := memcache.Set(ctx, item); err != nil {
-					log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
-				}
+				log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
 			}
 
-		} else {
-			log.Printf("[ERROR] Length of cache value is more than 1: %#v", item.Value)
+			if len(item.Value) == 1 {
+				num := item.Value[0]
+				//log.Printf("Item: %#v", num)
+
+				num += 1
+				//log.Printf("Item2: %#v", num)
+				if num >= dbDumpInterval {
+					// Memcache dump first to keep the counter going for other executions
+					num = 0
+
+					item := &memcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: time.Minute * 300,
+					}
+					if err := memcache.Set(ctx, item); err != nil {
+						log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
+					}
+
+					IncrementCacheDump(ctx, orgId, dataType)
+				} else {
+					//log.Printf("NOT Dumping!")
+
+					item := &memcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: time.Minute * 300,
+					}
+					if err := memcache.Set(ctx, item); err != nil {
+						log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
+					}
+				}
+
+			} else {
+				log.Printf("[ERROR] Length of cache value is more than 1: %#v", item.Value)
+			}
 		}
 	}
 
@@ -395,7 +466,8 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 	// Maxsize ish~
 
 	// Splitting into multiple cache items
-	if project.Environment == "cloud" || len(memcached) > 0 {
+	//if project.Environment == "cloud" || len(memcached) > 0 {
+	if len(memcached) > 0 {
 		comparisonNumber := 50
 		if len(data) > maxCacheSize*comparisonNumber {
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
