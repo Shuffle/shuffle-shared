@@ -2122,6 +2122,9 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					curOrg.Users = users
 					setOrg = true
 				}
+			} else if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error in org loading, but returning without warning: %s", err)
+				err = nil
 			} else {
 				return &Org{}, err
 			}

@@ -678,6 +678,7 @@ type Org struct {
 	MainPriority      string                `json:"main_priority" datastore:"main_priority"`
 	Region            string                `json:"region" datastore:"region"`
 	RegionUrl         string                `json:"region_url" datastore:"region_url"`
+	Tutorials         []Tutorial            `json:"tutorials" datastore:"tutorials"`
 }
 
 type PartnerInfo struct {
@@ -2069,13 +2070,20 @@ type SessionCookie struct {
 	Expiration int64  `json:"expiration"`
 }
 
+type Tutorial struct {
+	Name        string `json:"name" datastore:"name"`
+	Description string `json:"description" datastore:"description"`
+	Link        string `json:"link" datastore:"link"`
+	Done        bool   `json:"done" datastore:"done"`
+	Active      bool   `json:"active" datastore:"active"`
+}
+
 type HandleInfo struct {
 	Success            bool            `json:"success"`
 	Admin              string          `json:"admin"`
 	Username           string          `json:"username"`
 	PublicUsername     string          `json:"public_username"`
 	Name               string          `json:"name"`
-	Tutorials          []string        `json:"tutorials"`
 	ActiveApps         []string        `json:"active_apps"`
 	Id                 string          `json:"id"`
 	Avatar             string          `json:"avatar"`
@@ -2088,6 +2096,7 @@ type HandleInfo struct {
 	AppExecutionsLimit int64           `json:"app_execution_limit"`
 	AppExecutionsUsage int64           `json:"app_execution_usage"`
 	RegionUrl          string          `json:"region_url"`
+	Tutorials          []Tutorial      `json:"tutorials"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`

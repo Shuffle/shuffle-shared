@@ -8340,7 +8340,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] MFA login for user %s (%s)!", userdata.Username, userdata.Id)
 	}
 
-	tutorialsFinished := userdata.PersonalInfo.Tutorials
+	//tutorialsFinished := userdata.PersonalInfo.Tutorials
 	//if len(org.SecurityFramework.SIEM.Name) > 0 || len(org.SecurityFramework.Network.Name) > 0 || len(org.SecurityFramework.EDR.Name) > 0 || len(org.SecurityFramework.Cases.Name) > 0 || len(org.SecurityFramework.IAM.Name) > 0 || len(org.SecurityFramework.Assets.Name) > 0 || len(org.SecurityFramework.Intel.Name) > 0 || len(org.SecurityFramework.Communication.Name) > 0 {
 	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
 	//}
@@ -8352,7 +8352,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	returnValue := HandleInfo{
 		Success:   true,
-		Tutorials: tutorialsFinished,
+		Tutorials: []Tutorial{},
 	}
 
 	loginData := `{"success": true}`
