@@ -4,18 +4,48 @@ package shuffle
 // related to managing workflows
 
 import (
-	"fmt"
+	// "bytes"
 	"context"
+	// "errors"
+	"fmt"
+	// "gopkg.in/yaml.v3"
+	// "io"
 	"io/ioutil"
 	"log"
 	"net/http"
+	// "net/url"
 	"os"
 	//"os/exec"
+	// "regexp"
+	// "strconv"
 	"strings"
 	"time"
 
+	// "encoding/base32"
+	// "encoding/base64"
+	// "encoding/binary"
+	// "encoding/hex"
 	"encoding/json"
+	// "encoding/xml"
+
+	// "crypto/aes"
+	// "crypto/cipher"
+	// "crypto/hmac"
+	// "crypto/md5"
+	// "crypto/rand"
+	// "crypto/sha1"
+
+	// "github.com/bradfitz/slice"
+	// qrcode "github.com/skip2/go-qrcode"
+
+	// "github.com/frikky/kin-openapi/openapi2"
+	// "github.com/frikky/kin-openapi/openapi2conv"
+	// "github.com/frikky/kin-openapi/openapi3"
+
+	// "github.com/google/go-github/v28/github"
 	"github.com/satori/go.uuid"
+	// "golang.org/x/crypto/bcrypt"
+	// "google.golang.org/appengine"
 )
 
 func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
