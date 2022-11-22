@@ -2208,7 +2208,7 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 }
 
 func getTutorials(org Org, updateOrg bool) *Org {
-	log.Printf("\n\n[DEBUG] Getting init tutorials for org %s (%s)\n\n", org.Name, org.Id)
+	log.Printf("[DEBUG] Getting init tutorials for org %s (%s)", org.Name, org.Id)
 
 	allSteps := []Tutorial{
 		Tutorial{
