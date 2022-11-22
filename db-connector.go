@@ -2148,16 +2148,20 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	curOrg.Users = newUsers
+	if len(curOrg.Tutorials) == 0 {
+		curOrg = getTutorials(*curOrg, true)
+	}
+
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
-			log.Printf("[WARNING] Failed marshalling org for cache: %s", err)
+			log.Printf("[ERROR] Failed marshalling org for cache: %s", err)
 			return curOrg, nil
 		}
 
 		err = SetCache(ctx, cacheKey, neworg)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating org cache: %s", err)
+			log.Printf("[ERROR] Failed updating org cache: %s", err)
 		}
 
 		if setOrg {
@@ -2203,6 +2207,132 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	return nil
 }
 
+func getTutorials(org Org, updateOrg bool) *Org {
+	log.Printf("\n\n[DEBUG] Getting init tutorials for org %s (%s)\n\n", org.Name, org.Id)
+
+	allSteps := []Tutorial{
+		Tutorial{
+			Name:        "Find relevant apps",
+			Description: "0 out of 8 apps configured",
+			Done:        false,
+			Link:        "/welcome?tab=2",
+			Active:      true,
+		},
+		Tutorial{
+			Name:        "Discover Usecases",
+			Description: "0 workflows created. Create from Workflow Templates!",
+			Done:        false,
+			Link:        "/welcome?tab=3",
+			Active:      true,
+		},
+		Tutorial{
+			Name:        "Invite teammates",
+			Description: "Have they edited their org and invited teammates?",
+			Done:        false,
+			Link:        "/admin?tab=users",
+			Active:      true,
+		},
+		Tutorial{
+			Name:        "Security & Stability",
+			Description: "Configure MFA or SAML/SSO, new Environments & a Notification workflow",
+			Done:        false,
+			Link:        "/admin?tab=organization",
+			Active:      true,
+		},
+	}
+
+	have := []string{}
+	missing := []string{}
+	if len(org.SecurityFramework.SIEM.Name) > 0 {
+		have = append(have, "SIEM")
+	} else {
+		missing = append(missing, "SIEM")
+	}
+	if len(org.SecurityFramework.Communication.Name) > 0 {
+		have = append(have, "Communication")
+	} else {
+		missing = append(missing, "Communication")
+	}
+	if len(org.SecurityFramework.Assets.Name) > 0 {
+		have = append(have, "Assets")
+	} else {
+		missing = append(missing, "Assets")
+	}
+	if len(org.SecurityFramework.Cases.Name) > 0 {
+		have = append(have, "Cases")
+	} else {
+		missing = append(missing, "Cases")
+	}
+	if len(org.SecurityFramework.Network.Name) > 0 {
+		have = append(have, "Network")
+	} else {
+		missing = append(missing, "Network")
+	}
+	if len(org.SecurityFramework.Intel.Name) > 0 {
+		have = append(have, "Intel")
+	} else {
+		missing = append(missing, "Intel")
+	}
+	if len(org.SecurityFramework.EDR.Name) > 0 {
+		have = append(have, "EDR")
+	} else {
+		missing = append(missing, "EDR")
+	}
+	if len(org.SecurityFramework.IAM.Name) > 0 {
+		have = append(have, "IAM")
+	} else {
+		missing = append(missing, "IAM")
+	}
+
+	if len(have) > 1 {
+		allSteps[0].Done = true
+		allSteps[0].Description = fmt.Sprintf("%d out of %d apps configured", len(have), len(have)+len(missing))
+	}
+
+	selectedUser := User{}
+	ctx := context.Background()
+	for _, inputUser := range org.Users {
+		user, err := GetUser(ctx, inputUser.Id)
+		if user.Role == "admin" && user.ActiveOrg.Id == org.Id {
+			if err == nil {
+				selectedUser = *user
+				break
+			}
+		}
+	}
+
+	if len(org.Users) > 1 {
+		allSteps[2].Description = fmt.Sprintf("%d users invited and org name changed.", len(org.Users))
+		if strings.ToLower(org.Org) == strings.ToLower(org.Name) {
+			allSteps[2].Description = "Edit your org name and invite teammates"
+			allSteps[2].Link = "/admin?tab=organization"
+		} else {
+			allSteps[2].Done = true
+		}
+	}
+
+	if len(selectedUser.Id) > 0 {
+		workflows, _ := GetAllWorkflowsByQuery(ctx, selectedUser)
+		if len(workflows) > 1 {
+			allSteps[1].Done = true
+			allSteps[1].Description = fmt.Sprintf("%d workflows created", len(workflows))
+		}
+	}
+
+	if org.SSOConfig.SSOEntrypoint != "" && org.Defaults.NotificationWorkflow != "" {
+		allSteps[3].Done = true
+	} else {
+		allSteps[3].Link = "/admin?tab=organization&subtab=configure"
+	}
+
+	org.Tutorials = allSteps
+
+	if updateOrg {
+		SetOrg(ctx, org, org.Id)
+	}
+	return &org
+}
+
 func SetOrg(ctx context.Context, data Org, id string) error {
 	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
@@ -2228,6 +2358,9 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	data.Users = newUsers
+	if len(data.Tutorials) == 0 {
+		data = *getTutorials(data, false)
+	}
 
 	// clear session_token and API_token for user
 	if project.DbType == "elasticsearch" {
