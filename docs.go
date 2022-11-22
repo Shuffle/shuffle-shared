@@ -1,15 +1,46 @@
 package shuffle
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"fmt"
+	"gopkg.in/yaml.v3"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	//"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
+	"encoding/base32"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
-	"github.com/google/go-github/v28/github"
+	"encoding/xml"
+
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha1"
+
+	"github.com/bradfitz/slice"
+	qrcode "github.com/skip2/go-qrcode"
+
+	"github.com/frikky/kin-openapi/openapi2"
+	"github.com/frikky/kin-openapi/openapi2conv"
+	"github.com/frikky/kin-openapi/openapi3"
+
+	"github.com/satori/go.uuid"
+	"google.golang.org/appengine"
 )
 
 func GetDocs(resp http.ResponseWriter, request *http.Request) {
@@ -264,3 +295,57 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(b)
 }
+
+// Downloads documentation from Github to be placed in an app/workflow as markdown
+// Caching no matter what, with no retries
+func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
+	cacheKey := fmt.Sprintf("docs_%s", url)
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		return cacheData, nil
+	}
+
+	httpClient := &http.Client{}
+	req, err := http.NewRequest(
+		"GET",
+		url,
+		nil,
+	)
+
+	if err != nil {
+		SetCache(ctx, cacheKey, []byte{})
+		return []byte{}, err
+	}
+
+	newresp, err := httpClient.Do(req)
+	if err != nil {
+		return []byte{}, err
+	}
+
+	//log.Printf("URL %#v, RESP: %d", url, newresp.StatusCode)
+	if newresp.StatusCode != 200 {
+		SetCache(ctx, cacheKey, []byte{})
+
+		return []byte{}, errors.New(fmt.Sprintf("No body to handle for %#v. Status: %d", url, newresp.StatusCode))
+	}
+
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		SetCache(ctx, cacheKey, []byte{})
+		return []byte{}, err
+	}
+
+	//log.Printf("Documentation: %#v", string(body))
+	if len(body) > 0 {
+		err = SetCache(ctx, cacheKey, body)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for workflow/app doc %s: %s", url, err)
+		}
+		return body, nil
+	}
+
+	SetCache(ctx, cacheKey, []byte{})
+	return []byte{}, errors.New(fmt.Sprintf("No body to handle for %#v", url))
+}
+

@@ -4751,3 +4751,506 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 
 	return exec, nil
 }
+
+// Finds the child nodes of a node in execution and returns them
+// Used if e.g. a node in a branch is exited, and all children have to be stopped
+func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string {
+	//log.Printf("\nNODE TO FIX: %s\n\n", nodeId)
+	allChildren := []string{nodeId}
+	//log.Printf("\n\n")
+
+	// 1. Find children of this specific node
+	// 2. Find the children of those nodes etc.
+	// 3. Sort it in the right order to handle merges properly
+	for _, branch := range workflowExecution.Workflow.Branches {
+		if branch.SourceID == nodeId {
+			//log.Printf("NODE: %s, SRC: %s, CHILD: %s\n", nodeId, branch.SourceID, branch.DestinationID)
+			allChildren = append(allChildren, branch.DestinationID)
+
+			childNodes := FindChildNodes(workflowExecution, branch.DestinationID)
+			for _, bottomChild := range childNodes {
+				found := false
+
+				for _, topChild := range allChildren {
+					if topChild == bottomChild {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					allChildren = append(allChildren, bottomChild)
+				}
+			}
+		}
+	}
+
+	// Remove potential duplicates
+	newNodes := []string{}
+	for _, tmpnode := range allChildren {
+		found := false
+		for _, newnode := range newNodes {
+			if newnode == tmpnode {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			newNodes = append(newNodes, tmpnode)
+		}
+	}
+
+	return newNodes
+}
+
+// Recursively finds child nodes inside sub workflows
+func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigger Trigger, lastTriggerName string) ([]Action, []Branch, string) {
+	if execution.ExecutionOrg == "" {
+		execution.ExecutionOrg = execution.Workflow.OrgId
+	}
+
+	selectedWorkflow := ""
+	workflowAction := ""
+	for _, param := range trigger.Parameters {
+		if param.Name == "workflow" {
+			selectedWorkflow = param.Value
+		}
+
+		if param.Name == "startnode" {
+			workflowAction = param.Value
+		}
+	}
+
+	if len(selectedWorkflow) == 0 {
+		return []Action{}, []Branch{}, ""
+	}
+
+	// Authenticating and such
+	workflow, err := GetWorkflow(ctx, selectedWorkflow)
+	if err != nil {
+		return []Action{}, []Branch{}, ""
+	}
+
+	orgFound := false
+	if workflow.ExecutingOrg.Id == execution.ExecutionOrg {
+		orgFound = true
+	} else if workflow.OrgId == execution.ExecutionOrg {
+		orgFound = true
+	} else {
+		for _, org := range workflow.Org {
+			if org.Id == execution.ExecutionOrg {
+				orgFound = true
+				break
+			}
+		}
+	}
+
+	if !orgFound {
+		log.Printf("[WARNING] Auth for subflow is bad. %s (orig) vs %s", execution.ExecutionOrg, workflow.OrgId)
+		return []Action{}, []Branch{}, ""
+	}
+
+	//childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID)
+	//log.Printf("FIND CHILDNODES OF STARTNODE %s", workflowAction)
+	workflowExecution := WorkflowExecution{
+		Workflow: *workflow,
+	}
+
+	childNodes := FindChildNodes(workflowExecution, workflowAction)
+	//log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
+	newActions := []Action{}
+	branches := []Branch{}
+
+	// FIXME: Bad lastnode check. Need to go to the bottom of workflows and check max steps away from parent
+	lastNode := ""
+	for _, nodeId := range childNodes {
+		for _, action := range workflow.Actions {
+			if nodeId == action.ID {
+				newActions = append(newActions, action)
+				break
+			}
+		}
+
+		for _, branch := range workflow.Branches {
+			if branch.SourceID == nodeId {
+				branches = append(branches, branch)
+			}
+		}
+
+		lastNode = nodeId
+	}
+
+	found := false
+	for actionIndex, action := range newActions {
+		if lastNode == action.ID {
+			//actions[actionIndex].Name = trigger.Name
+			newActions[actionIndex].Label = lastTriggerName
+			//trigger.Label
+			found = true
+		}
+	}
+
+	if !found {
+		log.Printf("SHOULD CHECK TRIGGERS FOR LASTNODE!")
+	}
+
+	log.Printf("[INFO] Found %d actions and %d branches in subflow", len(newActions), len(branches))
+	if len(newActions) == len(childNodes) {
+		return newActions, branches, lastNode
+	} else {
+		log.Printf("\n\n[WARNING] Bad length of actions and nodes in subflow (subsubflow?): %d vs %d", len(newActions), len(childNodes))
+
+		// Adding information about triggers if subflow
+		changed := false
+		for _, nodeId := range childNodes {
+			for triggerIndex, trigger := range workflow.Triggers {
+				if trigger.AppName == "Shuffle Workflow" {
+					if nodeId == trigger.ID {
+						replaceActions := false
+						workflowAction := ""
+						for _, param := range trigger.Parameters {
+							if param.Name == "argument" && !strings.Contains(param.Value, ".#") {
+								replaceActions = true
+							}
+
+							if param.Name == "startnode" {
+								workflowAction = param.Value
+							}
+						}
+
+						if replaceActions {
+							replacementNodes, newBranches, lastNode := GetReplacementNodes(ctx, workflowExecution, trigger, lastTriggerName)
+							log.Printf("SUB REPLACEMENTS: %d, %d", len(replacementNodes), len(newBranches))
+							log.Printf("\n\nNEW LASTNODE: %s\n\n", lastNode)
+							if len(replacementNodes) > 0 {
+								//workflowExecution.Workflow.Actions = append(workflowExecution.Workflow.Actions, action)
+
+								//lastnode = replacementNodes[0]
+								// Have to validate in case it's the same workflow and such
+								for _, action := range replacementNodes {
+									found := false
+									for subActionIndex, subaction := range newActions {
+										if subaction.ID == action.ID {
+											found = true
+											//newActions[subActionIndex].Name = action.Name
+											newActions[subActionIndex].Label = action.Label
+											break
+										}
+									}
+
+									if !found {
+										action.SubAction = true
+										newActions = append(newActions, action)
+									}
+								}
+
+								for _, branch := range newBranches {
+									workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, branch)
+								}
+
+								// Append branches:
+								// parent -> new inner node (FIRST one)
+								for branchIndex, branch := range workflowExecution.Workflow.Branches {
+									if branch.DestinationID == trigger.ID {
+										log.Printf("REPLACE DESTINATION WITH %s!!", workflowAction)
+										workflowExecution.Workflow.Branches[branchIndex].DestinationID = workflowAction
+										branches = append(branches, workflowExecution.Workflow.Branches[branchIndex])
+									}
+
+									if branch.SourceID == trigger.ID {
+										log.Printf("REPLACE SOURCE WITH LASTNODE %s!!", lastNode)
+										workflowExecution.Workflow.Branches[branchIndex].SourceID = lastNode
+										branches = append(branches, workflowExecution.Workflow.Branches[branchIndex])
+									}
+								}
+
+								// Remove the trigger
+								workflowExecution.Workflow.Triggers = append(workflowExecution.Workflow.Triggers[:triggerIndex], workflowExecution.Workflow.Triggers[triggerIndex+1:]...)
+								workflow.Triggers = append(workflow.Triggers[:triggerIndex], workflow.Triggers[triggerIndex+1:]...)
+								changed = true
+							}
+						}
+					}
+				}
+
+			}
+		}
+
+		log.Printf("NEW ACTION LENGTH %d, Branches: %d. LASTNODE: %s\n\n", len(newActions), len(branches), lastNode)
+		if changed {
+			return newActions, branches, lastNode
+		}
+	}
+
+	return []Action{}, []Branch{}, ""
+}
+
+// Fileid = the app to execute
+// Body = The action body received from the user to test.
+func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte) (WorkflowExecution, error) {
+	var action Action
+	workflowExecution := WorkflowExecution{}
+	err := json.Unmarshal(body, &action)
+	if err != nil {
+		log.Printf("[WARNING] Failed action single execution unmarshaling: %s", err)
+		return workflowExecution, err
+	}
+
+	/*
+		if len(workflow.Name) > 0 || len(workflow.Owner) > 0 || len(workflow.OrgId) > 0 || len(workflow.Actions) != 1 {
+			log.Printf("[WARNING] Bad length for some characteristics in single execution of %s", fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	*/
+
+	if fileId != action.AppID {
+		log.Printf("[WARNING] Bad appid in single execution of App %s", fileId)
+		return workflowExecution, err
+	}
+
+	if len(action.ID) == 0 {
+		action.ID = uuid.NewV4().String()
+	}
+
+	app, err := GetApp(ctx, fileId, user, false)
+	if err != nil {
+		log.Printf("[WARNING] Error getting app (execute SINGLE workflow): %s", fileId)
+		return workflowExecution, err
+	}
+
+	if app.Authentication.Required && len(action.AuthenticationId) == 0 {
+		log.Printf("[WARNING] Tried to execute SINGLE %s WITHOUT auth (missing)", app.Name)
+
+		found := false
+		for _, param := range action.Parameters {
+			if param.Configuration {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return workflowExecution, errors.New("You must authenticate the app first")
+		}
+	}
+
+	newParams := []WorkflowAppActionParameter{}
+	if len(action.AuthenticationId) > 0 {
+		log.Printf("[INFO] Adding auth in single execution!")
+		curAuth, err := GetWorkflowAppAuthDatastore(ctx, action.AuthenticationId)
+
+		if err != nil {
+			log.Printf("[WARNING] Failed getting authentication for your org: %s", err)
+			return workflowExecution, err
+		}
+
+		if user.ActiveOrg.Id != curAuth.OrgId {
+			log.Printf("[WARNING] User %s tried to use bad auth %s", user.Id, action.AuthenticationId)
+			return workflowExecution, err
+		}
+
+		if curAuth.Encrypted {
+			for _, field := range curAuth.Fields {
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				if err != nil {
+					log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
+					break
+				}
+
+				if field.Key == "url" {
+					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+					if strings.HasSuffix(string(newValue), "/") {
+						newValue = []byte(string(newValue)[0 : len(newValue)-1])
+					}
+
+					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+				}
+
+				newParam := WorkflowAppActionParameter{
+					Name:  field.Key,
+					ID:    action.AuthenticationId,
+					Value: string(newValue),
+				}
+
+				newParams = append(newParams, newParam)
+			}
+		} else {
+			//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
+			//err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
+			//if err != nil {
+			//	log.Printf("[WARNING] Failed running encryption during execution: %s", err)
+			//}
+			for _, auth := range curAuth.Fields {
+
+				newParam := WorkflowAppActionParameter{
+					Name:  auth.Key,
+					ID:    action.AuthenticationId,
+					Value: auth.Value,
+				}
+
+				newParams = append(newParams, newParam)
+			}
+		}
+
+		// Rebuild params with the right data. This is to prevent issues on the frontend
+
+		action.Parameters = newParams
+	}
+
+	for _, param := range action.Parameters {
+		if param.Required && len(param.Value) == 0 {
+			//log.Printf("Param: %#v", param)
+
+			if param.Name == "username_basic" {
+				param.Name = "username"
+			} else if param.Name == "password_basic" {
+				param.Name = "password"
+			}
+
+			param.Name = strings.Replace(param.Name, "_", " ", -1)
+			param.Name = strings.Title(param.Name)
+
+			value := fmt.Sprintf("Param %s can't be empty. Please fill all required parameters (orange outline). If you don't know the value, input space in the field.", param.Name)
+			log.Printf("[WARNING] During single exec: %s", value)
+			return workflowExecution, errors.New(value)
+		}
+
+		newParams = append(newParams, param)
+	}
+
+	action.Sharing = app.Sharing
+	action.Public = app.Public
+	action.Generated = app.Generated
+	action.Parameters = newParams
+
+	workflow := Workflow{
+		Actions: []Action{
+			action,
+		},
+		Start: action.ID,
+		ID:    uuid.NewV4().String(),
+	}
+
+	//log.Printf("Sharing: %#v, Public: %#v, Generated: %#v. Start: %#v", action.Sharing, action.Public, action.Generated, workflow.Start)
+
+	workflowExecution = WorkflowExecution{
+		Workflow:      workflow,
+		Start:         workflow.Start,
+		ExecutionId:   uuid.NewV4().String(),
+		WorkflowId:    workflow.ID,
+		StartedAt:     int64(time.Now().Unix()),
+		CompletedAt:   0,
+		Authorization: uuid.NewV4().String(),
+		Status:        "EXECUTING",
+	}
+
+	if user.ActiveOrg.Id != "" {
+		workflow.ExecutingOrg = user.ActiveOrg
+		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
+		workflowExecution.OrgId = user.ActiveOrg.Id
+	}
+
+	err = SetWorkflowExecution(ctx, workflowExecution, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed handling single execution setup: %s", err)
+		return workflowExecution, err
+	}
+
+	return workflowExecution, nil
+}
+
+// Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth
+
+// Check if the execution data has correct info in it! Happens based on subflows.
+// 1. Parent workflow contains this workflow ID in the source trigger?
+// 2. Parent workflow's owner is same org?
+// 3. Parent execution auth is correct
+func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool, string) {
+	log.Printf("[DEBUG] Inside execute validation!")
+
+	if request.Method == "POST" {
+		ctx := GetContext(request)
+		workflowExecution := &WorkflowExecution{}
+		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
+		if sourceExecutionOk {
+			//log.Printf("[DEBUG] Got source exec %s", sourceExecution)
+			newExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
+			if err != nil {
+				log.Printf("[INFO] Failed getting source_execution in test validation based on %#v", sourceExecution[0])
+				return false, ""
+			} else {
+				workflowExecution = newExec
+			}
+
+		} else {
+			return false, ""
+		}
+
+		if workflowExecution.ExecutionId == "" {
+			log.Printf("[WARNING] No execution ID found. Bad auth.")
+			return false, ""
+		}
+
+		sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
+		if sourceAuthOk {
+			//log.Printf("[DEBUG] Got auth %s", sourceAuth)
+
+			if sourceAuth[0] != workflowExecution.Authorization {
+				log.Printf("[WARNING] Bad authorization for workflowexecution defined.")
+				return false, ""
+			}
+		} else {
+			return false, ""
+		}
+
+		// When reaching here, authentication is done, but not authorization.
+		// Need to verify the workflow, and whether it SHOULD have access to execute it.
+		sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
+		if sourceWorkflowOk {
+			//log.Printf("[DEBUG] Got source workflow %s", sourceWorkflow)
+			_ = sourceWorkflow
+
+			// Source workflow = parent
+			// This workflow = child
+
+			//if sourceWorkflow[0] != workflow.ID {
+			//	log.Printf("[DEBUG] Bad workflow in execution.")
+			//	return false, ""
+			//}
+
+		} else {
+			//log.Printf("Did NOT get source workflow")
+			return false, ""
+		}
+
+		if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
+			//e9274e37e53631a2321747b1be088f4d2631a6300a309eec9b4515c8528c35f4
+			return false, ""
+		}
+
+		// 1. Parent workflow contains this workflow ID in the source trigger?
+		// 2. Parent workflow's owner is same org?
+		// 3. Parent execution auth is correct
+
+		sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
+		if sourceNodeOk {
+			//log.Printf("[DEBUG] Got source node %s", sourceNode)
+			//workflowExecution.ExecutionSourceNode = sourceNode[0]
+		} else {
+			return false, ""
+		}
+
+		// SHOULD be executed by a trigger in the parent.
+		for _, trigger := range workflowExecution.Workflow.Triggers {
+			if sourceNode[0] == trigger.ID {
+				return true, workflowExecution.ExecutionOrg
+			}
+		}
+	}
+
+	return false, ""
+}

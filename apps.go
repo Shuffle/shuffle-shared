@@ -1180,3 +1180,55 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 func GetAppRequirements() string {
 	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.6\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
 }
+
+// Significantly slowed down everything. Just returning for now.
+func findReferenceAppDocs(ctx context.Context, allApps []WorkflowApp) []WorkflowApp {
+	newApps := []WorkflowApp{}
+
+	// Skipping this for now as it makes things slow
+	return allApps
+
+	for _, app := range allApps {
+		if len(app.ReferenceInfo.DocumentationUrl) > 0 && strings.HasPrefix(app.ReferenceInfo.DocumentationUrl, "https://raw.githubusercontent.com/Shuffle") && strings.Contains(app.ReferenceInfo.DocumentationUrl, ".md") {
+			// Should find documentation from the github (only if github?) and add it to app.Documentation before caching
+			//log.Printf("DOCS: %#v", app.ReferenceInfo.DocumentationUrl)
+			documentationData, err := DownloadFromUrl(ctx, app.ReferenceInfo.DocumentationUrl)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting data: %#v", err)
+			} else {
+				app.Documentation = string(documentationData)
+			}
+		}
+
+		//if app.Documentation == "" && strings.ToLower(app.Name) == "discord" {
+		if app.Documentation == "" {
+			referenceUrl := ""
+
+			if app.Generated {
+				//log.Printf("[DEBUG] Should look in the OpenAPI folder")
+				baseUrl := "https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs"
+
+				newName := strings.ToLower(strings.Replace(strings.Replace(app.Name, " ", "_", -1), "-", "_", -1))
+				referenceUrl = fmt.Sprintf("%s/%s.md", baseUrl, newName)
+			} else {
+				//log.Printf("[DEBUG] Should look in the Python-apps folder")
+			}
+
+			if len(referenceUrl) > 0 {
+				//log.Printf("REF: %#v", referenceUrl)
+
+				documentationData, err := DownloadFromUrl(ctx, referenceUrl)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting documentation data for app %#v: %#v", app.Name, err)
+				} else {
+					//log.Printf("[INFO] Added documentation from github for %#v", app.Name)
+					app.Documentation = string(documentationData)
+				}
+			}
+		}
+
+		newApps = append(newApps, app)
+	}
+
+	return newApps
+}

@@ -1,4 +1,36 @@
-api.go
+package shuffle
+
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+	"net/http"
+	"strings"
+
+	"encoding/base32"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/xml"
+
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/md5"
+	"crypto/rand"
+	"crypto/sha1"
+
+	"github.com/bradfitz/slice"
+	qrcode "github.com/skip2/go-qrcode"
+
+	"github.com/frikky/kin-openapi/openapi2"
+	"github.com/frikky/kin-openapi/openapi2conv"
+	"github.com/frikky/kin-openapi/openapi3"
+
+	"github.com/satori/go.uuid"
+	"google.golang.org/appengine"
+)
 
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -10,7 +42,8 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	_, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in validate swagger: %s", err)
-        setResponse(resp, request, 401, `{"success": false}`)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
@@ -19,7 +52,8 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Missing parts of API in request!")
-            setResponse(resp, request, 401, `{"success": false}`)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 
@@ -62,27 +96,6 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(data)
-}
-
-func GenerateApikey(ctx context.Context, userInfo User) (User, error) {
-	// Generate UUID
-	// Set uuid to apikey in backend (update)
-	userInfo.ApiKey = uuid.NewV4().String()
-	err := SetApikey(ctx, userInfo)
-	if err != nil {
-		log.Printf("[WARNING] Failed updating apikey: %s", err)
-		return userInfo, err
-	}
-
-	// Updating user
-	log.Printf("[INFO] Adding apikey to user %s", userInfo.Username)
-	err = SetUser(ctx, &userInfo, true)
-	if err != nil {
-		log.Printf("[WARNING] Failed updating users' apikey: %s", err)
-		return userInfo, err
-	}
-
-	return userInfo, nil
 }
 
 func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
@@ -179,114 +192,3 @@ func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(urlbody)
 }
-
-func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting API GEN request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
-
-	userInfo, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in apigen: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	//log.Printf("IN APIKEY GENERATION")
-	ctx := GetContext(request)
-	if request.Method == "GET" {
-		newUserInfo, err := GenerateApikey(ctx, userInfo)
-		if err != nil {
-			log.Printf("[WARNING] Failed to generate apikey for user %s: %s", userInfo.Username, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": ""}`))
-			return
-		}
-
-		userInfo = newUserInfo
-		log.Printf("[INFO] Updated apikey for user %s", userInfo.Username)
-	} else if request.Method == "POST" {
-		if request.Body == nil {
-			resp.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		body, err := ioutil.ReadAll(request.Body)
-		if err != nil {
-			log.Println("Failed reading body")
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Missing field: user_id"}`)))
-			return
-		}
-
-		type userId struct {
-			UserId string `json:"user_id"`
-		}
-
-		var t userId
-		err = json.Unmarshal(body, &t)
-		if err != nil {
-			log.Printf("Failed unmarshaling userId: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Missing field: user_id"}`)))
-			return
-		}
-
-		log.Printf("[INFO] Handling post for APIKEY gen FROM user %s. Userchange: %s!", userInfo.Username, t.UserId)
-
-		if userInfo.Role != "admin" {
-			log.Printf("[AUDIT] %s tried and failed to change apikey for %s (2)", userInfo.Username, t.UserId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change others' apikey"}`)))
-			return
-		}
-
-		foundUser, err := GetUser(ctx, t.UserId)
-		if err != nil {
-			log.Printf("[INFO] Can't find user %s (apikey gen): %s", t.UserId, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
-			return
-		}
-
-		// FIXME: May not be good due to different roles in different organizations.
-		if foundUser.Role == "admin" {
-			log.Printf("[AUDIT] %s tried and failed to change apikey for %s. Skipping because users' role is admin", userInfo.Username, t.UserId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change the apikey of another admin"}`)))
-			return
-		}
-
-		newUserInfo, err := GenerateApikey(ctx, *foundUser)
-		if err != nil {
-			log.Printf("Failed to generate apikey for user %s: %s", foundUser.Username, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
-			return
-		}
-
-		foundUser = &newUserInfo
-
-		resp.WriteHeader(200)
-		resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, foundUser.Username, foundUser.Verified, foundUser.ApiKey)))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "username": "%s", "verified": %t, "apikey": "%s"}`, userInfo.Username, userInfo.Verified, userInfo.ApiKey)))
-}
-
-
