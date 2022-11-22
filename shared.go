@@ -23,7 +23,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/xml"
+	// "encoding/xml"
 
 	"crypto/aes"
 	"crypto/cipher"
@@ -33,15 +33,18 @@ import (
 	"crypto/sha1"
 
 	"github.com/bradfitz/slice"
-	qrcode "github.com/skip2/go-qrcode"
+	// qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/frikky/kin-openapi/openapi2"
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
 
-	"github.com/satori/go.uuid"
+	// "github.com/google/go-github/v28/github"
+	// "github.com/satori/go.uuid"
+	// "golang.org/x/crypto/bcrypt"
 	"google.golang.org/appengine"
 )
+
 
 var project ShuffleStorage
 var baseDockerName = "frikky/shuffle"
