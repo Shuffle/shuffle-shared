@@ -7,29 +7,29 @@ import (
 	"net/http"
 	"strings"
 
-	_ "encoding/base32"
-	_ "encoding/base64"
-	_ "encoding/binary"
-	_ "encoding/hex"
+	//"encoding/base32"
+	//"encoding/base64"
+	//"encoding/binary"
+	//"encoding/hex"
 	"encoding/json"
-	_ "encoding/xml"
+	//"encoding/xml"
 
-	_ "crypto/aes"
-	_ "crypto/cipher"
-	_ "crypto/hmac"
-	_ "crypto/md5"
-	_ "crypto/rand"
-	_ "crypto/sha1"
+	// "crypto/aes"
+	// "crypto/cipher"
+	// "crypto/hmac"
+	//"crypto/md5"
+	// "crypto/rand"
+	//"crypto/sha1"
 
-	_ "github.com/bradfitz/slice"
-	_ "github.com/skip2/go-qrcode"
+	// "github.com/bradfitz/slice"
+	//"github.com/skip2/go-qrcode"
 
-	_ "github.com/frikky/kin-openapi/openapi2"
-	_ "github.com/frikky/kin-openapi/openapi2conv"
-	_ "github.com/frikky/kin-openapi/openapi3"
+	// "github.com/frikky/kin-openapi/openapi2"
+	// "github.com/frikky/kin-openapi/openapi2conv"
+	// "github.com/frikky/kin-openapi/openapi3"
 
-	_ "github.com/satori/go.uuid"
-	_ "google.golang.org/appengine"
+	// "github.com/satori/go.uuid"
+	// "google.golang.org/appengine"
 )
 
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
