@@ -6733,7 +6733,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if !foundOrg || tmpData.OrgId != fileId {
 		log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "No permission to change to this org"}`))
 		return
 	}
@@ -6760,7 +6760,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	userFound := false
 	usr := User{}
 	for _, orgUsr := range org.Users {
-		//log.Printf("Usr: %#v", orgUsr)
 		if user.Id == orgUsr.Id {
 			usr = orgUsr
 			userFound = true
@@ -6769,9 +6768,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound {
-		log.Printf("[WARNING] User can't edit the org \"%s\" (2)", tmpData.OrgId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
+		log.Printf("[WARNING] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "No permission to change to this org"}`))
 		return
 	}
 
@@ -6785,7 +6784,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetUser(ctx, &user, false)
 	if err != nil {
-		log.Printf("[WARNING] Failed updating user when changing org: %s", err)
+		log.Printf("[ERROR] Failed updating user when changing org: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return

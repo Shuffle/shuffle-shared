@@ -884,14 +884,14 @@ func HandleGetSpecificTrigger(resp http.ResponseWriter, request *http.Request) {
 	trigger, err := GetTriggerAuth(ctx, workflowId)
 	if err != nil {
 		log.Printf("[INFO] Trigger %s doesn't exist - specific trigger.", workflowId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": ""}`))
 		return
 	}
 
 	if user.Username != trigger.Owner && user.Role != "admin" {
-		log.Printf("Wrong user (%s) for trigger %s", user.Username, trigger.Id)
-		resp.WriteHeader(401)
+		log.Printf("[AUDIT] Wrong user (%s) for trigger %s", user.Username, trigger.Id)
+		resp.WriteHeader(403)
 		return
 	}
 
@@ -3354,16 +3354,11 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// This should be possible, and will also give the actual username
-	/*
-		profile, err := getOutlookProfile(outlookClient)
-		if err != nil {
-			log.Printf("Outlook profile failure: %s", err)
-			resp.WriteHeader(401)
-			return
-		}
-		log.Printf("PROFILE: %#v", profile)
-	*/
+	//profile, err := getOutlookProfile(outlookClient)
+	//if err != nil {
+	//	log.Printf("[WARNING] Outlook profile failure: %s", err)
+	//}
+	//log.Printf("PROFILE: %#v", profile)
 
 	folders, err := getOutlookFolders(outlookClient)
 	if err != nil {
@@ -3371,6 +3366,11 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed getting outlook folders"}`))
 		resp.WriteHeader(401)
 		return
+	}
+
+	//log.Printf("Got folders: %#v", folders)
+	if len(folders.Value) == 0 {
+		folders.Value = []OutlookFolder{}
 	}
 
 	b, err := json.Marshal(folders.Value)
