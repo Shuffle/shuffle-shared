@@ -8974,7 +8974,7 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
 		//go ResendActionResult(cacheData, 0)
-		log.Printf("[DEBUG] Should rerun (2)? %s (%s - %s)", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
+		log.Printf("\n\n[DEBUG] Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
 		//go ResendActionResult(cacheData, retries)
 
 		if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
@@ -9235,12 +9235,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 		actionResultBody, err := json.Marshal(actionResult)
 		if err == nil {
-			//log.Printf("[DEBUG] Setting cache for %s", actionCacheId)
+			log.Printf("[DEBUG] Setting cache for %s. Status: %s", actionCacheId, actionResult.Status)
 			err = SetCache(ctx, actionCacheId, actionResultBody)
 			if err != nil {
 				log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
 			}
 		}
+	} else {
+		//log.Printf("[WARNING] Skipping cache for %s", actionResult.Action.Name)
 	}
 
 	skipExecutionCount := false

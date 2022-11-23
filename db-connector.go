@@ -466,8 +466,8 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 	// Maxsize ish~
 
 	// Splitting into multiple cache items
-	//if project.Environment == "cloud" || len(memcached) > 0 {
-	if len(memcached) > 0 {
+	//if len(memcached) > 0 {
+	if project.Environment == "cloud" || len(memcached) > 0 {
 		comparisonNumber := 50
 		if len(data) > maxCacheSize*comparisonNumber {
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
@@ -690,7 +690,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			continue
 		}
 
-		//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
 		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
 		cache, err := GetCache(ctx, cacheId)
 		if err != nil {
@@ -888,8 +887,7 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 
 func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) error {
 	cacheKey := fmt.Sprintf("%s-actions", executionId)
-	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s\n\n", executionId)
-	_ = cacheKey
+	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s. Next: %#v\n\n", executionId, nextActions)
 
 	newVariableWrapper := ExecutionVariableWrapper{
 		StartNode:    startnode,
@@ -904,13 +902,13 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 
 	variableWrapperData, err := json.Marshal(newVariableWrapper)
 	if err != nil {
-		log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		log.Printf("[ERROR] Failed marshalling execution: %s", err)
 		return err
 	}
 
 	err = SetCache(ctx, cacheKey, variableWrapperData)
 	if err != nil {
-		log.Printf("[WARNING] Failed updating execution: %s", err)
+		log.Printf("[ERROR] Failed updating execution variables: %s", err)
 		return err
 	}
 
@@ -978,6 +976,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+
 	workflowExecution := &WorkflowExecution{}
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -992,6 +991,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 						Result: workflowExecution.ExecutionArgument,
 						Action: Action{ID: "execution_argument"},
 					}
+
 					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
 					if err != nil {
 						log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (3)", err)
@@ -1084,6 +1084,39 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 				workflowExecution.Results[valueIndex].Result = newValue
 			}
+		}
+	}
+
+	// Making heavy use of caching for values that may be lost
+	for _, action := range workflowExecution.Workflow.Actions {
+		found := false
+		for _, result := range workflowExecution.Results {
+			if result.Action.ID == action.ID {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
+		cache, err := GetCache(ctx, cacheId)
+		if err != nil {
+			//log.Printf("[WARNING] Couldn't find action cache %s (get exec): %s", cacheId, err)
+			continue
+		}
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err != nil {
+			continue
+		} else {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
 		}
 	}
 
