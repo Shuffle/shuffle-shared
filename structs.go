@@ -2530,7 +2530,7 @@ type MdmIP struct {
 	IP string `json:"ip"`
 }
 
-//TBD
+// TBD
 type MdmLink struct {
 	DisplayText string        `json:"ip"`
 	DisplayUrl  MdmDisplayUrl `json:"ip"`
@@ -3550,12 +3550,22 @@ type UsecaseMerge struct {
 	Timestamp   int64         `json:"timestamp"`
 }
 
+type AppStats struct {
+	WeeklyClicks      int           `json:"weekly_clicks" datastore:"weekly_clicks"`
+	TotalSearches     int           `json:"total_searches" datastore:"total_searches"`
+	Events            []WidgetPoint `json:"events" datastore:"events"`
+	WeeklyConversions int           `json:"weekly_conversions" datastore:"weekly_conversions"`
+	TotalConversions  int           `json:"total_conversions" datastore:"total_conversions"`
+	TotalClicks       int           `json:"total_clicks" datastore:"total_clicks"`
+	AppName           string        `json:"app_name" datastore:"app_name"`
+}
+
 type CreatorStats struct {
-	github_username    string   `json:"githubUsername"`
-	apps_count         int      `json:"appsCount"`
-	most_clicked_app   string   `json:"mostClickedApp`
-	most_conversed_app string   `json:"mostConversedApp`
-	verified           string   `json:"verified"`
-	workflows          string   `json:"workflows"`
-	app_stats          struct{} `json:"appStats"`
+	Creator          string     `json:"creator" datastore:"creator"`
+	Apps             int        `json:"apps" datastore:"apps"`
+	MostClickedApp   string     `json:"most_clicked_app" datastore:"most_clicked_app"`
+	MostConversedApp string     `json:"most_conversed_app" datastore:"most_conversed_app"`
+	Verified         bool       `json:"verified" datastore:"verified"`
+	Workflows        int        `json:"workflows" datastore:"workflows"`
+	AppStats         []AppStats `json:"app_stats" datastore:"app_stats"`
 }

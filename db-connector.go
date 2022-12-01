@@ -7369,18 +7369,52 @@ func GetHostedOAuth(ctx context.Context, id string) (*DataToSend, error) {
 	return stats, nil
 }
 
-func GetCreatorStats(ctx context.Context, creatorName string) ([]CreatorStats, error) {
-	var stats []CreatorStats
+func GetCreatorStats(ctx context.Context, creatorName string, startDate string, endDate string) ([]CreatorStats, error) {
+	stats := []CreatorStats{}
 	nameKey := "creator_stats"
 
-	log.Printf("Looking for name %s", creatorName)
+	log.Printf("[DEBUG] Looking for creator with name %s", creatorName)
 
-	q := datastore.NewQuery(nameKey).Filter("github_username =", creatorName)
+	q := datastore.NewQuery(nameKey).Filter("creator =", creatorName).Limit(1)
 	_, err := project.Dbclient.GetAll(ctx, q, &stats)
-	if err != nil && len(stats) == 0 {
-		log.Printf("[WARNING] Failed getting stats for creator: %s", creatorName)
-		return stats, err
+	if err != nil {
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[INFO] Stats error %s", err)
+			err = nil
+			// return stats, err
+		}
+	}
+	log.Print("startDate: ", startDate)
+	log.Print("endDate: ", endDate)
+	log.Print("len startDate: ", len(startDate))
+	log.Print("endDate: ", len(endDate))
+
+	if len(startDate) > 0 {
+		parsedStartdate, err := time.Parse("2006-01-02", startDate)
+		log.Printf("parsed date:", parsedStartdate)
+		if err != nil {
+			log.Printf("[ERROR] error parsing start_date %s: %s", startDate, err)
+			return stats, err
+		}
+	}
+	if len(endDate) > 0 {
+		parsedEndDate, err := time.Parse("2006-01-02", endDate)
+		log.Printf("parsed date:", parsedEndDate)
+		if err != nil {
+			log.Printf("[ERROR] error parsing start_date %s: %s", endDate, err)
+			return stats, err
+		}
 	}
 
-	return stats, nil
+	allApps := stats[0].AppStats
+
+	for _, i := range allApps {
+		fmt.Println("Events for %s", i.AppName)
+		//for _, j := range i.Events[0] {
+		//	fmt.Println("Conversions only ", j)
+		//}
+	}
+
+	return stats, err
+
 }
