@@ -1,4 +1,4 @@
-module shuffle
+module github.com/shuffle/shuffle-shared
 
 go 1.19
 
@@ -48,5 +48,5 @@ require (
 	golang.org/x/xerrors v0.0.0-20220907171357-04be3eba64a2 // indirect
 	google.golang.org/genproto v0.0.0-20221118155620-16455021b5e6 // indirect
 	google.golang.org/grpc v1.50.1 // indirect
-	google.golang.org/protobuf v1.26.1-0.20210525005349-febffdd88e85
+	google.golang.org/protobuf v1.28.1
 )
