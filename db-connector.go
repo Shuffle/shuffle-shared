@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 
 	//"strconv"
 	//"encoding/binary"
@@ -7128,52 +7129,174 @@ func GetHostedOAuth(ctx context.Context, id string) (*DataToSend, error) {
 	return stats, nil
 }
 
-func GetCreatorStats(ctx context.Context, creatorName string, startDate string, endDate string) ([]CreatorStats, error) {
+func GetCreatorStats(ctx context.Context, creatorName string, startDate string, endDate string) (CreatorStats, error) {
 	stats := []CreatorStats{}
 	nameKey := "creator_stats"
 
-	log.Printf("Looking for name %s", creatorName)
+	log.Printf("[INFO] Looking for name %s", creatorName)
+
 	q := datastore.NewQuery(nameKey).Filter("creator =", creatorName).Limit(1)
 	_, err := project.Dbclient.GetAll(ctx, q, &stats)
 	if err != nil {
 		if strings.Contains(err.Error(), `cannot load field`) {
 			log.Printf("[INFO] error %s", err)
 			err = nil
-			// return stats, err
+		} else {
+			log.Printf("[INFO] error loading data for %s", creatorName)
 		}
 	}
-	log.Print("startDate: ", startDate)
-	log.Print("endDate: ", endDate)
-	log.Print("len startDate: ", len(startDate))
-	log.Print("endDate: ", len(endDate))
 
-	if len(startDate) > 0 {
-		parsedStartdate, err := time.Parse("2006-01-02", startDate)
-		log.Printf("parsed date:", parsedStartdate)
+	var parsedStartDate time.Time
+	var parsedEndDate time.Time
+
+	startPresent := false
+	endPresent := false
+	bothPresent := false
+
+	if len(startDate) > 0 && len(endDate) > 0 {
+		parsedStartDate, err = time.Parse("2006-01-02", startDate)
+		log.Printf("parsed date:", parsedStartDate.Format("2006-01-02"))
 		if err != nil {
 			log.Printf("[ERROR] error parsing start_date %s: %s", startDate, err)
-			return stats, err
+			return stats[0], err
 		}
-	}
-	if len(endDate) > 0 {
-		parsedEndDate, err := time.Parse("2006-01-02", endDate)
-		log.Printf("parsed date:", parsedEndDate)
+		parsedEndDate, err = time.Parse("2006-01-02", endDate)
+		log.Printf("parsed date:", parsedEndDate.Format("2006-01-02"))
 		if err != nil {
 			log.Printf("[ERROR] error parsing start_date %s: %s", endDate, err)
-			return stats, err
+			return stats[0], err
 		}
+		bothPresent = true
+	} else if len(startDate) > 0 {
+		parsedStartDate, err = time.Parse("2006-01-02", startDate)
+		log.Printf("parsed date:", parsedStartDate.Format("2006-01-02"))
+		if err != nil {
+			log.Printf("[ERROR] error parsing start_date %s: %s", startDate, err)
+			return stats[0], err
+		}
+		startPresent = true
+	} else if len(endDate) > 0 {
+		parsedEndDate, err = time.Parse("2006-01-02", endDate)
+		log.Printf("parsed date:", parsedEndDate.Format("2006-01-02"))
+		if err != nil {
+			log.Printf("[ERROR] error parsing start_date %s: %s", endDate, err)
+			return stats[0], err
+		}
+		endPresent = true
 	}
 
-	allApps := stats[0].AppStats
+	if startPresent == false && endPresent == false && bothPresent == false { // if no query parameter is provided
+		if len(stats[0].AppStats) > 0 {
+			// calculating most conversed app and sorts in order highest first
+			sort.Slice(stats[0].AppStats, func(i, j int) bool {
+				return len(stats[0].AppStats[i].Events[0].Data) > len(stats[0].AppStats[j].Events[0].Data)
+			})
+			stats[0].MostConversedApp = stats[0].AppStats[0].AppName
 
-	for _, i := range allApps {
+			// calculating most clicked app and sorts in order highest first
+			sort.Slice(stats[0].AppStats, func(i, j int) bool {
+				return len(stats[0].AppStats[i].Events[1].Data) > len(stats[0].AppStats[j].Events[1].Data)
+			})
+			stats[0].MostClickedApp = stats[0].AppStats[0].AppName
+		}
+		return stats[0], err
+	}
+
+	var updatedStats []AppStats
+
+	for index, i := range stats[0].AppStats { // This is for filtering data by dates.
 		fmt.Println("Events for %s", i.AppName)
-		for _, j := range i.Events[0] {
-			fmt.Println("Conversions only ", j)
+		var appData []WidgetPoint
+
+		for eventIndex, j := range i.Events {
+			// fmt.Println("event index", eventIndex)
+			var appEvents []WidgetPointData
+			fmt.Println("len of j.datta ", len(j.Data))
+			fmt.Println("j.datta? ", j.Data)
+			if len(j.Data) > 0 {
+				for keyIndex, k := range j.Data {
+					_ = keyIndex
+					if len(k.Key) > 0 {
+						parsedData, err := time.Parse("2006-01-02", k.Key)
+						if err != nil {
+							log.Printf("[ERROR] error parsing data %s: %s", k.Key, err)
+							return stats[0], err
+						}
+						if bothPresent == true {
+							if parsedData.After(parsedStartDate) && parsedData.Before(parsedEndDate) {
+								appEvents = append(appEvents, k)
+								// fmt.Println("appEvents", appEvents)
+								// stats[0].AppStats[index].Events[eventIndex].Data[keyIndex] = k
+								fmt.Println("k.key", k.Key)
+							}
+						}
+						if startPresent == true {
+							if parsedData.After(parsedStartDate) {
+								appEvents = append(appEvents, k)
+								// stats[0].AppStats[index].Events[eventIndex].Data[keyIndex] = k
+								fmt.Println("k.key", k.Key)
+							}
+						}
+						if endPresent == true {
+							if parsedData.Before(parsedEndDate) {
+								appEvents = append(appEvents, k)
+								// stats[0].AppStats[index].Events[eventIndex].Data[keyIndex] = k
+								// fmt.Println("k.key", k.Key)
+							}
+						}
+
+					} else {
+						// stats[0].AppStats[index] = AppStats{} // for discarding apps with no events
+					}
+
+				}
+				if eventIndex == 0 {
+					appData = append(appData, WidgetPoint{"conversion", appEvents})
+					// appData[0].Key = "conversion"
+					// appData[0].Data = appEvents
+				}
+
+				if eventIndex == 1 {
+					appData = append(appData, WidgetPoint{"click", appEvents})
+					// appData[1].Key = "click"
+					// appData[1].Data = appEvents
+				}
+				//
+			}
+
 		}
+		// fmt.Println("app data ->", appData)
+		updatedStats = append(updatedStats, i) //fill in updatedStats with old data
+		updatedStats[index].Events = appData   // update events with filtered events
+		// updatedStats = append(updatedStats, appData)
+		// i.Events = appData
+	}
+	fmt.Print("updatedStats", updatedStats)
+	stats[0].AppStats = updatedStats // updating stats with updated values
+
+	if len(stats[0].AppStats) > 1 {
+		// calculating most conversed app and sorts in order highest first
+
+		sort.Slice(stats[0].AppStats, func(i, j int) bool {
+			fmt.Println("len of events ->>>> ", len(stats[0].AppStats[i].Events))
+			if len(stats[0].AppStats[i].Events) > 1 {
+				return len(stats[0].AppStats[i].Events[0].Data) > len(stats[0].AppStats[j].Events[0].Data)
+			} else {
+				return false
+			}
+		})
+		stats[0].MostConversedApp = stats[0].AppStats[0].AppName
+
+		// // calculating most clicked app and sorts in order highest first
+		sort.Slice(stats[0].AppStats, func(i, j int) bool {
+			if len(stats[0].AppStats[i].Events) > 1 {
+				return len(stats[0].AppStats[i].Events[0].Data) > len(stats[0].AppStats[j].Events[0].Data)
+			} else {
+				return false
+			}
+		})
+		stats[0].MostClickedApp = stats[0].AppStats[0].AppName
 	}
 
-	return stats, err
+	return stats[0], err
 }
-
-// Clear datastore, fix data
