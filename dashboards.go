@@ -42,7 +42,7 @@ func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
 		widget = location[6]
 	}
 
-	log.Printf("SHould get widget %s in dashboard %s", widget, dashboard)
+	log.Printf("Should get widget %s in dashboard %s", widget, dashboard)
 	id := uuid.NewV4().String()
 
 	// Returning some static info for now
@@ -53,7 +53,7 @@ func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
 		Dashboard: dashboard,
 		Data: []WidgetPoint{
 			WidgetPoint{
-				Key: "Wut",
+				Key: widget,
 				Data: []WidgetPointData{
 					WidgetPointData{
 						Key:  "11/21/2019",
