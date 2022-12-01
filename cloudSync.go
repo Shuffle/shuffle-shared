@@ -520,7 +520,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	// Allows parent & childorgs to run as much as they want. No limitations
 	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		log.Printf("[DEBUG] Execution for %s is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.")
+		log.Printf("[DEBUG] Execution for %s (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
 		return org, nil
 	}
 

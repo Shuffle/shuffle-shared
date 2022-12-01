@@ -3959,7 +3959,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID
 		} else {
-			log.Printf("[WARNING] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -5688,7 +5688,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !orgFound {
-			log.Printf("[INFO] User %s is admin, but can't change user's password outside their own org.", userInfo.Id)
+			log.Printf("[AUDIT] User %s (%s) is admin, but can't change user's (%s) password outside their own org.", userInfo.Username, userInfo.Id, foundUser.Username)
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 			return
@@ -6066,7 +6066,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !orgFound {
-		log.Printf("[WARNING] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
+		log.Printf("[AUDIT] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
 		return
@@ -6735,7 +6735,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if !foundOrg || tmpData.OrgId != fileId {
 		log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "No permission to change to this org"}`))
 		return
 	}
@@ -6762,7 +6762,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	userFound := false
 	usr := User{}
 	for _, orgUsr := range org.Users {
-		//log.Printf("Usr: %#v", orgUsr)
 		if user.Id == orgUsr.Id {
 			usr = orgUsr
 			userFound = true
@@ -6771,9 +6770,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound {
-		log.Printf("[WARNING] User can't edit the org \"%s\" (2)", tmpData.OrgId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
+		log.Printf("[WARNING] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "No permission to change to this org"}`))
 		return
 	}
 
@@ -6787,7 +6786,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	err = SetUser(ctx, &user, false)
 	if err != nil {
-		log.Printf("[WARNING] Failed updating user when changing org: %s", err)
+		log.Printf("[ERROR] Failed updating user when changing org: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -8342,7 +8341,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] MFA login for user %s (%s)!", userdata.Username, userdata.Id)
 	}
 
-	tutorialsFinished := userdata.PersonalInfo.Tutorials
+	//tutorialsFinished := userdata.PersonalInfo.Tutorials
 	//if len(org.SecurityFramework.SIEM.Name) > 0 || len(org.SecurityFramework.Network.Name) > 0 || len(org.SecurityFramework.EDR.Name) > 0 || len(org.SecurityFramework.Cases.Name) > 0 || len(org.SecurityFramework.IAM.Name) > 0 || len(org.SecurityFramework.Assets.Name) > 0 || len(org.SecurityFramework.Intel.Name) > 0 || len(org.SecurityFramework.Communication.Name) > 0 {
 	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
 	//}
@@ -8354,7 +8353,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	returnValue := HandleInfo{
 		Success:   true,
-		Tutorials: tutorialsFinished,
+		Tutorials: []Tutorial{},
 	}
 
 	loginData := `{"success": true}`
@@ -8977,7 +8976,7 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 
 		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
 		//go ResendActionResult(cacheData, 0)
-		log.Printf("[DEBUG] Should rerun (2)? %s (%s - %s)", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
+		log.Printf("\n\n[DEBUG] Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
 		//go ResendActionResult(cacheData, retries)
 
 		if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
@@ -9238,12 +9237,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 		actionResultBody, err := json.Marshal(actionResult)
 		if err == nil {
-			//log.Printf("[DEBUG] Setting cache for %s", actionCacheId)
+			log.Printf("[DEBUG] Setting cache for %s. Status: %s", actionCacheId, actionResult.Status)
 			err = SetCache(ctx, actionCacheId, actionResultBody)
 			if err != nil {
 				log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
 			}
 		}
+	} else {
+		//log.Printf("[WARNING] Skipping cache for %s", actionResult.Action.Name)
 	}
 
 	skipExecutionCount := false

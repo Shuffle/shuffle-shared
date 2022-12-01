@@ -64,7 +64,9 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 	nameKey := "org_statistics"
 	orgStatistics := &ExecutionInfo{}
 
-	if project.Environment == "cloud" {
+	if project.Environment != "cloud" {
+		log.Printf("[DEBUG] Not cloud. Not dumping cache stats for datatype %s.", dataType)
+	} else {
 		tx, err := project.Dbclient.NewTransaction(ctx)
 		if err != nil {
 			log.Printf("[WARNING] Error in cache dump: %#v", err)
@@ -173,72 +175,141 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while
 func IncrementCache(ctx context.Context, orgId, dataType string) {
-	if project.Environment != "cloud" {
-		return
-	}
 
 	// Dump to disk every 0x19
 	// 1. Get the existing value
 	// 2. Update it
 	dbDumpInterval := uint8(dumpInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
-	//if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
-	if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
-		item := &memcache.Item{
-			Key:        key,
-			Value:      []byte(string(1)),
-			Expiration: time.Minute * 300,
+	if len(memcached) > 0 {
+		item, err := mc.Get(key)
+		if err == gomemcache.ErrCacheMiss {
+			log.Printf("[DEBUG] Increment memcache miss for %#v: %s", key, err)
+
+			item := &gomemcache.Item{
+				Key:        key,
+				Value:      []byte(string(1)),
+				Expiration: 18000,
+			}
+
+			if err := mc.Set(item); err != nil {
+				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+			}
+
+		} else if err != nil {
+			log.Printf("[ERROR] Failed increment memcache err: %s", err)
+		} else {
+			if item == nil || item.Value == nil {
+				item = &gomemcache.Item{
+					Key:        key,
+					Value:      []byte(string(1)),
+					Expiration: 18000,
+				}
+
+				log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
+			}
+
+			if len(item.Value) == 1 {
+				num := item.Value[0]
+				//log.Printf("Item: %#v", num)
+
+				num += 1
+				//log.Printf("Item2: %#v", num)
+				if num >= dbDumpInterval {
+					// Memcache dump first to keep the counter going for other executions
+					num = 0
+
+					item := &gomemcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: 18000,
+					}
+					if err := mc.Set(item); err != nil {
+						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+					}
+
+					IncrementCacheDump(ctx, orgId, dataType)
+				} else {
+					//log.Printf("NOT Dumping!")
+
+					item := &gomemcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: 18000,
+					}
+
+					if err := mc.Set(item); err != nil {
+						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+					}
+				}
+			} else {
+				log.Printf("[ERROR] Length of value is longer than 1")
+			}
 		}
 
-		if err := memcache.Set(ctx, item); err != nil {
-			log.Printf("[ERROR] Failed setting cache for key %s: %s", orgId, err)
-		}
 	} else {
-		if item == nil || item.Value == nil {
-			item = &memcache.Item{
+		if project.Environment != "cloud" {
+			return
+		}
+
+		//if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
+		if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
+			item := &memcache.Item{
 				Key:        key,
 				Value:      []byte(string(1)),
 				Expiration: time.Minute * 300,
 			}
 
-			log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
-		}
-
-		if len(item.Value) == 1 {
-			num := item.Value[0]
-			//log.Printf("Item: %#v", num)
-
-			num += 1
-			//log.Printf("Item2: %#v", num)
-			if num >= dbDumpInterval {
-				// Memcache dump first to keep the counter going for other executions
-				num = 0
-
-				item := &memcache.Item{
+			if err := memcache.Set(ctx, item); err != nil {
+				log.Printf("[ERROR] Failed setting cache for key %s: %s", orgId, err)
+			}
+		} else {
+			if item == nil || item.Value == nil {
+				item = &memcache.Item{
 					Key:        key,
-					Value:      []byte(string(num)),
+					Value:      []byte(string(1)),
 					Expiration: time.Minute * 300,
 				}
-				if err := memcache.Set(ctx, item); err != nil {
-					log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
-				}
 
-				IncrementCacheDump(ctx, orgId, dataType)
-			} else {
-				//log.Printf("NOT Dumping!")
-
-				item := &memcache.Item{
-					Key:        key,
-					Value:      []byte(string(num)),
-					Expiration: time.Minute * 300,
-				}
-				if err := memcache.Set(ctx, item); err != nil {
-					log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
-				}
+				log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
 			}
 
-		} else {
-			log.Printf("[ERROR] Length of cache value is more than 1: %#v", item.Value)
+			if len(item.Value) == 1 {
+				num := item.Value[0]
+				//log.Printf("Item: %#v", num)
+
+				num += 1
+				//log.Printf("Item2: %#v", num)
+				if num >= dbDumpInterval {
+					// Memcache dump first to keep the counter going for other executions
+					num = 0
+
+					item := &memcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: time.Minute * 300,
+					}
+					if err := memcache.Set(ctx, item); err != nil {
+						log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
+					}
+
+					IncrementCacheDump(ctx, orgId, dataType)
+				} else {
+					//log.Printf("NOT Dumping!")
+
+					item := &memcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: time.Minute * 300,
+					}
+					if err := memcache.Set(ctx, item); err != nil {
+						log.Printf("[ERROR] Failed setting inner cache for key %s: %s", orgId, err)
+					}
+				}
+
+			} else {
+				log.Printf("[ERROR] Length of cache value is more than 1: %#v", item.Value)
+			}
 		}
 	}
 
@@ -396,6 +467,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 	// Maxsize ish~
 
 	// Splitting into multiple cache items
+	//if len(memcached) > 0 {
 	if project.Environment == "cloud" || len(memcached) > 0 {
 		comparisonNumber := 50
 		if len(data) > maxCacheSize*comparisonNumber {
@@ -619,7 +691,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			continue
 		}
 
-		//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
 		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
 		cache, err := GetCache(ctx, cacheId)
 		if err != nil {
@@ -817,8 +888,7 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 
 func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) error {
 	cacheKey := fmt.Sprintf("%s-actions", executionId)
-	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s\n\n", executionId)
-	_ = cacheKey
+	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s. Next: %#v\n\n", executionId, nextActions)
 
 	newVariableWrapper := ExecutionVariableWrapper{
 		StartNode:    startnode,
@@ -833,13 +903,13 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 
 	variableWrapperData, err := json.Marshal(newVariableWrapper)
 	if err != nil {
-		log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		log.Printf("[ERROR] Failed marshalling execution: %s", err)
 		return err
 	}
 
 	err = SetCache(ctx, cacheKey, variableWrapperData)
 	if err != nil {
-		log.Printf("[WARNING] Failed updating execution: %s", err)
+		log.Printf("[ERROR] Failed updating execution variables: %s", err)
 		return err
 	}
 
@@ -907,6 +977,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+
 	workflowExecution := &WorkflowExecution{}
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -921,6 +992,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 						Result: workflowExecution.ExecutionArgument,
 						Action: Action{ID: "execution_argument"},
 					}
+
 					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
 					if err != nil {
 						log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (3)", err)
@@ -1013,6 +1085,39 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 				workflowExecution.Results[valueIndex].Result = newValue
 			}
+		}
+	}
+
+	// Making heavy use of caching for values that may be lost
+	for _, action := range workflowExecution.Workflow.Actions {
+		found := false
+		for _, result := range workflowExecution.Results {
+			if result.Action.ID == action.ID {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
+		cache, err := GetCache(ctx, cacheId)
+		if err != nil {
+			//log.Printf("[WARNING] Couldn't find action cache %s (get exec): %s", cacheId, err)
+			continue
+		}
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err != nil {
+			continue
+		} else {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
 		}
 	}
 
@@ -2051,6 +2156,9 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					curOrg.Users = users
 					setOrg = true
 				}
+			} else if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error in org loading, but returning without warning: %s", err)
+				err = nil
 			} else {
 				return &Org{}, err
 			}
@@ -2074,16 +2182,20 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	curOrg.Users = newUsers
+	if len(curOrg.Tutorials) == 0 {
+		curOrg = getTutorials(*curOrg, true)
+	}
+
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
-			log.Printf("[WARNING] Failed marshalling org for cache: %s", err)
+			log.Printf("[ERROR] Failed marshalling org for cache: %s", err)
 			return curOrg, nil
 		}
 
 		err = SetCache(ctx, cacheKey, neworg)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating org cache: %s", err)
+			log.Printf("[ERROR] Failed updating org cache: %s", err)
 		}
 
 		if setOrg {
@@ -2129,6 +2241,132 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	return nil
 }
 
+func getTutorials(org Org, updateOrg bool) *Org {
+	log.Printf("[DEBUG] Getting init tutorials for org %s (%s)", org.Name, org.Id)
+
+	allSteps := []Tutorial{
+		Tutorial{
+			Name:        "Find relevant apps",
+			Description: "0 out of 8 apps configured",
+			Done:        false,
+			Link:        "/welcome?tab=2",
+			Active:      true,
+		},
+		Tutorial{
+			Name:        "Discover Usecases",
+			Description: "0 workflows created. Create from Workflow Templates!",
+			Done:        false,
+			Link:        "/welcome?tab=3",
+			Active:      true,
+		},
+		Tutorial{
+			Name:        "Invite teammates",
+			Description: "Have they edited their org and invited teammates?",
+			Done:        false,
+			Link:        "/admin?tab=users",
+			Active:      true,
+		},
+		Tutorial{
+			Name:        "Security & Stability",
+			Description: "Configure MFA or SAML/SSO, new Environments & a Notification workflow",
+			Done:        false,
+			Link:        "/admin?tab=organization",
+			Active:      true,
+		},
+	}
+
+	have := []string{}
+	missing := []string{}
+	if len(org.SecurityFramework.SIEM.Name) > 0 {
+		have = append(have, "SIEM")
+	} else {
+		missing = append(missing, "SIEM")
+	}
+	if len(org.SecurityFramework.Communication.Name) > 0 {
+		have = append(have, "Communication")
+	} else {
+		missing = append(missing, "Communication")
+	}
+	if len(org.SecurityFramework.Assets.Name) > 0 {
+		have = append(have, "Assets")
+	} else {
+		missing = append(missing, "Assets")
+	}
+	if len(org.SecurityFramework.Cases.Name) > 0 {
+		have = append(have, "Cases")
+	} else {
+		missing = append(missing, "Cases")
+	}
+	if len(org.SecurityFramework.Network.Name) > 0 {
+		have = append(have, "Network")
+	} else {
+		missing = append(missing, "Network")
+	}
+	if len(org.SecurityFramework.Intel.Name) > 0 {
+		have = append(have, "Intel")
+	} else {
+		missing = append(missing, "Intel")
+	}
+	if len(org.SecurityFramework.EDR.Name) > 0 {
+		have = append(have, "EDR")
+	} else {
+		missing = append(missing, "EDR")
+	}
+	if len(org.SecurityFramework.IAM.Name) > 0 {
+		have = append(have, "IAM")
+	} else {
+		missing = append(missing, "IAM")
+	}
+
+	if len(have) > 1 {
+		allSteps[0].Done = true
+		allSteps[0].Description = fmt.Sprintf("%d out of %d apps configured", len(have), len(have)+len(missing))
+	}
+
+	selectedUser := User{}
+	ctx := context.Background()
+	for _, inputUser := range org.Users {
+		user, err := GetUser(ctx, inputUser.Id)
+		if user.Role == "admin" && user.ActiveOrg.Id == org.Id {
+			if err == nil {
+				selectedUser = *user
+				break
+			}
+		}
+	}
+
+	if len(org.Users) > 1 {
+		allSteps[2].Description = fmt.Sprintf("%d users invited and org name changed.", len(org.Users))
+		if strings.ToLower(org.Org) == strings.ToLower(org.Name) {
+			allSteps[2].Description = "Edit your org name and invite teammates"
+			allSteps[2].Link = "/admin?tab=organization"
+		} else {
+			allSteps[2].Done = true
+		}
+	}
+
+	if len(selectedUser.Id) > 0 {
+		workflows, _ := GetAllWorkflowsByQuery(ctx, selectedUser)
+		if len(workflows) > 1 {
+			allSteps[1].Done = true
+			allSteps[1].Description = fmt.Sprintf("%d workflows created", len(workflows))
+		}
+	}
+
+	if org.SSOConfig.SSOEntrypoint != "" && org.Defaults.NotificationWorkflow != "" {
+		allSteps[3].Done = true
+	} else {
+		allSteps[3].Link = "/admin?tab=organization&subtab=configure"
+	}
+
+	org.Tutorials = allSteps
+
+	if updateOrg {
+		SetOrg(ctx, org, org.Id)
+	}
+	return &org
+}
+
 func SetOrg(ctx context.Context, data Org, id string) error {
 	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
@@ -2154,6 +2392,9 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	data.Users = newUsers
+	if len(data.Tutorials) == 0 {
+		data = *getTutorials(data, false)
+	}
 
 	// clear session_token and API_token for user
 	if project.DbType == "elasticsearch" {
