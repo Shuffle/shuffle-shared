@@ -7370,7 +7370,7 @@ func GetHostedOAuth(ctx context.Context, id string) (*DataToSend, error) {
 	return stats, nil
 }
 
-func GetCreatorStats(ctx context.Context, creatorName string, startDate string, endDate string) (CreatorStats, error) {
+func GetCreatorStats(ctx context.Context, creatorName string, startDate string, endDate string) ([]CreatorStats, error) {
 	stats := []CreatorStats{}
 	nameKey := "creator_stats"
 
@@ -7387,6 +7387,10 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 		}
 	}
 
+	if len(stats) == 0 { // used to handle error when creator name is not valid
+		return stats,nil
+	}
+
 	var parsedStartDate time.Time
 	var parsedEndDate time.Time
 
@@ -7396,32 +7400,28 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 
 	if len(startDate) > 0 && len(endDate) > 0 {
 		parsedStartDate, err = time.Parse("2006-01-02", startDate)
-		log.Printf("parsed date:", parsedStartDate.Format("2006-01-02"))
 		if err != nil {
-			log.Printf("[ERROR] error parsing start_date %s: %s", startDate, err)
-			return stats[0], err
+			log.Printf("[ERROR] Incorrect date format %s: %s", startDate, err)
+			return stats, err
 		}
 		parsedEndDate, err = time.Parse("2006-01-02", endDate)
-		log.Printf("parsed date:", parsedEndDate.Format("2006-01-02"))
 		if err != nil {
-			log.Printf("[ERROR] error parsing start_date %s: %s", endDate, err)
-			return stats[0], err
+			log.Printf("[ERROR] Incorrect date format %s: %s", endDate, err)
+			return stats, err
 		}
 		bothPresent = true
 	} else if len(startDate) > 0 {
 		parsedStartDate, err = time.Parse("2006-01-02", startDate)
-		log.Printf("parsed date:", parsedStartDate.Format("2006-01-02"))
 		if err != nil {
-			log.Printf("[ERROR] error parsing start_date %s: %s", startDate, err)
-			return stats[0], err
+			log.Printf("[ERROR] Incorrect date format %s: %s", startDate, err)
+			return stats, err
 		}
 		startPresent = true
 	} else if len(endDate) > 0 {
 		parsedEndDate, err = time.Parse("2006-01-02", endDate)
-		log.Printf("parsed date:", parsedEndDate.Format("2006-01-02"))
 		if err != nil {
-			log.Printf("[ERROR] error parsing start_date %s: %s", endDate, err)
-			return stats[0], err
+			log.Printf("[ERROR] Incorrect date format %s: %s", endDate, err)
+			return stats, err
 		}
 		endPresent = true
 	}
@@ -7440,49 +7440,37 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 			})
 			stats[0].MostClickedApp = stats[0].AppStats[0].AppName
 		}
-		return stats[0], err
+		return stats, err
 	}
 
 	var updatedStats []AppStats
 
 	for index, i := range stats[0].AppStats { // This is for filtering data by dates.
-		fmt.Println("Events for %s", i.AppName)
 		var appData []WidgetPoint
 
 		for eventIndex, j := range i.Events {
-			// fmt.Println("event index", eventIndex)
 			var appEvents []WidgetPointData
-			fmt.Println("len of j.datta ", len(j.Data))
-			fmt.Println("j.datta? ", j.Data)
 			if len(j.Data) > 0 {
-				for keyIndex, k := range j.Data {
-					_ = keyIndex
+				for _, k := range j.Data {
 					if len(k.Key) > 0 {
 						parsedData, err := time.Parse("2006-01-02", k.Key)
 						if err != nil {
 							log.Printf("[ERROR] error parsing data %s: %s", k.Key, err)
-							return stats[0], err
+							return stats, err
 						}
 						if bothPresent == true {
 							if parsedData.After(parsedStartDate) && parsedData.Before(parsedEndDate) {
 								appEvents = append(appEvents, k)
-								// fmt.Println("appEvents", appEvents)
-								// stats[0].AppStats[index].Events[eventIndex].Data[keyIndex] = k
-								fmt.Println("k.key", k.Key)
 							}
 						}
 						if startPresent == true {
 							if parsedData.After(parsedStartDate) {
 								appEvents = append(appEvents, k)
-								// stats[0].AppStats[index].Events[eventIndex].Data[keyIndex] = k
-								fmt.Println("k.key", k.Key)
 							}
 						}
 						if endPresent == true {
 							if parsedData.Before(parsedEndDate) {
 								appEvents = append(appEvents, k)
-								// stats[0].AppStats[index].Events[eventIndex].Data[keyIndex] = k
-								// fmt.Println("k.key", k.Key)
 							}
 						}
 
@@ -7506,20 +7494,15 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 			}
 
 		}
-		// fmt.Println("app data ->", appData)
 		updatedStats = append(updatedStats, i) //fill in updatedStats with old data
 		updatedStats[index].Events = appData   // update events with filtered events
-		// updatedStats = append(updatedStats, appData)
-		// i.Events = appData
 	}
-	fmt.Print("updatedStats", updatedStats)
 	stats[0].AppStats = updatedStats // updating stats with updated values
 
 	if len(stats[0].AppStats) > 1 {
 		// calculating most conversed app and sorts in order highest first
 
 		sort.Slice(stats[0].AppStats, func(i, j int) bool {
-			fmt.Println("len of events ->>>> ", len(stats[0].AppStats[i].Events))
 			if len(stats[0].AppStats[i].Events) > 1 {
 				return len(stats[0].AppStats[i].Events[0].Data) > len(stats[0].AppStats[j].Events[0].Data)
 			} else {
@@ -7536,8 +7519,8 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 				return false
 			}
 		})
-		stats[0].MostClickedApp = stats[0].AppStats[0].AppName
+		stats[0].MostClickedApp = stats[0].AppStats[1].AppName
 	}
 
-	return stats[0], err
+	return stats, err
 }
