@@ -3091,6 +3091,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		EthInfo     EthInfo  `json:"eth_info"`
 		CompanyRole string   `json:"company_role"`
 		Suborgs     []string `json:"suborgs"`
+
+		CreatorDescription string `json:"creator_description"`
+		CreatorUrl         string `json:"creator_url"`
+		CreatorLocation    string `json:"creator_location"`
+		CreatorSkills      string `json:"creator_skills"`
+		CreatorWorkStatus  string `json:"creator_work_status"`
+		CreatorSocial      string `json:"creator_social"`
 	}
 
 	ctx := GetContext(request)
@@ -3137,7 +3144,6 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	orgUpdater := true
-	log.Printf("Role: %#v", t.Role)
 	if len(t.Role) > 0 && (t.Role != "admin" && t.Role != "user" && t.Role != "org-reader") {
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
 		resp.WriteHeader(401)
@@ -3236,6 +3242,35 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Should set ethinfo to %#v", t.EthInfo)
 		foundUser.EthInfo = t.EthInfo
 	}
+
+	if len(t.CreatorDescription) > 0 {
+		log.Printf("Bio update?")
+		foundUser.PublicProfile.GithubBio = t.CreatorDescription
+	}
+
+	if len(t.CreatorUrl) > 0 {
+		foundUser.PublicProfile.GithubUrl = t.CreatorUrl
+	}
+
+	if len(t.CreatorLocation) > 0 {
+		foundUser.PublicProfile.GithubLocation = t.CreatorLocation
+	}
+
+	if len(t.CreatorSkills) > 0 {
+		foundUser.PublicProfile.Skills = strings.Split(t.CreatorSkills, ",")
+	}
+
+	if len(t.CreatorWorkStatus) > 0 {
+		foundUser.PublicProfile.WorkStatus = t.CreatorWorkStatus
+	}
+
+	if len(t.CreatorSocial) > 0 {
+		foundUser.PublicProfile.Social = strings.Split(t.CreatorSocial, ",")
+	}
+
+	//CreatorSkills string `json:"creator_skills"`
+	//CreatorWorkStatus string `json:"creator_work_status"`
+	//CreatorSocial string `json:"creator_social"`
 
 	if len(t.Suborgs) > 0 && foundUser.Id != userInfo.Id {
 		log.Printf("[DEBUG] Got suborg change: %#v", t.Suborgs)
@@ -13814,7 +13849,7 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 	return []byte{}, errors.New(fmt.Sprintf("No body to handle for %#v", url))
 }
 
-//// New execution with firestore
+// // New execution with firestore
 func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *http.Request, maxExecutionDepth int64) (WorkflowExecution, ExecInfo, string, error) {
 
 	workflowBytes, err := json.Marshal(workflow)
