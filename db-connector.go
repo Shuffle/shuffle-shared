@@ -7388,7 +7388,7 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 	}
 
 	if len(stats) == 0 { // used to handle error when creator name is not valid
-		return stats,nil
+		return stats, nil
 	}
 
 	var parsedStartDate time.Time
@@ -7447,6 +7447,8 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 
 	for index, i := range stats[0].AppStats { // This is for filtering data by dates.
 		var appData []WidgetPoint
+		var totalConversions int64
+		var totalClicks int64
 
 		for eventIndex, j := range i.Events {
 			var appEvents []WidgetPointData
@@ -7461,16 +7463,34 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 						if bothPresent == true {
 							if parsedData.After(parsedStartDate) && parsedData.Before(parsedEndDate) {
 								appEvents = append(appEvents, k)
+								if eventIndex == 0 {
+									totalConversions += k.Data
+								}
+								if eventIndex == 1 {
+									totalClicks += k.Data
+								}
 							}
 						}
 						if startPresent == true {
 							if parsedData.After(parsedStartDate) {
 								appEvents = append(appEvents, k)
+								if eventIndex == 0 {
+									totalConversions += k.Data
+								}
+								if eventIndex == 1 {
+									totalClicks += k.Data
+								}
 							}
 						}
 						if endPresent == true {
 							if parsedData.Before(parsedEndDate) {
 								appEvents = append(appEvents, k)
+								if eventIndex == 0 {
+									totalConversions += k.Data
+								}
+								if eventIndex == 1 {
+									totalClicks += k.Data
+								}
 							}
 						}
 
@@ -7495,7 +7515,9 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 
 		}
 		updatedStats = append(updatedStats, i) //fill in updatedStats with old data
-		updatedStats[index].Events = appData   // update events with filtered events
+		updatedStats[index].TotalConversions = int(totalConversions)
+		updatedStats[index].TotalClicks = int(totalClicks)
+		updatedStats[index].Events = appData // update events with filtered events
 	}
 	stats[0].AppStats = updatedStats // updating stats with updated values
 

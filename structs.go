@@ -3551,13 +3551,11 @@ type UsecaseMerge struct {
 }
 
 type AppStats struct {
-	WeeklyClicks      int           `json:"weekly_clicks" datastore:"weekly_clicks"`
-	TotalSearches     int           `json:"total_searches" datastore:"total_searches"`
-	Events            []WidgetPoint `json:"events" datastore:"events"`
-	WeeklyConversions int           `json:"weekly_conversions" datastore:"weekly_conversions"`
-	TotalConversions  int           `json:"total_conversions" datastore:"total_conversions"`
-	TotalClicks       int           `json:"total_clicks" datastore:"total_clicks"`
-	AppName           string        `json:"app_name" datastore:"app_name"`
+	TotalSearches    int           `json:"total_searches" datastore:"total_searches"`
+	Events           []WidgetPoint `json:"events" datastore:"events"`
+	TotalConversions int           `json:"total_conversions" datastore:"total_conversions"`
+	TotalClicks      int           `json:"total_clicks" datastore:"total_clicks"`
+	AppName          string        `json:"app_name" datastore:"app_name"`
 }
 
 type CreatorStats struct {
