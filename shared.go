@@ -3244,7 +3244,6 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(t.CreatorDescription) > 0 {
-		log.Printf("Bio update?")
 		foundUser.PublicProfile.GithubBio = t.CreatorDescription
 	}
 
