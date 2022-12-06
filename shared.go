@@ -5,13 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+
+	"gopkg.in/yaml.v3"
+
 	//"os/exec"
 	"regexp"
 	"strconv"
@@ -33,6 +35,7 @@ import (
 	"crypto/sha1"
 
 	"github.com/bradfitz/slice"
+	uuid "github.com/satori/go.uuid"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/frikky/kin-openapi/openapi2"
@@ -40,7 +43,6 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 
 	"github.com/google/go-github/v28/github"
-	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/appengine"
 )
@@ -3676,6 +3678,31 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Cleans up cache for the users
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err == nil {
+		log.Printf("Getting Org workflows")
+
+		workflows, err := GetAllWorkflowsByQuery(ctx, user)
+		if err == nil {
+			updated := false
+			for tutorialIndex, tutorial := range org.Tutorials {
+				if tutorial.Name == "Discover Usecases" {
+					org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d workflows created. Find more using Workflow Templates or public Workflows.", len(workflows)+1)
+					if len(workflows) > 0 {
+						org.Tutorials[tutorialIndex].Done = true
+						org.Tutorials[tutorialIndex].Link = "/search?tab=workflows"
+					}
+
+					updated = true
+					break
+				}
+			}
+
+			if updated {
+				SetOrg(ctx, *org, org.Id)
+			}
+		} else {
+			log.Printf("[ERROR] Failed getting workflows during new workflow creation for updating stats: %s", err)
+		}
+
 		for _, loopUser := range org.Users {
 			cacheKey := fmt.Sprintf("%s_workflows", loopUser.Id)
 			DeleteCache(ctx, cacheKey)
@@ -7287,6 +7314,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
+	GetTutorials(*org, true)
 
 	log.Printf("[INFO] Successfully updated org %s (%s)", org.Name, org.Id)
 	resp.WriteHeader(200)
@@ -15244,6 +15273,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	// 1. Check if the app exists and the user has access to it. If public/sharing ->
+
 	if strings.ToLower(value.Type) == "siem" {
 		org.SecurityFramework.SIEM.Name = app.Name
 		org.SecurityFramework.SIEM.Description = app.Description
@@ -15286,14 +15316,57 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		org.SecurityFramework.Communication.LargeImage = app.LargeImage
 	} else {
 		log.Printf("[WARNING] No handler for type %#v in app framework during update of app %#v", value.Type, app.Name)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	// Counting up for the getting started piece
+	cnt := 0
+	if len(org.SecurityFramework.SIEM.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Intel.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Communication.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Assets.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.IAM.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Cases.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.EDR.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Network.Name) > 0 {
+		cnt += 1
 	}
 
 	// Add app as active for org too
 	if !ArrayContains(org.ActiveApps, app.ID) {
 		org.ActiveApps = append(org.ActiveApps, app.ID)
+	}
+
+	for tutorialIndex, tutorial := range org.Tutorials {
+		if tutorial.Name == "Find relevant apps" {
+			org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d out of %d apps configured", cnt, 8)
+			if cnt > 0 {
+				org.Tutorials[tutorialIndex].Done = true
+			}
+		}
 	}
 
 	err = SetOrg(ctx, *org, org.Id)

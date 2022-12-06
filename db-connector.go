@@ -2183,7 +2183,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
-		curOrg = getTutorials(*curOrg, true)
+		curOrg = GetTutorials(*curOrg, true)
 	}
 
 	if project.CacheDb {
@@ -2241,7 +2241,7 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	return nil
 }
 
-func getTutorials(org Org, updateOrg bool) *Org {
+func GetTutorials(org Org, updateOrg bool) *Org {
 	log.Printf("[DEBUG] Getting init tutorials for org %s (%s)", org.Name, org.Id)
 
 	allSteps := []Tutorial{
@@ -2254,14 +2254,14 @@ func getTutorials(org Org, updateOrg bool) *Org {
 		},
 		Tutorial{
 			Name:        "Discover Usecases",
-			Description: "0 workflows created. Create from Workflow Templates!",
+			Description: "0 workflows created. Create from Workflow Templates! Additional usecases: /usecases",
 			Done:        false,
 			Link:        "/welcome?tab=3",
 			Active:      true,
 		},
 		Tutorial{
 			Name:        "Invite teammates",
-			Description: "Have they edited their org and invited teammates?",
+			Description: "Configure org name, image, and invite teammates",
 			Done:        false,
 			Link:        "/admin?tab=users",
 			Active:      true,
@@ -2349,7 +2349,8 @@ func getTutorials(org Org, updateOrg bool) *Org {
 		workflows, _ := GetAllWorkflowsByQuery(ctx, selectedUser)
 		if len(workflows) > 1 {
 			allSteps[1].Done = true
-			allSteps[1].Description = fmt.Sprintf("%d workflows created", len(workflows))
+			allSteps[1].Description = fmt.Sprintf("%d workflows created. Find more workflows in /search", len(workflows))
+			allSteps[1].Link = "/search?tab=workflows"
 		}
 	}
 
@@ -2393,7 +2394,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 
 	data.Users = newUsers
 	if len(data.Tutorials) == 0 {
-		data = *getTutorials(data, false)
+		data = *GetTutorials(data, false)
 	}
 
 	// clear session_token and API_token for user
