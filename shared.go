@@ -5,13 +5,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gopkg.in/yaml.v3"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"net/url"
 	"os"
+
+	"gopkg.in/yaml.v3"
+
 	//"os/exec"
 	"regexp"
 	"strconv"
@@ -33,6 +35,7 @@ import (
 	"crypto/sha1"
 
 	"github.com/bradfitz/slice"
+	uuid "github.com/satori/go.uuid"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/frikky/kin-openapi/openapi2"
@@ -40,7 +43,6 @@ import (
 	"github.com/frikky/kin-openapi/openapi3"
 
 	"github.com/google/go-github/v28/github"
-	"github.com/satori/go.uuid"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/appengine"
 )
@@ -2749,99 +2751,6 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-/*
-func DeleteWorkflows(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("Api authentication failed in deleting workflow: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-
-	var fileId string
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		fileId = location[4]
-	}
-
-	if len(fileId) != 36 {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow ID to delete is not valid"}`))
-		return
-	}
-
-	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, fileId)
-	if err != nil {
-		log.Printf("Failed getting the workflow locally: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	// FIXME - have a check for org etc too..
-	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[INFO] User %s is accessing %s executions as admin", user.Username, workflow.ID)
-		} else {
-		log.Printf("Wrong user (%s) for workflow %s", user.Username, workflow.ID)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-		}
-	}
-
-	// Clean up triggers and executions
-	for _, item := range workflow.Triggers {
-		if item.TriggerType == "SCHEDULE" {
-			err = deleteSchedule(ctx, item.ID)
-			if err != nil {
-				log.Printf("Failed to delete schedule: %s", err)
-			}
-		} else if item.TriggerType == "WEBHOOK" {
-			err = removeWebhookFunction(ctx, item.ID)
-			if err != nil {
-				log.Printf("Failed to delete webhook: %s", err)
-			}
-		} else if item.TriggerType == "EMAIL" {
-			err = handleOutlookSubRemoval(ctx, workflow.ID, item.ID)
-			if err != nil {
-				log.Printf("Failed to delete email sub: %s", err)
-			}
-		}
-	}
-
-	// FIXME - maybe delete workflow executions
-	log.Printf("Should delete workflow %s", fileId)
-	err = DeleteKey(ctx, "workflow", fileId)
-	if err != nil {
-		log.Printf("Failed deleting key %s", fileId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed deleting key"}`))
-		return
-	}
-
-	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-	DeleteCache(ctx, fmt.Sprintf("%s_%s", user.Username, fileId))
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
-}
-*/
-
 func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -3675,6 +3584,31 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Cleans up cache for the users
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err == nil {
+		//log.Printf("Getting Org workflows")
+
+		workflows, err := GetAllWorkflowsByQuery(ctx, user)
+		if err == nil {
+			updated := false
+			for tutorialIndex, tutorial := range org.Tutorials {
+				if tutorial.Name == "Discover Usecases" {
+					org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d workflows created. Find more using Workflow Templates or public Workflows.", len(workflows)+1)
+					if len(workflows) > 0 {
+						org.Tutorials[tutorialIndex].Done = true
+						org.Tutorials[tutorialIndex].Link = "/search?tab=workflows"
+					}
+
+					updated = true
+					break
+				}
+			}
+
+			if updated {
+				SetOrg(ctx, *org, org.Id)
+			}
+		} else {
+			log.Printf("[ERROR] Failed getting workflows during new workflow creation for updating stats: %s", err)
+		}
+
 		for _, loopUser := range org.Users {
 			cacheKey := fmt.Sprintf("%s_workflows", loopUser.Id)
 			DeleteCache(ctx, cacheKey)
@@ -4032,6 +3966,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Resetting subflows as they shouldn't be entirely saved. Used just for imports/exports
 	if len(workflow.Subflows) > 0 {
 		log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
+
+		for _, subflow := range workflow.Subflows {
+			SetWorkflow(ctx, subflow, subflow.ID)
+		}
+
+		workflow.Subflows = []Workflow{}
 	}
 
 	if workflow.Status != "test" && workflow.Status != "production" {
@@ -4409,10 +4349,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		//log.Printf("[INFO] Workflow: %s, Trigger %s: %s", workflow.ID, trigger.TriggerType, trigger.Status)
-
 		// Check if it's actually running
-		// FIXME: Do this for other triggers too
 		if trigger.TriggerType == "SCHEDULE" && trigger.Status != "uninitialized" {
 			schedule, err := GetSchedule(ctx, trigger.ID)
 			if err != nil {
@@ -4421,8 +4358,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				trigger.Status = "stopped"
 			}
 		} else if trigger.TriggerType == "SUBFLOW" {
-			for _, param := range trigger.Parameters {
-				//log.Printf("PARAMS: %#v", param)
+			for paramIndex, param := range trigger.Parameters {
 				if param.Name == "workflow" {
 					// Validate workflow exists
 					_, err := GetWorkflow(ctx, param.Value)
@@ -4432,7 +4368,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 							workflow.Errors = append(workflow.Errors, parsedError)
 						}
 
-						log.Printf("[WARNING] Couldn't find subflow %s for workflow %s (%s)", param.Value, workflow.Name, workflow.ID)
+						log.Printf("[INFO] Couldn't find subflow %s for workflow %#v (%s). Setting to self as failover.", param.Value, workflow.Name, workflow.ID)
+						trigger.Parameters[paramIndex].Value = workflow.ID
 					}
 				}
 
@@ -7286,6 +7223,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
+	GetTutorials(*org, true)
 
 	log.Printf("[INFO] Successfully updated org %s (%s)", org.Name, org.Id)
 	resp.WriteHeader(200)
@@ -15243,6 +15182,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	// 1. Check if the app exists and the user has access to it. If public/sharing ->
+
 	if strings.ToLower(value.Type) == "siem" {
 		org.SecurityFramework.SIEM.Name = app.Name
 		org.SecurityFramework.SIEM.Description = app.Description
@@ -15285,14 +15225,57 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		org.SecurityFramework.Communication.LargeImage = app.LargeImage
 	} else {
 		log.Printf("[WARNING] No handler for type %#v in app framework during update of app %#v", value.Type, app.Name)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	// Counting up for the getting started piece
+	cnt := 0
+	if len(org.SecurityFramework.SIEM.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Intel.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Communication.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Assets.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.IAM.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Cases.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.EDR.Name) > 0 {
+		cnt += 1
+	}
+
+	if len(org.SecurityFramework.Network.Name) > 0 {
+		cnt += 1
 	}
 
 	// Add app as active for org too
 	if !ArrayContains(org.ActiveApps, app.ID) {
 		org.ActiveApps = append(org.ActiveApps, app.ID)
+	}
+
+	for tutorialIndex, tutorial := range org.Tutorials {
+		if tutorial.Name == "Find relevant apps" {
+			org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d out of %d apps configured", cnt, 8)
+			if cnt > 0 {
+				org.Tutorials[tutorialIndex].Done = true
+			}
+		}
 	}
 
 	err = SetOrg(ctx, *org, org.Id)
