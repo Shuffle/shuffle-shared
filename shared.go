@@ -6761,6 +6761,25 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	expiration := time.Now().Add(3600 * time.Second)
+
+	newCookie := &http.Cookie{
+		Name:    "session_token",
+		Value:   user.Session,
+		Expires: expiration,
+	}
+
+	if project.Environment == "cloud" {
+		newCookie.Domain = ".shuffler.io"
+		newCookie.Secure = true
+		newCookie.HttpOnly = true
+	}
+
+	http.SetCookie(resp, newCookie)
+
+	newCookie.Name = "__session"
+	http.SetCookie(resp, newCookie)
+
 	// Cleanup cache for the user
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
@@ -8408,6 +8427,9 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			newCookie.HttpOnly = true
 		}
 
+		http.SetCookie(resp, newCookie)
+
+		newCookie.Name = "__session"
 		http.SetCookie(resp, newCookie)
 
 		// ADD TO DATABASE

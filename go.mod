@@ -1,6 +1,7 @@
 module github.com/shuffle/shuffle-shared
 
 // Keep on 1.11 until AppEngine supports 1.17 or higher
+
 go 1.11
 
 //replace github.com/frikky/kin-openapi => ../kin-openapi
