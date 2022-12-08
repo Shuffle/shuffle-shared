@@ -918,13 +918,16 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	runReturn := false
 	userInfo, usererr := HandleApiAuthentication(resp, request)
 	log.Printf("[AUDIT] Logging out user %s (%s)", userInfo.Username, userInfo.Id)
-
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", userInfo.Username))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", userInfo.Id))
 
 			RedirectUserRequest(resp, request)
 			// FIXME: Allow superfluous cleanups?
@@ -6640,18 +6643,30 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Just getting here for later
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
+
+		// Clean up the users' cache for different parts
+
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && len(gceProject) > 0 {
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
 	}
 
-	user, err := HandleApiAuthentication(resp, request)
+	// Checking user error
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed change org: %s", err)
 		resp.WriteHeader(401)
@@ -6693,7 +6708,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	ctx := GetContext(request)
 	foundOrg := false
 	for _, org := range user.Orgs {
 		if org == tmpData.OrgId {
