@@ -3218,7 +3218,13 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating user cache: %s", err)
+			log.Printf("[WARNING] Failed updating user cache (ID): %s", err)
+		}
+
+		cacheKey := fmt.Sprintf("user_%s", strings.ToLower(user.Username))
+		err = SetCache(ctx, cacheKey, data)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating user cache (username): %s", err)
 		}
 	}
 
