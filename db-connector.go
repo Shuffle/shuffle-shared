@@ -403,7 +403,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 			}
 		}
 
-		return "", errors.New(fmt.Sprintf("No cache found in MEMCACHED for %s", name))
+		return "", errors.New(fmt.Sprintf("No cache found in SHUFFLE_MEMCACHED for %s", name))
 	}
 
 	if project.Environment == "cloud" {
@@ -1617,7 +1617,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
+				log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
 				err = nil
 			} else {
 				return &Workflow{}, err
@@ -1691,7 +1691,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
 		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
+				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler (3): %s", err)
 				err = nil
 			} else {
 				return workflow, err
@@ -2129,7 +2129,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			//log.Printf("Users: %#v", curOrg.Users)
 			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
-				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler: %s", err)
+				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler (2): %s", err)
 				err = nil
 
 				users := []User{}
@@ -3139,7 +3139,6 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 				log.Printf("[WARNING] Failed loading user %#v - does it have to change? %s", username, err)
 				return &User{}, err
 			}
-			//	log.Printf("[INFO] Error in user. Migrating to new org and user handler.")
 			//	curUser.ActiveOrg = OrgMini{
 			//		Name: curUser.ActiveOrg.Name,
 			//		Id:   curUser.ActiveOrg.Id,
@@ -3221,7 +3220,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			log.Printf("[WARNING] Failed updating user cache (ID): %s", err)
 		}
 
-		cacheKey := fmt.Sprintf("user_%s", strings.ToLower(user.Username))
+		cacheKey = fmt.Sprintf("user_%s", strings.ToLower(user.Username))
 		err = SetCache(ctx, cacheKey, data)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating user cache (username): %s", err)
@@ -3625,41 +3624,40 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	maxLen := 200
 	queryLimit := 50
 	cursorStr := ""
+
 	allApps = user.PrivateApps
 	org, orgErr := GetOrg(ctx, user.ActiveOrg.Id)
-	if len(user.PrivateApps) > 0 {
+	if len(user.PrivateApps) > 0 && orgErr == nil {
 		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
-		if orgErr == nil {
-			orgChanged := false
-			for _, app := range user.PrivateApps {
-				if !ArrayContains(org.ActiveApps, app.ID) {
-					orgChanged = true
-					org.ActiveApps = append(org.ActiveApps, app.ID)
-				}
+		orgChanged := false
+		for _, app := range user.PrivateApps {
+			if !ArrayContains(org.ActiveApps, app.ID) {
+				orgChanged = true
+				org.ActiveApps = append(org.ActiveApps, app.ID)
 			}
+		}
 
-			if orgChanged {
-				err := SetOrg(ctx, *org, org.Id)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting org %s with %d apps: %s", org.Id, len(org.ActiveApps), err)
+		if orgChanged {
+			err := SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org %s with %d apps: %s", org.Id, len(org.ActiveApps), err)
 
-					if len(org.Users) > 10 {
-						newUsers := []User{}
-						for _, user := range org.Users {
-							if len(user.Id) == 0 {
-								continue
-							}
-
-							newUsers = append(newUsers, user)
+				if len(org.Users) > 10 {
+					newUsers := []User{}
+					for _, user := range org.Users {
+						if len(user.Id) == 0 {
+							continue
 						}
 
-						if len(newUsers) > 0 {
-							org.Users = newUsers
+						newUsers = append(newUsers, user)
+					}
 
-							err := SetOrg(ctx, *org, org.Id)
-							if err != nil {
-								log.Printf("[WARNING] (2) Failed setting org %s with %d apps after cleanup: %s", org.Id, len(org.ActiveApps), err)
-							}
+					if len(newUsers) > 0 {
+						org.Users = newUsers
+
+						err := SetOrg(ctx, *org, org.Id)
+						if err != nil {
+							log.Printf("[WARNING] (2) Failed setting org %s with %d apps after cleanup: %s", org.Id, len(org.ActiveApps), err)
 						}
 					}
 				}
@@ -3689,6 +3687,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 				//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
 				break
+			}
+
+			if orgErr == nil && !ArrayContains(org.ActiveApps, innerApp.ID) {
+				continue
 			}
 
 			if len(innerApp.Actions) == 0 {
@@ -3854,14 +3856,31 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	allApps = append(allApps, publicApps...)
+	//allApps = append(allApps, publicApps...)
+	//log.Printf("Active apps: %d", len(org.ActiveApps))
+	appsAdded := []string{}
+	if orgErr == nil {
+		for _, publicApp := range publicApps {
+			if ArrayContains(org.ActiveApps, publicApp.ID) {
+				appsAdded = append(appsAdded, publicApp.ID)
+				allApps = append(allApps, publicApp)
+			}
+		}
+	}
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
+	// Instead loading in all public apps which is shared between all orgs
+	// This should make the request fast for everyone except that one
+	// person who loads it first (or keeps it in cache?)
 	if orgErr == nil && len(org.ActiveApps) > 0 {
 		//log.Printf("[INFO] Should append ORG APPS: %#v", org.ActiveApps)
 
 		allKeys := []*datastore.Key{}
 		for _, appId := range org.ActiveApps {
+			if ArrayContains(appsAdded, appId) {
+				continue
+			}
+
 			found := false
 			for _, app := range allApps {
 				if app.ID == appId {
@@ -3898,30 +3917,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					log.Printf("[DEBUG] Found action %s (%s) directly with %d actions", app.Name, app.ID, len(newApp.Actions))
 					newApps[appIndex] = *newApp
 				}
-
-				/*
-					parsedApi, err := GetOpenApiDatastore(ctx, app.ID)
-					if err != nil {
-						log.Printf("[WARNING] Failed to find OpenAPI while parsing %s", app)
-						continue
-					}
-
-					log.Printf("API: %#v", parsedApi)
-					_ = parsedApi
-					// Hardcoded for a test sample
-				*/
-				//newActions := []WorkflowAppAction{}
-				//if app.ID == "SentinelOne" {
-				//	newActions = append(newActions, WorkflowAppAction{
-				//		Name: "get_threats",
-				//	})
-				//}
-
-				//if len(parsedApi.Body.Paths) > 0 {
-				//	for path, pathValue := range parsedApi.Paths {
-				//		log.Printf("Path: %s", path)
-				//	}
-				//}
 
 			}
 		}
@@ -6806,7 +6801,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[INFO] Error in workflow loading. Migrating workflow to new workflow handler.")
+				log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (2): %s", err)
 				err = nil
 			} else {
 				return cacheData, err
@@ -6844,7 +6839,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
-	log.Printf("[DEBUG] Starting with memcached address %#v. If this is empty, fallback to appengine", memcached)
+	log.Printf("[DEBUG] Starting with memcached address %#v (SHUFFLE_MEMCACHED). If this is empty, fallback to appengine", memcached)
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(dbType) == "elasticsearch" || strings.ToLower(dbType) == "opensearch" {

@@ -1022,10 +1022,24 @@ func MakeGmailSubscription(client *http.Client, folderIds []string) (SubResponse
 func ExtendOutlookSubscription(client *http.Client, subscriptionId string) error {
 	fullUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/subscriptions/%s", subscriptionId)
 
+	t := time.Now().Local().Add(time.Minute * time.Duration(4200))
+	timeFormat := fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d.0000000Z", t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
+
+	sub := OutlookSubscription{
+		ExpirationDateTime: timeFormat,
+	}
+	//ClientState:        "This is a test",
+
+	data, err := json.Marshal(sub)
+	if err != nil {
+		log.Printf("[ERROR] Marshal problem in sub extension: %s", err)
+		return err
+	}
+
 	req, err := http.NewRequest(
 		"PATCH",
 		fullUrl,
-		nil,
+		bytes.NewBuffer(data),
 	)
 	req.Header.Add("Content-Type", "application/json")
 
@@ -1050,7 +1064,7 @@ func ExtendOutlookSubscription(client *http.Client, subscriptionId string) error
 	return nil
 }
 
-func makeOutlookSubscription(client *http.Client, folderIds []string, notificationURL string) (string, error) {
+func MakeOutlookSubscription(client *http.Client, folderIds []string, notificationURL string) (string, error) {
 	fullUrl := "https://graph.microsoft.com/v1.0/subscriptions"
 
 	// FIXME - this expires rofl
@@ -1465,7 +1479,7 @@ func HandleDeleteOutlookSub(resp http.ResponseWriter, request *http.Request) {
 	// Check what kind of sub it is
 	err = HandleOutlookSubRemoval(ctx, user, workflowId, triggerId)
 	if err != nil {
-		log.Printf("Failed sub removal: %s", err)
+		log.Printf("[ERROR] Failed sub removal: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1687,7 +1701,7 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 	failCnt := 0
 	log.Printf("[INFO] Folders: %#v", curTrigger.Folders)
 	for {
-		subId, err := makeOutlookSubscription(outlookClient, curTrigger.Folders, notificationURL)
+		subId, err := MakeOutlookSubscription(outlookClient, curTrigger.Folders, notificationURL)
 		if err != nil {
 			failCnt += 1
 
@@ -2913,7 +2927,7 @@ func (v *CodeVerifier) CodeChallengeS256() string {
 	return base64URLEncode(h.Sum(nil))
 }
 
-//https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
+// https://dev-18062.okta.com/oauth2/default/v1/authorize?client_id=0oa3&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
 func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, codeChallenge, clientSecret string) ([]byte, error) {
 	client := &http.Client{}
 	data := fmt.Sprintf("client_id=%s&grant_type=authorization_code&redirect_uri=%s&code=%s&code_verifier=%s", clientId, redirectUri, code, codeChallenge)

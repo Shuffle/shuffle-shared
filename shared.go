@@ -6932,6 +6932,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		},
 		CloudSyncActive: parentOrg.CloudSyncActive,
 		CreatorOrg:      tmpData.OrgId,
+		ActiveApps:      parentOrg.ActiveApps,
 	}
 	//SyncFeatures:    parentOrg.SyncFeatures,
 
