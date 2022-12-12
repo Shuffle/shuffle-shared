@@ -3004,13 +3004,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		CompanyRole string   `json:"company_role"`
 		Suborgs     []string `json:"suborgs"`
 
-		CreatorDescription string           `json:"creator_description"`
-		CreatorUrl         string           `json:"creator_url"`
-		CreatorLocation    string           `json:"creator_location"`
-		CreatorSkills      string           `json:"creator_skills"`
-		CreatorWorkStatus  string           `json:"creator_work_status"`
-		CreatorSocial      string           `json:"creator_social"`
-		SpecializedApps    []SpecializedApp `json:"specialized_apps"`
+		CreatorDescription string          `json:"creator_description"`
+		CreatorUrl         string          `json:"creator_url"`
+		CreatorLocation    string          `json:"creator_location"`
+		CreatorSkills      string          `json:"creator_skills"`
+		CreatorWorkStatus  string          `json:"creator_work_status"`
+		CreatorSocial      string          `json:"creator_social"`
+		SpecializedApps    []MinimizedApps `json:"specialized_apps"`
 	}
 
 	ctx := GetContext(request)
@@ -3157,37 +3157,57 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			foundUser.EthInfo = t.EthInfo
 		}
 
-		// Related to creators
-		if len(t.CreatorDescription) > 0 {
-			foundUser.PublicProfile.GithubBio = t.CreatorDescription
-		}
+		username := foundUser.PublicProfile.GithubUsername
+		creator, err := HandleAlgoliaCreatorSearch(ctx, username)
 
-		if len(t.CreatorUrl) > 0 {
-			foundUser.PublicProfile.GithubUrl = t.CreatorUrl
-		}
-
-		if len(t.CreatorLocation) > 0 {
-			foundUser.PublicProfile.GithubLocation = t.CreatorLocation
-		}
-
-		if len(t.CreatorSkills) > 0 {
-			foundUser.PublicProfile.Skills = strings.Split(t.CreatorSkills, ",")
-		}
-
-		if len(t.CreatorWorkStatus) > 0 {
-			foundUser.PublicProfile.WorkStatus = t.CreatorWorkStatus
-		}
-
-		if len(t.CreatorSocial) > 0 {
-			foundUser.PublicProfile.Social = strings.Split(t.CreatorSocial, ",")
-		}
-
-		if len(t.SpecializedApps) > 0 {
-			for _, app := range t.SpecializedApps {
-				algoliaUser.SpecializedApps = append(algoliaUser.SpecializedApps, app)
+		// FIXME: If any of the parts below are updated, also update
+		// the same field within Algolia itself.
+		if err == nil {
+			// Related to creators
+			if len(t.CreatorDescription) > 0 {
+				foundUser.PublicProfile.GithubBio = t.CreatorDescription
 			}
 
-			// Update the user in algolia here
+			if len(t.CreatorUrl) > 0 {
+				foundUser.PublicProfile.GithubUrl = t.CreatorUrl
+			}
+
+			if len(t.CreatorLocation) > 0 {
+				foundUser.PublicProfile.GithubLocation = t.CreatorLocation
+			}
+
+			if len(t.CreatorSkills) > 0 {
+				foundUser.PublicProfile.Skills = strings.Split(t.CreatorSkills, ",")
+			}
+
+			if len(t.CreatorWorkStatus) > 0 {
+				foundUser.PublicProfile.WorkStatus = t.CreatorWorkStatus
+			}
+
+			if len(t.CreatorSocial) > 0 {
+				foundUser.PublicProfile.Social = strings.Split(t.CreatorSocial, ",")
+			}
+
+			if len(t.SpecializedApps) > 0 {
+				// Update the user in algolia here
+				for _, app := range t.SpecializedApps {
+					found := false
+					for _, currentApp := range creator.SpecializedApps {
+						if currentApp.Name == app.Name {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						creator.SpecializedApps = append(creator.SpecializedApps, app)
+					}
+				}
+
+				foundUser.PublicProfile.SpecializedApps = creator.SpecializedApps
+			}
+		} else {
+			log.Printf("[ERROR] Failed to find creator with username %s: %s", username, err)
 		}
 	}
 
