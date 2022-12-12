@@ -3004,12 +3004,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		CompanyRole string   `json:"company_role"`
 		Suborgs     []string `json:"suborgs"`
 
-		CreatorDescription string `json:"creator_description"`
-		CreatorUrl         string `json:"creator_url"`
-		CreatorLocation    string `json:"creator_location"`
-		CreatorSkills      string `json:"creator_skills"`
-		CreatorWorkStatus  string `json:"creator_work_status"`
-		CreatorSocial      string `json:"creator_social"`
+		CreatorDescription string           `json:"creator_description"`
+		CreatorUrl         string           `json:"creator_url"`
+		CreatorLocation    string           `json:"creator_location"`
+		CreatorSkills      string           `json:"creator_skills"`
+		CreatorWorkStatus  string           `json:"creator_work_status"`
+		CreatorSocial      string           `json:"creator_social"`
+		SpecializedApps    []SpecializedApp `json:"specialized_apps"`
 	}
 
 	ctx := GetContext(request)
@@ -3150,33 +3151,44 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		foundUser.PersonalInfo.Role = t.CompanyRole
 	}
 
-	if len(t.EthInfo.Account) > 0 {
-		log.Printf("[DEBUG] Should set ethinfo to %#v", t.EthInfo)
-		foundUser.EthInfo = t.EthInfo
-	}
+	if project.Environment == "cloud" {
+		if len(t.EthInfo.Account) > 0 {
+			log.Printf("[DEBUG] Should set ethinfo to %#v", t.EthInfo)
+			foundUser.EthInfo = t.EthInfo
+		}
 
-	if len(t.CreatorDescription) > 0 {
-		foundUser.PublicProfile.GithubBio = t.CreatorDescription
-	}
+		// Related to creators
+		if len(t.CreatorDescription) > 0 {
+			foundUser.PublicProfile.GithubBio = t.CreatorDescription
+		}
 
-	if len(t.CreatorUrl) > 0 {
-		foundUser.PublicProfile.GithubUrl = t.CreatorUrl
-	}
+		if len(t.CreatorUrl) > 0 {
+			foundUser.PublicProfile.GithubUrl = t.CreatorUrl
+		}
 
-	if len(t.CreatorLocation) > 0 {
-		foundUser.PublicProfile.GithubLocation = t.CreatorLocation
-	}
+		if len(t.CreatorLocation) > 0 {
+			foundUser.PublicProfile.GithubLocation = t.CreatorLocation
+		}
 
-	if len(t.CreatorSkills) > 0 {
-		foundUser.PublicProfile.Skills = strings.Split(t.CreatorSkills, ",")
-	}
+		if len(t.CreatorSkills) > 0 {
+			foundUser.PublicProfile.Skills = strings.Split(t.CreatorSkills, ",")
+		}
 
-	if len(t.CreatorWorkStatus) > 0 {
-		foundUser.PublicProfile.WorkStatus = t.CreatorWorkStatus
-	}
+		if len(t.CreatorWorkStatus) > 0 {
+			foundUser.PublicProfile.WorkStatus = t.CreatorWorkStatus
+		}
 
-	if len(t.CreatorSocial) > 0 {
-		foundUser.PublicProfile.Social = strings.Split(t.CreatorSocial, ",")
+		if len(t.CreatorSocial) > 0 {
+			foundUser.PublicProfile.Social = strings.Split(t.CreatorSocial, ",")
+		}
+
+		if len(t.SpecializedApps) > 0 {
+			for _, app := range t.SpecializedApps {
+				algoliaUser.SpecializedApps = append(algoliaUser.SpecializedApps, app)
+			}
+
+			// Update the user in algolia here
+		}
 	}
 
 	//CreatorSkills string `json:"creator_skills"`
