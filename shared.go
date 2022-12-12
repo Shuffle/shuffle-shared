@@ -3189,7 +3189,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if len(t.SpecializedApps) > 0 {
-				// Update the user in algolia here
+				// FIXME: Update the user in algolia here. Currently just updating existing user
 				for _, app := range t.SpecializedApps {
 					found := false
 					for _, currentApp := range creator.SpecializedApps {
@@ -3204,7 +3204,22 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				foundUser.PublicProfile.SpecializedApps = creator.SpecializedApps
+				for _, creatorApp := range creator.SpecializedApps {
+					// If not found in foundUser.PublicProfile
+					found := false
+					for _, userApp := range foundUser.PublicProfile.SpecializedApps {
+						if userApp.Name == creatorApp.Name {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						foundUser.PublicProfile.SpecializedApps = append(foundUser.PublicProfile.SpecializedApps, creatorApp)
+					}
+				}
+
+				//foundUser.PublicProfile.SpecializedApps = creator.SpecializedApps
 			}
 		} else {
 			log.Printf("[ERROR] Failed to find creator with username %s: %s", username, err)
