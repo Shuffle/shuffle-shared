@@ -2613,6 +2613,8 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		maxAmount = 1000
 	}
 
+	log.Printf("[DEBUG] Amount of workflows to get: %d", maxAmount)
+
 	workflowExecutions, err := GetAllWorkflowExecutions(ctx, fileId, maxAmount)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting executions for %s", fileId)
@@ -2621,7 +2623,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("[DEBUG] Got %d executions", len(workflowExecutions))
+	log.Printf("[DEBUG] Got %d executions", len(workflowExecutions))
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
@@ -8368,7 +8370,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	if userdata.MFA.Active && len(data.MFACode) == 0 {
 		log.Printf(`[DEBUG] Username %s (%s) has MFA activated. Redirecting.`, userdata.Username, userdata.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "MFA_REDIRECT"}`)))
 		return
 	}

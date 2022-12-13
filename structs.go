@@ -3044,15 +3044,16 @@ type UsecaseStep struct {
 }
 
 type UsecaseMerge struct {
-	Name        string        `json:"id"`
-	Id          string        `json:"name"`
-	Source      UsecaseStep   `json:"source"`
-	Middle      []UsecaseStep `json:"middle"`
-	Destination UsecaseStep   `json:"destination"`
-	OrgId       string        `json:"org_id"`
-	Username    string        `json:"username"`
-	UserId      string        `json:"user_id"`
-	Timestamp   int64         `json:"timestamp"`
+	Name           string        `json:"id"`
+	Id             string        `json:"name"`
+	Source         UsecaseStep   `json:"source"`
+	Middle         []UsecaseStep `json:"middle"`
+	Destination    UsecaseStep   `json:"destination"`
+	OrgId          string        `json:"org_id"`
+	Username       string        `json:"username"`
+	UserId         string        `json:"user_id"`
+	Timestamp      int64         `json:"timestamp"`
+	SourcePlatform string        `json:"source_platform"`
 }
 
 type AppStats struct {

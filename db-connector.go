@@ -6270,7 +6270,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 		//totalMaxSize := 22369621 // Total of App Engine max /3*2
 		totalMaxSize := 11184810
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
-		max := 100
+		max := amount
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)

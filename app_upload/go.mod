@@ -2,7 +2,7 @@ module stitcher
 
 go 1.15
 
-//replace github.com/shuffle/shuffle-shared => ../
+replace github.com/shuffle/shuffle-shared => ../
 
 require (
 	cloud.google.com/go/storage v1.14.0
