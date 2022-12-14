@@ -370,6 +370,7 @@ var usecaseData = `[
         ]
     }
 ]`
+var sandboxProject = "shuffle-sandbox-337810"
 
 func GetContext(request *http.Request) context.Context {
 	if project.Environment == "cloud" && len(memcached) == 0 {
@@ -922,7 +923,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
@@ -2970,8 +2971,9 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
+
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Update User request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
@@ -5348,7 +5350,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting API GEN request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
@@ -5595,7 +5597,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Password Change request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
@@ -6172,7 +6174,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
@@ -6703,7 +6705,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		// Clean up the users' cache for different parts
 
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
@@ -8181,7 +8183,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		// Checking if it's a special region. All user-specific requests should
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && len(gceProject) > 0 {
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
