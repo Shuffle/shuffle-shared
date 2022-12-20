@@ -370,6 +370,7 @@ var usecaseData = `[
         ]
     }
 ]`
+
 var sandboxProject = "shuffle-sandbox-337810"
 
 func GetContext(request *http.Request) context.Context {
@@ -2982,7 +2983,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("Api authentication failed in update user: %s", err)
+		log.Printf("[AUDIT] Api authentication failed in update user: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2990,9 +2991,9 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("Failed reading body")
+		log.Println("[WARNING] Failed reading body in update user: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Missing field: user_id"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Required field: user_id"}`)))
 		return
 	}
 
@@ -3023,7 +3024,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshaling userId: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Missing field: user_id"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Required field: user_id"}`)))
 		return
 	}
 
