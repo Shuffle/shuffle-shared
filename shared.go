@@ -2635,6 +2635,9 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	for index, execution := range workflowExecutions {
 		newResults := []ActionResult{}
+		newActions := []Action{}
+
+		// Results
 		for _, result := range execution.Results {
 			newParams := []WorkflowAppActionParameter{}
 			for _, param := range result.Action.Parameters {
@@ -2651,7 +2654,25 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 			newResults = append(newResults, result)
 		}
 
+		// Actions
+		for _, action := range execution.Workflow.Actions {
+			newParams := []WorkflowAppActionParameter{}
+			for _, param := range action.Parameters {
+				//log.Printf("PARAM: %#v", param)
+				if param.Configuration || strings.Contains(strings.ToLower(param.Name), "user") || strings.Contains(strings.ToLower(param.Name), "key") || strings.Contains(strings.ToLower(param.Name), "pass") {
+					param.Value = ""
+					//log.Printf("FOUND CONFIG: %s!!", param.Name)
+				}
+
+				newParams = append(newParams, param)
+			}
+
+			action.Parameters = newParams
+			newActions = append(newActions, action)
+		}
+
 		workflowExecutions[index].Results = newResults
+		workflowExecutions[index].Workflow.Actions = newActions
 	}
 
 	newjson, err := json.Marshal(workflowExecutions)
@@ -8930,13 +8951,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	}
 
 	return nil
-
-	//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
-	//if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
-	//	subflowResults[subflowIndex].Result = newExecution.Result
-	//	updated = true
-	//	finished += 1
-	//}
 }
 
 // Re-validating whether the workflow is done or not IF a result should be found.
@@ -9014,7 +9028,6 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 		return
 	}
 
-	//log.Printf("\n\nSTILL NOT FINISHED: %#v - add to results", foundNotExecuted)
 	for _, executionItem := range foundNotExecuted {
 		cacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, executionItem)
 		cache, err := GetCache(ctx, cacheId)
@@ -9328,7 +9341,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	newResult := FixBadJsonBody([]byte(actionResult.Result))
 	actionResult.Result = string(newResult)
 
-	//if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 
 		setExecVar := true
@@ -9416,298 +9428,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	//log.Printf("[DEBUG] STATUS OF %s: %s", actionResult.Action.AppName, actionResult.Status)
 	if actionResult.Status == "SUCCESS" && actionResult.Action.AppName == "shuffle-subflow" {
 		dbSave = true
-
-		//runCheck := false
-		//for _, param := range actionResult.Action.Parameters {
-		//	if param.Name == "check_result" {
-		//		//log.Printf("[INFO] RESULT: %#v", param)
-		//		if param.Value == "true" {
-		//			runCheck = true
-		//		}
-
-		//		break
-		//	}
-		//}
-
-		//_ = runCheck
-		////log.Printf("\n\nRUNCHECK: %#v\n\n", runCheck)
-		//if runCheck {
-		//	log.Printf("[WARNING] Sinkholing request IF the subflow-result DOESNT have result. Value: %s", actionResult.Result)
-		//	var subflowData SubflowData
-		//	err = json.Unmarshal([]byte(actionResult.Result), &subflowData)
-		//	if err == nil {
-		//		if len(subflowData.Result) == 0 {
-		//			//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
-		//			log.Printf("\n\nNO RESULT FOR SUBFLOW RESULT - RETURNING\n\n")
-		//			return &workflowExecution, false, nil
-		//		}
-		//	}
-		//	//type SubflowData struct {
-		//}
-		//	log.Printf("[INFO] Validating subflow result in workflow %s", workflowExecution.ExecutionId)
-
-		//	// WAY lower timeout in cloud
-		//	// Should probably change it for enterprise customers?
-		//	// Idk how to handle this in cloud yet.
-		//	// FIXME: Check "if finished {" location, and the ExecutionParent for realtime data
-		//	// E.g. the subitem itself updating it
-		//	// 60*30 = 1800 = 30 minutes of waiting potentially
-		//	// This is NOT ideal.
-		//	subflowTimeout := 1800
-		//	if project.Environment == "cloud" {
-		//		subflowTimeout = 120
-		//	}
-
-		//	subflowResult := SubflowData{}
-		//	subflowResults := []SubflowData{}
-		//	err = json.Unmarshal([]byte(actionResult.Result), &subflowResult)
-
-		//	// This is just in case it's running in the worker
-		//	backendUrl := os.Getenv("BASE_URL")
-		//	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
-		//	log.Printf("[DEBUG] ResultURL: %s", backendUrl)
-		//	topClient := &http.Client{
-		//		Transport: &http.Transport{
-		//			Proxy: nil,
-		//		},
-		//	}
-		//	newExecution := WorkflowExecution{}
-
-		//	httpProxy := os.Getenv("HTTP_PROXY")
-		//	httpsProxy := os.Getenv("HTTPS_PROXY")
-		//	if len(httpProxy) > 0 || len(httpsProxy) > 0 {
-		//		topClient = &http.Client{}
-		//	} else {
-		//		if len(httpProxy) > 0 {
-		//			log.Printf("Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
-		//		}
-		//		if len(httpsProxy) > 0 {
-		//			log.Printf("Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
-		//		}
-		//	}
-
-		//	if err != nil {
-		//		subflowResults = []SubflowData{}
-		//		err = json.Unmarshal([]byte(actionResult.Result), &subflowResults)
-		//		if err == nil {
-		//			//log.Printf("[INFO] Should get data for %d subflow executions", len(subflowResults))
-		//			count := 0
-		//			updated := false
-		//			//newResult := ""
-
-		//			for {
-		//				time.Sleep(3 * time.Second)
-
-		//				finished := 0
-		//				for subflowIndex, subflowResult := range subflowResults {
-		//					if !subflowResult.Success || len(subflowResult.Result) != 0 {
-		//						finished += 1
-		//						continue
-		//					}
-
-		//					// Have to get from backend IF no environment (worker, onprem)
-		//					// "worker"
-		//					if project.Environment == "" {
-		//						data, err := json.Marshal(subflowResult)
-		//						if err != nil {
-		//							log.Printf("[WARNING] Failed init marshal: %s", err)
-		//							continue
-		//						}
-
-		//						req, err := http.NewRequest(
-		//							"POST",
-		//							resultUrl,
-		//							bytes.NewBuffer([]byte(data)),
-		//						)
-
-		//						newresp, err := topClient.Do(req)
-		//						if err != nil {
-		//							log.Printf("[ERROR] Failed making request: %s", err)
-		//							continue
-		//						}
-
-		//						body, err := ioutil.ReadAll(newresp.Body)
-		//						if err != nil {
-		//							log.Printf("[ERROR] Failed reading body: %s", err)
-		//							continue
-		//						}
-
-		//						if newresp.StatusCode != 200 {
-		//							log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
-		//							continue
-		//						}
-
-		//						err = json.Unmarshal(body, &newExecution)
-		//						if err != nil {
-		//							log.Printf("[ERROR] Failed newexecutuion unmarshal: %s", err)
-		//							continue
-		//						}
-
-		//						//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
-		//						if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
-		//							subflowResults[subflowIndex].Result = newExecution.Result
-		//							updated = true
-		//							finished += 1
-		//						}
-
-		//					} else {
-		//						tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
-		//						newExecution := *tmpExecution
-		//						if err != nil {
-		//							log.Printf("[WARNING] Error getting subflow data: %s", err)
-		//						} else {
-		//							//log.Printf("Results: %d, status: %s", len(workflowExecution.Results), workflowExecution.Status)
-		//							if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
-		//								subflowResults[subflowIndex].Result = newExecution.Result
-		//								updated = true
-		//								finished += 1
-		//							}
-		//						}
-		//					}
-		//				}
-
-		//				if finished == len(subflowResults) {
-		//					break
-		//				}
-
-		//				if count >= subflowTimeout/3 {
-		//					break
-		//				}
-
-		//				count += 1
-		//			}
-
-		//			if updated {
-		//				newJson, err := json.Marshal(subflowResults)
-		//				if err == nil {
-		//					actionResult.Result = string(newJson)
-		//				} else {
-		//					log.Printf("[WARNING] Failed marshalling subflowresultS: %s", err)
-		//				}
-		//			}
-		//		}
-		//	}
-
-		//	if err == nil && subflowResult.Success == true && len(subflowResult.ExecutionId) > 0 {
-		//		log.Printf("[DEBUG] Should get data for subflow execution %s", subflowResult.ExecutionId)
-		//		count := 0
-		//		for {
-		//			time.Sleep(3 * time.Second)
-
-		//			if count >= subflowTimeout/3 {
-		//				break
-		//			}
-
-		//			// Worker & onprem
-		//			if project.Environment == "" {
-		//				data, err := json.Marshal(subflowResult)
-		//				if err != nil {
-		//					log.Printf("[WARNING] Failed init marshal: %s", err)
-		//					count += 1
-		//					continue
-		//				}
-
-		//				req, err := http.NewRequest(
-		//					"POST",
-		//					resultUrl,
-		//					bytes.NewBuffer([]byte(data)),
-		//				)
-
-		//				newresp, err := topClient.Do(req)
-		//				if err != nil {
-		//					log.Printf("[ERROR] Failed making request: %s", err)
-		//					count += 1
-		//					continue
-		//				}
-
-		//				body, err := ioutil.ReadAll(newresp.Body)
-		//				if err != nil {
-		//					log.Printf("[ERROR] Failed reading body: %s", err)
-		//					count += 1
-		//					continue
-		//				}
-
-		//				if newresp.StatusCode != 200 {
-		//					log.Printf("[ERROR] Bad statuscode getting subresult: %d, %s", newresp.StatusCode, string(body))
-		//					count += 1
-		//					continue
-		//				}
-
-		//				err = json.Unmarshal(body, &newExecution)
-		//				if err != nil {
-		//					log.Printf("[ERROR] Failed workflowExecution unmarshal: %s", err)
-		//					count += 1
-		//					continue
-		//				}
-
-		//				//log.Printf("Results: %d, status: %s, result: %s", len(newExecution.Results), newExecution.Status, newExecution.Result)
-		//				if newExecution.Status == "FINISHED" || newExecution.Status == "SUCCESS" {
-		//					subflowResult.Result = newExecution.Result
-		//					break
-		//					//subflowResults[subflowIndex].Result = workflowExecution.Result
-		//					//updated = true
-		//					//finished += 1
-		//				}
-		//			} else {
-		//				tmpExecution, err := GetWorkflowExecution(ctx, subflowResult.ExecutionId)
-		//				newExecution = *tmpExecution
-		//				if err != nil {
-		//					log.Printf("[WARNING] Error getting subflow data: %s", err)
-		//				} else {
-		//					//log.Printf("Results: %d, status: %s", len(newExecution.Results), newExecution.Status)
-		//					if newExecution.Status == "FINISHED" || newExecution.Status == "ABORTED" {
-		//						subflowResult.Result = newExecution.Result
-		//						break
-		//					}
-
-		//				}
-		//			}
-
-		//			count += 1
-		//		}
-		//	}
-
-		//	if len(subflowResult.Result) > 0 {
-		//		newJson, err := json.Marshal(subflowResult)
-		//		if err == nil {
-		//			actionResult.Result = string(newJson)
-		//		} else {
-		//			log.Printf("[WARNING] Failed marshalling subflowresult: %s", err)
-		//		}
-		//	}
-		//} else {
-		//	log.Printf("[WARNING] Skipping subresult check!")
-		//}
-
-		// Updating in case the execution got more info
-		//if project.Environment != "" {
-		//	parsedExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-		//	if err != nil {
-		//		log.Printf("[ERROR] FAILED to reload execution after subflow check: %s", err)
-		//	} else {
-		//		log.Printf("[DEBUG] Re-updated execution after subflow check!")
-		//	}
-
-		//	workflowExecution = *parsedExecution
-		//} else {
-		//	if updateParam {
-		//		return &workflowExecution, false, errors.New("Rerun this transaction with updated values")
-		//	}
-
-		//	log.Printf("[INFO] Skipping updateparam with %d results", len(workflowExecution.Results))
-		//	// return &workflowExecution, dbSave, err
-		//	//return
-		//	//func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
-
-		//	//type SubflowData struct {
-		//	//	Success       bool   `json:"success"`
-		//	//	ExecutionId   string `json:"execution_id"`
-		//	//	Authorization string `json:"authorization"`
-		//	//	Result        string `json:"result"`
-		//	//}
-		//	//log.Printf("[DEBUG] NOT validating updated workflowExecution because worker")
-		//}
-
 	}
 
 	if actionResult.Status == "ABORTED" || actionResult.Status == "FAILURE" {
@@ -10437,8 +10157,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 				}
 			}
-
-			//log.Println("Might be finished based on length of results and everything being SUCCESS or FINISHED - VERIFY THIS. Setting status to finished.")
 
 			workflowExecution.Result = lastResult
 			workflowExecution.Status = "FINISHED"
@@ -12252,7 +11970,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		curAuth, err := GetWorkflowAppAuthDatastore(ctx, action.AuthenticationId)
 
 		if err != nil {
-			log.Printf("[WARNING] Failed getting authentication for your org: %s", err)
+			log.Printf("[ERROR] Failed getting authentication with ID %s for org %s: %s", action.AuthenticationId, user.ActiveOrg.Id, err)
 			return workflowExecution, err
 		}
 
@@ -14357,8 +14075,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if len(allAuths) == 0 {
 				allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
 				if err != nil {
-					log.Printf("Api authentication failed in get all app auth: %s", err)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Api authentication failed in get all app auth: %s", err), err
+					log.Printf("[ERROR] Api authentication failed in get all app auth for ID %s: %s", workflow.ExecutingOrg.Id, err)
+					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Api authentication failed in get all app auth for %s: %s", workflow.ExecutingOrg.Id, err), err
 				}
 			}
 
@@ -14379,12 +14097,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if curAuth.Encrypted {
 				setField := true
 				newFields := []AuthenticationStore{}
+				fieldLength := 0
 				for _, field := range curAuth.Fields {
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
-						log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
+						log.Printf("[ERROR] Failed decryption in org %s for %s: %s", curAuth.OrgId, field.Key, err)
 						setField = false
+						//fieldLength = 0
 						break
 					}
 
@@ -14399,12 +14119,27 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
 					}
 
+					fieldLength += len(newValue)
 					field.Value = string(newValue)
 					newFields = append(newFields, field)
 				}
 
+				// There is some Very weird bug that has caused encryption to sometimes be skipped.
+				// This is a way to discover when this happens properly.
+				// The problem happens about every 10.000~ decryption, which is still way too much.
+				// By adding the full total, there should be no problem with this, seeing as lengths are added together
+				fieldNames := ""
+				for _, field := range curAuth.Fields {
+					fieldNames += field.Key + ", "
+				}
+
 				if setField {
 					curAuth.Fields = newFields
+
+					log.Printf("[DEBUG] Outer decryption debugging for %s. Auth: %#v, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+				} else {
+					log.Printf("[ERROR] Outer decryption debugging for %s. Auth: %#v. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+
 				}
 			} else {
 				//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
