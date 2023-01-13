@@ -959,12 +959,17 @@ type GmailSubscription struct {
 	LabelFilterAction []string `json:"labelFilterAction"`
 }
 
-func MakeGmailSubscription(client *http.Client, folderIds []string) (SubResponse, error) {
+func MakeGmailSubscription(ctx context.Context, client *http.Client, folderIds []string) (SubResponse, error) {
 	fullUrl := "https://www.googleapis.com/gmail/v1/users/me/watch"
 
 	// FIXME - this expires rofl
 	//t := time.Now().Local().Add(time.Minute * time.Duration(4200))
 	//timeFormat := fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d.0000000Z", t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
+
+	err := cancelGmailSubscription(ctx, client)
+	if err != nil {
+		log.Printf("[WARNING] Failed to cancel gmail subscription before remaking it: %s", err)
+	}
 
 	resource := "projects/shuffler/topics/gmail_testing"
 	//log.Printf("[INFO] Subscription resource to get for gmail: %s", resource)
@@ -1057,7 +1062,7 @@ func ExtendOutlookSubscription(client *http.Client, subscriptionId string) error
 	}
 
 	if res.StatusCode != 200 && res.StatusCode != 201 {
-		log.Printf("[ERROR] Re-subscription failed. Status: %d", res.StatusCode)
+		log.Printf("[ERROR] Outlook Re-subscription failed. Status: %d", res.StatusCode)
 		return errors.New(fmt.Sprintf("RE-subscription failed: %s", string(body)))
 	}
 
@@ -1897,7 +1902,7 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 	trigger.Folders = curTrigger.Folders
 
 	for {
-		sub, err := MakeGmailSubscription(gmailClient, curTrigger.Folders)
+		sub, err := MakeGmailSubscription(ctx, gmailClient, curTrigger.Folders)
 		if err != nil {
 			log.Printf("[WARNING] Failed making oauth subscription for gmail - cancelling request: %s", err)
 			resp.WriteHeader(401)
@@ -2836,7 +2841,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if callSub {
-		MakeGmailSubscription(gmailClient, trigger.Folders)
+		MakeGmailSubscription(ctx, gmailClient, trigger.Folders)
 	}
 
 	resp.WriteHeader(200)
@@ -3108,7 +3113,7 @@ func GetOutlookClient(ctx context.Context, code string, accessToken OauthToken, 
 	return client, access_token, nil
 }
 
-func getGmailFolders(client *http.Client) (OutlookFolders, error) {
+func GetGmailFolders(client *http.Client) (OutlookFolders, error) {
 	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/ec03b4f2-fccf-4c35-b0eb-be85a0f5dd43/mailFolders")
 	requestUrl := fmt.Sprintf("https://gmail.googleapis.com/gmail/v1/users/me/labels")
 
@@ -3182,7 +3187,7 @@ func getOutlookFolders(client *http.Client) (OutlookFolders, error) {
 	}
 
 	//log.Printf("[INFO] Folder Body: %s", string(body))
-	log.Printf("[INFO] Status folders: %d", ret.StatusCode)
+	log.Printf("[INFO] Status Outlook folders: %d. Reason: %s", ret.StatusCode, string(body))
 	if ret.StatusCode != 200 {
 		return OutlookFolders{}, err
 	}
@@ -3234,7 +3239,7 @@ func HandleGetGmailFolders(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	trigger, err := GetTriggerAuth(ctx, triggerId)
+	triggerAuth, err := GetTriggerAuth(ctx, triggerId)
 	if err != nil {
 		log.Printf("[AUDIT] Trigger %s doesn't exist - gmail folders.", triggerId)
 		resp.WriteHeader(401)
@@ -3242,31 +3247,16 @@ func HandleGetGmailFolders(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if trigger.OrgId != user.ActiveOrg.Id {
-		log.Printf("[AUDIT] User %s is accessing trigger %s without permission.", user.ActiveOrg.Id, triggerId)
+	if triggerAuth.OrgId != user.ActiveOrg.Id {
+		log.Printf("[AUDIT] User %s is accessing trigger auth %s without permission.", user.ActiveOrg.Id, triggerId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Trigger doesn't exist."}`))
 		return
 	}
 
-	//client, accessToken, err := getOutlookClient(ctx, code, OauthToken{}, url)
-	//if err != nil {
-	//	log.Printf("Oauth client failure - outlook register: %s", err)
-	//	resp.WriteHeader(401)
-	//	return
-	//}
-
-	// FIXME - should be shuffler in literally every case except testing lol
-	//log.Printf("TRIGGER: %#v", trigger)
-	//redirectDomain := "localhost:5001"
-	//url := fmt.Sprintf("http://%s/api/v1/triggers/gmail/register", redirectDomain)
-	//if project.Environment == "cloud" {
-	//	url = fmt.Sprintf("https://shuffler.io/api/v1/triggers/gmail/register", redirectDomain)
-	//}
-
-	/* Fix refresh tokens!! */
-	gmailClient, err := RefreshGmailClient(ctx, *trigger)
-	//gmailClient, _, err := GetGmailClient(ctx, "", trigger.OauthToken, url)
+	log.Printf("AUTH: %#v", triggerAuth)
+	//gmailClient, _, err := GetGmailClient(ctx, "", triggerAuth.OauthToken, "")
+	gmailClient, err := RefreshGmailClient(ctx, *triggerAuth)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - outlook folders: %s", err)
 		resp.Write([]byte(`{"success": false, "reason": "Failed creating outlook client"}`))
@@ -3274,21 +3264,10 @@ func HandleGetGmailFolders(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// This should be possible, and will also give the actual username
-	/*
-		profile, err := getOutlookProfile(outlookClient)
-		if err != nil {
-			log.Printf("Outlook profile failure: %s", err)
-			resp.WriteHeader(401)
-			return
-		}
-		log.Printf("PROFILE: %#v", profile)
-	*/
-
-	folders, err := getGmailFolders(gmailClient)
+	folders, err := GetGmailFolders(gmailClient)
 	if err != nil {
-		log.Printf("[WARNING] Failed setting outlook folders: %s", err)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting outlook folders"}`))
+		log.Printf("[WARNING] Failed setting gmail folders: %s", err)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting gmail folders"}`))
 		resp.WriteHeader(401)
 		return
 	}
@@ -3364,7 +3343,7 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - outlook folders: %s", err)
 		resp.Write([]byte(`{"success": false, "reason": "Failed creating outlook client"}`))
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		return
 	}
 
@@ -3378,7 +3357,7 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed setting outlook folders: %s", err)
 		resp.Write([]byte(`{"success": false, "reason": "Failed getting outlook folders"}`))
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		return
 	}
 

@@ -12163,9 +12163,14 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	downloadLocation, downloadOk := request.URL.Query()["location"]
+	version, versionOk := request.URL.Query()["version"]
 	cacheKey := fmt.Sprintf("docs_%s", location[4])
 	if downloadOk {
 		cacheKey = fmt.Sprintf("%s_%s", cacheKey, downloadLocation[0])
+	}
+
+	if versionOk {
+		cacheKey = fmt.Sprintf("%s_%s", cacheKey, version[0])
 	}
 
 	cache, err := GetCache(ctx, cacheKey)
@@ -12182,32 +12187,36 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
 
 	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
-	version, versionOk := request.URL.Query()["version"]
 	realPath := ""
 	//log.Printf("\n\n INSIDe Download path (%s): %s with version %#v!\n\n", location[4], downloadLocation, version)
 
+	newname := location[4]
 	if downloadOk {
 		if downloadLocation[0] == "openapi" {
-			newname := strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "_")
+			newname = strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "_")
 			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", newname)
 			realPath = fmt.Sprintf("https://github.com/Shuffle/openapi-apps/blob/master/docs/%s.md", newname)
 
 		} else if downloadLocation[0] == "python" && versionOk {
 			// Apparently this uses dashes for no good reason?
 			// Should maybe move everything over to underscores later?
-			newname := strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "-")
+			newname = strings.ReplaceAll(newname, `%20`, "-")
+			newname = strings.ReplaceAll(newname, ` `, "-")
+			newname = strings.ReplaceAll(newname, `_`, "-")
+			newname = strings.ToLower(newname)
+			log.Printf("Newname: %s", newname)
 
 			if version[0] == "1.0.0" {
 				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)
 				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/1.0.0/README.md", newname)
 
+				log.Printf("[INFO] Should download python app for version %s: %s", version[0], docPath)
+
 			} else {
 				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/README.md", newname)
 				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/README.md", newname)
-
 			}
 
-			log.Printf("Should download python app for version %s: %s", version[0], docPath)
 		}
 	}
 
@@ -12313,6 +12322,8 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Not caching 404s
+	//if Result.Success && !strings.Contains(string(b), "404: Not Found") {
 	err = SetCache(ctx, cacheKey, b)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
