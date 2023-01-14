@@ -6026,11 +6026,16 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	for key, _ := range workflow.Actions {
 		workflow.Actions[key].ReferenceUrl = ""
+
+		// Never helpful when this is red
+		if workflow.Actions[key].AppName == "Shuffle Tools" {
+			workflow.Actions[key].IsValid = true
+		}
 	}
 
 	body, err := json.Marshal(workflow)
 	if err != nil {
-		log.Printf("Failed workflow GET marshalling: %s", err)
+		log.Printf("[WARNING] Failed workflow GET marshalling: %s", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -12204,7 +12209,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 			newname = strings.ReplaceAll(newname, ` `, "-")
 			newname = strings.ReplaceAll(newname, `_`, "-")
 			newname = strings.ToLower(newname)
-			log.Printf("Newname: %s", newname)
 
 			if version[0] == "1.0.0" {
 				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)

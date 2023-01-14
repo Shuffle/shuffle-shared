@@ -3131,17 +3131,15 @@ func GetGmailFolders(client *http.Client) (OutlookFolders, error) {
 
 	//log.Printf("Folders: %s", string(body))
 	//log.Printf("[INFO] Folder Body: %s", string(body))
-	log.Printf("[INFO] Status for GMAIL folders (Labels): %d. Body: %s", ret.StatusCode, string(body))
 	if ret.StatusCode != 200 {
+		log.Printf("[INFO] Bad Status for GMAIL folders (Labels): %d. Body: %s", ret.StatusCode, string(body))
 		return OutlookFolders{}, err
 	}
-
-	//log.Printf("Body: %s", string(body))
 
 	labels := GmailLabels{}
 	err = json.Unmarshal(body, &labels)
 	if err != nil {
-		log.Printf("[WARNING] GMAIL Unmarshal: %s", err)
+		log.Printf("[WARNING] GMAIL folder Unmarshal: %s", err)
 		return OutlookFolders{}, err
 	}
 

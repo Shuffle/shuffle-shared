@@ -3897,7 +3897,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		var newApps = make([]WorkflowApp, len(allKeys))
 		err = project.Dbclient.GetMulti(ctx, allKeys, newApps)
 		if err != nil {
-			log.Printf("[DEBUG] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
+			log.Printf("[ERROR] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
 		}
 
 		log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
