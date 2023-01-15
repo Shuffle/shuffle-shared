@@ -10815,10 +10815,30 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	org := &Org{}
+	added := false
 	if app.Sharing || app.Public {
-		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		org, err = GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
-			added := false
+			log.Printf("Org len: %d", len(org.ActiveApps))
+			if len(org.ActiveApps) > 150 {
+				// No reason for it to be this big. Arbitrarily reducing.
+				same := []string{}
+				samecnt := 0
+				for _, activeApp := range org.ActiveApps {
+					if ArrayContains(same, activeApp) {
+						samecnt += 1
+						continue
+					}
+
+					same = append(same, activeApp)
+				}
+
+				added = true
+				log.Printf("Same: %d, total uniq: %d", samecnt, len(same))
+				org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
+			}
+
 			if !ArrayContains(org.ActiveApps, app.ID) {
 				org.ActiveApps = append(org.ActiveApps, app.ID)
 				added = true
@@ -10829,20 +10849,20 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
 				} else {
-					log.Printf("[INFO] Added public app %s (%s) to org %s (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					log.Printf("[INFO] Added public app %s (%s) to org %#v (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 					cacheKey := fmt.Sprintf("apps_%s", user.Id)
 					DeleteCache(ctx, cacheKey)
 				}
 			}
 		}
 	} else {
-		log.Printf("[WARNING] User is trying to activate %s which is NOT public", app.Name)
+		log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s", app.Name, app.ID, user.ActiveOrg.Id, user.Username)
+	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %#v", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
 
 	// If onprem, it should autobuild the container(s) from here
 

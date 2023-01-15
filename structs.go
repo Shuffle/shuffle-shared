@@ -3044,8 +3044,8 @@ type UsecaseStep struct {
 }
 
 type UsecaseMerge struct {
-	Name           string        `json:"id"`
-	Id             string        `json:"name"`
+	Name           string        `json:"name"`
+	Id             string        `json:"id"`
 	Source         UsecaseStep   `json:"source"`
 	Middle         []UsecaseStep `json:"middle"`
 	Destination    UsecaseStep   `json:"destination"`
