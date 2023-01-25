@@ -2230,6 +2230,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	apikey := request.Header.Get("Authorization")
 
+	ctx := GetContext(request)
 	user := &User{}
 	if len(apikey) > 0 {
 		if !strings.HasPrefix(apikey, "Bearer ") {
@@ -2258,7 +2259,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		ctx := GetContext(request)
 		cache, err := GetCache(ctx, newApikey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -2309,7 +2309,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 	// One time API keys
 	authorizationArr, ok := request.URL.Query()["authorization"]
-	ctx := GetContext(request)
 	if ok {
 		authorization := ""
 		if len(authorizationArr) > 0 {
@@ -10820,7 +10819,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	if app.Sharing || app.Public {
 		org, err = GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
-			log.Printf("Org len: %d", len(org.ActiveApps))
 			if len(org.ActiveApps) > 150 {
 				// No reason for it to be this big. Arbitrarily reducing.
 				same := []string{}
@@ -10835,7 +10833,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				added = true
-				log.Printf("Same: %d, total uniq: %d", samecnt, len(same))
+				//log.Printf("Same: %d, total uniq: %d", samecnt, len(same))
 				org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
 			}
 
@@ -11469,98 +11467,6 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 
 	return []Action{}, []Branch{}, ""
 }
-
-/*
-func HandleGetSpecificStats(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	_, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("Api authentication failed in getting specific workflow: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-
-	var statsId string
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		statsId = location[4]
-	}
-
-	ctx := context.Background()
-	statisticsId := "global_statistics"
-	nameKey := statsId
-	key := datastore.NameKey(statisticsId, nameKey, nil)
-	statisticsItem := StatisticsItem{}
-	if err := project.Dbclient.Get(ctx, key, &statisticsItem); err != nil {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	b, err := json.Marshal(statisticsItem)
-	if err != nil {
-		log.Printf("Failed to marshal data: %s", err)
-		resp.WriteHeader(401)
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(b))
-}
-*/
-
-/*
-func CleanupExecutions(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[INFO] Api authentication failed in cleanup executions: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "message": "Not authenticated"}`))
-		return
-	}
-
-	if user.Role != "admin" {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "message": "Insufficient permissions"}`))
-		return
-	}
-
-	ctx := context.Background()
-
-	// Removes three months from today
-	timestamp := int64(time.Now().AddDate(0, -2, 0).Unix())
-	log.Println(timestamp)
-	q := datastore.NewQuery("workflowexecution").Filter("started_at <", timestamp)
-	var workflowExecutions []WorkflowExecution
-	_, err = project.Dbclient.GetAll(ctx, q, &workflowExecutions)
-	if err != nil {
-		log.Printf("Error getting workflowexec (cleanup): %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting all workflowexecutions"}`)))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
-}
-*/
 
 // Uses a simple way to be able to modify the encryption key being used
 // FIXME: Investigate better ways of handling EVERYTHING related to encryption
