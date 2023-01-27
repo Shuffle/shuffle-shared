@@ -2793,6 +2793,7 @@ type OrborusExecutionRequest struct {
 	ShufflePassProxyToApp string            `json:"shuffle_pass_proxy_to_app"`
 	Action                Action            `json:"action"`
 	FullExecution         WorkflowExecution `json:"workflow_execution"`
+	WorkerServerUrl       string            `json:"worker_server_url"`
 }
 
 type OpenseaAsset struct {
