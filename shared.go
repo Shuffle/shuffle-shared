@@ -1107,7 +1107,7 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in get all apps: %s", userErr)
+		log.Printf("[AUDIT] Api authentication failed in get app auth: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1120,6 +1120,7 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	//	resp.Write([]byte(`{"success": false}`))
 	//	return
 	//}
+
 	ctx := GetContext(request)
 	allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	if err != nil {
@@ -2318,30 +2319,31 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		log.Printf("[ERROR] WHAT ARE ONE TIME KEYS USED FOR?")
 	}
 
-	c, err := request.Cookie("session_token")
-	// Compatibility issues
+	// __session first due to Compatibility issues
+	c, err := request.Cookie("__session")
 	if err != nil {
-		c, err = request.Cookie("__session")
+		c, err = request.Cookie("session_token")
 	}
 
 	if err == nil {
 		sessionToken := c.Value
+
+		newCookie := &http.Cookie{
+			Name:    "session_token",
+			Value:   sessionToken,
+			Expires: time.Now().Add(-100 * time.Hour),
+			MaxAge:  -1,
+		}
+
+		if project.Environment == "cloud" {
+			newCookie.Domain = ".shuffler.io"
+			newCookie.Secure = true
+			newCookie.HttpOnly = true
+		}
+
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
 			log.Printf("[DEBUG] No valid session token for ID %s. Setting cookie to expire.", sessionToken)
-
-			newCookie := &http.Cookie{
-				Name:    "session_token",
-				Value:   sessionToken,
-				Expires: time.Now().Add(-100 * time.Hour),
-				MaxAge:  -1,
-			}
-
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-				newCookie.Secure = true
-				newCookie.HttpOnly = true
-			}
 
 			http.SetCookie(resp, newCookie)
 
@@ -2349,20 +2351,27 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			http.SetCookie(resp, newCookie)
 
 			return User{}, err
+		} else {
+			// Check if both session tokens are set
+			// Compatibility issues
+			//expiration := time.Now().Add(3600 * time.Second)
+			newCookie.Expires = c.Expires
+			newCookie.MaxAge = c.MaxAge
+
+			_, err1 := request.Cookie("session_token")
+			if err1 != nil {
+				log.Printf("[DEBUG] Setting missing session_token for user %s (%s)", user.Username, user.Id)
+				newCookie.Name = "session_token"
+				http.SetCookie(resp, newCookie)
+			}
+
+			_, err2 := request.Cookie("__session")
+			if err2 != nil {
+				log.Printf("[DEBUG] Setting missing __session for user %s (%s)", user.Username, user.Id)
+				newCookie.Name = "__session"
+				http.SetCookie(resp, newCookie)
+			}
 		}
-
-		//user, err := GetUser(ctx, session.UserId)
-		//if err != nil {
-		//	log.Printf("[INFO] User with Identifier %s doesn't exist: %s", session.UserId, err)
-		//	http.SetCookie(resp, &http.Cookie{
-		//		Name:    "session_token",
-		//		Value:   sessionToken,
-		//		Expires: time.Now().Add(-100 * time.Hour),
-		//		MaxAge:  -1,
-		//	})
-
-		//	return User{}, err
-		//}
 
 		if len(user.Id) == 0 && len(user.Username) == 0 {
 
@@ -2786,7 +2795,7 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		log.Printf("[AUDIT] Api authentication failed in get all apps: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -6209,7 +6218,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("Api authentication failed in get all apps: %s", userErr)
+		log.Printf("[AUDIT] Api authentication failed in get all apps: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -7931,7 +7940,16 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := GetContext(request)
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
 
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
@@ -7945,6 +7963,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
+	ctx := GetContext(request)
 	app, err := GetApp(ctx, fileId, User{}, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)

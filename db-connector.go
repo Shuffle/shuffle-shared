@@ -1165,7 +1165,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 	obj := bucket.Object(fullParsedPath)
 	fileReader, err := obj.NewReader(ctx)
 	if err != nil {
-		log.Printf("[WARNING] Failed making reader for %s: %s", fullParsedPath, err)
+		log.Printf("[ERROR] Failed making App reader for %s: %s", fullParsedPath, err)
 		return workflowApp, err
 	}
 
@@ -1264,7 +1264,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		err := project.Dbclient.Get(ctx, key, workflowApp)
 		log.Printf("[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
 		if err != nil || len(workflowApp.Actions) == 0 {
-			log.Printf("[WARNING] Failed getting app in GetApp with ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", id, len(workflowApp.Actions), err)
+			log.Printf("[WARNING] Failed getting app in GetApp with name %#v and ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
 				if app.ID == id {
 					workflowApp = &app
@@ -2715,7 +2715,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			obj := bucket.Object(fullParsedPath)
 			fileReader, err := obj.NewReader(ctx)
 			if err != nil {
-				log.Printf("[WARNING] Failed making reader for %s: %s", fullParsedPath, err)
+				log.Printf("[ERROR] Failed making OpenAPI reader for %s: %s", fullParsedPath, err)
 				return *api, err
 			}
 
@@ -6836,6 +6836,12 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		DbType:        dbType,
 		CloudUrl:      "https://shuffler.io",
 		BucketName:    "shuffler.appspot.com",
+	}
+
+	bucketName := os.Getenv("SHUFFLE_ORG_BUCKET")
+	if len(bucketName) > 0 {
+		log.Printf("[DEBUG] Using custom project bucketname: %s", bucketName)
+		project.BucketName = bucketName
 	}
 
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
