@@ -14929,7 +14929,6 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 
 	// System for replacing an app if it's not defined
 	if value.ID != "remove" {
-
 		app, err = GetApp(ctx, value.ID, user, false)
 		if err != nil {
 
@@ -14955,8 +14954,6 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
-	_ = org
-
 	if value.Type == "email" {
 		value.Type = "comms"
 	}
@@ -14977,7 +14974,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		org.SecurityFramework.Network.Description = app.Description
 		org.SecurityFramework.Network.ID = app.ID
 		org.SecurityFramework.Network.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "edr" || strings.ToLower(value.Type) == "edr & av" {
+	} else if strings.ToLower(value.Type) == "edr" || strings.ToLower(value.Type) == "edr & av" || strings.ToLower(value.Type) == "eradication" {
 		org.SecurityFramework.EDR.Name = app.Name
 		org.SecurityFramework.EDR.Description = app.Description
 		org.SecurityFramework.EDR.ID = app.ID
@@ -15002,7 +14999,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		org.SecurityFramework.Intel.Description = app.Description
 		org.SecurityFramework.Intel.ID = app.ID
 		org.SecurityFramework.Intel.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "comms" {
+	} else if strings.ToLower(value.Type) == "comms" || strings.ToLower(value.Type) == "communication" || strings.ToLower(value.Type) == "email" {
 		org.SecurityFramework.Communication.Name = app.Name
 		org.SecurityFramework.Communication.Description = app.Description
 		org.SecurityFramework.Communication.ID = app.ID
@@ -15049,13 +15046,14 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	// Add app as active for org too
-	if !ArrayContains(org.ActiveApps, app.ID) {
+	if len(app.ID) > 0 && !ArrayContains(org.ActiveApps, app.ID) {
 		org.ActiveApps = append(org.ActiveApps, app.ID)
 	}
 
 	for tutorialIndex, tutorial := range org.Tutorials {
 		if tutorial.Name == "Find relevant apps" {
 			org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d out of %d apps configured", cnt, 8)
+
 			if cnt > 0 {
 				org.Tutorials[tutorialIndex].Done = true
 			}
@@ -15078,7 +15076,11 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 	}
 
-	log.Printf("[DEBUG] Successfully updated app framework type %s to app %s (%s) for org %s (%s)!", value.Type, app.Name, app.ID, org.Name, org.Id)
+	if value.ID != "remove" {
+		log.Printf("[DEBUG] Successfully updated app framework type %s to app %#v (%s) for org %s (%s)!", value.Type, app.Name, app.ID, org.Name, org.Id)
+	} else {
+		log.Printf("[DEBUG] Successfully REMOVED app framework type %s for org %s (%s)!", value.Type, org.Name, org.Id)
+	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -15826,4 +15828,55 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 	return org.Priorities, nil
 	//return []Priority{}, nil
+}
+
+// Sorts an org list in order to make ChildOrgs appear under their parent org
+func SortOrgList(orgs []OrgMini) []OrgMini {
+	// Creates parentorg map
+	parentOrgs := map[string][]OrgMini{}
+	for _, org := range orgs {
+		if len(org.CreatorOrg) == 0 && len(org.ChildOrgs) > 0 {
+			parentOrgs[org.Id] = []OrgMini{}
+		} else if len(org.CreatorOrg) == 0 {
+			// No childorgs, but isn't a parentorg either
+			parentOrgs[org.Id] = []OrgMini{}
+		} else {
+			// Child orgs go here
+		}
+	}
+
+	for _, org := range orgs {
+		// Check if parent in parentOrgs map
+		if len(org.CreatorOrg) == 0 {
+			continue
+		} else {
+		}
+
+		if val, ok := parentOrgs[org.CreatorOrg]; ok {
+			parentOrgs[org.CreatorOrg] = append(val, org)
+		} else {
+			//log.Printf("No parentorg for: %#v", org.Name)
+		}
+	}
+
+	newOrgs := []OrgMini{}
+	for key, value := range parentOrgs {
+		// Find key in orgs
+		found := false
+		for _, org := range orgs {
+			if org.Id == key {
+				found = true
+				newOrgs = append(newOrgs, org)
+				break
+			}
+		}
+
+		if found {
+			for _, childorg := range value {
+				newOrgs = append(newOrgs, childorg)
+			}
+		}
+	}
+
+	return newOrgs
 }
