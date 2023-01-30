@@ -15845,17 +15845,17 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 		}
 	}
 
+	noParentOrg := []OrgMini{}
 	for _, org := range orgs {
 		// Check if parent in parentOrgs map
 		if len(org.CreatorOrg) == 0 {
 			continue
-		} else {
 		}
 
 		if val, ok := parentOrgs[org.CreatorOrg]; ok {
 			parentOrgs[org.CreatorOrg] = append(val, org)
 		} else {
-			//log.Printf("No parentorg for: %#v", org.Name)
+			noParentOrg = append(noParentOrg, org)
 		}
 	}
 
@@ -15877,6 +15877,10 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 			}
 		}
 	}
+
+	// Adding orgs where parentorg is unavailable
+	// They should probably be under some "inactive" parentorg..
+	newOrgs = append(newOrgs, noParentOrg...)
 
 	return newOrgs
 }
