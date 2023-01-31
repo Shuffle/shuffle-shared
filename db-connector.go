@@ -6278,34 +6278,8 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
-					//log.Printf("[WARNING] Error: %s", err)
 					break
-					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					//} else {
-					//	//log.Printf("[WARNING] Workflow iterator issue: %s", err)
-					//	break
-					//}
 				}
-
-				//log.Printf("[DEBUG] Appending %s", innerWorkflow.ExecutionId)
-
-				// Partly scalable due to caching of the values being fetched
-
-				/*
-					// Not fixing for each here. Fixing when clicking individual instead.
-						for valueIndex, value := range innerWorkflow.Results {
-							if strings.Contains(value.Result, "Result too large to handle") {
-								//log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
-								newValue, err := getExecutionFileValue(ctx, innerWorkflow, value)
-								if err != nil {
-									log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
-									continue
-								}
-
-								innerWorkflow.Results[valueIndex].Result = newValue
-							}
-						}
-				*/
 
 				executions = append(executions, innerWorkflow)
 			}
@@ -6316,11 +6290,9 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				//break
 			}
 
+			// This is a way to load as much data as we want, and the frontend will load the actual result for us
 			executionmarshal, err := json.Marshal(executions)
 			if err == nil {
-				//log.Printf("Length breaking: %d", len(executionmarshal))
-				// This is a way to load as much data as we want, and the frontend will load the actual result for us
-
 				if len(executionmarshal) > totalMaxSize {
 					// Reducing size
 
@@ -6376,8 +6348,9 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				}
 			}
 
+			// expected to get here
 			if len(executions) >= amount {
-				log.Printf("Breaking due to executions larger than amount (%d/%d)", len(executions), amount)
+				//log.Printf("[INFO] Breaking due to executions larger than amount (%d/%d)", len(executions), amount)
 				break
 			}
 
@@ -6390,7 +6363,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				//log.Printf("NEXTCURSOR: %s", nextCursor)
 				nextStr := fmt.Sprintf("%s", nextCursor)
 				if cursorStr == nextStr {
-					log.Printf("Breaking due to no new cursor")
+					//log.Printf("Breaking due to no new cursor")
 					break
 				}
 
