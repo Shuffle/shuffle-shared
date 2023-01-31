@@ -2623,7 +2623,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		maxAmount = 1000
 	}
 
-	log.Printf("[DEBUG] Amount of workflows to get: %d", maxAmount)
+	log.Printf("[DEBUG] Amount of executions to get: %d", maxAmount)
 
 	workflowExecutions, err := GetAllWorkflowExecutions(ctx, fileId, maxAmount)
 	if err != nil {
@@ -2633,7 +2633,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] Got %d executions", len(workflowExecutions))
+	log.Printf("[DEBUG] Got %d executions for %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)

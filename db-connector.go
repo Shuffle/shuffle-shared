@@ -6155,7 +6155,6 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			}
 		}
 
-		//log.Printf("Got %d executions", len(executions))
 		slice.Sort(executions[:], func(i, j int) bool {
 			return executions[i].StartedAt > executions[j].StartedAt
 		})
@@ -6268,9 +6267,9 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
 		//totalMaxSize := 33554432
 		//totalMaxSize := 22369621 // Total of App Engine max /3*2
+		//totalMaxSize := 11184810
 		totalMaxSize := 11184810
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
-		max := amount
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)
@@ -6312,19 +6311,68 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			}
 
 			if err != iterator.Done {
+				//log.Printf("Breaking due to no more iterator")
 				//log.Printf("[INFO] Failed fetching results: %v", err)
 				//break
 			}
 
 			executionmarshal, err := json.Marshal(executions)
 			if err == nil {
-				//log.Printf("LEN: %d", len(executionmarshal))
+				//log.Printf("Length breaking: %d", len(executionmarshal))
+				// This is a way to load as much data as we want, and the frontend will load the actual result for us
+
 				if len(executionmarshal) > totalMaxSize {
-					break
+					// Reducing size
+
+					for execIndex, execution := range executions {
+						newResults := []ActionResult{}
+
+						newActions := []Action{}
+						for _, action := range execution.Workflow.Actions {
+							newAction := Action{
+								Name:    action.Name,
+								ID:      action.ID,
+								AppName: action.AppName,
+								AppID:   action.AppID,
+							}
+
+							newActions = append(newActions, newAction)
+						}
+
+						executions[execIndex].Workflow = Workflow{
+							Name:     execution.Workflow.Name,
+							ID:       execution.Workflow.ID,
+							Triggers: execution.Workflow.Triggers,
+							Actions:  newActions,
+						}
+
+						for _, result := range execution.Results {
+							result.Result = "Result was too large to load. Full Execution needs to be loaded individually for this execution. Click \"Explore execution\" in the UI to see it in detail."
+							result.Action = Action{
+								Name:       result.Action.Name,
+								ID:         result.Action.ID,
+								AppName:    result.Action.AppName,
+								AppID:      result.Action.AppID,
+								LargeImage: result.Action.LargeImage,
+							}
+
+							newResults = append(newResults, result)
+						}
+
+						executions[execIndex].ExecutionArgument = "too large"
+						executions[execIndex].Results = newResults
+					}
+
+					executionmarshal, err = json.Marshal(executions)
+					if err == nil && len(executionmarshal) > totalMaxSize {
+						log.Printf("Length breaking (2): %d", len(executionmarshal))
+						break
+					}
 				}
 			}
 
-			if len(executions) >= max {
+			if len(executions) >= amount {
+				log.Printf("Breaking due to executions larger than amount (%d/%d)", len(executions), amount)
 				break
 			}
 
@@ -6337,6 +6385,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				//log.Printf("NEXTCURSOR: %s", nextCursor)
 				nextStr := fmt.Sprintf("%s", nextCursor)
 				if cursorStr == nextStr {
+					log.Printf("Breaking due to no new cursor")
 					break
 				}
 
@@ -6347,7 +6396,6 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			}
 		}
 
-		//log.Printf("Got %d executions", len(executions))
 		slice.Sort(executions[:], func(i, j int) bool {
 			return executions[i].StartedAt > executions[j].StartedAt
 		})
