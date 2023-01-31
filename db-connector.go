@@ -6325,6 +6325,11 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 					// Reducing size
 
 					for execIndex, execution := range executions {
+						// Making sure the first 5 are "always" proper
+						if execIndex < 5 {
+							continue
+						}
+
 						newResults := []ActionResult{}
 
 						newActions := []Action{}
