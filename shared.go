@@ -9490,6 +9490,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 		} else {
+
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
@@ -9646,7 +9647,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//unfinishedNodes := []string{}
 		childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
 		_ = childNodes
-		//log.Printf("childnodes: %d: %#v", len(childNodes), childNodes)
+
+		// See if it can even find it in here for skipped?
+		//log.Printf("childnodes of %s (%s): %d: %#v", actionResult.Action.Label, actionResult.Action.Id, len(childNodes), childNodes)
 
 		//FIXME: Should this run and fix all nodes,
 		// or should it send them in as new SKIPs? Should we only handle DIRECT
@@ -9753,7 +9756,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 
 						if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-							streamUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+							streamUrl = fmt.Sprintf("%s/api/v1/streams", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 						}
 
 						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
@@ -13119,7 +13122,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+			backendUrl = fmt.Sprintf("%s/workflows", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 		}
 	}
 
