@@ -69,7 +69,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 	} else {
 		tx, err := project.Dbclient.NewTransaction(ctx)
 		if err != nil {
-			log.Printf("[WARNING] Error in cache dump: %#v", err)
+			log.Printf("[WARNING] Error in cache dump: %s", err)
 			return
 		}
 
@@ -184,7 +184,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 	if len(memcached) > 0 {
 		item, err := mc.Get(key)
 		if err == gomemcache.ErrCacheMiss {
-			log.Printf("[DEBUG] Increment memcache miss for %#v: %s", key, err)
+			log.Printf("[DEBUG] Increment memcache miss for %s: %s", key, err)
 
 			item := &gomemcache.Item{
 				Key:        key,
@@ -211,10 +211,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 
 			if len(item.Value) == 1 {
 				num := item.Value[0]
-				//log.Printf("Item: %#v", num)
+				//log.Printf("Item: %s", num)
 
 				num += 1
-				//log.Printf("Item2: %#v", num)
+				//log.Printf("Item2: %s", num)
 				if num >= dbDumpInterval {
 					// Memcache dump first to keep the counter going for other executions
 					num = 0
@@ -276,10 +276,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 
 			if len(item.Value) == 1 {
 				num := item.Value[0]
-				//log.Printf("Item: %#v", num)
+				//log.Printf("Item: %s", num)
 
 				num += 1
-				//log.Printf("Item2: %#v", num)
+				//log.Printf("Item2: %s", num)
 				if num >= dbDumpInterval {
 					// Memcache dump first to keep the counter going for other executions
 					num = 0
@@ -308,7 +308,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 				}
 
 			} else {
-				log.Printf("[ERROR] Length of cache value is more than 1: %#v", item.Value)
+				log.Printf("[ERROR] Length of cache value is more than 1: %s", item.Value)
 			}
 		}
 	}
@@ -368,11 +368,11 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 
 		item, err := mc.Get(name)
 		if err == gomemcache.ErrCacheMiss {
-			//log.Printf("[DEBUG] Cache miss for %#v: %s", name, err)
+			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
 		} else if err != nil {
 			log.Printf("[WARNING] Failed cache err: %s", err)
 		} else {
-			//log.Printf("[INFO] Got new cache: %#v", item)
+			//log.Printf("[INFO] Got new cache: %s", item)
 
 			if len(item.Value) == maxCacheSize {
 				totalData := item.Value
@@ -838,10 +838,10 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 	}
 
 	/*
-		log.Printf("\n\nEnvironments: %#v", environments)
+		log.Printf("\n\nEnvironments: %s", environments)
 		log.Printf("Startnode: %s", startAction)
-		log.Printf("Parents: %#v", parents)
-		log.Printf("NextActions: %#v", nextActions)
+		log.Printf("Parents: %s", parents)
+		log.Printf("NextActions: %s", nextActions)
 		log.Printf("Extra: %d", extra)
 		log.Printf("Children: %s", children)
 	*/
@@ -852,7 +852,7 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 
 func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) error {
 	cacheKey := fmt.Sprintf("%s-actions", executionId)
-	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s. Next: %#v\n\n", executionId, nextActions)
+	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s. Next: %s\n\n", executionId, nextActions)
 
 	newVariableWrapper := ExecutionVariableWrapper{
 		StartNode:    startnode,
@@ -889,7 +889,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &wrapper)
 			if err == nil {
 				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
@@ -1074,7 +1074,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
@@ -1276,7 +1276,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			cache, err := GetCache(ctx, cacheKey)
 			if err == nil {
 				cacheData := []byte(cache.([]uint8))
-				//log.Printf("CACHEDATA: %#v", cacheData)
+				//log.Printf("CACHEDATA: %s", cacheData)
 				err = json.Unmarshal(cacheData, &workflowApp)
 				if err == nil {
 					if (len(workflowApp.ID) == 0 || len(workflowApp.Actions) == 0) && project.Environment == "cloud" {
@@ -1331,7 +1331,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		err := project.Dbclient.Get(ctx, key, workflowApp)
 		log.Printf("[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
 		if err != nil || len(workflowApp.Actions) == 0 {
-			log.Printf("[WARNING] Failed getting app in GetApp with name %#v and ID %#v. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
+			log.Printf("[WARNING] Failed getting app in GetApp with name %s and ID %s. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
 				if app.ID == id {
 					workflowApp = &app
@@ -1419,7 +1419,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &sub)
 			if err == nil {
 				return sub, nil
@@ -1495,7 +1495,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &env)
 			if err == nil {
 				return env, nil
@@ -1587,7 +1587,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		} else {
 			//environments = []Environment{}
 			for _, hit := range wrapped.Hits.Hits {
-				//log.Printf("[DEBUG] Hit: %#v", hit)
+				//log.Printf("[DEBUG] Hit: %s", hit)
 				//if hit.ID == id {
 				//	env = &hit.Source
 				//	break
@@ -1616,7 +1616,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		}
 	}
 
-	//log.Printf("[DEBUG] Got hit: %#v", env)
+	//log.Printf("[DEBUG] Got hit: %s", env)
 
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
@@ -1644,7 +1644,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil {
 				return workflow, nil
@@ -1718,7 +1718,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil {
 				return workflow, nil
@@ -2150,7 +2150,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &curOrg)
 			if err == nil {
 				return curOrg, nil
@@ -2193,7 +2193,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
 			log.Printf("[ERROR] Error in org loading for %s: %s", key, err)
-			//log.Printf("Users: %#v", curOrg.Users)
+			//log.Printf("Users: %s", curOrg.Users)
 			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
 				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler (2): %s", err)
@@ -2519,7 +2519,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	cache, err := GetCache(ctx, thissession)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
-		//log.Printf("CACHEDATA: %#v", cacheData)
+		//log.Printf("CACHEDATA: %s", cacheData)
 		err = json.Unmarshal(cacheData, &session)
 		if err == nil {
 			return session, nil
@@ -2835,7 +2835,7 @@ func SetSession(ctx context.Context, user User, value string) error {
 			return err
 		}
 
-		//log.Printf("SESSION RES: %#v", res)
+		//log.Printf("SESSION RES: %s", res)
 		err = indexEs(ctx, nameKey, parsedKey, data)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating user with session: %s", err)
@@ -3201,9 +3201,9 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		if err := project.Dbclient.Get(ctx, key, curUser); err != nil {
 			// Handles migration of the user
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[DEBUG] Failed loading user %s (this is ok): %#v", username, err)
+				log.Printf("[DEBUG] Failed loading user %s (this is ok): %s", username, err)
 			} else {
-				log.Printf("[WARNING] Failed loading user %#v - does it have to change? %s", username, err)
+				log.Printf("[WARNING] Failed loading user %s - does it have to change? %s", username, err)
 				return &User{}, err
 			}
 			//	curUser.ActiveOrg = OrgMini{
@@ -3238,7 +3238,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
-	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %#v", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
+	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %s", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
 	if updateOrg {
 		user = fixUserOrg(ctx, user)
@@ -3376,7 +3376,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &allworkflowappAuths)
 			if err == nil {
 				return allworkflowappAuths, nil
@@ -3483,7 +3483,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 
 	//for _, env := range allworkflowappAuths {
 	//	for _, param := range env.Fields {
-	//		log.Printf("ENV: %#v", param)
+	//		log.Printf("ENV: %s", param)
 	//	}
 	//}
 
@@ -3500,7 +3500,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &environments)
 			if err == nil {
 				return environments, nil
@@ -3601,7 +3601,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return []Environment{}, err
 		}
 
-		//log.Printf("Got %d environments for org: %#v", len(environments), environments)
+		//log.Printf("Got %d environments for org: %s", len(environments), environments)
 	}
 
 	if len(environments) == 0 {
@@ -3940,7 +3940,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	// This should make the request fast for everyone except that one
 	// person who loads it first (or keeps it in cache?)
 	if orgErr == nil && len(org.ActiveApps) > 0 {
-		//log.Printf("[INFO] Should append ORG APPS: %#v", org.ActiveApps)
+		//log.Printf("[INFO] Should append ORG APPS: %s", org.ActiveApps)
 
 		allKeys := []*datastore.Key{}
 		for _, appId := range org.ActiveApps {
@@ -4055,7 +4055,7 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 				appConstraint := fmt.Sprintf("> %s", loopedApp.AppVersion)
 				c, err := semver.NewConstraint(appConstraint)
 				if err != nil {
-					log.Printf("[ERROR] Failed preparing constraint %#v: %s", appConstraint, err)
+					log.Printf("[ERROR] Failed preparing constraint %s: %s", appConstraint, err)
 					continue
 				}
 
@@ -4064,7 +4064,7 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 					newApp.Versions = loopedApp.Versions
 					newApp.LoopVersions = loopedApp.LoopVersions
 
-					//log.Printf("[DEBUG] New IS larger - changing app on index %d from %s to %s. Versions: %#v", appIndex, loopedApp.AppVersion, innerApp.AppVersion, newApp.LoopVersions)
+					//log.Printf("[DEBUG] New IS larger - changing app on index %d from %s to %s. Versions: %s", appIndex, loopedApp.AppVersion, innerApp.AppVersion, newApp.LoopVersions)
 				} else {
 					//log.Printf("[DEBUG] New is NOT larger: %s_%s (new) vs %s_%s - just appending", innerApp.Name, innerApp.AppVersion, loopedApp.Name, loopedApp.AppVersion)
 					newApp = loopedApp
@@ -4076,7 +4076,7 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 				})
 				newApp.LoopVersions = append(newApp.LoopVersions, innerApp.AppVersion)
 				newIndex = appIndex
-				//log.Printf("Versions for %s_%s: %#v", newApp.Name, newApp.AppVersion, newApp.LoopVersions)
+				//log.Printf("Versions for %s_%s: %s", newApp.Name, newApp.AppVersion, newApp.LoopVersions)
 			}
 
 			break
@@ -4256,7 +4256,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			it := project.Dbclient.Run(ctx, query)
 			//innerApp := WorkflowApp{}
 			//data, err := it.Next(&innerApp)
-			//log.Printf("DATA: %#v, err: %s", data, err)
+			//log.Printf("DATA: %s, err: %s", data, err)
 
 			for {
 				innerApp := WorkflowApp{}
@@ -4512,7 +4512,7 @@ func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				return workflowExecution, nil
@@ -4653,7 +4653,7 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 			if newName == strings.ToLower(collectionName) {
 				executions = append(executions, hit.Source)
 			} else {
-				log.Printf("[DEBUG] Skipping %#v vs. %#v", newName, collectionName)
+				log.Printf("[DEBUG] Skipping %s vs. %s", newName, collectionName)
 			}
 		}
 
@@ -4813,7 +4813,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
-			log.Printf("[ERROR] Error adding workflow app AUTH %#v (%s) with %d fields: %s", workflowappauth.Label, workflowappauth.Id, len(workflowappauth.Fields), err)
+			log.Printf("[ERROR] Error adding workflow app AUTH %s (%s) with %d fields: %s", workflowappauth.Label, workflowappauth.Id, len(workflowappauth.Fields), err)
 			for _, field := range workflowappauth.Fields {
 				log.Printf("FIELD: %s: %d", field.Key, len(field.Value))
 			}
@@ -4918,7 +4918,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil && len(user.Id) > 0 {
 				//log.Printf("Found user in cache for session %s", sessionId)
@@ -5143,7 +5143,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &hook)
 			if err == nil && len(hook.Id) > 0 {
 				return hook, nil
@@ -5154,7 +5154,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			//log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
 		}
 	}
-	//log.Printf("DBTYPE: %#v", project.DbType)
+	//log.Printf("DBTYPE: %s", project.DbType)
 
 	var err error
 	if project.DbType == "elasticsearch" {
@@ -5329,7 +5329,7 @@ func SetNotification(ctx context.Context, notification Notification) error {
 
 	notification.UpdatedAt = timeNow
 	nameKey := "notifications"
-	//log.Printf("SETTING NOTIFICATION: %#v", notification)
+	//log.Printf("SETTING NOTIFICATION: %s", notification)
 
 	if project.DbType == "elasticsearch" {
 		data, err := json.Marshal(notification)
@@ -5393,7 +5393,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &notifications)
 			if err == nil {
 				return notifications, nil
@@ -5749,7 +5749,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &appAuth)
 			if err == nil {
 				return appAuth, nil
@@ -6240,7 +6240,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &executions)
 			if err == nil {
 				//log.Printf("[DEBUG] Returned %d executions for workflow %s", len(executions), workflowId)
@@ -6544,7 +6544,7 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 		query := datastore.NewQuery(nameKey).Filter(fmt.Sprintf("%s =", fieldName), value).Limit(10)
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting orgs for field %#v: %s", fieldName, err)
+			log.Printf("[WARNING] Failed getting orgs for field %s: %s", fieldName, err)
 			return orgs, err
 		}
 	}
@@ -6855,7 +6855,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			parsedCache := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(parsedCache, &cacheData)
 			if err == nil {
 				return cacheData, nil
@@ -6938,7 +6938,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
-	log.Printf("[DEBUG] Starting with memcached address %#v (SHUFFLE_MEMCACHED). If this is empty, fallback to appengine", memcached)
+	log.Printf("[DEBUG] Starting with memcached address %s (SHUFFLE_MEMCACHED). If this is empty, fallback to appengine", memcached)
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(dbType) == "elasticsearch" || strings.ToLower(dbType) == "opensearch" {
@@ -6953,7 +6953,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		if ret.StatusCode >= 300 {
 			respBody, err := ioutil.ReadAll(ret.Body)
 			if err != nil {
-				log.Printf("[ERROR] Failed handling ES setup: %#v", ret)
+				log.Printf("[ERROR] Failed handling ES setup: %s", ret)
 				return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
 			}
 
@@ -7049,7 +7049,7 @@ func GetEsConfig() *elasticsearch.Client {
 			//}
 		}
 
-		log.Printf("[INFO] Added certificate %#v elastic client.", certificateLocation)
+		log.Printf("[INFO] Added certificate %s elastic client.", certificateLocation)
 	}
 	config.Transport = transport
 
@@ -7197,7 +7197,7 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
+			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &usecase)
 			if err == nil {
 				return usecase, nil
@@ -7420,7 +7420,6 @@ func GetAppStats(ctx context.Context, id string) (*Conversionevents, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %#v", cacheData)
 			err = json.Unmarshal(cacheData, &stats)
 			if err == nil {
 				return stats, nil
