@@ -2283,12 +2283,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		//log.Println(apikeyCheck[1])
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
-			log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
+			//log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
 			return User{}, err
 		}
 
 		if len(userdata.Id) == 0 && len(userdata.Username) == 0 {
-			log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
+			//log.Printf("[WARNING] Apikey %s doesn't exist or the user doesn't have an ID/Username", apikey)
 			return User{}, errors.New("Couldn't find the user")
 		}
 
@@ -2623,8 +2623,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		maxAmount = 1000
 	}
 
-	log.Printf("[DEBUG] Amount of executions to get: %d", maxAmount)
-
 	workflowExecutions, err := GetAllWorkflowExecutions(ctx, fileId, maxAmount)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting executions for %s", fileId)
@@ -2632,8 +2630,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-
-	log.Printf("[DEBUG] Got %d executions for %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
@@ -6559,7 +6555,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
-		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		log.Printf("[INFO] Organization %#v doesn't exist: %s", tmpData.OrgId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -9047,94 +9043,97 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 	}
 
 	if len(foundNotExecuted) == 0 {
-		log.Printf("[DEBUG] No result missing that has been executed based on %#v", executed)
+		//log.Printf("[DEBUG] No result missing that has been executed based on executed apps %#v", executed)
 		return
 	}
 
-	for _, executionItem := range foundNotExecuted {
-		cacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, executionItem)
-		cache, err := GetCache(ctx, cacheId)
-		if err != nil {
-			//log.Printf("[WARNING] Couldn't find in fix exec %s: %s", cacheId, err)
-			continue
-		}
+	// Skipping this since it's not needed anymore with loads of cache checking
+	/*
+		for _, executionItem := range foundNotExecuted {
+			cacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, executionItem)
+			cache, err := GetCache(ctx, cacheId)
+			if err != nil {
+				//log.Printf("[WARNING] Couldn't find in fix exec %s: %s", cacheId, err)
+				continue
+			}
 
-		actionResult := ActionResult{}
-		cacheData := []byte(cache.([]uint8))
-		//log.Printf("Data: %s", string(cacheData))
+			actionResult := ActionResult{}
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("Data: %s", string(cacheData))
 
-		// Just ensuring the data is good
-		err = json.Unmarshal(cacheData, &actionResult)
-		if err != nil {
-			//log.Printf("[WARNING] Failed unmarshal in fix exec %s: %s", cacheId, err)
-			continue
-		}
+			// Just ensuring the data is good
+			err = json.Unmarshal(cacheData, &actionResult)
+			if err != nil {
+				//log.Printf("[WARNING] Failed unmarshal in fix exec %s: %s", cacheId, err)
+				continue
+			}
 
-		//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
-		//go ResendActionResult(cacheData, 0)
-		log.Printf("\n\n[DEBUG] Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
-		//go ResendActionResult(cacheData, retries)
+			//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
+			//go ResendActionResult(cacheData, 0)
+			log.Printf("\n\n[DEBUG] Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
+			//go ResendActionResult(cacheData, retries)
 
-		if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
+			if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 
-			setExecVar := true
-			//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %#v", actionResult.Result)
-			if strings.Contains(actionResult.Result, "\"success\":") {
-				type SubflowMapping struct {
-					Success bool `json:"success"`
-				}
+				setExecVar := true
+				//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %#v", actionResult.Result)
+				if strings.Contains(actionResult.Result, "\"success\":") {
+					type SubflowMapping struct {
+						Success bool `json:"success"`
+					}
 
-				var subflowData SubflowMapping
-				err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
-				if err != nil {
-					log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
-					setExecVar = false
-				} else {
-					if subflowData.Success == false {
+					var subflowData SubflowMapping
+					err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+					if err != nil {
+						log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
 						setExecVar = false
-					}
-				}
-			}
-
-			if len(actionResult.Result) == 0 {
-				setExecVar = false
-			}
-
-			if setExecVar {
-				log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (3)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
-
-				if len(workflowExecution.Results) > 0 {
-					lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
-					_ = lastResult
-					//log.Printf("LAST: %s", lastResult)
-				}
-
-				actionResult.Action.ExecutionVariable.Value = actionResult.Result
-
-				foundIndex := -1
-				for i, executionVariable := range workflowExecution.ExecutionVariables {
-					if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
-						foundIndex = i
-						break
+					} else {
+						if subflowData.Success == false {
+							setExecVar = false
+						}
 					}
 				}
 
-				if foundIndex >= 0 {
-					workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+				if len(actionResult.Result) == 0 {
+					setExecVar = false
+				}
+
+				if setExecVar {
+					log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (3)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+
+					if len(workflowExecution.Results) > 0 {
+						lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
+						_ = lastResult
+						//log.Printf("LAST: %s", lastResult)
+					}
+
+					actionResult.Action.ExecutionVariable.Value = actionResult.Result
+
+					foundIndex := -1
+					for i, executionVariable := range workflowExecution.ExecutionVariables {
+						if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+							foundIndex = i
+							break
+						}
+					}
+
+					if foundIndex >= 0 {
+						workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+					} else {
+						workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+					}
 				} else {
-					workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+					log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 				}
+			}
+
+			if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+				go ResendActionResult(cacheData, retries)
 			} else {
-				log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+				workflowExecution.Results = append(workflowExecution.Results, actionResult)
 			}
 		}
-
-		if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-			go ResendActionResult(cacheData, retries)
-		} else {
-			workflowExecution.Results = append(workflowExecution.Results, actionResult)
-		}
-	}
+	*/
 
 	saveToDb := false
 	extra := 0
@@ -9333,7 +9332,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 		actionResultBody, err := json.Marshal(actionResult)
 		if err == nil {
-			log.Printf("[DEBUG] Setting cache for %s. Status: %s", actionCacheId, actionResult.Status)
 			err = SetCache(ctx, actionCacheId, actionResultBody)
 			if err != nil {
 				log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
@@ -10409,143 +10407,147 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// after 20 seconds to re-check it
 	// Don't want to run from the get-go
 
-	if time.Now().Unix()-workflowExecution.StartedAt > 5 {
-		_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
-		foundNotExecuted := []string{}
-		for _, executedItem := range newExecuted {
-			if executedItem == actionResult.Action.ID {
-				continue
-			}
-
-			found := false
-			for _, result := range workflowExecution.Results {
-				if result.Action.ID == executedItem {
-					found = true
-					break
+	/*
+		if time.Now().Unix()-workflowExecution.StartedAt > 5 {
+			_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
+			foundNotExecuted := []string{}
+			for _, executedItem := range newExecuted {
+				if executedItem == actionResult.Action.ID {
+					continue
 				}
-			}
 
-			if !found {
-				foundNotExecuted = append(foundNotExecuted, executedItem)
-			}
-		}
-
-		if len(foundNotExecuted) > 0 {
-			// Running them right away?
-			validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
-		} else {
-			//log.Printf("\n\n[WARNING] Rerunning checks for whether the execution is done at all.\n\n")
-
-			// FIXME: Doesn't take into accoutn subflows and user input trigger
-			allActions := workflowExecution.Workflow.Actions
-			for _, trigger := range workflowExecution.Workflow.Triggers {
-				//log.Printf("Appname trigger (0): %s", trigger.AppName)
-				if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
-					allActions = append(allActions, Action{
-						ID:      trigger.ID,
-						Name:    trigger.Name,
-						AppName: trigger.AppName,
-					})
-				}
-			}
-
-			for _, action := range allActions {
 				found := false
 				for _, result := range workflowExecution.Results {
-					if result.Action.ID == action.ID {
+					if result.Action.ID == executedItem {
 						found = true
 						break
 					}
 				}
 
-				if found {
-					continue
+				if !found {
+					foundNotExecuted = append(foundNotExecuted, executedItem)
+				}
+			}
+
+			if len(foundNotExecuted) > 0 {
+				// Running them right away?
+				validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
+			} else {
+				//log.Printf("\n\n[WARNING] Rerunning checks for whether the execution is done at all.\n\n")
+
+				// FIXME: Doesn't take into accoutn subflows and user input trigger
+				allActions := workflowExecution.Workflow.Actions
+				for _, trigger := range workflowExecution.Workflow.Triggers {
+					//log.Printf("Appname trigger (0): %s", trigger.AppName)
+					if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
+						allActions = append(allActions, Action{
+							ID:      trigger.ID,
+							Name:    trigger.Name,
+							AppName: trigger.AppName,
+						})
+					}
 				}
 
-				//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
-				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
-				cache, err := GetCache(ctx, cacheId)
-				if err != nil {
-					//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
-					continue
-				}
-
-				actionResult := ActionResult{}
-				cacheData := []byte(cache.([]uint8))
-
-				// Just ensuring the data is good
-				err = json.Unmarshal(cacheData, &actionResult)
-				if err != nil {
-					log.Printf("[WARNING] Failed unmarshal in fix exec %s (2): %s", cacheId, err)
-					continue
-				}
-
-				log.Printf("[DEBUG] Should rerun (1)? %s (%s - %s)", action.Label, action.Name, action.ID)
-				// If reruns, make sure it waits a bit for the next executions?
-				// This may cause one action that actually finished to get its result sent AFTER the next one, leading to missing information in subsequent nodes.
-				if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-
-					setExecVar := true
-					//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %#v", actionResult.Result)
-					if strings.Contains(actionResult.Result, "\"success\":") {
-						type SubflowMapping struct {
-							Success bool `json:"success"`
+				for _, action := range allActions {
+					found := false
+					for _, result := range workflowExecution.Results {
+						if result.Action.ID == action.ID {
+							found = true
+							break
 						}
+					}
 
-						var subflowData SubflowMapping
-						err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
-						if err != nil {
-							log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
-							setExecVar = false
-						} else {
-							if subflowData.Success == false {
+					if found {
+						continue
+					}
+
+					//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
+					cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
+					cache, err := GetCache(ctx, cacheId)
+					if err != nil {
+						//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+						continue
+					}
+
+					actionResult := ActionResult{}
+					cacheData := []byte(cache.([]uint8))
+
+					// Just ensuring the data is good
+					err = json.Unmarshal(cacheData, &actionResult)
+					if err != nil {
+						log.Printf("[WARNING] Failed unmarshal in fix exec %s (2): %s", cacheId, err)
+						continue
+					}
+
+					log.Printf("\n\n[DEBUG] Should rerun (1)? %s (%s - %s)\n\n", action.Label, action.Name, action.ID)
+
+					// If reruns, make sure it waits a bit for the next executions?
+					// This may cause one action that actually finished to get its result sent AFTER the next one, leading to missing information in subsequent nodes.
+					if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
+
+						setExecVar := true
+						//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %#v", actionResult.Result)
+						if strings.Contains(actionResult.Result, "\"success\":") {
+							type SubflowMapping struct {
+								Success bool `json:"success"`
+							}
+
+							var subflowData SubflowMapping
+							err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+							if err != nil {
+								log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
 								setExecVar = false
-							}
-						}
-					}
-
-					if len(actionResult.Result) == 0 {
-						setExecVar = false
-					}
-
-					if setExecVar {
-						log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (1)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
-
-						if len(workflowExecution.Results) > 0 {
-							lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
-							_ = lastResult
-							//log.Printf("LAST: %s", lastResult)
-						}
-
-						actionResult.Action.ExecutionVariable.Value = actionResult.Result
-
-						foundIndex := -1
-						for i, executionVariable := range workflowExecution.ExecutionVariables {
-							if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
-								foundIndex = i
-								break
+							} else {
+								if subflowData.Success == false {
+									setExecVar = false
+								}
 							}
 						}
 
-						if foundIndex >= 0 {
-							workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+						if len(actionResult.Result) == 0 {
+							setExecVar = false
+						}
+
+						if setExecVar {
+							log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (1)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+
+							if len(workflowExecution.Results) > 0 {
+								lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
+								_ = lastResult
+								//log.Printf("LAST: %s", lastResult)
+							}
+
+							actionResult.Action.ExecutionVariable.Value = actionResult.Result
+
+							foundIndex := -1
+							for i, executionVariable := range workflowExecution.ExecutionVariables {
+								if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
+									foundIndex = i
+									break
+								}
+							}
+
+							if foundIndex >= 0 {
+								workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
+							} else {
+								workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+							}
 						} else {
-							workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
+							log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 						}
-					} else {
-						log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 					}
-				}
 
-				workflowExecution.Results = append(workflowExecution.Results, actionResult)
-				if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-					go ResendActionResult(cacheData, 0)
-				} else {
-					workflowExecution.Results = append(workflowExecution.Results, actionResult)
+					log.Printf("\n\n[INFO] Should rerun but is skipping as caching is waaay better!!!\n\n")
+					//workflowExecution.Results = append(workflowExecution.Results, actionResult)
+					if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+						go ResendActionResult(cacheData, 0)
+					} else {
+						workflowExecution.Results = append(workflowExecution.Results, actionResult)
+					}
 				}
 			}
 		}
-	}
+	*/
 
 	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
@@ -13127,18 +13129,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] Using %s as redirectUrl in SSO", backendUrl)
-
-	//backendUrl := os.Getenv("BASE_URL")
-	//if project.Environment == "cloud" {
-	//	backendUrl = "https://shuffler.io"
-	//}
-	//if len(backendUrl) == 0 {
-	//	backendUrl = "http://127.0.0.1:5001"
-	//}
-
-	//log.Printf("URL: %#v", request.URL)
-	//log.Printf("REDIRECT: %s", redirectUrl)
-	//_ = entryPoint
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {

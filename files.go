@@ -104,7 +104,7 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[INFO] INITIAL Api authentication failed in file LIST: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file LIST: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -168,7 +168,7 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[INFO] INITIAL Api authentication failed in file deletion: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
@@ -282,7 +282,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[INFO] INITIAL Api authentication failed in file deletion: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
@@ -626,7 +626,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("INITIAL Api authentication failed in file download: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
@@ -857,7 +857,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("INITIAL Api authentication failed in file upload: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file upload: %s", err)
 		orgId, err := fileAuthentication(request)
 		if err != nil {
 			log.Printf("Bad file authentication in create file: %s", err)
@@ -970,7 +970,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("INITIAL Api authentication failed in file upload: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file upload: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
@@ -1091,7 +1091,6 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 			file.Encrypted = true
 		}
 
-		log.Printf("[DEBUG] Got old length %d vs encrypted length %d", len(contents), len(newContents))
 		contents = newContents
 
 		file.FileSize = int64(len(contents))
@@ -1167,7 +1166,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[INFO] INITIAL Api authentication failed in file creation: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file creation: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {

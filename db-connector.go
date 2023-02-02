@@ -365,6 +365,7 @@ func DeleteCache(ctx context.Context, name string) error {
 // Cache handlers
 func GetCache(ctx context.Context, name string) (interface{}, error) {
 	if len(memcached) > 0 {
+
 		item, err := mc.Get(name)
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %#v: %s", name, err)
@@ -662,53 +663,14 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("ExecutionId can't be empty.")
 	}
 
-	/*
-	   for valueIndex, value := range workflowExecution.Results {
-	   			if strings.Contains(value.Result, "Result too large to handle") {
-	   				log.Printf("[DEBUG] Found prefix %s to be replaced", value.Result)
-	   				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
-	   				if err != nil {
-	   					log.Printf("[DEBUG] Failed to parse in execution file value %s", err)
-	   					continue
-	   				}
-
-	   				workflowExecution.Results[valueIndex].Result = newValue
-	   			}
-	   		}
-	*/
-
-	// Make sure to de-duplicate before saving and checking things
-	for _, action := range workflowExecution.Workflow.Actions {
-		found := false
-		for _, result := range workflowExecution.Results {
-			if result.Action.ID == action.ID {
-				found = true
-				break
-			}
-		}
-
-		if found {
-			continue
-		}
-
-		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
-		cache, err := GetCache(ctx, cacheId)
-		if err != nil {
-			//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
-			continue
-		}
-
-		actionResult := ActionResult{}
-		cacheData := []byte(cache.([]uint8))
-
-		// Just ensuring the data is good
-		err = json.Unmarshal(cacheData, &actionResult)
-		if err != nil {
-			continue
-		} else {
-			workflowExecution.Results = append(workflowExecution.Results, actionResult)
-		}
+	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
+		log.Printf("[INFO] Already finished! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
+		return nil
 	}
+
+	// Fixes missing pieces
+	workflowExecution = Fixexecution(ctx, workflowExecution)
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
@@ -733,7 +695,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return nil
 	} else {
 		// Deleting cache so that listing can work well
-		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
+		//DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
 	}
@@ -747,6 +709,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		}
 	} else {
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
+
+		log.Printf("[INFO] Saving execution %s with status %s and %d/%d results (not including subflows)", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 
 		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
@@ -974,6 +938,133 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	return string(data), nil
 }
 
+func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
+
+	// Make sure to not having missing items in the execution
+	for _, action := range workflowExecution.Workflow.Actions {
+		found := false
+
+		for _, result := range workflowExecution.Results {
+			if result.Action.ID == action.ID {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
+		cache, err := GetCache(ctx, cacheId)
+		if err != nil {
+			//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+			continue
+		}
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err == nil {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		} else {
+			log.Printf("[ERROR] Failed unmarshalling in fix exec for ID %s (1): %s", cacheId, err)
+		}
+	}
+
+	// Don't forget any!!
+	extra := 0
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+			continue
+		}
+
+		extra += 1
+
+		found := false
+		for _, result := range workflowExecution.Results {
+			if result.Action.ID == trigger.ID {
+				found = true
+				break
+			}
+		}
+
+		if found {
+			continue
+		}
+
+		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, trigger.ID)
+		cache, err := GetCache(ctx, cacheId)
+		if err != nil {
+			//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+			continue
+		}
+
+		actionResult := ActionResult{}
+		cacheData := []byte(cache.([]uint8))
+
+		// Just ensuring the data is good
+		err = json.Unmarshal(cacheData, &actionResult)
+		if err == nil {
+			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+		} else {
+			log.Printf("[ERROR] Failed unmarshalling in fix exec for ID %s (1): %s", cacheId, err)
+		}
+	}
+
+	// Clean up the results
+	handled := []string{}
+	newResults := []ActionResult{}
+	for _, result := range workflowExecution.Results {
+		if ArrayContains(handled, result.Action.ID) {
+			continue
+		}
+
+		handled = append(handled, result.Action.ID)
+		newResults = append(newResults, result)
+	}
+
+	workflowExecution.Results = newResults
+	if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
+		return workflowExecution
+	}
+
+	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
+
+		log.Printf("\n\n[INFO] Execution %s is complete!\n\n", workflowExecution.ExecutionId)
+
+		workflowExecution.Status = "FINISHED"
+
+		lastResult := ActionResult{}
+		highest_finishTime := int64(0)
+		for actionIndex, action := range workflowExecution.Workflow.Actions {
+			for parameterIndex, param := range action.Parameters {
+				if param.Configuration {
+					workflowExecution.Workflow.Actions[actionIndex].Parameters[parameterIndex].Value = ""
+				}
+			}
+
+			// Only show result of last success..?
+			if workflowExecution.Results[actionIndex].CompletedAt > highest_finishTime && workflowExecution.Results[actionIndex].Status == "SUCCESS" {
+				lastResult = workflowExecution.Results[actionIndex]
+			}
+		}
+
+		workflowExecution.Result = lastResult.Result
+		workflowExecution.CompletedAt = int64(time.Now().Unix())
+
+		nameKey := "workflowexecution"
+
+		// Inject into these?
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
+	}
+
+	return workflowExecution
+}
+
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
@@ -1014,6 +1105,11 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 						workflowExecution.Results[valueIndex].Result = newValue
 					}
 				}
+
+				// Fixes missing pieces
+				newexec := Fixexecution(ctx, *workflowExecution)
+				workflowExecution = &newexec
+
 				//log.Printf("[DEBUG] Returned execution %s", id)
 				return workflowExecution, nil
 			} else {
@@ -1088,38 +1184,9 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	// Making heavy use of caching for values that may be lost
-	for _, action := range workflowExecution.Workflow.Actions {
-		found := false
-		for _, result := range workflowExecution.Results {
-			if result.Action.ID == action.ID {
-				found = true
-				break
-			}
-		}
-
-		if found {
-			continue
-		}
-
-		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
-		cache, err := GetCache(ctx, cacheId)
-		if err != nil {
-			//log.Printf("[WARNING] Couldn't find action cache %s (get exec): %s", cacheId, err)
-			continue
-		}
-
-		actionResult := ActionResult{}
-		cacheData := []byte(cache.([]uint8))
-
-		// Just ensuring the data is good
-		err = json.Unmarshal(cacheData, &actionResult)
-		if err != nil {
-			continue
-		} else {
-			workflowExecution.Results = append(workflowExecution.Results, actionResult)
-		}
-	}
+	// Fixes missing pieces
+	newexec := Fixexecution(ctx, *workflowExecution)
+	workflowExecution = &newexec
 
 	if project.CacheDb {
 		newexecution, err := json.Marshal(workflowExecution)
@@ -4951,7 +5018,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	}
 
 	if len(users) == 0 {
-		log.Printf("[WARNING] No users found for session %s", sessionId)
+		//log.Printf("[WARNING] No users found for session %s", sessionId)
 		return User{}, errors.New("No users found for this apikey")
 	}
 
@@ -6923,11 +6990,13 @@ func GetEsConfig() *elasticsearch.Client {
 
 	// https://github.com/elastic/go-elasticsearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/elasticsearch.go#L98
 	config := elasticsearch.Config{
-		Addresses: strings.Split(esUrl, ","),
-		Username:  os.Getenv("SHUFFLE_OPENSEARCH_USERNAME"),
-		Password:  os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD"),
-		APIKey:    os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
-		CloudID:   os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
+		Addresses:     strings.Split(esUrl, ","),
+		Username:      os.Getenv("SHUFFLE_OPENSEARCH_USERNAME"),
+		Password:      os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD"),
+		APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
+		CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
+		MaxRetries:    5,
+		RetryOnStatus: []int{500, 502, 503, 504, 429, 403},
 	}
 
 	//config.Transport.TLSClientConfig
