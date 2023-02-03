@@ -9183,8 +9183,6 @@ func ResendActionResult(actionData []byte, retries int64) {
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 			backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 		}
-
-		//backendUrl = fmt.Sprintf("http://localhost:5002")
 	}
 
 	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -9222,6 +9220,8 @@ func ResendActionResult(actionData []byte, retries int64) {
 	if len(backendUrl) == 0 {
 		backendUrl = "http://localhost:5001"
 	}
+
+	log.Printf("\n\n[INFO] Resending action result to backend %s\n\n", backendUrl)
 
 	streamUrl := fmt.Sprintf("%s/api/v1/streams?rerun=true&retries=%d", backendUrl, retries+1)
 	req, err := http.NewRequest(
@@ -10407,32 +10407,32 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// after 20 seconds to re-check it
 	// Don't want to run from the get-go
 
-	/*
-		if time.Now().Unix()-workflowExecution.StartedAt > 5 {
-			_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
-			foundNotExecuted := []string{}
-			for _, executedItem := range newExecuted {
-				if executedItem == actionResult.Action.ID {
-					continue
-				}
+	if time.Now().Unix()-workflowExecution.StartedAt > 5 {
+		_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
+		foundNotExecuted := []string{}
+		for _, executedItem := range newExecuted {
+			if executedItem == actionResult.Action.ID {
+				continue
+			}
 
-				found := false
-				for _, result := range workflowExecution.Results {
-					if result.Action.ID == executedItem {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					foundNotExecuted = append(foundNotExecuted, executedItem)
+			found := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.ID == executedItem {
+					found = true
+					break
 				}
 			}
 
-			if len(foundNotExecuted) > 0 {
-				// Running them right away?
-				validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
-			} else {
+			if !found {
+				foundNotExecuted = append(foundNotExecuted, executedItem)
+			}
+		}
+
+		if len(foundNotExecuted) > 0 {
+			// Running them right away?
+			validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
+		} else {
+			/*
 				//log.Printf("\n\n[WARNING] Rerunning checks for whether the execution is done at all.\n\n")
 
 				// FIXME: Doesn't take into accoutn subflows and user input trigger
@@ -10545,9 +10545,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						workflowExecution.Results = append(workflowExecution.Results, actionResult)
 					}
 				}
-			}
+			*/
 		}
-	*/
+	}
 
 	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")

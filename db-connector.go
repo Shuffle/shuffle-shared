@@ -675,7 +675,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
-
 		err = SetCache(ctx, cacheKey, executionData)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
@@ -695,7 +694,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return nil
 	} else {
 		// Deleting cache so that listing can work well
-		//DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
 	}
@@ -710,7 +709,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	} else {
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
 
-		log.Printf("[INFO] Saving execution %s with status %s and %d/%d results (not including subflows)", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+		log.Printf("[INFO] Saving execution %s with status %s and %d/%d results (not including subflows) - 2", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 
 		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
@@ -1033,7 +1032,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
 
-		log.Printf("\n\n[INFO] Execution %s is complete!\n\n", workflowExecution.ExecutionId)
+		log.Printf("\n\n[INFO] Execution %s is complete! Saving to DB.\n\n", workflowExecution.ExecutionId)
 
 		workflowExecution.Status = "FINISHED"
 
@@ -1058,8 +1057,54 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		nameKey := "workflowexecution"
 
 		// Inject into these?
+		//DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
+
+		if project.DbType == "elasticsearch" {
+			executionData, err := json.Marshal(workflowExecution)
+			if err != nil {
+				log.Printf("[ERROR] Failed saving execution data for elasticsearch: %s", err)
+				return workflowExecution
+			}
+
+			err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
+			if err != nil {
+				log.Printf("[ERROR] Failed saving new execution %s (2): %s", workflowExecution.ExecutionId, err)
+				return workflowExecution
+			}
+		} else {
+			workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
+
+			log.Printf("[INFO] Saving execution %s with status %s and %d~/%d results (not including subflows) - 1", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+
+			key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
+			if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
+				log.Printf("[WARNING] Error adding workflow_execution to datastore: %s", err)
+
+				// Has to do with certain data coming back in parameters where it shouldn't, causing saving to be impossible
+				if strings.Contains(fmt.Sprintf("%s", err), "contains an invalid nested") {
+					//log.Printf("[DEBUG] RETRYING WITHOUT WORKFLOW AND PARAMS?")
+					//workflowExecution.Workflow = Workflow{}
+					//newParams = []WorkflowAppActionParameters{}
+					newResults := []ActionResult{}
+					for _, result := range workflowExecution.Results {
+						result.Action.Parameters = []WorkflowAppActionParameter{}
+						newResults = append(newResults, result)
+					}
+
+					workflowExecution.Results = newResults
+
+					key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
+					if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
+						log.Printf("[ERROR] Workflow execution save issue (3): %s", err)
+					} else {
+						return workflowExecution
+					}
+				}
+				return workflowExecution
+			}
+		}
 	}
 
 	return workflowExecution
@@ -1169,7 +1214,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 
 		// Parsing as file.
-		log.Printf("[DEBUG] Getting execution %s. Results: %d", id, len(workflowExecution.Results))
+		log.Printf("[DEBUG] Getting execution %s. Results: ~%d/%d", id, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 		for valueIndex, value := range workflowExecution.Results {
 			if strings.Contains(value.Result, "Result too large to handle") {
 				//log.Printf("[DEBUG] Found prefix %s to be replaced (2)", value.Result)
