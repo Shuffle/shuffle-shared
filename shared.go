@@ -13578,6 +13578,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		return WorkflowExecution{}, ExecInfo{}, "Failed unmarshal during execution", err
 	}
 
+	if len(workflow.OrgId) > 0 {
+		workflowExecution.ExecutionOrg = workflow.OrgId
+		workflowExecution.OrgId = workflow.OrgId
+	}
+
 	makeNew := true
 	start, startok := request.URL.Query()["start"]
 	if request.Method == "POST" {

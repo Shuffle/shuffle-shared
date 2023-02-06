@@ -4295,6 +4295,8 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	env = strings.ReplaceAll(env, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
+	log.Printf("[DEBUG] Adding to queue name %s", nameKey)
+
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
 		data, err := json.Marshal(executionRequest)
