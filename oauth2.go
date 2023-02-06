@@ -2625,7 +2625,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[DEBUG] Got last message: %s with snippet %s!", newHistoryId, lastMessage.Snippet)
 
 			handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
-			err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)))
+			err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)), 30)
 			if err != nil {
 				log.Printf("[WARNING] Failed updating gmail user %s cache: %s (2)", gmailUserInfo, err)
 			} else {
@@ -2655,7 +2655,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("Found new history ID %s", newHistoryId)
-	err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)))
+	err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)), 30)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating gmail user %s cache: %s", gmailUserInfo, err)
 	}

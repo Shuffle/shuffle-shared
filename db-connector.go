@@ -316,7 +316,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 	/*
 		cache, err := GetCache(ctx, key)
 		if err != nil {
-			SetCache(ctx, key, []byte(string(1)))
+			SetCache(ctx, key, []byte(string(1)), 30)
 		} else {
 			//cacheData := string([]byte(cache.([]uint8)))
 			cacheData := cache.(int)
@@ -463,7 +463,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 }
 
 // FIXME: Add the option to set cache that expires at longer intervals
-func SetCache(ctx context.Context, name string, data []byte) error {
+func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
 	//log.Printf("DATA SIZE: %d", len(data))
 	// Maxsize ish~
 
@@ -500,7 +500,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 				item := &memcache.Item{
 					Key:        keyname,
 					Value:      parsedData,
-					Expiration: time.Minute * 30,
+					Expiration: time.Minute * time.Duration(expiration),
 				}
 
 				var err error
@@ -508,7 +508,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 					newitem := &gomemcache.Item{
 						Key:        keyname,
 						Value:      parsedData,
-						Expiration: 1800,
+						Expiration: expiration * 60,
 					}
 
 					err = mc.Set(newitem)
@@ -541,7 +541,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 			item := &memcache.Item{
 				Key:        name,
 				Value:      data,
-				Expiration: time.Minute * 30,
+				Expiration: time.Minute * time.Duration(expiration),
 			}
 
 			var err error
@@ -549,7 +549,7 @@ func SetCache(ctx context.Context, name string, data []byte) error {
 				newitem := &gomemcache.Item{
 					Key:        name,
 					Value:      data,
-					Expiration: 1800,
+					Expiration: expiration * 60,
 				}
 
 				err = mc.Set(newitem)
@@ -644,7 +644,7 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 		//	return nil
 		//}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for setapp: %s", err)
 		}
@@ -675,7 +675,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
-		err = SetCache(ctx, cacheKey, executionData)
+		err = SetCache(ctx, cacheKey, executionData, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
 			dbSave = true
@@ -870,7 +870,7 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 		return err
 	}
 
-	err = SetCache(ctx, cacheKey, variableWrapperData)
+	err = SetCache(ctx, cacheKey, variableWrapperData, 30)
 	if err != nil {
 		log.Printf("[ERROR] Failed updating execution variables: %s", err)
 		return err
@@ -928,7 +928,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	if project.CacheDb {
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution file value: %s", err)
 		}
@@ -1009,7 +1009,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		if err == nil {
 			workflowExecution.Results = append(workflowExecution.Results, actionResult)
 		} else {
-			log.Printf("[ERROR] Failed unmarshalling in fix exec for ID %s (1): %s", cacheId, err)
+			log.Printf("[ERROR] Failed unmarshalling in fix exec for ID %s (2): %s", cacheId, err)
 		}
 	}
 
@@ -1026,86 +1026,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	}
 
 	workflowExecution.Results = newResults
-	if workflowExecution.Status == "FINISHED" || workflowExecution.Status == "ABORTED" {
-		return workflowExecution
-	}
 
-	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
-
-		log.Printf("\n\n[INFO] Execution %s is complete! Saving to DB.\n\n", workflowExecution.ExecutionId)
-
-		workflowExecution.Status = "FINISHED"
-
-		lastResult := ActionResult{}
-		highest_finishTime := int64(0)
-		for actionIndex, action := range workflowExecution.Workflow.Actions {
-			for parameterIndex, param := range action.Parameters {
-				if param.Configuration {
-					workflowExecution.Workflow.Actions[actionIndex].Parameters[parameterIndex].Value = ""
-				}
-			}
-
-			// Only show result of last success..?
-			if workflowExecution.Results[actionIndex].CompletedAt > highest_finishTime && workflowExecution.Results[actionIndex].Status == "SUCCESS" {
-				lastResult = workflowExecution.Results[actionIndex]
-			}
-		}
-
-		workflowExecution.Result = lastResult.Result
-		workflowExecution.CompletedAt = int64(time.Now().Unix())
-
-		nameKey := "workflowexecution"
-
-		// Inject into these?
-		//DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
-		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
-		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
-
-		if project.DbType == "elasticsearch" {
-			executionData, err := json.Marshal(workflowExecution)
-			if err != nil {
-				log.Printf("[ERROR] Failed saving execution data for elasticsearch: %s", err)
-				return workflowExecution
-			}
-
-			err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
-			if err != nil {
-				log.Printf("[ERROR] Failed saving new execution %s (2): %s", workflowExecution.ExecutionId, err)
-				return workflowExecution
-			}
-		} else {
-			workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
-
-			log.Printf("[INFO] Saving execution %s with status %s and %d~/%d results (not including subflows) - 1", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
-
-			key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
-			if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-				log.Printf("[WARNING] Error adding workflow_execution to datastore: %s", err)
-
-				// Has to do with certain data coming back in parameters where it shouldn't, causing saving to be impossible
-				if strings.Contains(fmt.Sprintf("%s", err), "contains an invalid nested") {
-					//log.Printf("[DEBUG] RETRYING WITHOUT WORKFLOW AND PARAMS?")
-					//workflowExecution.Workflow = Workflow{}
-					//newParams = []WorkflowAppActionParameters{}
-					newResults := []ActionResult{}
-					for _, result := range workflowExecution.Results {
-						result.Action.Parameters = []WorkflowAppActionParameter{}
-						newResults = append(newResults, result)
-					}
-
-					workflowExecution.Results = newResults
-
-					key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
-					if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-						log.Printf("[ERROR] Workflow execution save issue (3): %s", err)
-					} else {
-						return workflowExecution
-					}
-				}
-				return workflowExecution
-			}
-		}
-	}
+	//UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, workflowExecution.Start, children, parents, visited, executed, nextActions, environments, extra)
 
 	return workflowExecution
 }
@@ -1155,7 +1077,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				newexec := Fixexecution(ctx, *workflowExecution)
 				workflowExecution = &newexec
 
-				//log.Printf("[DEBUG] Returned execution %s", id)
+				//log.Printf("[DEBUG] Returned execution %s from cache with %d results", id, len(workflowExecution.Results))
 				return workflowExecution, nil
 			} else {
 				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
@@ -1240,7 +1162,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, nil
 		}
 
-		err = SetCache(ctx, id, newexecution)
+		err = SetCache(ctx, id, newexecution, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution: %s", err)
 		}
@@ -1301,7 +1223,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 			return workflowApp, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for get cloud app cache: %s", err)
 		}
@@ -1412,7 +1334,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			return workflowApp, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getapp: %s", err)
 		}
@@ -1446,7 +1368,7 @@ func SetSubscriptionRecipient(ctx context.Context, sub SubscriptionRecipient, id
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for setworkflow: %s", err)
 		}
@@ -1521,7 +1443,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 			return sub, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getsub: %s", err)
 		}
@@ -1671,7 +1593,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			return env, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getenv: %s", err)
 		}
@@ -1745,7 +1667,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			return workflow, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
 		}
@@ -1819,7 +1741,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 			return workflow, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
 		}
@@ -2305,7 +2227,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			return curOrg, nil
 		}
 
-		err = SetCache(ctx, cacheKey, neworg)
+		err = SetCache(ctx, cacheKey, neworg, 30)
 		if err != nil {
 			log.Printf("[ERROR] Failed updating org cache: %s", err)
 		}
@@ -2550,7 +2472,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-		err = SetCache(ctx, cacheKey, neworg)
+		err = SetCache(ctx, cacheKey, neworg, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org: %s", err)
 		}
@@ -2613,7 +2535,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 			return session, nil
 		}
 
-		err = SetCache(ctx, thissession, data)
+		err = SetCache(ctx, thissession, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating session cache: %s", err)
 		}
@@ -2755,7 +2677,7 @@ func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) 
 		}
 
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating openapi cache in set: %s", err)
 		}
@@ -2854,7 +2776,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			return *api, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating openapi cache: %s", err)
 		}
@@ -3273,7 +3195,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			return curUser, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache: %s", err)
 		}
@@ -3283,7 +3205,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
-	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %s", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
+	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
 	if updateOrg {
 		user = fixUserOrg(ctx, user)
@@ -3327,13 +3249,13 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating user cache (ID): %s", err)
 		}
 
 		cacheKey = fmt.Sprintf("user_%s", strings.ToLower(user.Username))
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating user cache (username): %s", err)
 		}
@@ -3518,7 +3440,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			return allworkflowappAuths, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating get app auth cache: %s", err)
 		}
@@ -3689,7 +3611,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 			return environments, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating environment cache: %s", err)
 		}
@@ -3960,7 +3882,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			return allApps, nil
 		}
 
-		err = SetCache(ctx, publicAppsKey, newbody)
+		err = SetCache(ctx, publicAppsKey, newbody, 30)
 		if err != nil {
 			log.Printf("[INFO] Error setting app cache item for %s: %v", publicAppsKey, err)
 		} else {
@@ -4045,7 +3967,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			return allApps, nil
 		}
 
-		err = SetCache(ctx, cacheKey, newbody)
+		err = SetCache(ctx, cacheKey, newbody, 30)
 		if err != nil {
 			log.Printf("[INFO] Error setting app cache item for %s: %v", cacheKey, err)
 		} else {
@@ -4357,7 +4279,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 		//requestCache.Set(cacheKey, &apps, cache.DefaultExpiration)
 		data, err := json.Marshal(allApps)
 		if err == nil {
-			err = SetCache(ctx, cacheKey, data)
+			err = SetCache(ctx, cacheKey, data, 30)
 			if err != nil {
 				log.Printf("[WARNING] Failed updating cache for execution: %s", err)
 			}
@@ -4608,7 +4530,7 @@ func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 			return workflowExecution, nil
 		}
 
-		err = SetCache(ctx, id, newexecution)
+		err = SetCache(ctx, id, newexecution, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating collection: %s", err)
 		}
@@ -4755,7 +4677,7 @@ func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, op
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
 		}
@@ -4797,7 +4719,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
 		}
@@ -5074,7 +4996,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			return User{}, err
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting session cache for user %s: %s", sessionId, err)
 		}
@@ -5242,7 +5164,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			return hook, err
 		}
 
-		err = SetCache(ctx, cacheKey, hookData)
+		err = SetCache(ctx, cacheKey, hookData, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for gethook: %s", err)
 		}
@@ -5278,7 +5200,7 @@ func SetHook(ctx context.Context, hook Hook) error {
 	if project.CacheDb {
 
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, hookId)
-		err = SetCache(ctx, cacheKey, hookData)
+		err = SetCache(ctx, cacheKey, hookData, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for hook: %s", err)
 		}
@@ -5546,7 +5468,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification cache: %s", err)
 		}
@@ -5844,7 +5766,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 			return appAuth, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating app auth cache: %s", err)
 		}
@@ -6498,7 +6420,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			return executions, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache executions (%s): %s", workflowId, err)
 			return executions, nil
@@ -6874,7 +6796,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting cache for set cache key: %s", err)
 		}
@@ -6955,7 +6877,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 			return cacheData, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for get cache key: %s", err)
 		}
@@ -7223,7 +7145,7 @@ func SetUsecase(ctx context.Context, usecase Usecase, optionalEditedSecondsOffse
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, name)
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for setusecase: %s", err)
 		}
@@ -7298,7 +7220,7 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 			return usecase, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getusecase: %s", err)
 		}
@@ -7344,7 +7266,7 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, deal.ID)
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for deal: %s", err)
 		}
@@ -7446,7 +7368,7 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 			return deals, nil
 		}
 
-		err = SetCache(ctx, cacheKey, newdeal)
+		err = SetCache(ctx, cacheKey, newdeal, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating deal cache: %s", err)
 		}
@@ -7491,7 +7413,7 @@ func GetAppStats(ctx context.Context, id string) (*Conversionevents, error) {
 			return stats, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getappstats: %s", err)
 		}
@@ -7692,4 +7614,39 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 	}
 
 	return stats, err
+}
+
+func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
+	log.Printf("[INFO][%s] Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+
+	//if (len(environments) == 1 && len(workflowExecution.Results) >= 1) || (len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) && len(workflowExecution.Workflow.Actions) > 0) {
+	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
+
+		// Check if status is already set first from cache
+		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
+			log.Printf("[INFO] Already finished! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
+			return false
+		}
+
+		//log.Printf("\n\nFINISHED!\n\n")
+		workflowExecution.CompletedAt = int64(time.Now().Unix())
+		workflowExecution.Status = "FINISHED"
+		err = SetWorkflowExecution(ctx, workflowExecution, true)
+		if err != nil {
+			log.Printf("[ERROR] FAILED TO SET EXECUTION DURING FINALIZATION %s: %s", workflowExecution.ExecutionId, err)
+		} else {
+			log.Printf("[INFO] Finalized execution %s for workflow %s with %d results and status %s", workflowExecution.ExecutionId, workflowExecution.Workflow.ID, len(workflowExecution.Results), workflowExecution.Status)
+
+			// Validate text vs previous executions
+			//RunTextClassifier(ctx, workflowExecution)
+
+			// Enrich IPs and the like by finding stuff with regex
+			RunIOCFinder(ctx, workflowExecution)
+			return true
+		}
+
+	}
+
+	return false
 }

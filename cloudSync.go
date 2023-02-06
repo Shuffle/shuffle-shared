@@ -299,7 +299,7 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 			return foundUser, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data)
+		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating algolia username cache: %s", err)
 		}

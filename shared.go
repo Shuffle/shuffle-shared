@@ -2300,7 +2300,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		user.SessionLogin = false
-		err = SetCache(ctx, newApikey, b)
+		err = SetCache(ctx, newApikey, b, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
@@ -2773,7 +2773,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.CacheDb {
-		err = SetCache(ctx, cacheKey, newjson)
+		err = SetCache(ctx, cacheKey, newjson, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
 		}
@@ -4797,7 +4797,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					// Updates the auth item itself IF necessary
-					go UpdateAppAuth(ctx, auth, workflow.ID, action.ID, true)
+					UpdateAppAuth(ctx, auth, workflow.ID, action.ID, true)
 					break
 				}
 			}
@@ -6008,7 +6008,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %s, Active: %s, SupportAccess: %s, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -8760,7 +8760,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		//log.Printf("\n\n[DEBUG] ITS LOOPING - SHOULD ADD TO A LIST INSTEAD!\n\n")
 
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
-		err = SetCache(ctx, subflowResultCacheId, []byte(returnValue))
+		err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 30)
 		if err != nil {
 			log.Printf("\n\n\n[ERROR] Failed setting subflow loop cache result for action in parsed exec results %s: %s\n\n", subflowResultCacheId, err)
 			return err
@@ -9221,7 +9221,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 		backendUrl = "http://localhost:5001"
 	}
 
-	log.Printf("\n\n[INFO] Resending action result to backend %s\n\n", backendUrl)
+	//log.Printf("\n\n[INFO] Resending action result to backend %s\n\n", backendUrl)
 
 	streamUrl := fmt.Sprintf("%s/api/v1/streams?rerun=true&retries=%d", backendUrl, retries+1)
 	req, err := http.NewRequest(
@@ -9288,13 +9288,26 @@ func ResendActionResult(actionData []byte, retries int64) {
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
 	var err error
 	if actionResult.Action.ID == "" {
-		//log.Printf("[ERROR] Failed handling EMPTY action %s. Usually happens during worker run that sets everything?", actionResult)
+		log.Printf("\n\n[ERROR] Failed handling EMPTY action %s. Usually happens during worker run that sets everything?\n\n", actionResult)
 		return &workflowExecution, true, nil
 	}
 
-	// 1. Set cache
-	// 2. Find executed without a result
-	// 3. Ensure the result is NOT set when running an action
+	// 1. CHECK cache if it happened in another?
+	// 2. Set cache
+	// 3. Find executed without a result
+	// 4. Ensure the result is NOT set when running an action
+
+	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
+	/*
+		cache, err := GetCache(ctx, actionCacheId)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+
+			log.Printf("\n\n[DEBUG] Found cache for %s. This means the action result is already in. Value: '%s'!", actionCacheId, string(cacheData))
+
+			return &workflowExecution, true, errors.New(fmt.Sprintf("Data for action %s (%s) has already been ran.", actionResult.Action.Label, actionResult.Action.ID))
+		}
+	*/
 
 	// Don't set cache for triggers?
 	//log.Printf("\n\nACTIONRES: %s\n\nRES: %s\n", actionResult, actionResult.Result)
@@ -9324,18 +9337,19 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		}
 
-		log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %s", setCache)
+		log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 		//log.Printf("[WARNING] Should maybe not set cache for subflow if it should wait for result.")
 	}
 
 	if setCache {
-		actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 		actionResultBody, err := json.Marshal(actionResult)
 		if err == nil {
-			err = SetCache(ctx, actionCacheId, actionResultBody)
+			err = SetCache(ctx, actionCacheId, actionResultBody, 120)
 			if err != nil {
 				log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
 			}
+		} else {
+			log.Printf("\n\n[ERROR] Failed marshalling result and put it in cache.")
 		}
 	} else {
 		//log.Printf("[WARNING] Skipping cache for %s", actionResult.Action.Name)
@@ -9972,7 +9986,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 							newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, curAction.ID)
 							cacheData := []byte("1")
-							err = SetCache(ctx, newExecId, cacheData)
+							err = SetCache(ctx, newExecId, cacheData, 1)
 							if err != nil {
 								log.Printf("[WARNING] Failed setting cache for skipped action %s: %s", newExecId, err)
 							} else {
@@ -10407,32 +10421,32 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// after 20 seconds to re-check it
 	// Don't want to run from the get-go
 
-	if time.Now().Unix()-workflowExecution.StartedAt > 5 {
-		_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
-		foundNotExecuted := []string{}
-		for _, executedItem := range newExecuted {
-			if executedItem == actionResult.Action.ID {
-				continue
-			}
+	/*
+		if time.Now().Unix()-workflowExecution.StartedAt > 5 {
+			_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
+			foundNotExecuted := []string{}
+			for _, executedItem := range newExecuted {
+				if executedItem == actionResult.Action.ID {
+					continue
+				}
 
-			found := false
-			for _, result := range workflowExecution.Results {
-				if result.Action.ID == executedItem {
-					found = true
-					break
+				found := false
+				for _, result := range workflowExecution.Results {
+					if result.Action.ID == executedItem {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					foundNotExecuted = append(foundNotExecuted, executedItem)
 				}
 			}
 
-			if !found {
-				foundNotExecuted = append(foundNotExecuted, executedItem)
-			}
-		}
-
-		if len(foundNotExecuted) > 0 {
-			// Running them right away?
-			validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
-		} else {
-			/*
+			if len(foundNotExecuted) > 0 {
+				// Running them right away?
+				validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
+			} else {
 				//log.Printf("\n\n[WARNING] Rerunning checks for whether the execution is done at all.\n\n")
 
 				// FIXME: Doesn't take into accoutn subflows and user input trigger
@@ -10545,9 +10559,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						workflowExecution.Results = append(workflowExecution.Results, actionResult)
 					}
 				}
-			*/
+			}
 		}
-	}
+	*/
 
 	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
@@ -12278,7 +12292,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	// Not caching 404s
 	//if Result.Success && !strings.Contains(string(b), "404: Not Found") {
-	err = SetCache(ctx, cacheKey, b)
+	err = SetCache(ctx, cacheKey, b, 30)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
 	}
@@ -12353,7 +12367,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b)
+	err = SetCache(ctx, cacheKey, b, 30)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
 	}
@@ -13512,7 +13526,7 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 	)
 
 	if err != nil {
-		SetCache(ctx, cacheKey, []byte{})
+		SetCache(ctx, cacheKey, []byte{}, 30)
 		return []byte{}, err
 	}
 
@@ -13523,27 +13537,27 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 
 	//log.Printf("URL %s, RESP: %d", url, newresp.StatusCode)
 	if newresp.StatusCode != 200 {
-		SetCache(ctx, cacheKey, []byte{})
+		SetCache(ctx, cacheKey, []byte{}, 30)
 
 		return []byte{}, errors.New(fmt.Sprintf("No body to handle for %s. Status: %d", url, newresp.StatusCode))
 	}
 
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
-		SetCache(ctx, cacheKey, []byte{})
+		SetCache(ctx, cacheKey, []byte{}, 30)
 		return []byte{}, err
 	}
 
 	//log.Printf("Documentation: %s", string(body))
 	if len(body) > 0 {
-		err = SetCache(ctx, cacheKey, body)
+		err = SetCache(ctx, cacheKey, body, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for workflow/app doc %s: %s", url, err)
 		}
 		return body, nil
 	}
 
-	SetCache(ctx, cacheKey, []byte{})
+	SetCache(ctx, cacheKey, []byte{}, 30)
 	return []byte{}, errors.New(fmt.Sprintf("No body to handle for %s", url))
 }
 
@@ -13687,7 +13701,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				cacheData := []byte("1")
-				err = SetCache(ctx, newExecId, cacheData)
+				err = SetCache(ctx, newExecId, cacheData, 1)
 				if err != nil {
 					log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
 				} else {
@@ -15273,7 +15287,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	// PS: This is NOT an ideal process, and broadcasting should be handled differently
 	//log.Printf("Body to update: %s", string(body))
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
-	err = SetCache(ctx, sessionKey, body)
+	err = SetCache(ctx, sessionKey, body, 30)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 	}
@@ -15579,7 +15593,7 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 
 	if exec.Status == "FINISHED" || exec.Status == "FAILURE" {
 		cacheKey := fmt.Sprintf("workflowexecution-%s", executionId)
-		err = SetCache(ctx, cacheKey, body)
+		err = SetCache(ctx, cacheKey, body, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for workflowexec key %s: %s", cacheKey, err)
 		}
@@ -15876,4 +15890,149 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 	newOrgs = append(newOrgs, noParentOrg...)
 
 	return newOrgs
+}
+
+func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecution, children map[string][]string, inputNode string) []string {
+	nextActions := []string{}
+
+	parentRan := false
+	for _, result := range workflowExecution.Results {
+		if result.Action.ID == inputNode {
+			parentRan = true
+		}
+	}
+
+	if !parentRan {
+		//log.Printf("Should run parent first.")
+		return []string{inputNode}
+	} else {
+		// Starting from the startnode, go through the workflow one level at a time
+		foundCnt := 0
+		for _, child := range children[inputNode] {
+			// Check if the parent and its childs have a result
+			found := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.ID == child {
+					foundCnt += 1
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				// Due to being too fast cleared
+				//cacheId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, child)
+				//_, err := GetCache(ctx, cacheId)
+				//if err != nil {
+				//	//log.Printf("[INFO] Missing execution (2): %s", child)
+				//	nextActions = append(nextActions, child)
+				//	continue
+				//}
+
+				cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, child)
+				_, err := GetCache(ctx, cacheId)
+				if err != nil {
+					//log.Printf("[INFO] Missing execution (2): %s", child)
+					nextActions = append(nextActions, child)
+				}
+			}
+		}
+
+		if foundCnt == len(children[inputNode]) {
+			//log.Printf("All nodes done. Check their child results. Child nodes: %d, found: %d", len(children[inputNode]), foundCnt)
+			// Run child nodes of this!
+			nextActions = []string{}
+
+			// Randomize order as to keep digging
+			//for _, child := range rand.Perm(children[inputNode]) {
+			for _, child := range children[inputNode] {
+				next := findMissingChildren(ctx, workflowExecution, children, child)
+
+				// Only doing one are at a time as to SLOWLY dig down into it
+				if len(next) > 0 {
+					nextActions = append(nextActions, next...)
+					break
+				}
+			}
+
+			return nextActions
+		} else {
+			//log.Printf("Missing nodes. Found: %d, Expected: %d", foundCnt, len(children[inputNode]))
+		}
+	}
+
+	return nextActions
+}
+
+// Finds next actions that aren't already executed and don't have results
+func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution) []string {
+	extra := 0
+	parents := map[string][]string{}
+	children := map[string][]string{}
+	nextActions := []string{}
+
+	inputNode := workflowExecution.Start
+	if len(workflowExecution.Results) == 0 {
+		return []string{inputNode}
+	}
+
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+			continue
+		}
+
+		extra += 1
+	}
+
+	if ValidateFinished(ctx, extra, *workflowExecution) {
+		return []string{}
+	}
+
+	for _, branch := range workflowExecution.Workflow.Branches {
+		// Check what the parent is first. If it's trigger - skip
+		sourceFound := false
+		destinationFound := false
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.ID == branch.SourceID {
+				sourceFound = true
+			}
+
+			if action.ID == branch.DestinationID {
+				destinationFound = true
+			}
+		}
+
+		if !sourceFound || !destinationFound {
+			for _, trigger := range workflowExecution.Workflow.Triggers {
+				if trigger.ID == branch.SourceID {
+					sourceFound = true
+				}
+
+				if trigger.ID == branch.DestinationID {
+					destinationFound = true
+				}
+			}
+		}
+
+		foundCnt := 0
+		if sourceFound {
+			parents[branch.DestinationID] = append(parents[branch.DestinationID], branch.SourceID)
+			foundCnt += 1
+		}
+
+		if destinationFound {
+			children[branch.SourceID] = append(children[branch.SourceID], branch.DestinationID)
+			foundCnt += 1
+		}
+
+		if foundCnt != 2 {
+			log.Printf("[INFO] Missing branch fullfillment!")
+		}
+	}
+
+	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode)
+
+	log.Printf("[DEBUG] Checking what are next actions in workflow %s. Results: %d/%d. NextActions: %s", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, nextActions)
+
+	return nextActions
 }
