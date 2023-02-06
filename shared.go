@@ -7671,6 +7671,8 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		Environment    string `json:"environment"`
 		Auth           string `json:"auth"`
 		CustomResponse string `json:"custom_response"`
+		Version        string `json:"version" datastore:"version"`
+		VersionTimeout int    `json:"version_timeout" datastore:"version_timeout"`
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -7719,7 +7721,7 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !(isTypeValid) {
-		log.Printf("Type %s is not valid. Try any of these: %s", requestdata.Type, strings.Join(validTypes, ", "))
+		log.Printf("[WARNING] Type %s is not valid. Try any of these: %s", requestdata.Type, strings.Join(validTypes, ", "))
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -7792,6 +7794,8 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		Environment:    requestdata.Environment,
 		Auth:           requestdata.Auth,
 		CustomResponse: requestdata.CustomResponse,
+		Version:        requestdata.Version,
+		VersionTimeout: requestdata.VersionTimeout,
 	}
 
 	hook.Status = "running"
@@ -11297,7 +11301,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			Body: string(swaggerdata),
 		}
 
-		ctx := context.Background()
+		ctx := GetContext(request)
 		err = SetOpenApiDatastore(ctx, idstring, parsed)
 		if err != nil {
 			log.Printf("[WARNING] Failed uploading openapi2 to datastore: %s", err)
@@ -15147,7 +15151,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//ctx := GetContext(request)
-	ctx := context.Background()
+	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)

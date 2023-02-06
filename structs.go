@@ -625,6 +625,8 @@ type Hook struct {
 	Environment    string       `json:"environment" datastore:"environment"`
 	Auth           string       `json:"auth" datastore:"auth"`
 	CustomResponse string       `json:"custom_response" datastore:"custom_response"`
+	Version        string       `json:"version" datastore:"version"`
+	VersionTimeout int          `json:"version_timeout" datastore:"version_timeout"`
 }
 
 // Used within a user
