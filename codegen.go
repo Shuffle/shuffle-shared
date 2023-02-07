@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,28 @@ import (
 	//"github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
 )
+
+var pythonAllowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
+var pythonReplacements = map[string]string{
+	"[": "",
+	"]": "",
+	"{": "",
+	"}": "",
+	"(": "",
+	")": "",
+	"!": "",
+	"@": "",
+	"#": "",
+	"$": "",
+	"%": "",
+	"^": "",
+	"&": "",
+	":": "",
+	";": "",
+	"<": "",
+	">": "",
+	"'": "",
+}
 
 func CopyFile(fromfile, tofile string) error {
 	from, err := os.Open(fromfile)
@@ -260,6 +283,59 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 	return appPath, nil
 }
 
+func TrimToNum(r int) bool {
+	if n := r - '0'; n >= 0 && n <= 9 {
+		return false
+	}
+	return true
+}
+
+// Returns fixed function names based on a list of strings
+func GetValidParameters(parameters []string) []string {
+	numbers := "0123456789"
+	newParams := []string{}
+	for _, param := range parameters {
+		originalParam := param
+
+		for key, val := range pythonReplacements {
+			param = strings.Replace(param, key, val, -1)
+		}
+
+		for _, char := range param {
+			if !strings.Contains(pythonAllowed, string(char)) {
+				param = strings.Replace(param, string(char), "", -1)
+			}
+		}
+
+		if len(param) > 0 && !ArrayContains(newParams, param) {
+			newParams = append(newParams, param)
+		} else {
+			// Find some name for it just for the code
+			h := md5.New()
+			io.WriteString(h, originalParam)
+			newName := strings.ToLower(fmt.Sprintf("%X", h.Sum(nil)))
+
+			// Fix leading numbers
+			newString := ""
+			shouldAdd := false
+			for _, char := range newName {
+				if !strings.Contains(numbers, string(char)) {
+					shouldAdd = true
+				}
+
+				if shouldAdd {
+					newString += string(char)
+				}
+			}
+
+			// Leading 0 not allowed
+			newParams = append(newParams, newString)
+		}
+	}
+
+	return newParams
+}
+
 // This function generates the python code that's being used.
 // This is really meta when you program it. Handling parameters is hard here.
 func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string, api WorkflowApp, handleFile bool) (string, string) {
@@ -310,6 +386,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			// Check if it's a part of the URL already
 
 			parsedQuery := FixFunctionName(query, "", true)
+			newParams := GetValidParameters([]string{parsedQuery})
+			if len(newParams) > 0 {
+				parsedQuery = newParams[0]
+			}
+
 			queryString += fmt.Sprintf("%s=\"\"", parsedQuery)
 
 			if index != len(optionalQueries)-1 {
@@ -393,20 +474,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		}
 	}
 
-	//baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
-	// This is a quickfix for onpremises stuff. Does work, but should really be
-	// part of the authentication scheme from openapi3
-	//urlParameter := ""
-	//urlInline := ""
-	//log.Printf("URL: %s", url)
-	//if !strings.HasPrefix(strings.ToLower(url), "http") {
-
-	// Modifies url to have the right path and such
-	//log.Printf("URL: %s", urlSplit)
-	//if len(swagger.Servers) > 0 {
-	//	log.Printf("SwaggerURL: %#v", swagger.Servers[0].URL)
-	//}
-
 	urlSplit := strings.Split(url, "/")
 	if strings.HasPrefix(url, "http") && len(urlSplit) > 2 {
 		tmpUrl := strings.Join(urlSplit[3:len(urlSplit)], "/")
@@ -434,9 +501,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	// Specific check for SSL verification
 	// This is critical for onprem stuff.
-	//verifyParam := ""
-	//verifyWrapper := ""
-	//verifyAddin := ""
 	// Added to_file as of July 2022
 	verifyParam := ", ssl_verify=False, to_file=False"
 	verifyWrapper := `if type(ssl_verify) == str: ssl_verify = False if ssl_verify.lower() == "false" or ssl_verify == "0" else True`
@@ -446,15 +510,20 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	headerParserCode := ""
 	queryParserCode := ""
 	if len(parameters) > 0 {
+		log.Printf("Got params: ", parameters)
+
+		parameters = GetValidParameters(parameters)
 		parameterData = fmt.Sprintf(", %s", strings.Join(parameters, ", "))
-		//log.Printf("Params: %#v", parameters)
+		log.Printf("Params: %#v", parameters)
 
 		// This is gibberish :)
 		for _, param := range parameters {
 			if strings.Contains(param, "headers=") {
 				headerParserCode = "if len(headers) > 0:\n            for header in headers.split(\"\\n\"):\n                if '=' in header:\n                    headersplit=header.split('=')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()\n                elif ':' in header:\n                    headersplit=header.split(':')\n                    request_headers[headersplit[0].strip()] = headersplit[1].strip()"
+
 			} else if strings.Contains(param, "queries=") {
 				queryParserCode = "\n        if len(queries) > 0:\n            if queries[0] == \"?\" or queries[0] == \"&\":\n                queries = queries[1:len(queries)]\n            if queries[len(queries)-1] == \"?\" or queries[len(queries)-1] == \"&\":\n                queries = queries[0:-1]\n            for query in queries.split(\"&\"):\n                 if isinstance(query, list) or isinstance(query, dict):\n                    try:\n                        query = json.dumps(query)\n                    except:\n                        pass\n                 if '=' in query:\n                    headersplit=query.split('=')\n                    params[requests.utils.quote(headersplit[0].strip())] = requests.utils.quote(headersplit[1].strip())\n                 else:\n                    params[requests.utils.quote(query.strip())] = None\n        params = '&'.join([k if v is None else f\"{k}={v}\" for k, v in params.items()])"
+
 			} else {
 				if !strings.Contains(url, fmt.Sprintf("{%s}", param)) {
 					queryData += fmt.Sprintf(`
@@ -544,6 +613,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
+	log.Printf("Queries: ", queryString)
 	parsedParameters := fmt.Sprintf("%s%s%s%s%s%s%s",
 		authenticationParameter,
 		urlParameter,
@@ -705,8 +775,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "detection") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(strings.ToLower(functionname), "queries") {
+		log.Printf("\n%s", data)
 	}
 
 	return functionname, data

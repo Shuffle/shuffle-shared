@@ -1806,6 +1806,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Fix here by allowing cleanup from UI anyway :)
 	if strings.ToLower(os.Getenv("SHUFFLE_DISABLE_RERUN_AND_ABORT")) == "true" {
 		log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping. (abort)")
 		resp.WriteHeader(409)
@@ -7502,7 +7503,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	parsedReason := "An error occurred during execution of this node"
+	parsedReason := "An error occurred during execution of this node. This may be due to the Workflow being Aborted, or an error in the node itself."
 	reason, reasonok := request.URL.Query()["reason"]
 	if reasonok {
 		parsedReason = reason[0]
@@ -11890,6 +11891,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 // Body = The action body received from the user to test.
 func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte) (WorkflowExecution, error) {
 	var action Action
+
 	workflowExecution := WorkflowExecution{}
 	err := json.Unmarshal(body, &action)
 	if err != nil {
@@ -12002,6 +12004,11 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	}
 
 	for _, param := range action.Parameters {
+		newName := GetValidParameters([]string{param.Name})
+		if len(newName) > 0 {
+			param.Name = newName[0]
+		}
+
 		if param.Required && len(param.Value) == 0 {
 			//log.Printf("Param: %s", param)
 
@@ -13953,13 +13960,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	startnodeFound := false
 	newStartnode := ""
-	for _, item := range workflowExecution.Workflow.Actions {
+	for actionIndex, item := range workflowExecution.Workflow.Actions {
 		if item.ID == workflowExecution.Start {
 			startnodeFound = true
 		}
 
 		if item.IsStartNode {
 			newStartnode = item.ID
+		}
+
+		// Fix names of parameters
+		for paramIndex, param := range item.Parameters {
+			newName := GetValidParameters([]string{param.Name})
+			if len(newName) > 0 {
+				workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Name = newName[0]
+			}
 		}
 	}
 
