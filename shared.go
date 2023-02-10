@@ -11579,8 +11579,9 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 
 	parsedData, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
-		log.Printf("[ERROR] Failed base64 decode for an auth key %s: %s. Data: %s", data, err, string(data))
-		return []byte{}, err
+		log.Printf("[WARNING] Failed base64 decode for an auth key %s: %s. Data: %s. Returning as if this is valid.", data, err, string(data))
+		//return []byte{}, err
+		return data, nil
 	}
 
 	nonceSize := gcm.NonceSize()
