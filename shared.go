@@ -9991,7 +9991,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 							newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, curAction.ID)
 							cacheData := []byte("1")
-							err = SetCache(ctx, newExecId, cacheData, 1)
+							err = SetCache(ctx, newExecId, cacheData, 2)
 							if err != nil {
 								log.Printf("[WARNING] Failed setting cache for skipped action %s: %s", newExecId, err)
 							} else {
@@ -13718,7 +13718,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				cacheData := []byte("1")
-				err = SetCache(ctx, newExecId, cacheData, 1)
+				err = SetCache(ctx, newExecId, cacheData, 2)
 				if err != nil {
 					log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
 				} else {
