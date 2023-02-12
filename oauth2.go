@@ -489,7 +489,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[INFO] Api authentication failed in getting specific trigger: %s", err)
+		log.Printf("[AUDIT] Api authentication failed in getting specific trigger: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -497,7 +497,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to register gmail: %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
@@ -505,7 +505,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 	code := request.URL.Query().Get("code")
 	if len(code) == 0 {
 		log.Println("No code")
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		return
 	}
 
@@ -662,6 +662,44 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		return
 	}
+
+	// Webhook is never added..?
+	/*
+		hook := Hook{
+			Id:        trigger.Id,
+			Start:     trigger.Start,
+			Workflows: []string{trigger.WorkflowId},
+			Info: Info{
+				Name:        "Gmail Cloud Subscription",
+				Description: "",
+				Url:         notificationURL,
+			},
+			Type:   "gmail",
+			Owner:  "",
+			Status: "running",
+			Actions: []HookAction{
+				HookAction{
+					Type:  "workflow",
+					Name:  "",
+					Id:    workflowId,
+					Field: "",
+				},
+			},
+			Running:     true,
+			OrgId:       org.Id,
+			Environment: "cloud",
+		}
+
+		err = SetHook(ctx, hook)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting hook FOR Gmail from CLOUD org %s: %s", org.Id, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		} else {
+			log.Printf("[INFO] Successfully set up CLOUD hook FOR OUTLOOK")
+		}
+	*/
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -1238,7 +1276,7 @@ func HandleGmailSubRemoval(ctx context.Context, user User, workflowId, triggerId
 			log.Printf("[INFO] Successfully set STOPPED gmail execution trigger")
 		}
 	} else {
-		log.Printf("SHOULD STOP OUTLOOK SUB IN CLOUD")
+		log.Printf("[INFO] SHOULD STOP GMAIL SUB IN CLOUD")
 	}
 
 	// Actually delete the thing
@@ -1294,7 +1332,7 @@ func HandleOutlookSubRemoval(ctx context.Context, user User, workflowId, trigger
 			log.Printf("[INFO] Successfully set STOPPED outlook execution trigger")
 		}
 	} else {
-		log.Printf("SHOULD STOP OUTLOOK SUB IN CLOUD")
+		log.Printf("[INFO] SHOULD STOP OUTLOOK SUB IN CLOUD")
 	}
 
 	// Actually delete the thing
@@ -1600,10 +1638,6 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// url doesn't really matter here
-	//url := fmt.Sprintf("https://shuffler.io")
-	//redirectDomain := "localhost:5001"
-	//url := fmt.Sprintf("http://%s/api/v1/triggers/outlook/register", redirectDomain)
 	outlookClient, _, err := GetOutlookClient(ctx, "", trigger.OauthToken, "")
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure for gmail - triggerauth: %s", err)
@@ -1809,7 +1843,7 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in gmail deploy: %s", err)
+		log.Printf("[AUDIT] Api authentication failed in gmail deploy: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1939,13 +1973,22 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 		// Set the ID somewhere here
 		trigger.SubscriptionId = sub.HistoryId
 
-		returnUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
+		callbackUrl := "https://shuffler.io"
+		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+			callbackUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
+
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			callbackUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		returnUrl := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", callbackUrl, trigger.Id)
 		hook := Hook{
 			Id:        trigger.Id,
 			Start:     trigger.Start,
 			Workflows: []string{trigger.WorkflowId},
 			Info: Info{
-				Name:        "Used onprem",
+				Name:        "Gmail Trigger",
 				Description: "",
 				Url:         returnUrl,
 			},
@@ -2008,12 +2051,12 @@ func HandleCreateGmailSub(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Setting hook with ID %s with URL %s", trigger.Id, returnUrl)
 		err = SetHook(ctx, hook)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting hook FOR GMAIL for org %s: %s", user.ActiveOrg.Id, err)
+			log.Printf("[ERROR] Failed setting hook FOR GMAIL for org %s: %s", user.ActiveOrg.Id, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		} else {
-			log.Printf("[INFO] Successfully set up onprem hook FOR gmail")
+			log.Printf("[INFO] Successfully set up onprem hook FOR gmail with URL %s", returnUrl)
 		}
 
 		break
@@ -2493,7 +2536,16 @@ func handleIndividualEmailUploads(ctx context.Context, gmailClient *http.Client,
 		return message, err
 	}
 
-	webhookUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
+	callbackUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		callbackUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		callbackUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	webhookUrl := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", callbackUrl, trigger.Id)
 	err = MakeGmailWebhookRequest(ctx, webhookUrl, mappedData)
 	if err != nil {
 		log.Printf("[WARNING] Failed making webhook request to %s: %s", webhookUrl, err)
@@ -2731,6 +2783,15 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(item.Messages) <= 3 {
+			callbackUrl := "https://shuffler.io"
+			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+				callbackUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+			}
+
+			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+				callbackUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+			}
+
 			for _, message := range item.Messages {
 				if ArrayContains(handled, message.ID) {
 					//log.Printf("[DEBUG] Email %s is already handled", message.ID)
@@ -2828,7 +2889,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 
-				webhookUrl := fmt.Sprintf("https://shuffler.io/api/v1/hooks/webhook_%s", trigger.Id)
+				webhookUrl := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", callbackUrl, trigger.Id)
 				err = MakeGmailWebhookRequest(ctx, webhookUrl, mappedData)
 				if err != nil {
 					log.Printf("[WARNING] Failed making webhook request to %s: %s", webhookUrl, err)
@@ -2873,7 +2934,7 @@ func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData 
 		return err
 	}
 
-	log.Printf("[DEBUG] Webhook RESP (%d): %s", res.StatusCode, string(body))
+	log.Printf("[DEBUG] Webhook RESP to %s (%d): %s", webhookUrl, res.StatusCode, string(body))
 	return nil
 }
 
@@ -3330,13 +3391,17 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 	//	return
 	//}
 
-	// FIXME - should be shuffler in literally every case except testing lol
-	//log.Printf("TRIGGER: %#v", trigger)
-	redirectDomain := "localhost:5001"
-	url := fmt.Sprintf("http://%s/api/v1/triggers/gmail/register", redirectDomain)
-	if project.Environment == "cloud" {
-		url = fmt.Sprintf("https://shuffler.io/api/v1/triggers/gmail/register", redirectDomain)
+	callbackUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		callbackUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		callbackUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	url := fmt.Sprintf("%s/api/v1/triggers/gmail/register", callbackUrl)
+
 	outlookClient, _, err := GetOutlookClient(ctx, "", trigger.OauthToken, url)
 	if err != nil {
 		log.Printf("[WARNING] Oauth client failure - outlook folders: %s", err)
