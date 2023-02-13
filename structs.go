@@ -3076,3 +3076,15 @@ type CreatorStats struct {
 	Workflows        int        `json:"workflows" datastore:"workflows"`
 	AppStats         []AppStats `json:"app_stats" datastore:"app_stats"`
 }
+
+type Mailcheck struct {
+	Targets            []string `json:"targets"`
+	Body               string   `json:"body"`
+	Subject            string   `json:"subject"`
+	Type               string   `json:"type"`
+	SenderCompany      string   `json:"sender_company"`
+	ReferenceExecution string   `json:"reference_execution"`
+	WorkflowId         string   `json:"workflow_id"`
+	ExecutionType      string   `json:"execution_type"`
+	Start              string   `json:"start"`
+}

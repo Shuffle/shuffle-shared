@@ -561,7 +561,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 					log.Printf("[WARNING] Failed setting cache for %s (2): %s", name, err)
 				} else {
-					log.Printf("[WARNING] Something bad with App Engine context for memcache: %s", err)
+					log.Printf("[WARNING] Something bad with App Engine context for memcache (key: %s): %s", name, err)
 				}
 			}
 		}
@@ -569,10 +569,10 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 		return nil
 	} else if project.Environment == "onprem" {
 		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
-		requestCache.Set(name, data, cache.DefaultExpiration)
+		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
 	} else {
 		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
-		requestCache.Set(name, data, cache.DefaultExpiration)
+		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
 		//return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
 
@@ -6204,6 +6204,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 
 	cacheKey := fmt.Sprintf("%s_%s_%d", index, workflowId, amount)
 	var err error
+	totalMaxSize := 11184810
 	var executions []WorkflowExecution
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -6304,7 +6305,6 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 		//totalMaxSize := 33554432
 		//totalMaxSize := 22369621 // Total of App Engine max /3*2
 		//totalMaxSize := 11184810
-		totalMaxSize := 11184810
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		cursorStr := ""
 		for {
@@ -6409,10 +6409,61 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				//break
 			}
 		}
+	}
 
-		slice.Sort(executions[:], func(i, j int) bool {
-			return executions[i].StartedAt > executions[j].StartedAt
-		})
+	slice.Sort(executions[:], func(i, j int) bool {
+		return executions[i].StartedAt > executions[j].StartedAt
+	})
+
+	executionmarshal, err := json.Marshal(executions)
+	if err == nil {
+		if len(executionmarshal) > totalMaxSize {
+			// Reducing size
+
+			for execIndex, execution := range executions {
+				// Making sure the first 5 are "always" proper
+				if execIndex < 5 {
+					continue
+				}
+
+				newResults := []ActionResult{}
+
+				newActions := []Action{}
+				for _, action := range execution.Workflow.Actions {
+					newAction := Action{
+						Name:    action.Name,
+						ID:      action.ID,
+						AppName: action.AppName,
+						AppID:   action.AppID,
+					}
+
+					newActions = append(newActions, newAction)
+				}
+
+				executions[execIndex].Workflow = Workflow{
+					Name:     execution.Workflow.Name,
+					ID:       execution.Workflow.ID,
+					Triggers: execution.Workflow.Triggers,
+					Actions:  newActions,
+				}
+
+				for _, result := range execution.Results {
+					result.Result = "Result was too large to load. Full Execution needs to be loaded individually for this execution. Click \"Explore execution\" in the UI to see it in detail."
+					result.Action = Action{
+						Name:       result.Action.Name,
+						ID:         result.Action.ID,
+						AppName:    result.Action.AppName,
+						AppID:      result.Action.AppID,
+						LargeImage: result.Action.LargeImage,
+					}
+
+					newResults = append(newResults, result)
+				}
+
+				executions[execIndex].ExecutionArgument = "too large"
+				executions[execIndex].Results = newResults
+			}
+		}
 	}
 
 	if project.CacheDb {
@@ -6422,7 +6473,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			return executions, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 10)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache executions (%s): %s", workflowId, err)
 			return executions, nil
