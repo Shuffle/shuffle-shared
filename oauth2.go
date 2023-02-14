@@ -228,7 +228,7 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 				Id:           fileId,
 				CreatedAt:    timeNow,
 				UpdatedAt:    timeNow,
-				Description:  fmt.Sprintf("File found in outlook message %s with ID %s", email.ID, attachment.ID),
+				Description:  fmt.Sprintf("File found in outlook message %s with ID %s. This is from an Outlook Trigger.", email.ID, attachment.ID),
 				Status:       "uploading",
 				Filename:     attachment.Name,
 				OrgId:        trigger.OrgId,

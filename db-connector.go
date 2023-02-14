@@ -4841,6 +4841,28 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	return nil
 }
 
+func GetScheduleByWorkflowId(ctx context.Context, workflowId string) (*ScheduleOld, error) {
+	nameKey := "schedules"
+	curSchedule := &ScheduleOld{}
+	if project.DbType == "elasticsearch" {
+		return curSchedule, errors.New("Not implemented")
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("workflow_id =", workflowId).Limit(1)
+		tmpSchedules := []ScheduleOld{}
+		_, err := project.Dbclient.GetAll(ctx, q, &tmpSchedules)
+		if err != nil && len(tmpSchedules) == 0 {
+			log.Printf("[WARNING] Error getting schedules for workflow Id: %s", err)
+			return curSchedule, err
+		}
+
+		if len(tmpSchedules) > 0 {
+			curSchedule = &tmpSchedules[0]
+		}
+	}
+
+	return curSchedule, nil
+}
+
 func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error) {
 	nameKey := "schedules"
 	curUser := &ScheduleOld{}
