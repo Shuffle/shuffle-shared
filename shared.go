@@ -2179,10 +2179,34 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	// If there are multiple
 	if project.Environment == "cloud" {
 		defaults := []int{}
+		cloudFound := false
 		for envIndex, environment := range environments {
 			if environment.Default {
 				defaults = append(defaults, envIndex)
 			}
+
+			if strings.ToLower(environment.Name) == "cloud" {
+				cloudFound = true
+			}
+		}
+
+		// Ensure it's attached. When they click "set as default", it will become activated forever :>
+		// Found by seeing a user from early on that didn't have the env
+		if !cloudFound {
+			setDefault := false
+			if len(environments) == 1 {
+				setDefault = true
+			}
+
+			environments = append(environments, Environment{
+				Name:       "Cloud",
+				Type:       "cloud",
+				Archived:   false,
+				Registered: true,
+				Default:    false,
+				OrgId:      user.ActiveOrg.Id,
+				Id:         uuid.NewV4().String(),
+			})
 		}
 
 		if len(defaults) > 1 {
@@ -13951,9 +13975,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	if len(workflowExecution.ExecutionSource) == 0 {
 		log.Printf("[INFO] No execution source (trigger) specified. Setting to default")
 		workflowExecution.ExecutionSource = "default"
-	} else {
-		log.Printf("[INFO] Execution source is %s for execution ID %s in workflow %s", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
 	}
+
+	log.Printf("[INFO] Execution source is %s for execution ID %s in workflow %s. Organization: %d", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
 
 	workflowExecution.ExecutionVariables = workflow.ExecutionVariables
 	if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
@@ -16058,7 +16082,7 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 
 	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode)
 
-	log.Printf("[DEBUG] Checking what are next actions in workflow %s. Results: %d/%d. NextActions: %s", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, nextActions)
+	log.Printf("[DEBUG][%s] Checking what are next actions in workflow %s. Results: %d/%d. NextActions: %s", workflowExecution.ExecutionId, workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, nextActions)
 
 	return nextActions
 }
