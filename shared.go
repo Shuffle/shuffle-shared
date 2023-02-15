@@ -2203,7 +2203,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 				Type:       "cloud",
 				Archived:   false,
 				Registered: true,
-				Default:    false,
+				Default:    setDefault,
 				OrgId:      user.ActiveOrg.Id,
 				Id:         uuid.NewV4().String(),
 			})
