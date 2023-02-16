@@ -3,6 +3,7 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -16409,7 +16410,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		}
 
 		//cacheData := []byte("1")
-		//err = SetCache(ctx, newExecId, cacheData, 1)
+		//err = SetCache(ctx, newExecId, cacheData, 2)
 		//if err != nil {
 		//	log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
 		//} else {
@@ -16697,4 +16698,57 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	}
 
 	return workflowExecution, relevantActions
+}
+
+func GetExternalClient(baseUrl string) *http.Client {
+	httpProxy := os.Getenv("HTTP_PROXY")
+	httpsProxy := os.Getenv("HTTPS_PROXY")
+
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.MaxIdleConnsPerHost = 100
+	transport.ResponseHeaderTimeout = time.Second * 10
+	transport.Proxy = nil
+
+	skipSSLVerify := false
+	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
+		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
+		skipSSLVerify = true
+	}
+
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion:         tls.VersionTLS11,
+		InsecureSkipVerify: skipSSLVerify,
+	}
+
+	//getStats()
+
+	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
+		//client = &http.Client{}
+	} else {
+		if len(httpProxy) > 0 {
+			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+		if len(httpsProxy) > 0 {
+			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpsProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+	}
+
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   time.Second * 30,
+	}
+
+	return client
 }
