@@ -884,20 +884,16 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 
 	cacheKey := fmt.Sprintf("%s-actions", executionId)
 	wrapper := &ExecutionVariableWrapper{}
-	if project.CacheDb {
-		cache, err := GetCache(ctx, cacheKey)
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %s", cacheData)
+		err = json.Unmarshal(cacheData, &wrapper)
 		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
-			err = json.Unmarshal(cacheData, &wrapper)
-			if err == nil {
-				return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
-			}
-		} else {
-			//log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
+			return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 		}
 	} else {
-		log.Printf("[ERROR][%s] CacheDB is being skipped - can we handle execution?", executionId)
+		//log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
 	}
 
 	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
@@ -7691,6 +7687,23 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 	return stats, err
 }
 
+func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
+	// Keeping cache for 30-60 min due to rerun management
+	if project.Environment == "cloud" {
+		return
+	}
+
+	log.Printf("[INFO][%s] Cleaning up cache for all %d results.", workflowExecution.ExecutionId, len(workflowExecution.Results))
+
+	for _, result := range workflowExecution.Results {
+		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
+		DeleteCache(ctx, cacheId)
+	}
+
+	cacheKey := fmt.Sprintf("%s-actions", workflowExecution.ExecutionId)
+	DeleteCache(ctx, cacheKey)
+}
+
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
 	log.Printf("[INFO][%s] Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 
@@ -7709,7 +7722,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		workflowExecution.Status = "FINISHED"
 		err = SetWorkflowExecution(ctx, workflowExecution, true)
 		if err != nil {
-			log.Printf("[ERROR] FAILED TO SET EXECUTION DURING FINALIZATION %s: %s", workflowExecution.ExecutionId, err)
+			log.Printf("[ERROR] Failed to set execution during finalization %s: %s", workflowExecution.ExecutionId, err)
 		} else {
 			log.Printf("[INFO] Finalized execution %s for workflow %s with %d results and status %s", workflowExecution.ExecutionId, workflowExecution.Workflow.ID, len(workflowExecution.Results), workflowExecution.Status)
 
@@ -7717,10 +7730,10 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			//RunTextClassifier(ctx, workflowExecution)
 
 			// Enrich IPs and the like by finding stuff with regex
+			RunCacheCleanup(ctx, workflowExecution)
 			RunIOCFinder(ctx, workflowExecution)
 			return true
 		}
-
 	}
 
 	return false
