@@ -781,6 +781,17 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Checking if it's a special region. All user-specific requests should
+	// go through shuffler.io and not subdomains
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -7128,6 +7139,18 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	// Checking if it's a special region. All user-specific requests should
+	// go through shuffler.io and not subdomains
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Edit Org request to main site handler (shuffler.io)")
+
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	user, err := HandleApiAuthentication(resp, request)

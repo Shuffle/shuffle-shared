@@ -295,6 +295,11 @@ func GetValidParameters(parameters []string) []string {
 	numbers := "0123456789"
 	newParams := []string{}
 	for _, param := range parameters {
+		if param == "headers=\"\"" || param == "queries=\"\"" {
+			newParams = append(newParams, param)
+			continue
+		}
+
 		originalParam := param
 
 		for key, val := range pythonReplacements {
@@ -510,11 +515,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	headerParserCode := ""
 	queryParserCode := ""
 	if len(parameters) > 0 {
-		log.Printf("Got params: ", parameters)
-
 		parameters = GetValidParameters(parameters)
 		parameterData = fmt.Sprintf(", %s", strings.Join(parameters, ", "))
-		log.Printf("Params: %#v", parameters)
 
 		// This is gibberish :)
 		for _, param := range parameters {
@@ -595,6 +597,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	fileGrabber := ``
 	fileParameter := ``
 	contentTypeRemoval := "pass"
+	bodyParsing := "try:\n            body = json.dumps(body)\n        except:\n            pass"
 	if method == "post" && len(fileField) > 0 {
 		fileParameter = ", file_id"
 		//fileGrabber = "filedata = self.get_file(file_id)\n        print(f\"FILEDATA: {filedata}\")"
@@ -608,12 +611,13 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         files = {"%s": (filedata["filename"], filedata["data"])}`, fileField)
 
 		fileBalance = ", files=files"
+
+		bodyParsing = ""
 	}
 
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
-	log.Printf("Queries: ", queryString)
 	parsedParameters := fmt.Sprintf("%s%s%s%s%s%s%s",
 		authenticationParameter,
 		urlParameter,
@@ -664,10 +668,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
         if not "http://" in url and not "http" in url:
             url = f"http://{url}" 
 
-        try:
-            body = json.dumps(body)
-        except:
-            pass
+        %s
 
        	found = False
         contentType = "" 
@@ -763,6 +764,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		bodyFormatter,
 		fileGrabber,
 		fileAdder,
+		bodyParsing,
 		contentTypeRemoval,
 		strings.ToUpper(method),
 		parsedDataCurlParser,
@@ -775,7 +777,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "queries") {
+	if strings.Contains(strings.ToLower(functionname), "observable") {
 		log.Printf("\n%s", data)
 	}
 
