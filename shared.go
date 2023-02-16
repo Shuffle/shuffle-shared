@@ -9800,8 +9800,19 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 							streamUrl = fmt.Sprintf("%s/api/v1/streams", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 						}
+					} else {
+						if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 
-						//streamUrl = fmt.Sprintf("http://localhost:5002/api/v1/streams")
+							streamUrl := fmt.Sprintf("http://localhost:33333/api/v1/streams")
+							if len(hostenv) > 0 {
+								streamUrl = fmt.Sprintf("http://%s:33333/api/v1/streams", hostenv)
+							}
+
+						} else {
+							if len(os.Getenv("BASE_URL")) > 0 {
+								streamUrl = fmt.Sprintf("%s/api/v1/streams", os.Getenv("BASE_URL"))
+							}
+						}
 					}
 
 					req, err := http.NewRequest(
