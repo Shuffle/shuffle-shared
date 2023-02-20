@@ -2911,12 +2911,13 @@ type Usecase struct {
 		Description string `json:"description"`
 		Human       bool   `json:"human"`
 	} `json:"process"`
-	Edited       int64         `json:"edited"`
-	EditedBy     string        `json:"edited_by"`
-	Blogpost     string        `json:"blogpost"`
-	Video        string        `json:"video"`
-	Priority     string        `json:"priority"`
-	ExtraButtons []ExtraButton `json:"extra_buttons"`
+	Edited          int64         `json:"edited"`
+	EditedBy        string        `json:"edited_by"`
+	Blogpost        string        `json:"blogpost"`
+	Video           string        `json:"video"`
+	Priority        string        `json:"priority"`
+	WorkflowOutline string        `json:"workflow_outline"`
+	ExtraButtons    []ExtraButton `json:"extra_buttons"`
 }
 
 type DealSearchWrapper struct {

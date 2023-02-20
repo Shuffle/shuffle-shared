@@ -8348,6 +8348,14 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	updateUser := false
 	if project.Environment == "cloud" {
+		if strings.HasSuffix(userdata.Username, "@shuffler.io") {
+			if !userdata.Active {
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "You need to activate your account before logging in"}`)))
+				return
+			}
+		}
+
 		//log.Printf("[DEBUG] Are they using SSO?")
 		// If it fails, allow login if password correct?
 		// Check if suborg -> Get parent & check SSO
@@ -11622,30 +11630,35 @@ func handleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	key, err := create32Hash(passphrase)
 	if err != nil {
-		log.Printf("[WARNING] Failed hashing in decrypt: %s", err)
+		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
 		return []byte{}, err
 	}
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		log.Printf("[WARNING] Error creating cipher from key in decryption: %s", err)
+		log.Printf("[ERROR] Error creating cipher from key in decryption: %s", err)
 		return []byte{}, err
 	}
 
 	gcm, err := cipher.NewGCM(block)
 	if err != nil {
-		log.Printf("[WARNING] Error creating new GCM block in decryption: %s", err)
+		log.Printf("[ERROR] Error creating new GCM block in decryption: %s", err)
 		return []byte{}, err
 	}
 
 	parsedData, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
-		log.Printf("[WARNING] Failed base64 decode for an auth key %s: %s. Data: %s. Returning as if this is valid.", data, err, string(data))
+		log.Printf("[WARNING] Failed base64 decode for auth key '%s': '%s'. Data: '%s'. Returning as if this is valid.", data, err, string(data))
 		//return []byte{}, err
 		return data, nil
 	}
 
 	nonceSize := gcm.NonceSize()
+	if nonceSize > len(parsedData) {
+		log.Printf("[ERROR] Nonce size is larger than parsed data. Returning as if this is valid.")
+		return data, nil
+	}
+
 	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
@@ -15419,9 +15432,9 @@ func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Needs to be a shuffler.io account to update
+	// Needs to be an active shuffler.io account to update
 	if project.Environment == "cloud" && !strings.HasSuffix(user.Username, "@shuffler.io") {
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Can't change framework info"}`))
 		return
 	}
@@ -15429,7 +15442,7 @@ func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read for usecase update: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -15438,7 +15451,7 @@ func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 	err = json.Unmarshal(body, &usecase)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshaling usecase: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
