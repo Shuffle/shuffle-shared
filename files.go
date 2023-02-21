@@ -380,6 +380,22 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	outputFiles, err := FindSimilarFile(ctx, file.Md5sum, file.OrgId)
+	log.Printf("[INFO] Found %d similar files", len(outputFiles))
+	if len(outputFiles) > 0 {
+		for _, item := range outputFiles {
+			item.Status = "deleted"
+			err = SetFile(ctx, item)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting duplicate file %s to deleted", item.Id)
+			}
+		}
+	}
+
+	nameKey := "Files"
+	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", nameKey, file.OrgId, file.Md5sum))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, file.OrgId))
+
 	/*
 		//Actually delete it?
 		err = DeleteKey(ctx, "files", fileId)
@@ -391,7 +407,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
-	log.Printf("[INFO] Successfully deleted file %s", fileId)
+	log.Printf("[INFO] Successfully deleted file %s for org %s", fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
 }
@@ -881,7 +897,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	file, err := GetFile(ctx, fileId)
 	//log.Printf("file obj", file)
 	if err != nil {
-		log.Printf("File %s not found: %s", fileId, err)
+		log.Printf("[INFO] File %s not found: %s", fileId, err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -927,9 +943,9 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	file.IsEdited = true
 
 	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-	err = uploadFile(ctx, file, parsedKey, body)
+	fileId, err = uploadFile(ctx, file, parsedKey, body)
 	if err != nil {
-		log.Printf("[ERROR] Failed to upload file: %s", err)
+		log.Printf("[ERROR] Failed to upload file with ID %s: %s", fileId, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed file upload in Shuffle"}`))
 		return
@@ -937,7 +953,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
 }
 
 func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
@@ -995,7 +1011,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
-		log.Printf("File %s not found: %s", fileId, err)
+		log.Printf("[INFO] File %s not found: %s", fileId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1063,9 +1079,9 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	// Handle file encryption if an encryption key is set
 
 	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-	err = uploadFile(ctx, file, parsedKey, contents)
+	fileId, err = uploadFile(ctx, file, parsedKey, contents)
 	if err != nil {
-		log.Printf("[ERROR] Failed to upload file: %s", err)
+		log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed file upload in Shuffle"}`))
 		return
@@ -1073,69 +1089,82 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
 }
 
-func uploadFile(ctx context.Context, file *File, encryptionKey string, contents []byte) error {
+func uploadFile(ctx context.Context, file *File, encryptionKey string, contents []byte) (string, error) {
 	md5 := Md5sum(contents)
 	sha256Sum := sha256.Sum256(contents)
 
-	if len(encryptionKey) > 0 {
-		newContents := contents
-		newFileValue, err := handleKeyEncryption(contents, encryptionKey)
-		if err != nil {
-			log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
-			newContents = contents
-		} else {
-			newContents = []byte(newFileValue)
-			file.Encrypted = true
-		}
+	// Should look for another file with the same md5
+	outputFiles, err := FindSimilarFile(ctx, md5, file.OrgId)
+	if len(outputFiles) > 0 {
+		outputFile := outputFiles[0]
+		log.Printf("[INFO] Already found a file with the same Md5 '%s' for org '%s' in ID: %s. Referencing same location.", md5, file.OrgId, outputFile.Id)
 
-		contents = newContents
-
+		file.Encrypted = outputFile.Encrypted
 		file.FileSize = int64(len(contents))
-	}
+		file.StorageArea = outputFile.StorageArea
+		file.DownloadPath = outputFile.DownloadPath
 
-	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s. Content length: %d", file.Id, len(contents))
-		file.StorageArea = "google_storage"
-
-		//applocation := fmt.Sprintf("gs://%s/triggers/outlooktrigger.zip", bucketName)
-
-		bucket := project.StorageClient.Bucket(orgFileBucket)
-		obj := bucket.Object(file.DownloadPath)
-
-		w := obj.NewWriter(ctx)
-		if _, err := fmt.Fprintln(w, string(contents)); err != nil {
-			log.Printf("[ERROR] Failed to write the file to datastore: %s", err)
-			return err
-		}
-
-		// Close, just like writing a file.
-		defer w.Close()
-	} else if file.StorageArea == "s3" {
-		log.Printf("SHOULD UPLOAD TO S3!")
 	} else {
-		f, err := os.OpenFile(file.DownloadPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+		if len(encryptionKey) > 0 {
+			newContents := contents
+			newFileValue, err := handleKeyEncryption(contents, encryptionKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
+				newContents = contents
+			} else {
+				newContents = []byte(newFileValue)
+				file.Encrypted = true
+			}
 
-		if err != nil {
-			// Rolling back file
-			file.Status = "created"
-			SetFile(ctx, *file)
+			contents = newContents
 
-			log.Printf("[ERROR] Failed uploading and creating file: %s", err)
-			return err
-		} else {
-			log.Printf("[INFO] File path %#v was made. Next step is to upload bytes: %d", file.DownloadPath, len(contents))
+			file.FileSize = int64(len(contents))
 		}
 
-		defer f.Close()
-		reader := bytes.NewReader(contents)
-		_, err = io.Copy(f, reader)
-		if err != nil {
-			log.Printf("[ERROR] Failed loading file contents into file %#v: %s", file.DownloadPath, err)
+		if project.Environment == "cloud" || file.StorageArea == "google_storage" {
+			log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s. Content length: %d", file.Id, len(contents))
+			file.StorageArea = "google_storage"
+
+			//applocation := fmt.Sprintf("gs://%s/triggers/outlooktrigger.zip", bucketName)
+
+			bucket := project.StorageClient.Bucket(orgFileBucket)
+			obj := bucket.Object(file.DownloadPath)
+
+			w := obj.NewWriter(ctx)
+			if _, err := fmt.Fprintln(w, string(contents)); err != nil {
+				log.Printf("[ERROR] Failed to write the file to datastore: %s", err)
+				return file.Id, err
+			}
+
+			// Close, just like writing a file.
+			defer w.Close()
+		} else if file.StorageArea == "s3" {
+			log.Printf("SHOULD UPLOAD TO S3!")
 		} else {
-			log.Printf("[INFO] Added %d bytes to file %s", len(contents), file.DownloadPath)
+			f, err := os.OpenFile(file.DownloadPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+
+			if err != nil {
+				// Rolling back file
+				file.Status = "created"
+				SetFile(ctx, *file)
+
+				log.Printf("[ERROR] Failed uploading and creating file: %s", err)
+				return file.Id, err
+			} else {
+				log.Printf("[INFO] File path %#v was made. Next step is to upload bytes: %d", file.DownloadPath, len(contents))
+			}
+
+			defer f.Close()
+			reader := bytes.NewReader(contents)
+			_, err = io.Copy(f, reader)
+			if err != nil {
+				log.Printf("[ERROR] Failed loading file contents into file %#v: %s", file.DownloadPath, err)
+			} else {
+				log.Printf("[INFO] Added %d bytes to file %s", len(contents), file.DownloadPath)
+			}
 		}
 	}
 
@@ -1147,13 +1176,13 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 
 	log.Printf("[INFO] MD5 for file %s (%s) is %s and SHA256 is %s. Type: %s and size: %d", file.Filename, file.Id, file.Md5sum, file.Sha256sum, file.ContentType, file.FileSize)
 
-	err := SetFile(ctx, *file)
+	err = SetFile(ctx, *file)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting file back to active")
-		return err
+		return file.Id, err
 	}
 
-	return nil
+	return file.Id, nil
 }
 
 func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {

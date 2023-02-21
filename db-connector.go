@@ -1448,6 +1448,172 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	return sub, nil
 }
 
+// Check OrgId later
+// No deduplication for popular files
+func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
+	//log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
+	files := []File{}
+	nameKey := "Files"
+
+	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, orgId, md5)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %s", cacheData)
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for env: %s", err)
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		var buf bytes.Buffer
+
+		// FIXME: Don't do name = here, but ID
+		// Or search?
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"md5_sum": md5,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return files, nil
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (find file md5): %s", err)
+			return files, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return files, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return files, err
+		}
+
+		wrapped := FileSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return files, err
+		}
+
+		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 && wrapped.Hits.Hits[0].Source.Status == "active" {
+			files = append(files, wrapped.Hits.Hits[0].Source)
+		} else {
+			//file = []Environment{}
+			for _, hit := range wrapped.Hits.Hits {
+				//log.Printf("[DEBUG] Hit: %s", hit)
+				//if hit.ID == id {
+				//	env = &hit.Source
+				//	break
+				//}
+				if hit.Source.OrgId == orgId && hit.Source.Status == "active" {
+					files = append(files, hit.Source)
+					break
+				}
+
+				//environments = append(environments, hit.Source)
+			}
+
+			//if len(environments) != 1 {
+			//	return env, errors.New(fmt.Sprintf("Found %d environments. Want 1 only.", len(environments)))
+			//}
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("md5_sum =", md5).Limit(25)
+		_, err := project.Dbclient.GetAll(ctx, query, &files)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+			return files, err
+		} else {
+			//log.Printf("[INFO] Got %d files for md5: %s", len(files), md5)
+			parsedFiles := []File{}
+			for _, newfile := range files {
+				if newfile.OrgId == orgId && newfile.Status == "active" {
+					parsedFiles = append(parsedFiles, newfile)
+				}
+			}
+
+			//log.Printf("[INFO] Got %d PARSD files for md5: %s", len(parsedFiles), md5)
+
+			if len(parsedFiles) == 0 {
+				return parsedFiles, errors.New(fmt.Sprintf("No file found for md5: %s", md5))
+				//log.Printf("[INFO] Couldn't find file with md5 %s for org %s", md5, orgId)
+			}
+
+			files = parsedFiles
+		}
+	}
+
+	//log.Printf("[DEBUG] Got hit: %s", file)
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in find file md5 : %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for find file md5: %s", err)
+		}
+	}
+
+	return files, nil
+}
+
 func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error) {
 	//log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
 	env := &Environment{}
@@ -3441,7 +3607,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			log.Printf("[WARNING] Failed updating get app auth cache: %s", err)
 		}
 
-		log.Printf("[DEBUG] Set cache for app auth %s with length %d", cacheKey, len(allworkflowappAuths))
+		//log.Printf("[DEBUG] Set cache for app auth %s with length %d", cacheKey, len(allworkflowappAuths))
 	}
 
 	//for _, env := range allworkflowappAuths {
@@ -5348,6 +5514,10 @@ func SetFile(ctx context.Context, file File) error {
 	timeNow := time.Now().Unix()
 	file.UpdatedAt = timeNow
 	nameKey := "Files"
+
+	if file.CreatedAt == 0 {
+		file.CreatedAt = timeNow
+	}
 
 	if project.DbType == "elasticsearch" {
 		data, err := json.Marshal(file)

@@ -2206,7 +2206,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		// Found by seeing a user from early on that didn't have the env
 		if !cloudFound {
 			setDefault := false
-			if len(environments) == 1 {
+			if len(environments) == 1 || len(defaults) == 0 {
 				setDefault = true
 			}
 
@@ -2219,18 +2219,20 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 				OrgId:      user.ActiveOrg.Id,
 				Id:         uuid.NewV4().String(),
 			})
+
+			defaults = append(defaults, len(environments)-1)
 		}
 
+		// Fallback to cloud for now
 		if len(defaults) > 1 {
 			for _, index := range defaults {
-				if environments[index].Name == "Cloud" {
+				if strings.ToLower(environments[index].Name) == "cloud" {
 					continue
 				} else {
 					environments[index].Default = false
 				}
 			}
 		}
-
 	}
 
 	newEnvironments := []Environment{}
@@ -8579,7 +8581,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(loginData))
 		return
 	} else {
-		log.Printf("[INFO] User session is empty - create one!")
+		log.Printf("[INFO] User session for %s (%s) is empty - create one!", userdata.Username, userdata.Id)
 
 		sessionToken := uuid.NewV4().String()
 		expiration := time.Now().Add(3600 * time.Second)
@@ -8595,6 +8597,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			newCookie.HttpOnly = true
 		}
 
+		// Does it not set both?
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -8607,13 +8610,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		userdata.Session = sessionToken
-		err = SetUser(ctx, &userdata, true)
-		if err != nil {
-			log.Printf("Failed updating user when setting session: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
 
 		returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
 			Key:        "session_token",
@@ -8626,6 +8622,14 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Value:      sessionToken,
 			Expiration: expiration.Unix(),
 		})
+
+		err = SetUser(ctx, &userdata, true)
+		if err != nil {
+			log.Printf("[ERROR] Failed updating user when setting session: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 
 		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
 		newData, err := json.Marshal(returnValue)
@@ -16537,7 +16541,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					fakeUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 				}
 
-				// Add fakeUrl = ngrok url here to test locally
 				if len(fakeUrl) > 0 {
 					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 						Name:  "backend_url",
