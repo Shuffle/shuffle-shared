@@ -1778,7 +1778,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	//log.Printf("[DEBUG] RERAN %d execution(s) in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully RERAN and stopped %d executions"}`, total)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully RERAN %d executions"}`, total)))
 }
 
 // Send in deleteall=true to delete ALL executions for the environment ID
@@ -1951,6 +1951,11 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 func RerunExecution(ctx context.Context, environment string, workflow Workflow) (int, error) {
 	maxReruns := 100
 	//log.Printf("[DEBUG] Finding executions for %s", workflow.ID)
+	//if project.Environment == "cloud" && workflow.ID != "0a0752db-61ba-49ea-a488-4dfe6d2f57a0" {
+	//	log.Printf("Bad workflow ID during test: %s", workflow.ID)
+	//	return 0, nil
+	//}
+
 	executions, err := GetUnfinishedExecutions(ctx, workflow.ID)
 	if err != nil {
 		log.Printf("[DEBUG] Failed getting executions for workflow %s", workflow.ID)
@@ -2042,7 +2047,51 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 				log.Printf("[ERROR] Failed re-adding execution to db: %s", err)
 			}
 		} else {
-			log.Printf("[DEBUG] Rerunning executions is not available in cloud yet.")
+			//log.Printf("[DEBUG] Rerunning executions is not available in cloud yet.")
+			//if len(environments) != 1 || strings.ToLower(environments[0]) != "cloud" {
+			//	log.Printf("[DEBUG][%s] Skipping execution for workflow %s because it's not for JUST the cloud env. Org: %s", execution.ExecutionId, execution.Workflow.ID, execution.OrgId)
+			//	continue
+			//}
+
+			streamUrl := fmt.Sprintf("https://shuffler.io")
+			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+				streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+			}
+
+			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+				streamUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
+			}
+
+			streamUrl = fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/rerun", streamUrl, execution.Workflow.ID, execution.ExecutionId)
+
+			client := &http.Client{
+				Timeout: 5 * time.Second,
+			}
+			req, err := http.NewRequest(
+				"POST",
+				streamUrl,
+				nil,
+			)
+
+			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", execution.Authorization))
+			if err != nil {
+				log.Printf("[WARNING] Error in new request for manual rerun: %s", err)
+				continue
+			}
+
+			newresp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[WARNING] Error running body for manual rerun: %s", err)
+				continue
+			}
+
+			body, err := ioutil.ReadAll(newresp.Body)
+			if err != nil {
+				log.Printf("[WARNING] Failed reading body for manual rerun: %s", err)
+				continue
+			}
+
+			log.Printf("[DEBUG] Rerun response: %s", string(body))
 		}
 
 		cnt += 1
@@ -16402,7 +16451,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					if err != nil {
 						log.Printf("No cache for parent ID %#v", parentId)
 					} else {
-						log.Printf("Parent ID already ran. How long ago?")
+						//log.Printf("Parent ID already ran. How long ago?")
 					}
 				}
 			}

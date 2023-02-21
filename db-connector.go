@@ -6330,7 +6330,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 		//log.Printf("[WARNING] Getting executions from datastore")
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
-		max := 50
+		max := 100
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)
