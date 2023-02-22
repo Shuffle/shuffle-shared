@@ -463,7 +463,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[ERROR] Api authentication failed in get 2fa: %s", err)
+		log.Printf("[AUDIT] Api authentication failed in get 2fa: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -8215,7 +8215,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		//log.Printf("Parsed API: %s", parsedApi)
 		if len(parsedApi.ID) > 0 {
 			parsedApi.Success = true
 		} else {
@@ -9413,6 +9412,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// 4. Ensure the result is NOT set when running an action
 
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
+	// Done elsewhere
 	/*
 		cache, err := GetCache(ctx, actionCacheId)
 		if err == nil {
@@ -9429,27 +9429,29 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	setCache := true
 	if actionResult.Action.AppName == "shuffle-subflow" {
+		if actionResult.Action.Name == "run_userinput" {
+			log.Printf("\n\n[INFO] Inside userinput default return!")
+		} else {
+			for _, param := range actionResult.Action.Parameters {
+				if param.Name == "check_result" {
+					//log.Printf("[INFO] RESULT: %s", param)
+					if param.Value == "true" {
+						setCache = false
+					}
 
-		for _, param := range actionResult.Action.Parameters {
-			if param.Name == "check_result" {
-				//log.Printf("[INFO] RESULT: %s", param)
-				if param.Value == "true" {
-					setCache = false
+					break
 				}
-
-				break
-			}
-		}
-
-		if !setCache {
-			var subflowData SubflowData
-			jsonerr := json.Unmarshal([]byte(actionResult.Result), &subflowData)
-			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
-				setCache = false
-			} else {
-				setCache = true
 			}
 
+			if !setCache {
+				var subflowData SubflowData
+				jsonerr := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+				if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
+					setCache = false
+				} else {
+					setCache = true
+				}
+			}
 		}
 
 		log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
@@ -9459,7 +9461,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if setCache {
 		actionResultBody, err := json.Marshal(actionResult)
 		if err == nil {
-			err = SetCache(ctx, actionCacheId, actionResultBody, 120)
+			err = SetCache(ctx, actionCacheId, actionResultBody, 35)
 			if err != nil {
 				log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
 			}
@@ -16551,6 +16553,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						trigger = innertrigger
 						break
 					}
+
 				}
 
 				// FIXME: Add startnode from frontend
@@ -16559,6 +16562,8 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				for _, parameter := range trigger.Parameters {
 					parameter.Variant = "STATIC_VALUE"
 					action.Parameters = append(action.Parameters, parameter)
+
+					log.Printf("Param: %#v -> %s", parameter.Name, parameter.Value)
 				}
 
 				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
@@ -16599,7 +16604,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 			}
 		} else if action.AppName == "User Input" {
-			log.Printf("USER INPUT!")
 			branchesFound := 0
 			parentFinished := 0
 
@@ -16622,7 +16626,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 			}
 
-			log.Printf("[DEBUG] Should execute %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
+			log.Printf("[DEBUG] Should execute PAReNT %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
 			if branchesFound == parentFinished {
 
 				if action.ID == workflowExecution.Start {
@@ -16667,86 +16671,192 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					workflowExecution.Status = "WAITING"
 					err = SetWorkflowExecution(ctx, workflowExecution, true)
 					if err != nil {
-						log.Printf("[WARNING] Error saving workflow execution actionresult setting: %s", err)
+						log.Printf("[ERROR] Error saving workflow execution actionresult setting: %s", err)
 						break
 					}
 
-					// Still having personal to see if it works or not
-					users := []string{}
-					smsUser := ""
-					mailbody := ""
-					smsEnabled := false
-					emailEnabled := false
-					for _, trigger := range trigger.Parameters {
-						//log.Printf("TRIGGER PARAM: %s", trigger)
-						if trigger.Name == "email" {
-							itemsplit := strings.Split(trigger.Value, ",")
-							for _, mail := range itemsplit {
-								users = append(users, mail)
-							}
-						} else if trigger.Name == "alertinfo" {
-							mailbody = trigger.Value
-						} else if trigger.Name == "type" {
-							if strings.Contains(trigger.Value, "sms") {
-								smsEnabled = true
-							}
+					action.Environment = environment
+					action.AppName = "shuffle-subflow"
+					action.Name = "run_userinput"
+					action.AppVersion = "1.0.0"
 
-							if strings.Contains(trigger.Value, "email") {
-								emailEnabled = true
-							}
-						} else if trigger.Name == "sms" {
-							smsUser = trigger.Value
-						} else if trigger.Name == "subflow" {
-							log.Printf("[DEBUG] Should handle subflow in user input")
+					for _, innertrigger := range workflowExecution.Workflow.Triggers {
+						if innertrigger.ID == action.ID {
+							trigger = innertrigger
+							break
 						}
 					}
 
+					// FIXME: Add startnode from frontend
+					action.ExecutionDelay = trigger.ExecutionDelay
+					action.Parameters = []WorkflowAppActionParameter{}
+					for _, parameter := range trigger.Parameters {
+						parameter.Variant = "STATIC_VALUE"
+						if parameter.Name == "alertinfo" {
+							parameter.Name = "information"
+						}
+
+						action.Parameters = append(action.Parameters, parameter)
+					}
+
+					//action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					//	Name:  "source_workflow",
+					//	Value: workflowExecution.Workflow.ID,
+					//})
+
+					//action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					//	Name:  "source_execution",
+					//	Value: workflowExecution.ExecutionId,
+					//})
+
+					//action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					//	Name:  "source_auth",
+					//	Value: workflowExecution.Authorization,
+					//})
+
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:  "startnode",
+						Value: workflowExecution.Start,
+					})
+
+					fakeUrl := ""
+					if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+						fakeUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+					}
+
+					if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+						fakeUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+					}
+
+					// Fallback
+					if len(fakeUrl) == 0 {
+						fakeUrl = "https://shuffler.io"
+					}
+
+					if len(fakeUrl) > 0 {
+						action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+							Name:  "backend_url",
+							Value: fakeUrl,
+						})
+					}
+
+					// If sms/email, it should be setting the apikey based on the org
+					syncApikey := workflowExecution.Authorization
+					if project.Environment != "cloud" {
+						org, err := GetOrg(ctx, workflowExecution.ExecutionOrg)
+						if err == nil {
+							log.Printf("Got syncconfig key: %s", org.SyncConfig.Apikey)
+							syncApikey = org.SyncConfig.Apikey
+						} else {
+							log.Printf("[ERROR] Failed to get org %s: %s", workflowExecution.ExecutionOrg, err)
+						}
+					}
+
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:  "user_apikey",
+						Value: syncApikey,
+					})
+
 					/*
+						for _, trigger := range trigger.Parameters {
+							//log.Printf("TRIGGER PARAM: %s", trigger)
+							if trigger.Name == "email" {
+								itemsplit := strings.Split(trigger.Value, ",")
+								for _, mail := range itemsplit {
+									users = append(users, mail)
+								}
+							} else if trigger.Name == "alertinfo" {
+								mailbody = trigger.Value
+							} else if trigger.Name == "type" {
+								if strings.Contains(trigger.Value, "sms") {
+									smsEnabled = true
+								}
+
+								if strings.Contains(trigger.Value, "email") {
+									emailEnabled = true
+								}
+							} else if trigger.Name == "sms" {
+								smsUser = trigger.Value
+							} else if trigger.Name == "subflow" {
+								log.Printf("[DEBUG] Should handle subflow in user input")
+							}
+						}
+					*/
+
+					// Still having personal to see if it works or not
+					/*
+						users := []string{}
+						smsUser := ""
+						mailbody := ""
+						smsEnabled := false
+						emailEnabled := false
+						for _, trigger := range trigger.Parameters {
+							//log.Printf("TRIGGER PARAM: %s", trigger)
+							if trigger.Name == "email" {
+								itemsplit := strings.Split(trigger.Value, ",")
+								for _, mail := range itemsplit {
+									users = append(users, mail)
+								}
+							} else if trigger.Name == "alertinfo" {
+								mailbody = trigger.Value
+							} else if trigger.Name == "type" {
+								if strings.Contains(trigger.Value, "sms") {
+									smsEnabled = true
+								}
+
+								if strings.Contains(trigger.Value, "email") {
+									emailEnabled = true
+								}
+							} else if trigger.Name == "sms" {
+								smsUser = trigger.Value
+							} else if trigger.Name == "subflow" {
+								log.Printf("[DEBUG] Should handle subflow in user input")
+							}
+						}
 
 						// FIXME: Change the startnode to NEXT one :thinking:
 
+						startnode := workflowExecution.Start
+						if emailEnabled {
+							mailBody := Mailcheck{
+								Targets:            users,
+								Type:               "User input",
+								WorkflowId:         workflowExecution.Workflow.ID,
+								Start:              startnode,
+								Body:               mailbody,
+								ReferenceExecution: workflowExecution.ExecutionId,
+								Subject:            "An alert from Shuffle",
+							}
+							_ = mailBody
+
+							//err = sendAlertMail(ctx, mailBody, workflowExecution.ExecutionOrg)
+							//if err != nil {
+							//	log.Printf("[INFO] Failed sending email about user input: %s", err)
+							//}
+						}
+
+						_ = smsUser
+						_ = startAction
+						if smsEnabled {
+							if len(mailbody) > 140 {
+								mailbody = mailbody[0:139]
+							}
+
+							url := "https://shuffler.io"
+
+							continueUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?authorization=%s&start=%s&reference_execution=%s&answer=true", url, workflowExecution.Workflow.ID, workflowExecution.Authorization, startnode, workflowExecution.ExecutionId)
+							stopUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?authorization=%s&start=%s&reference_execution=%s&answer=false", url, workflowExecution.Workflow.ID, workflowExecution.Authorization, startnode, workflowExecution.ExecutionId)
+
+							mailbody += fmt.Sprintf("\n\nContinue: %s\n\nStop: %s", continueUrl, stopUrl)
+
+							//err = sendSMS(ctx, mailbody, []string{smsUser}, workflowExecution.Workflow.ExecutingOrg.Id)
+							//if err != nil {
+							//	log.Printf("[INFO] Failed sending sms about user input: %s", err)
+							//}
+						}
+
+						break
 					*/
-
-					startnode := workflowExecution.Start
-					if emailEnabled {
-						mailBody := Mailcheck{
-							Targets:            users,
-							Type:               "User input",
-							WorkflowId:         workflowExecution.Workflow.ID,
-							Start:              startnode,
-							Body:               mailbody,
-							ReferenceExecution: workflowExecution.ExecutionId,
-							Subject:            "An alert from Shuffle",
-						}
-						_ = mailBody
-
-						//err = sendAlertMail(ctx, mailBody, workflowExecution.ExecutionOrg)
-						//if err != nil {
-						//	log.Printf("[INFO] Failed sending email about user input: %s", err)
-						//}
-					}
-
-					_ = smsUser
-					_ = startAction
-					if smsEnabled {
-						if len(mailbody) > 140 {
-							mailbody = mailbody[0:139]
-						}
-
-						url := "https://shuffler.io"
-
-						continueUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?authorization=%s&start=%s&reference_execution=%s&answer=true", url, workflowExecution.Workflow.ID, workflowExecution.Authorization, startnode, workflowExecution.ExecutionId)
-						stopUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?authorization=%s&start=%s&reference_execution=%s&answer=false", url, workflowExecution.Workflow.ID, workflowExecution.Authorization, startnode, workflowExecution.ExecutionId)
-
-						mailbody += fmt.Sprintf("\n\nContinue: %s\n\nStop: %s", continueUrl, stopUrl)
-
-						//err = sendSMS(ctx, mailbody, []string{smsUser}, workflowExecution.Workflow.ExecutingOrg.Id)
-						//if err != nil {
-						//	log.Printf("[INFO] Failed sending sms about user input: %s", err)
-						//}
-					}
-
-					break
 				}
 			}
 		} else {

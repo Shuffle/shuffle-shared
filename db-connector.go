@@ -561,7 +561,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 					log.Printf("[WARNING] Failed setting cache for %s (2): %s", name, err)
 				} else {
-					log.Printf("[WARNING] Something bad with App Engine context for memcache (key: %s): %s", name, err)
+					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
 				}
 			}
 		}
@@ -1501,7 +1501,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -1665,7 +1665,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -1958,7 +1958,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -2028,7 +2028,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			}
 
 			res, err := project.Es.Search(
-				project.Es.Search.WithContext(context.Background()),
+				project.Es.Search.WithContext(ctx),
 				project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 				project.Es.Search.WithBody(&buf),
 				project.Es.Search.WithTrackTotalHits(true),
@@ -3030,7 +3030,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -3114,7 +3114,7 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -3207,7 +3207,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -3533,7 +3533,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -3656,7 +3656,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -4044,7 +4044,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			return allApps, nil
 		}
 
-		err = SetCache(ctx, publicAppsKey, newbody, 30)
+		err = SetCache(ctx, publicAppsKey, newbody, 1440)
 		if err != nil {
 			log.Printf("[INFO] Error setting app cache item for %s: %v", publicAppsKey, err)
 		} else {
@@ -4129,7 +4129,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			return allApps, nil
 		}
 
-		err = SetCache(ctx, cacheKey, newbody, 30)
+		err = SetCache(ctx, cacheKey, newbody, 1440)
 		if err != nil {
 			log.Printf("[INFO] Error setting app cache item for %s: %v", cacheKey, err)
 		} else {
@@ -4274,7 +4274,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -4508,7 +4508,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -4533,7 +4533,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 			}
 
 			res, err = project.Es.Search(
-				project.Es.Search.WithContext(context.Background()),
+				project.Es.Search.WithContext(ctx),
 				project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 				project.Es.Search.WithBody(&buf),
 				project.Es.Search.WithTrackTotalHits(true),
@@ -4727,7 +4727,7 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 
 		// Perform the search request.
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -5104,7 +5104,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -5213,7 +5213,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -5578,7 +5578,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -5700,7 +5700,7 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -5823,7 +5823,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -5992,7 +5992,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 
 		// Perform the search request.
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -6170,7 +6170,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -6272,7 +6272,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 
 		// Perform the search request.
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -6433,7 +6433,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 
 		// Perform the search request.
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -6698,7 +6698,7 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(nameKey)),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -6776,7 +6776,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 
 		// Perform the search request.
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -6898,7 +6898,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 		}
 
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),
@@ -7551,7 +7551,7 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 
 		// Perform the search request.
 		res, err := project.Es.Search(
-			project.Es.Search.WithContext(context.Background()),
+			project.Es.Search.WithContext(ctx),
 			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
 			project.Es.Search.WithBody(&buf),
 			project.Es.Search.WithTrackTotalHits(true),

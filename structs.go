@@ -3089,3 +3089,12 @@ type Mailcheck struct {
 	ExecutionType      string   `json:"execution_type"`
 	Start              string   `json:"start"`
 }
+
+type SmsBody struct {
+	Numbers            []string `json:"numbers" datastore:"numbers"`
+	Body               string   `json:"body" datastore:"body"`
+	ReferenceExecution string   `json:"reference_execution"`
+	WorkflowId         string   `json:"workflow_id"`
+	ExecutionType      string   `json:"execution_type"`
+	Start              string   `json:"start"`
+}
