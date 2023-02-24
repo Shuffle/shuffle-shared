@@ -2404,7 +2404,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			authorization = authorizationArr[0]
 		}
 		_ = authorization
-		log.Printf("[ERROR] WHAT ARE ONE TIME KEYS USED FOR?")
+		log.Printf("[ERROR] WHAT ARE ONE TIME KEYS USED FOR? User input?")
 	}
 
 	// __session first due to Compatibility issues
@@ -9431,6 +9431,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if actionResult.Action.AppName == "shuffle-subflow" {
 		if actionResult.Action.Name == "run_userinput" {
 			log.Printf("\n\n[INFO] Inside userinput default return!")
+
+			return &workflowExecution, true, nil
 		} else {
 			for _, param := range actionResult.Action.Parameters {
 				if param.Name == "check_result" {
@@ -11717,7 +11719,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		log.Printf("[WARNING] Error reading decryptionkey: %s", err)
+		log.Printf("[ERROR] Error reading decryptionkey: %s", err)
 		return []byte{}, err
 	}
 
@@ -12203,10 +12205,11 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution) []byte {
 	cnt := 0
 	type retStruct struct {
-		Success       bool   `json:"success"`
-		Id            string `json:"id"`
-		Authorization string `json:"authorization"`
-		Result        string `json:"result"`
+		Success       bool     `json:"success"`
+		Id            string   `json:"id"`
+		Authorization string   `json:"authorization"`
+		Result        string   `json:"result"`
+		Errors        []string `json:"errors"`
 	}
 
 	returnBody := retStruct{
@@ -12214,6 +12217,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		Id:            workflowExecution.ExecutionId,
 		Authorization: workflowExecution.Authorization,
 		Result:        "",
+		Errors:        []string{},
 	}
 
 	// VERY short sleeptime here on purpose
@@ -12230,6 +12234,13 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		if len(newExecution.Results) > 0 {
 			if len(newExecution.Results[0].Result) > 0 {
 				returnBody.Result = newExecution.Results[0].Result
+
+				// Check for single action errors in liquid and similar
+				for _, param := range newExecution.Results[0].Action.Parameters {
+					if strings.Contains("liquid", param.Name) {
+						returnBody.Errors = append(returnBody.Errors, param.Value)
+					}
+				}
 				break
 			}
 		}
@@ -12526,8 +12537,7 @@ func md5sum(data []byte) string {
 
 // Checks if data is sent from Worker >0.8.51, which sends a full execution
 // instead of individial results
-func ValidateNewWorkerExecution(body []byte) error {
-	ctx := context.Background()
+func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 	var execution WorkflowExecution
 	err := json.Unmarshal(body, &execution)
 	if err != nil {
@@ -13932,7 +13942,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// If answer is false, reference execution with result
 			//log.Printf("[INFO] Answer is OK AND reference is OK!")
 			if answer[0] == "false" {
-				log.Printf("Should update reference and return, no need for further execution!")
+				log.Printf("[INFO] Should update reference execution and return, no need for further execution!")
 
 				// Get the reference execution
 				oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])

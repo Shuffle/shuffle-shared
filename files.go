@@ -554,11 +554,14 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+				if len(file.ReferenceFileId) > 0 {
+					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+				}
 				data, err := HandleKeyDecryption(allText, passphrase)
 				if err != nil {
 					log.Printf("[ERROR] Failed decrypting file: %s", err)
 				} else {
-					log.Printf("[DEBUG] File size reduced from %d to %d after decryption", len(allText), len(data))
+					log.Printf("[DEBUG] File size reduced from %d to %d after decryption (1)", len(allText), len(data))
 					allText = []byte(data)
 				}
 
@@ -742,11 +745,14 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			if len(file.ReferenceFileId) > 0 {
+				passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+			}
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				log.Printf("[ERROR] Failed decrypting file: %s", err)
 			} else {
-				log.Printf("[DEBUG] File size reduced from %d to %d after decryption", len(allText), len(data))
+				log.Printf("[DEBUG] File size reduced from %d to %d after decryption (2)", len(allText), len(data))
 				allText = []byte(data)
 			}
 
@@ -818,11 +824,14 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 		if file.Encrypted {
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			if len(file.ReferenceFileId) > 0 {
+				passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+			}
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				log.Printf("[ERROR] Failed decrypting file: %s", err)
 			} else {
-				log.Printf("[DEBUG] File size reduced from %d to %d after decryption", len(allText), len(data))
+				log.Printf("[DEBUG] File size reduced from %d to %d after decryption (3)", len(allText), len(data))
 				allText = []byte(data)
 			}
 
@@ -1103,10 +1112,16 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 		log.Printf("[INFO] Already found a file with the same Md5 '%s' for org '%s' in ID: %s. Referencing same location.", md5, file.OrgId, outputFile.Id)
 
 		file.Encrypted = outputFile.Encrypted
-		file.FileSize = int64(len(contents))
+		file.FileSize = outputFile.FileSize
 		file.StorageArea = outputFile.StorageArea
 		file.DownloadPath = outputFile.DownloadPath
 
+		// Makes sure we're always referencing the original in case of decryption
+		if len(outputFile.ReferenceFileId) > 0 {
+			file.ReferenceFileId = outputFile.ReferenceFileId
+		} else {
+			file.ReferenceFileId = outputFile.Id
+		}
 	} else {
 		if len(encryptionKey) > 0 {
 			newContents := contents

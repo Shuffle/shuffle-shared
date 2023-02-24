@@ -4792,7 +4792,6 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
-		//log.Printf("[WARNING] Getting executions from datastore")
 		q := datastore.NewQuery(index).Limit(24)
 		_, err := project.Dbclient.GetAll(ctx, q, &executions)
 		if err != nil {
@@ -6327,7 +6326,6 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
-		//log.Printf("[WARNING] Getting executions from datastore")
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
 		max := 100
@@ -6488,7 +6486,6 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
-		//log.Printf("[WARNING] Getting executions from datastore")
 		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
 		//totalMaxSize := 33554432
 		//totalMaxSize := 22369621 // Total of App Engine max /3*2
