@@ -4666,6 +4666,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				log.Printf("[DEBUG] Should send email to %s during execution.", email)
 			}
+
 			if strings.Contains(triggerType, "sms") {
 				if sms == "0000000" {
 					log.Printf("Email isn't specified during save.")
@@ -4679,15 +4680,21 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[DEBUG] Should send SMS to %s during execution.", sms)
 			}
 
+			// Removed all checks as this is handled in the shuffle-subflow app
 			if strings.Contains(triggerType, "subflow") {
-				if len(subflow) != 36 {
-					log.Printf("[WARNING] Subflow isn't specified!")
-					if workflow.PreviouslySaved {
-						resp.WriteHeader(401)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Subflow in User Input Trigger isn't specified"}`)))
-						return
-					}
-				}
+				//if strings.Contains(subflow, "/") {
+				//	subflowSplit := strings.Split(subflow, "/")
+				//	subflow = subflowSplit[len(subflowSplit)-1]
+				//}
+
+				//if len(subflow) != 36 {
+				//	log.Printf("[WARNING] Subflow isn't specified!")
+				//	if workflow.PreviouslySaved {
+				//		resp.WriteHeader(401)
+				//		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Subflow in User Input Trigger isn't specified"}`)))
+				//		return
+				//	}
+				//}
 
 				log.Printf("[DEBUG] Should run subflow with workflow %s during execution.", subflow)
 			}
@@ -9430,7 +9437,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	setCache := true
 	if actionResult.Action.AppName == "shuffle-subflow" {
 		if actionResult.Action.Name == "run_userinput" {
-			log.Printf("\n\n[INFO] Inside userinput default return!")
+			log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
 
 			return &workflowExecution, true, nil
 		} else {
@@ -12236,8 +12243,10 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 				returnBody.Result = newExecution.Results[0].Result
 
 				// Check for single action errors in liquid and similar
+				// to be used in the frontend
 				for _, param := range newExecution.Results[0].Action.Parameters {
-					if strings.Contains("liquid", param.Name) {
+					//log.Printf("Name: %s", param.Name)
+					if strings.Contains(param.Name, "liquid") && !ArrayContains(returnBody.Errors, param.Value) {
 						returnBody.Errors = append(returnBody.Errors, param.Value)
 					}
 				}
@@ -16461,7 +16470,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					parentId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, parent)
 					_, err := GetCache(ctx, parentId)
 					if err != nil {
-						log.Printf("No cache for parent ID %#v", parentId)
+						//log.Printf("[INFO] No cache for parent ID %#v", parentId)
 					} else {
 						//log.Printf("Parent ID already ran. How long ago?")
 					}
@@ -16647,6 +16656,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				} else {
 					//log.Printf("Should stop after this iteration because it's user-input based. %s", action)
 					log.Printf("[DEBUG] Should stop after this iteration because it's user-input based.") //%s", action)
+
 					trigger := Trigger{}
 					for _, innertrigger := range workflowExecution.Workflow.Triggers {
 						if innertrigger.ID == action.ID {
@@ -16663,7 +16673,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					}
 
 					_ = triggerData
-					log.Printf("\n\nSHOULD RUN USER INPUT!\n\n")
 
 					timeNow := int64(time.Now().Unix())
 					result := ActionResult{
@@ -16676,7 +16685,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						Status:        "WAITING",
 					}
 
-					//GetAction(workflowExecution, nextAction, environment)
 					workflowExecution.Results = append(workflowExecution.Results, result)
 					workflowExecution.Status = "WAITING"
 					err = SetWorkflowExecution(ctx, workflowExecution, true)
@@ -16697,6 +16705,28 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						}
 					}
 
+					smsEnabled := false
+					emailEnabled := false
+					subflowEnabled := false
+					for _, trigger := range trigger.Parameters {
+						//log.Printf("TRIGGER PARAM: %s", trigger)
+						if trigger.Name == "type" {
+							if strings.Contains(trigger.Value, "sms") {
+								smsEnabled = true
+							}
+
+							if strings.Contains(trigger.Value, "email") {
+								emailEnabled = true
+							}
+
+							if strings.Contains(trigger.Value, "subflow") {
+								subflowEnabled = true
+							}
+						}
+					}
+
+					//log.Printf("\n\nSHOULD RUN USER INPUT! SMS: %#v, email: %#v, subflow: %#v \n\n", smsEnabled, emailEnabled, subflowEnabled)
+
 					// FIXME: Add startnode from frontend
 					action.ExecutionDelay = trigger.ExecutionDelay
 					action.Parameters = []WorkflowAppActionParameter{}
@@ -16704,6 +16734,18 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						parameter.Variant = "STATIC_VALUE"
 						if parameter.Name == "alertinfo" {
 							parameter.Name = "information"
+						}
+
+						if parameter.Name == "sms" && smsEnabled == false {
+							continue
+						}
+
+						if parameter.Name == "email" && emailEnabled == false {
+							continue
+						}
+
+						if parameter.Name == "subflow" && subflowEnabled == false {
+							continue
 						}
 
 						action.Parameters = append(action.Parameters, parameter)
@@ -16798,31 +16840,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						users := []string{}
 						smsUser := ""
 						mailbody := ""
-						smsEnabled := false
-						emailEnabled := false
-						for _, trigger := range trigger.Parameters {
-							//log.Printf("TRIGGER PARAM: %s", trigger)
-							if trigger.Name == "email" {
-								itemsplit := strings.Split(trigger.Value, ",")
-								for _, mail := range itemsplit {
-									users = append(users, mail)
-								}
-							} else if trigger.Name == "alertinfo" {
-								mailbody = trigger.Value
-							} else if trigger.Name == "type" {
-								if strings.Contains(trigger.Value, "sms") {
-									smsEnabled = true
-								}
-
-								if strings.Contains(trigger.Value, "email") {
-									emailEnabled = true
-								}
-							} else if trigger.Name == "sms" {
-								smsUser = trigger.Value
-							} else if trigger.Name == "subflow" {
-								log.Printf("[DEBUG] Should handle subflow in user input")
-							}
-						}
 
 						// FIXME: Change the startnode to NEXT one :thinking:
 
