@@ -994,6 +994,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		http.SetCookie(resp, newCookie)
 	}
 
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
 	if runReturn == true {
 		DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
 		DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
@@ -6839,6 +6841,12 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
+
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+
 			return
 		}
 	}
@@ -14100,7 +14108,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.ExecutionSource = "default"
 	}
 
-	log.Printf("[INFO] Execution source is %s for execution ID %s in workflow %s. Organization: %d", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
+	log.Printf("[INFO] Execution source is %s for execution ID %s in workflow %s. Organization: %s", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
 
 	workflowExecution.ExecutionVariables = workflow.ExecutionVariables
 	if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {

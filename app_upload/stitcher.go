@@ -35,6 +35,7 @@ import (
 
 var gceProject = "shuffler"
 var bucketName = "shuffler.appspot.com"
+
 var publicBucket = "shuffle_public"
 var appSearchIndex = "appsearch"
 
@@ -485,6 +486,9 @@ func deployAppCloudFunc(appname string, appversion string) {
 
 	fullAppname := fmt.Sprintf("%s-%s", strings.Replace(appname, "_", "-", -1), strings.Replace(appversion, ".", "-", -1))
 	locations := []string{"europe-west2"}
+	if len(os.Getenv("SHUFFLE_GCE_LOCATION")) > 0 {
+		locations = []string{os.Getenv("SHUFFLE_GCE_LOCATION")}
+	}
 
 	// Deploys the app to all locations
 	bucketname := stitcher(appname, appversion)
@@ -811,13 +815,21 @@ func main() {
 		return
 	}
 
+	if len(os.Getenv("SHUFFLE_ORG_BUCKET")) > 0 {
+		bucketName = os.Getenv("SHUFFLE_ORG_BUCKET")
+	}
+
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) == 0 {
+		gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
+	}
+
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
 	log.Printf("\n\n============================= \n[INFO] Running with: \nUrl: %s\nApikey: %s\n============================= \n\n", baseUrl, apikey)
 	//deployAll()
 	//return
 
-	appname := "shuffle-subflow"
+	appname := "aws-ses"
 	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
