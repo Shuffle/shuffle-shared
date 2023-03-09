@@ -382,7 +382,9 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 					if item, err := mc.Get(keyname); err == gomemcache.ErrCacheMiss {
 						break
 					} else {
-						totalData = append(totalData, item.Value...)
+						if totalData != nil && item.Value != nil {
+							totalData = append(totalData, item.Value...)
+						}
 
 						//log.Printf("%d - %d = ", len(item.Value), maxCacheSize)
 						if len(item.Value) != maxCacheSize {

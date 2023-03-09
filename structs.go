@@ -3085,8 +3085,9 @@ type Mailcheck struct {
 	Subject            string   `json:"subject"`
 	Type               string   `json:"type"`
 	SenderCompany      string   `json:"sender_company"`
-	ReferenceExecution string   `json:"reference_execution"`
 	WorkflowId         string   `json:"workflow_id"`
+	ReferenceExecution string   `json:"reference_execution"`
+	Authorization      string   `json:"authorization"`
 	ExecutionType      string   `json:"execution_type"`
 	Start              string   `json:"start"`
 }
@@ -3095,7 +3096,28 @@ type SmsBody struct {
 	Numbers            []string `json:"numbers" datastore:"numbers"`
 	Body               string   `json:"body" datastore:"body"`
 	ReferenceExecution string   `json:"reference_execution"`
+	Authorization      string   `json:"authorization"`
 	WorkflowId         string   `json:"workflow_id"`
 	ExecutionType      string   `json:"execution_type"`
 	Start              string   `json:"start"`
+}
+
+type UserInputResponse struct {
+	Success     bool   `json:"success"`
+	Source      string `json:"source"`
+	Reason      string `json:"reason"`
+	Information string `json:"information"`
+	ClickInfo   struct {
+		Clicked bool   `json:"clicked"`
+		Time    int64  `json:"time"`
+		IP      string `json:"ip"`
+		User    string `json:"user"`
+		Note    string `json:"note"`
+	} `json:"click_info"`
+	Subflow struct {
+		Success       bool   `json:"success"`
+		ExecutionID   string `json:"execution_id"`
+		Authorization string `json:"authorization"`
+	} `json:"subflow"`
+	SubflowURL string `json:"subflow_url"`
 }

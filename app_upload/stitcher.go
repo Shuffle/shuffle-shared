@@ -409,6 +409,13 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 	projectsLocationsFunctionsService := cloudfunctions.NewProjectsLocationsFunctionsService(service)
 	location := fmt.Sprintf("projects/%s/locations/%s", gceProject, localization)
 	functionName := fmt.Sprintf("%s/functions/%s", location, appname)
+	serviceAccountEmail := "shuffle-apps@shuffler.iam.gserviceaccount.com"
+
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 {
+		serviceAccountEmail = fmt.Sprintf("shuffle-apps@%s.iam.gserviceaccount.com", os.Getenv("SHUFFLE_GCEPROJECT"))
+	}
+
+	log.Printf("[INFO] Uploading function %#v for email %#v", functionName, serviceAccountEmail)
 
 	// Increased to 512 due to potential issues in the future
 	cloudFunction := &cloudfunctions.CloudFunction{
@@ -420,7 +427,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 		Name:                 functionName,
 		Runtime:              "python38",
 		SourceArchiveUrl:     applocation,
-		ServiceAccountEmail:  "shuffle-apps@shuffler.iam.gserviceaccount.com",
+		ServiceAccountEmail:  serviceAccountEmail,
 	}
 
 	createCall := projectsLocationsFunctionsService.Create(location, cloudFunction)
@@ -819,7 +826,7 @@ func main() {
 		bucketName = os.Getenv("SHUFFLE_ORG_BUCKET")
 	}
 
-	if len(os.Getenv("SHUFFLE_GCEPROJECT")) == 0 {
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 {
 		gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
 	}
 
@@ -829,8 +836,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "aws-ses"
-	appversion := "1.0.0"
+	appname := "shuffle-subflow"
+	appversion := "1.1.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

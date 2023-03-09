@@ -716,6 +716,15 @@ func HandleGetOrgs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET ORGS request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get orgs: %s", err)
@@ -805,21 +814,42 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
 	}
 
 	ctx := GetContext(request)
+	sanitizeOrg := false
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		referenceId, referenceok := request.URL.Query()["reference_execution"]
+		authorization, authorizationok := request.URL.Query()["authorization"]
+		if referenceok && authorizationok {
+			workflowExecution, err := GetWorkflowExecution(ctx, referenceId[0])
+			if err == nil && authorization[0] == workflowExecution.Authorization {
+				sanitizeOrg = true
+			}
+		}
+
+		if sanitizeOrg != true {
+			log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
 	org, err := GetOrg(ctx, fileId)
 	if err != nil {
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
 		return
 	}
+
+	// FIX: Add a way to get Org branding without being logged in
+	// First usage: For workflow executions without being logged in
+	// Maybe make it based on execution_id + authorization as an example?
 
 	admin := false
 	userFound := false
@@ -835,8 +865,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !userFound {
-		log.Printf("[ERROR] User %s (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
+	if !userFound && !sanitizeOrg {
+		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 		return
@@ -908,6 +938,16 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	org.Users = []User{}
 	org.SyncConfig.Apikey = ""
 	org.SyncConfig.Source = ""
+
+	// This is for sending branding information
+	// to those who need it
+	if sanitizeOrg {
+		newOrg := org
+		org = &Org{}
+		org.Name = newOrg.Name
+		org.Id = newOrg.Id
+		org.Image = newOrg.Image
+	}
 
 	newjson, err := json.Marshal(org)
 	if err != nil {
@@ -2399,15 +2439,15 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	}
 
 	// One time API keys
-	authorizationArr, ok := request.URL.Query()["authorization"]
-	if ok {
-		authorization := ""
-		if len(authorizationArr) > 0 {
-			authorization = authorizationArr[0]
-		}
-		_ = authorization
-		log.Printf("[ERROR] WHAT ARE ONE TIME KEYS USED FOR? User input?")
-	}
+	//authorizationArr, ok := request.URL.Query()["authorization"]
+	//if ok {
+	//	//authorization := ""
+	//	//if len(authorizationArr) > 0 {
+	//	//	authorization = authorizationArr[0]
+	//	//}
+	//	//_ = authorization
+	//	//log.Printf("[ERROR] WHAT ARE ONE TIME KEYS USED FOR? User input?")
+	//}
 
 	// __session first due to Compatibility issues
 	c, err := request.Cookie("__session")
@@ -2435,10 +2475,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		if err != nil {
 			log.Printf("[DEBUG] No valid session token for ID %s. Setting cookie to expire.", sessionToken)
 
-			http.SetCookie(resp, newCookie)
+			if resp != nil {
+				http.SetCookie(resp, newCookie)
 
-			newCookie.Name = "__session"
-			http.SetCookie(resp, newCookie)
+				newCookie.Name = "__session"
+				http.SetCookie(resp, newCookie)
+			}
 
 			return User{}, err
 		} else {
@@ -2452,14 +2494,18 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			if err1 != nil {
 				log.Printf("[DEBUG] Setting missing session_token for user %s (%s)", user.Username, user.Id)
 				newCookie.Name = "session_token"
-				http.SetCookie(resp, newCookie)
+				if resp != nil {
+					http.SetCookie(resp, newCookie)
+				}
 			}
 
 			_, err2 := request.Cookie("__session")
 			if err2 != nil {
 				log.Printf("[DEBUG] Setting missing __session for user %s (%s)", user.Username, user.Id)
 				newCookie.Name = "__session"
-				http.SetCookie(resp, newCookie)
+				if resp != nil {
+					http.SetCookie(resp, newCookie)
+				}
 			}
 		}
 
@@ -2478,10 +2524,12 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				newCookie.HttpOnly = true
 			}
 
-			http.SetCookie(resp, newCookie)
+			if resp != nil {
+				http.SetCookie(resp, newCookie)
 
-			newCookie.Name = "__session"
-			http.SetCookie(resp, newCookie)
+				newCookie.Name = "__session"
+				http.SetCookie(resp, newCookie)
+			}
 
 			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 		}
@@ -4159,7 +4207,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.DefaultReturnValue
 	}
 
-	log.Printf("[INFO] Saving workflow %s with %d action(s) and %d trigger(s)", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
+	log.Printf("[INFO] Saving workflow '%s' with %d action(s) and %d trigger(s)", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
 
 	if len(user.ActiveOrg.Id) > 0 {
 		if len(workflow.ExecutingOrg.Id) == 0 {
@@ -4645,6 +4693,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
+			_ = subflow
+
 			if len(triggerType) == 0 {
 				log.Printf("[DEBUG] No type specified for user input node")
 				if workflow.PreviouslySaved {
@@ -4666,7 +4716,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				log.Printf("[DEBUG] Should send email to %s during execution.", email)
+				//log.Printf("[DEBUG] Should send email to %s during execution.", email)
 			}
 
 			if strings.Contains(triggerType, "sms") {
@@ -4698,7 +4748,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				//	}
 				//}
 
-				log.Printf("[DEBUG] Should run subflow with workflow %s during execution.", subflow)
+				//log.Printf("[DEBUG] Should run subflow with workflow %s during execution.", subflow)
 			}
 		}
 
@@ -9444,8 +9494,54 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	setCache := true
 	if actionResult.Action.AppName == "shuffle-subflow" {
+
+		// Verifying if the userinput should be sent properly or not
 		if actionResult.Action.Name == "run_userinput" {
-			log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
+			//log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
+
+			if strings.Contains(actionResult.Result, "\"success\":") {
+				//log.Printf("Found success in result. Now verifying if the workflow should just continue or not")
+
+				type SubflowMapping struct {
+					Success bool `json:"success"`
+				}
+
+				var subflowData SubflowMapping
+				err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+				if err == nil && subflowData.Success == false {
+					log.Printf("[INFO] Userinput subflow failed. Should abort workflow or continue execution by default?")
+				} else {
+					log.Printf("[INFO] Subflow succeeded. Should continue execution by default? Value: %s", actionResult.Result)
+				}
+			}
+
+			foundWaiting := false
+			for resultIndex, result := range workflowExecution.Results {
+				if result.Action.ID == actionResult.Action.ID {
+					workflowExecution.Results[resultIndex].Result = actionResult.Result
+
+					// Updating cache for the result to always use the latest
+					actionResultBody, err := json.Marshal(workflowExecution.Results[resultIndex].Result)
+					if err == nil {
+						cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+						err = SetCache(ctx, cacheId, actionResultBody, 35)
+						if err != nil {
+							//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+							continue
+						}
+					}
+
+					foundWaiting = true
+					break
+				}
+			}
+
+			if foundWaiting {
+				err = SetWorkflowExecution(ctx, workflowExecution, true)
+				if err != nil {
+					log.Printf("[ERROR] Failed setting workflow execution: %s", err)
+				}
+			}
 
 			return &workflowExecution, true, nil
 		} else {
@@ -11044,7 +11140,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %s", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
 
 	// If onprem, it should autobuild the container(s) from here
 
@@ -13953,58 +14049,134 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Check for parameters of start and ExecutionId
 		// This is mostly used for user input trigger
 
+		//log.Printf("\n\nChecking answerok!!\n\n")
+
 		answer, answerok := request.URL.Query()["answer"]
 		referenceId, referenceok := request.URL.Query()["reference_execution"]
-		if answerok && referenceok {
+		authorization, authorizationok := request.URL.Query()["authorization"]
+		if answerok && referenceok && authorizationok {
 			// If answer is false, reference execution with result
-			//log.Printf("[INFO] Answer is OK AND reference is OK!")
-			if answer[0] == "false" {
-				log.Printf("[INFO] Should update reference execution and return, no need for further execution!")
+			log.Printf("[INFO] Should update reference execution and return, no need for further execution!")
 
-				// Get the reference execution
-				oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
-				if err != nil {
-					log.Printf("Failed getting execution (execution) %s: %s", referenceId[0], err)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
+			// Get the reference execution
+			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
+			if err != nil {
+				log.Printf("Failed getting execution (execution) %s: %s", referenceId[0], err)
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
+			}
+
+			if oldExecution.Workflow.ID != workflow.ID {
+				log.Println("Wrong workflowid!")
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Bad workflow ID in get %s", referenceId), errors.New("Bad workflow ID")
+			}
+
+			if authorization[0] != oldExecution.Authorization {
+				log.Println("[AUDIT][%s] Wrong authorization for execution during userinput! %s vs %s", referenceId[0], authorization[0], oldExecution.Authorization)
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Bad authorization in get %s", referenceId), errors.New("Bad authorization key")
+			}
+
+			if len(start) == 0 {
+				// Just guessing~
+				for _, trigger := range workflow.Triggers {
+					if trigger.AppName == "User Input" {
+						start = []string{trigger.ID}
+						break
+					}
 				}
+			}
 
-				if oldExecution.Workflow.ID != workflow.ID {
-					log.Println("Wrong workflowid!")
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Bad ID %s", referenceId), errors.New("Bad ID")
-				}
+			//log.Printf("%s", oldExecution.Results)
+			newResults := []ActionResult{}
+			foundresult := ActionResult{}
+			for _, result := range oldExecution.Results {
+				log.Printf("%s - %s", result.Action.ID, start[0])
+				if result.Status == "WAITING" {
+					//if result.Action.ID == start[0] {
 
-				newResults := []ActionResult{}
-				//log.Printf("%s", oldExecution.Results)
-				for _, result := range oldExecution.Results {
-					log.Printf("%s - %s", result.Action.ID, start[0])
-					if result.Action.ID == start[0] {
-						note, noteok := request.URL.Query()["note"]
-						if noteok {
-							result.Result = fmt.Sprintf("User note: %s", note[0])
-						} else {
-							result.Result = fmt.Sprintf("User clicked %s", answer[0])
-						}
+					var userinputResp UserInputResponse
+					err = json.Unmarshal([]byte(result.Result), &userinputResp)
+					// Error here should just be warnings
+					log.Printf("\n\n[DEBUG] Failed unmarshalling userinput: %s\n\n", err)
 
-						// Stopping the whole thing
-						result.CompletedAt = int64(time.Now().Unix())
-						result.Status = "ABORTED"
-						oldExecution.Status = result.Status
-						oldExecution.Result = result.Result
-						oldExecution.LastNode = result.Action.ID
+					//if err == nil {
+					userinputResp.ClickInfo.Clicked = true
+					userinputResp.ClickInfo.Time = time.Now().Unix()
+					userinputResp.ClickInfo.IP = request.RemoteAddr
+					userinputResp.ClickInfo.Note = ""
+
+					user, err := HandleApiAuthentication(nil, request)
+					if err == nil && user.Username != "" {
+						userinputResp.ClickInfo.User = user.Username
 					}
 
-					newResults = append(newResults, result)
-				}
+					b, err := json.Marshal(userinputResp)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling userinput: %s", err)
+					} else {
+						result.Result = string(b)
+					}
 
+					result.CompletedAt = int64(time.Now().Unix())
+					if answer[0] == "false" {
+						result.Status = "ABORTED"
+					} else {
+						result.Status = "SUCCESS"
+					}
+
+					/*
+						} else {
+							log.Printf("[ERROR] Failed unmarshalling userinput: %s", err)
+
+							// FIXME: Add note functionality again
+							//note, noteok := request.URL.Query()["note"]
+							//if noteok {
+							//	result.Result = fmt.Sprintf("User note: %s", note[0])
+							//} else {
+							//	result.Result = fmt.Sprintf("User clicked %s", answer[0])
+							//}
+
+							// Stopping the whole thing
+							if answer[0] == "false" {
+								result.CompletedAt = int64(time.Now().Unix())
+								result.Status = "ABORTED"
+
+								// Abort from here?
+								oldExecution.Status = result.Status
+								oldExecution.Result = result.Result
+								oldExecution.LastNode = result.Action.ID
+							} else {
+								result.CompletedAt = int64(time.Now().Unix())
+								result.Status = "SUCCESS"
+								result.Result = `{"success": true, "reason": "Continuing from user input", "user_input": true}`
+							}
+						}
+					*/
+
+					foundresult = result
+					newResults = append(newResults, result)
+					break
+
+				}
+			}
+
+			// FIXME: Should SEND the result here instead of just updating it.
+			//log.Printf("[INFO] Answer is OK AND reference is OK!")
+
+			b, err := json.Marshal(foundresult)
+			log.Printf("Sending result: %s", string(b))
+
+			if err != nil {
 				oldExecution.Results = newResults
 				err = SetWorkflowExecution(ctx, *oldExecution, true)
 				if err != nil {
 					log.Printf("Error saving workflow execution actionresult setting: %s", err)
 					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed setting workflowexecution actionresult in execution: %s", err), err
 				}
-
-				return WorkflowExecution{}, ExecInfo{}, "", nil
+			} else {
+				ResendActionResult(b, 4)
 			}
+
+			return WorkflowExecution{}, ExecInfo{}, "", errors.New("User Input")
 		}
 
 		if referenceok {
@@ -14013,7 +14185,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// Will use the old name, but still continue with NEW ID
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
-				log.Printf("Failed getting execution (execution) %s: %s", referenceId[0], err)
+				log.Printf("[ERROR] Failed getting execution (execution) %s: %s", referenceId[0], err)
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
@@ -14421,22 +14593,24 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
-			defaultResults = []ActionResult{}
-			for _, result := range workflowExecution.Results {
-				if result.Status == "WAITING" {
-					result.Status = "SUCCESS"
-					result.Result = `{"success": true, "reason": "Continuing from user input"}`
+			/*
+				defaultResults = []ActionResult{}
+				for _, result := range workflowExecution.Results {
+					if result.Status == "WAITING" {
+						result.Status = "SUCCESS"
+						result.Result = `{"success": true, "reason": "Continuing from user input"}`
 
-					log.Printf("Actions + extra = %d. Results = %d", len(workflowExecution.Workflow.Actions)+extra, len(workflowExecution.Results))
-					if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
-						workflowExecution.Status = "FINISHED"
-					} else {
-						workflowExecution.Status = "EXECUTING"
+						//log.Printf("Actions + extra = %d. Results = %d", len(workflowExecution.Workflow.Actions)+extra, len(workflowExecution.Results))
+						if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
+							workflowExecution.Status = "FINISHED"
+						} else {
+							workflowExecution.Status = "EXECUTING"
+						}
 					}
-				}
 
-				defaultResults = append(defaultResults, result)
-			}
+					defaultResults = append(defaultResults, result)
+				}
+			*/
 		} else if len(workflowExecution.Results) == 0 && !workflowExecution.Workflow.Configuration.StartFromTop {
 			found := false
 			for _, nodeId := range childNodes {
@@ -14790,7 +14964,7 @@ func GetAppRequirements() string {
 // 2. Parent workflow's owner is same org?
 // 3. Parent execution auth is correct
 func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool, string) {
-	log.Printf("[DEBUG] Inside execute validation!")
+	log.Printf("[DEBUG] Inside execute validation for workflow %s (%s)!", workflow.Name, workflow.ID)
 
 	if request.Method == "POST" {
 		ctx := GetContext(request)
@@ -14817,7 +14991,8 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 
 		sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
 		if sourceAuthOk {
-			//log.Printf("[DEBUG] Got auth %s", sourceAuth)
+			log.Printf("[DEBUG] Got source auth %s", sourceAuth)
+			// Must origin from a parent workflow")
 
 			if sourceAuth[0] != workflowExecution.Authorization {
 				log.Printf("[WARNING] Bad authorization for workflowexecution defined.")
@@ -14857,10 +15032,8 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		// 3. Parent execution auth is correct
 
 		sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
-		if sourceNodeOk {
-			//log.Printf("[DEBUG] Got source node %s", sourceNode)
-			//workflowExecution.ExecutionSourceNode = sourceNode[0]
-		} else {
+		if !sourceNodeOk {
+			log.Printf("[AUDIT] Couldn't find source node that started the execution")
 			return false, ""
 		}
 
@@ -16569,7 +16742,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				//appversion := action.AppVersion
 				//appname = strings.Replace(appname, ".", "-", -1)
 				//appversion = strings.Replace(appversion, ".", "-", -1)
-				//	shuffle-subflow_1.0.0
 
 				//visited = append(visited, action.ID)
 				//executed = append(executed, action.ID)
@@ -16653,7 +16825,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 			}
 
-			log.Printf("[DEBUG] Should execute PAReNT %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
+			log.Printf("[DEBUG] Should execute parent %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
 			if branchesFound == parentFinished {
 
 				if action.ID == workflowExecution.Start {
@@ -16704,7 +16876,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					action.Environment = environment
 					action.AppName = "shuffle-subflow"
 					action.Name = "run_userinput"
-					action.AppVersion = "1.0.0"
+					action.AppVersion = "1.1.0"
 
 					for _, innertrigger := range workflowExecution.Workflow.Triggers {
 						if innertrigger.ID == action.ID {
@@ -16799,6 +16971,12 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 							Value: fakeUrl,
 						})
 					}
+
+					log.Printf("Starting with sourcenode '%s'", trigger.ID)
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:  "source_node",
+						Value: trigger.ID,
+					})
 
 					// If sms/email, it should be setting the apikey based on the org
 					syncApikey := workflowExecution.Authorization
