@@ -2382,6 +2382,27 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		}
 	}
 
+	if val, ok := path.Post.ExtensionProps.Extensions["x-required-fields"]; ok {
+
+		j, err := json.Marshal(&val)
+		if err == nil {
+			if j[0] == 0x22 && j[len(j)-1] == 0x22 {
+				j = j[1 : len(j)-1]
+			}
+		}
+
+		log.Printf("\n\n[INFO] Found required bodyfields: %s\n\n", string(j))
+
+		newValue := []string{}
+		err = json.Unmarshal(j, &newValue)
+		if err == nil {
+			action.RequiredBodyFields = newValue
+			//log.Printf("Setting required bodyfields: %#v", newValue)
+		} else {
+			log.Printf("[ERROR] Failed to unmarshal required bodyfields %s: %s", string(j), err)
+		}
+	}
+
 	action.Returns.Schema.Type = "string"
 	handleFile := false
 

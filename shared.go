@@ -17274,8 +17274,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedApp := WorkflowApp{}
 	selectedAction := WorkflowAppAction{}
 	for _, app := range newapps {
-		log.Printf("Name: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 		if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
+			log.Printf("[DEBUG] Found app: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 			selectedApp = app
 
 			for _, action := range app.Actions {
@@ -17290,7 +17290,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				// For now just finding the first one
-				log.Printf("Hi: %s & %s", strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_"), strings.ReplaceAll(strings.ToLower(value.Label), " ", "_"))
+				//log.Printf("Hi: %s & %s", strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_"), strings.ReplaceAll(strings.ToLower(value.Label), " ", "_"))
 
 				if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == strings.ReplaceAll(strings.ToLower(value.Label), " ", "_") {
 
@@ -17318,7 +17318,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Got action: %s", selectedAction.Name)
+	log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
+	// Need translation here, now that we have the action
+	// Should just do an app injection into the workflow?
+	for _, value := range value.Fields {
+		log.Printf("%s: %s", value.Key, value.Value)
+	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
