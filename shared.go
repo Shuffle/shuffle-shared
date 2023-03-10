@@ -980,14 +980,23 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", userInfo.Username))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", userInfo.Id))
+			DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
 
 			RedirectUserRequest(resp, request)
+
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", userInfo.Id))
+			DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
+
 			// FIXME: Allow superfluous cleanups?
 			// Point is: should it continue running the logout to
 			// ensure cookies are cleared?
 			// Keeping it for now to ensure cleanup.
+			return
 		}
 	}
 
@@ -1241,7 +1250,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to set new workflowapp: %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
@@ -17162,4 +17171,156 @@ func GetExternalClient(baseUrl string) *http.Client {
 	}
 
 	return client
+}
+
+// Apps to test:
+// Communication: Slack & Teams -> Send message
+// Ticketing: TheHive & Jira 		-> Create ticket
+
+// 1. Check the category, if it has the label in it
+// 2. Get the app (openapi & app config)
+// 3. Check if the label exists for the app in any action
+// 4. Do the translation~ (workflow or direct)
+// 5. Run app action/workflow
+// 6. Return result from the app
+func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just here to verify that the user is logged in
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in run category action: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to run category action: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read for category action: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var value CategoryAction
+	err = json.Unmarshal(body, &value)
+	if err != nil {
+		log.Printf("[WARNING] Error with unmarshal tmpBody in category action: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	categories := []AppCategory{
+		AppCategory{
+			Name:         "Cases",
+			Color:        "",
+			Icon:         "cases",
+			ActionLabels: []string{"Create ticket"},
+		},
+	}
+
+	value.Category = strings.ToLower(value.Category)
+	value.Label = strings.ReplaceAll(strings.ToLower(value.Label), " ", "_")
+	value.AppName = strings.ReplaceAll(strings.ToLower(value.AppName), " ", "_")
+
+	foundIndex := -1
+	labelIndex := -1
+	if len(value.Category) > 0 {
+
+		for categoryIndex, category := range categories {
+			if strings.ToLower(category.Name) != value.Category {
+				continue
+			}
+
+			foundIndex = categoryIndex
+			break
+		}
+
+		if foundIndex >= 0 {
+			for _, label := range categories[foundIndex].ActionLabels {
+				if strings.ReplaceAll(strings.ToLower(label), " ", "_") == value.Label {
+					labelIndex = foundIndex
+				}
+			}
+		}
+	} else {
+		log.Printf("[DEBUG] No category set in category action")
+	}
+
+	log.Printf("[INFO] Found label %s in category %d with label %d", value.Label, foundIndex, labelIndex)
+
+	newapps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps in category action: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed loading apps. Contact support@shuffler.io"}`))
+		return
+	}
+
+	selectedApp := WorkflowApp{}
+	selectedAction := WorkflowAppAction{}
+	for _, app := range newapps {
+		log.Printf("Name: %s vs %s (%s)", app.Name, value.AppName, app.ID)
+		if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
+			selectedApp = app
+
+			for _, action := range app.Actions {
+				if len(action.CategoryLabel) == 0 {
+					continue
+				} else {
+					log.Printf("[DEBUG] Found category label %s", action.CategoryLabel)
+				}
+
+				if len(value.ActionName) > 0 && action.Name != value.ActionName {
+					continue
+				}
+
+				// For now just finding the first one
+				log.Printf("Hi: %s & %s", strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_"), strings.ReplaceAll(strings.ToLower(value.Label), " ", "_"))
+
+				if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == strings.ReplaceAll(strings.ToLower(value.Label), " ", "_") {
+
+					selectedAction = action
+					log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
+					break
+				}
+			}
+
+			break
+		}
+	}
+
+	if len(selectedApp.ID) == 0 {
+		log.Printf("[WARNING] Couldn't find app with ID or name '%s' active in org %s (%s)", value.AppName, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding an app with that name or ID"}`))
+		return
+	}
+
+	if len(selectedAction.Name) == 0 {
+		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'", value.Label, selectedApp.Name)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding the label in app '%s'"}`, selectedApp.Name)))
+		return
+	}
+
+	log.Printf("[INFO] Got action: %s", selectedAction.Name)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+
 }

@@ -1243,8 +1243,8 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 
 	//Verified      bool   `json:"verified" yaml:"verified" required:false datastore:"verified"`
 	for actualPath, path := range swagger.Paths {
-		actualPath = strings.Replace(actualPath, " ", "_", -1)
 		//actualPath = strings.Replace(actualPath, ".", "", -1)
+		actualPath = strings.Replace(actualPath, " ", "_", -1)
 		actualPath = strings.Replace(actualPath, "\\", "", -1)
 		if !api.Invalid && strings.HasPrefix(actualPath, "tmp") {
 			log.Printf("[WARNING] Set api %s to invalid because of path %s", swagger.Info.Title, actualPath)
@@ -1614,6 +1614,15 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 		Parameters:  extraParameters,
 	}
 
+	if val, ok := path.Connect.ExtensionProps.Extensions["x-label"]; ok {
+		label := string(val.(json.RawMessage))
+		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
+			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		} else {
+			action.CategoryLabel = []string{label}
+		}
+	}
+
 	action.Returns.Schema.Type = "string"
 	handleFile := false
 
@@ -1791,6 +1800,15 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
+	}
+
+	if val, ok := path.Get.ExtensionProps.Extensions["x-label"]; ok {
+		label := string(val.(json.RawMessage))
+		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
+			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		} else {
+			action.CategoryLabel = []string{label}
+		}
 	}
 
 	action.Returns.Schema.Type = "string"
@@ -1984,6 +2002,15 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		Parameters:  extraParameters,
 	}
 
+	if val, ok := path.Head.ExtensionProps.Extensions["x-label"]; ok {
+		label := string(val.(json.RawMessage))
+		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
+			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		} else {
+			action.CategoryLabel = []string{label}
+		}
+	}
+
 	action.Returns.Schema.Type = "string"
 	handleFile := false
 
@@ -2158,6 +2185,15 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
+	}
+
+	if val, ok := path.Delete.ExtensionProps.Extensions["x-label"]; ok {
+		label := string(val.(json.RawMessage))
+		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
+			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		} else {
+			action.CategoryLabel = []string{label}
+		}
 	}
 
 	action.Returns.Schema.Type = "string"
@@ -2335,6 +2371,15 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
+	}
+
+	if val, ok := path.Post.ExtensionProps.Extensions["x-label"]; ok {
+		label := string(val.(json.RawMessage))
+		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
+			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		} else {
+			action.CategoryLabel = []string{label}
+		}
 	}
 
 	action.Returns.Schema.Type = "string"
@@ -2543,6 +2588,15 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 		Parameters:  extraParameters,
 	}
 
+	if val, ok := path.Patch.ExtensionProps.Extensions["x-label"]; ok {
+		label := string(val.(json.RawMessage))
+		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
+			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		} else {
+			action.CategoryLabel = []string{label}
+		}
+	}
+
 	action.Returns.Schema.Type = "string"
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
@@ -2723,6 +2777,15 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 		NodeType:    "action",
 		Environment: api.Environment,
 		Parameters:  extraParameters,
+	}
+
+	if val, ok := path.Put.ExtensionProps.Extensions["x-label"]; ok {
+		label := string(val.(json.RawMessage))
+		if label[0] == 0x22 && label[len(label)-1] == 0x22 {
+			action.CategoryLabel = []string{label[1 : len(label)-1]}
+		} else {
+			action.CategoryLabel = []string{label}
+		}
 	}
 
 	action.Returns.Schema.Type = "string"

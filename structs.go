@@ -156,13 +156,14 @@ type WorkflowAppAction struct {
 		ID          string           `json:"id" datastore:"id" yaml:"id,omitempty"`
 		Schema      SchemaDefinition `json:"schema" datastore:"schema" yaml:"schema"`
 	} `json:"returns" datastore:"returns"`
-	AuthenticationId string `json:"authentication_id" datastore:"authentication_id"`
-	Example          string `json:"example,noindex" datastore:"example" yaml:"example"`
-	AuthNotRequired  bool   `json:"auth_not_required" datastore:"auth_not_required" yaml:"auth_not_required"`
-	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
-	RunMagicOutput   bool   `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
-	RunMagicInput    bool   `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
-	ExecutionDelay   int64  `json:"execution_delay" datastore:"execution_delay"`
+	AuthenticationId string   `json:"authentication_id" datastore:"authentication_id"`
+	Example          string   `json:"example,noindex" datastore:"example" yaml:"example"`
+	AuthNotRequired  bool     `json:"auth_not_required" datastore:"auth_not_required" yaml:"auth_not_required"`
+	SourceWorkflow   string   `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	RunMagicOutput   bool     `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
+	RunMagicInput    bool     `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
+	ExecutionDelay   int64    `json:"execution_delay" datastore:"execution_delay"`
+	CategoryLabel    []string `json:"category_label" datastore:"category_label"`
 }
 
 type Authentication struct {
@@ -3120,4 +3121,26 @@ type UserInputResponse struct {
 		Authorization string `json:"authorization"`
 	} `json:"subflow"`
 	SubflowURL string `json:"subflow_url"`
+}
+
+type CategoryAction struct {
+	AppName string         `json:"app_name"`
+	Label   string         `json:"label"`
+	Fields  []Valuereplace `json:"fields"`
+
+	// Optional~
+	AppVersion     string         `json:"app_version"`
+	ActionName     string         `json:"action_name"`
+	Category       string         `json:"category"`
+	OptionalFields []Valuereplace `json:"optional_fields"`
+
+	OrgId            string `json:"org_id"`
+	AuthenticationId string `json:"authentication_id"`
+}
+
+type AppCategory struct {
+	Name         string   `json:"name"`
+	Color        string   `json:"color"`
+	Icon         string   `json:"icon"`
+	ActionLabels []string `json:"action_labels"`
 }
