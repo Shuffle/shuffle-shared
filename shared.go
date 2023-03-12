@@ -6266,7 +6266,6 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
 		orgFound = true
 	} else {
-		log.Printf("FoundUser: %s", foundUser.Orgs)
 		for _, item := range foundUser.Orgs {
 			if item == userInfo.ActiveOrg.Id {
 				orgFound = true
@@ -14491,7 +14490,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						if err == nil {
 							//log.Printf("Checking expiration vs timenow: %d %d. Err: %s", timeNow, int64(val)+120, err)
 							if timeNow >= int64(val)+120 {
-								log.Printf("[DEBUG] Should run refresh of Oauth2 for %s!!", curAuth.Id)
+								log.Printf("[DEBUG] Should run refresh of Oauth2 for authentication ID '%s'!!", curAuth.Id)
 								runRefresh = true
 							}
 
@@ -14528,29 +14527,58 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					if len(refreshUrl) == 0 {
 						log.Printf("[ERROR] No Oauth2 request to run, as no refresh url is set!")
 					} else {
-						log.Printf("[INFO] Running Oauth2 request with URL %s", refreshUrl)
+						//log.Printf("[INFO] Running Oauth2 request with URL %s", refreshUrl)
 
 						newAuth, err := RunOauth2Request(ctx, user, curAuth, true)
 						if err != nil {
-							log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s", err)
-						} else {
-							log.Printf("[DEBUG] Setting new auth to index: %d and curauth", authIndex)
-							allAuths[authIndex] = newAuth
-
-							// Does the oauth2 replacement
-							newParams = []WorkflowAppActionParameter{}
-							for _, param := range newAuth.Fields {
-								//log.Printf("FIELD: %s", param.Key, param.Value)
-								if param.Key != "url" && param.Key != "access_token" {
-									//log.Printf("Skipping key %s (2)", param.Key)
-									continue
+							log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+							// Commented out as we don't want to stop the app, but just continue with the old tokens
+							/*
+								actionRes := ActionResult{
+									Action:        action,
+									ExecutionId:   workflowExecution.ExecutionId,
+									Authorization: workflowExecution.Authorization,
+									Result:        fmt.Sprintf(`{"success": false, "reason": "Failed running oauth2 request to refresh oauth2 tokens for this app."}`),
+									StartedAt:     workflowExecution.StartedAt,
+									CompletedAt:   workflowExecution.StartedAt,
+									Status:        "FAILURE",
 								}
 
-								newParams = append(newParams, WorkflowAppActionParameter{
-									Name:  param.Key,
-									Value: param.Value,
-								})
+								workflowExecution.Results = append(workflowExecution.Results, actionRes)
+								cacheData := []byte("1")
+
+								newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, action.ID)
+								err = SetCache(ctx, newExecId, cacheData, 2)
+								if err != nil {
+									log.Printf("[WARNING] Failed setting base cache for failed Oauth2 action %s: %s", newExecId, err)
+								}
+
+								b, err := json.Marshal(actionRes)
+								if err == nil {
+									err = SetCache(ctx, fmt.Sprintf("%s_result", newExecId), b, 2)
+									if err != nil {
+										log.Printf("[WARNING] Failed setting result cache for failed Oauth2 action %s: %s", newExecId, err)
+									}
+								}
+							*/
+						}
+
+						log.Printf("[DEBUG] Setting new auth to index: %d and curauth", authIndex)
+						allAuths[authIndex] = newAuth
+
+						// Does the oauth2 replacement
+						newParams = []WorkflowAppActionParameter{}
+						for _, param := range newAuth.Fields {
+							//log.Printf("FIELD: %s", param.Key, param.Value)
+							if param.Key != "url" && param.Key != "access_token" {
+								//log.Printf("Skipping key %s (2)", param.Key)
+								continue
 							}
+
+							newParams = append(newParams, WorkflowAppActionParameter{
+								Name:  param.Key,
+								Value: param.Value,
+							})
 						}
 					}
 				}
@@ -14939,6 +14967,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Means executing a subflow is happening
 	if len(workflowExecution.ExecutionParent) > 0 {
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
+	}
+
+	finished := ValidateFinished(ctx, 0, workflowExecution)
+	if finished {
+		log.Printf("[INFO] Already workflow already finished.")
 	}
 
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil

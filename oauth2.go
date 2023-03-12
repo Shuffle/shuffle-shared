@@ -3504,7 +3504,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	}
 
-	log.Printf("[DEBUG] Make request to %s for Oauth2 token. User: %s (%s)", url, user.Username, user.Id)
 	if len(requestData.ClientSecret) == 0 && len(requestData.ClientId) > 0 {
 		log.Printf("[INFO] Should query db for secret based on ID %s", requestData.ClientId)
 		oauth2data, err := GetHostedOAuth(ctx, requestData.ClientId)
@@ -3513,6 +3512,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	}
 
+	log.Printf("[DEBUG] Making request to %s for Oauth2 token. User: '%s' ('%s')", url, user.Username, user.Id)
 	//log.Printf("[DEBUG] Verbose Requestdata: Sending request to %#v with requestdata %#v", url, requestData)
 	if len(url) == 0 {
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
@@ -3557,6 +3557,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	respBody := []byte{}
 	if !refresh {
+		log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
 		req, err := http.NewRequest(
 			"POST",
 			url,
@@ -3589,7 +3590,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			return appAuth, errors.New(fmt.Sprintf("Bad status code for URL %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 	} else {
-		//log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
+		log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
 
 		if len(refreshToken) == 0 {
 			log.Printf("[ERROR] No refresh token acquired for %s", refreshUrl)
@@ -3646,6 +3647,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	if strings.Contains(string(respBody), "error") {
 		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nV: %#v", string(respBody), v.Encode())
 	}
+
 	var oauthResp Oauth2Resp
 	err = json.Unmarshal(respBody, &oauthResp)
 	if err != nil {
@@ -3656,6 +3658,9 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2) (2): %s. Continuing anyway as we have an access token", err)
 		}
 	}
+
+	// Need to refresh the "code"? Is that a thing?
+	log.Printf("[INFO] Response: %#v", oauthResp)
 
 	// Cleans up the existing keys before adding new ones
 	if len(oauthResp.AccessToken) > 0 {
