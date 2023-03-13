@@ -17484,7 +17484,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("\n\n[INFO] Added workflow %s\n\n", newWorkflow.ID)
 	newWorkflow.Actions = append(newWorkflow.Actions, startAction)
 
-	foundAuthenticationId := "819c8c78-f8a5-4235-87ae-d1b6170f1f4a"
+	foundAuthenticationId := value.AuthenticationId
+
+	// Sample. Point is to get authentication and choose the latest otherwise
+	if foundAuthenticationId == "" {
+		foundAuthenticationId = "378d651f-6379-4c25-aebf-2be55af06825"
+	}
+
 	refUrl := ""
 	if project.Environment == "cloud" {
 		location := "europe-west2"
@@ -17520,8 +17526,36 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("Required bodyfields: %#v", selectedAction.RequiredBodyFields)
+	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
+		// Optional > Required
+		for _, field := range value.OptionalFields {
+			if strings.ReplaceAll(strings.ToLower(field.Key), " ", "_") == strings.ReplaceAll(strings.ToLower(param.Name), " ", "_") {
+				param.Value = field.Value
+			}
+		}
+
+		// Parse input params into the field
+		for _, field := range value.Fields {
+			//log.Printf("%s & %s", strings.ReplaceAll(strings.ToLower(field.Key), " ", "_"), strings.ReplaceAll(strings.ToLower(param.Name), " ", "_"))
+			if strings.ReplaceAll(strings.ToLower(field.Key), " ", "_") == strings.ReplaceAll(strings.ToLower(param.Name), " ", "_") {
+				param.Value = field.Value
+			}
+		}
+
+		if param.Required && len(param.Value) == 0 && !param.Configuration {
+			//log.Printf("[INFO] Required - Key: %s, Value: %#v", param.Name, param.Value)
+			missingFields = append(missingFields, param.Name)
+		}
+
 		secondAction.Parameters = append(secondAction.Parameters, param)
+	}
+
+	if len(missingFields) > 0 {
+		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
+		return
 	}
 
 	// Add params and such of course
