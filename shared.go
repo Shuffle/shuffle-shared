@@ -9709,7 +9709,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if workflowExecution.Workflow.Configuration.SkipNotifications == false {
 			// Add an else for HTTP request errors with success "false"
 			// These could be "silent" issues
-			if actionResult.Status == "FAILURE" {
+			if actionResult.Status == "FAILURE" && workflowExecution.Workflow.Hidden == false {
 				log.Printf("[DEBUG] Result is %s for %s (%s). Making notification.", actionResult.Status, actionResult.Action.Label, actionResult.Action.ID)
 				err := CreateOrgNotification(
 					ctx,
@@ -10268,7 +10268,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		err = json.Unmarshal([]byte(actionResult.Result), &resultCheck)
 		if err == nil {
 			//log.Printf("Unmarshal success!")
-			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") {
+			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") && workflowExecution.Workflow.Hidden == false {
 				err = CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Potential error in Workflow %s", workflowExecution.Workflow.Name),
@@ -12289,8 +12289,10 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		Actions: []Action{
 			action,
 		},
-		Start: action.ID,
-		ID:    uuid.NewV4().String(),
+		Start:     action.ID,
+		ID:        uuid.NewV4().String(),
+		Generated: true,
+		Hidden:    true,
 	}
 
 	//log.Printf("Sharing: %s, Public: %s, Generated: %s. Start: %s", action.Sharing, action.Public, action.Generated, workflow.Start)
@@ -12321,17 +12323,10 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	return workflowExecution, nil
 }
 
-func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution) []byte {
+func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int) SingleResult {
 	cnt := 0
-	type retStruct struct {
-		Success       bool     `json:"success"`
-		Id            string   `json:"id"`
-		Authorization string   `json:"authorization"`
-		Result        string   `json:"result"`
-		Errors        []string `json:"errors"`
-	}
 
-	returnBody := retStruct{
+	returnBody := SingleResult{
 		Success:       true,
 		Id:            workflowExecution.ExecutionId,
 		Authorization: workflowExecution.Authorization,
@@ -12350,13 +12345,14 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 			break
 		}
 
-		if len(newExecution.Results) > 0 {
-			if len(newExecution.Results[0].Result) > 0 {
-				returnBody.Result = newExecution.Results[0].Result
+		if len(newExecution.Results) > resultAmount-1 {
+			relevantIndex := len(newExecution.Results) - 1
+			if len(newExecution.Results[relevantIndex].Result) > 0 {
+				returnBody.Result = newExecution.Results[relevantIndex].Result
 
 				// Check for single action errors in liquid and similar
 				// to be used in the frontend
-				for _, param := range newExecution.Results[0].Action.Parameters {
+				for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
 					//log.Printf("Name: %s", param.Name)
 					if strings.Contains(param.Name, "liquid") && !ArrayContains(returnBody.Errors, param.Value) {
 						returnBody.Errors = append(returnBody.Errors, param.Value)
@@ -12377,13 +12373,8 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		returnBody.Success = false
 	}
 
-	returnBytes, err := json.Marshal(returnBody)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal retStruct in single execution: %s", err)
-		return []byte{}
-	}
+	return returnBody
 
-	return returnBytes
 }
 
 func GetDocs(resp http.ResponseWriter, request *http.Request) {
@@ -17206,6 +17197,33 @@ func GetExternalClient(baseUrl string) *http.Client {
 	return client
 }
 
+func GetAllAppCategories() []AppCategory {
+	categories := []AppCategory{
+		AppCategory{
+			Name:         "Cases",
+			Color:        "",
+			Icon:         "cases",
+			ActionLabels: []string{"Create ticket"},
+			RequiredFields: map[string][]string{
+				"Create ticket": []string{"title", "description"},
+			},
+		},
+	}
+
+	return categories
+}
+
+// Function with the name RemoveFromArray to remove a string from a string array
+func RemoveFromArray(array []string, element string) []string {
+	for i, v := range array {
+		if v == element {
+			return append(array[:i], array[i+1:]...)
+		}
+	}
+
+	return array
+}
+
 // Apps to test:
 // Communication: Slack & Teams -> Send message
 // Ticketing: TheHive & Jira 		-> Create ticket
@@ -17257,14 +17275,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 
-	categories := []AppCategory{
-		AppCategory{
-			Name:         "Cases",
-			Color:        "",
-			Icon:         "cases",
-			ActionLabels: []string{"Create ticket"},
-		},
-	}
+	categories := GetAllAppCategories()
 
 	value.Category = strings.ToLower(value.Category)
 	value.Label = strings.ReplaceAll(strings.ToLower(value.Label), " ", "_")
@@ -17305,8 +17316,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	selectedApp := WorkflowApp{}
+	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
 	for _, app := range newapps {
+		if app.Name == "" || len(app.Categories) == 0 {
+			continue
+		}
+
 		if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
 			log.Printf("[DEBUG] Found app: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 			selectedApp = app
@@ -17328,6 +17344,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == strings.ReplaceAll(strings.ToLower(value.Label), " ", "_") {
 
 					selectedAction = action
+
+					for _, category := range categories {
+						if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
+							selectedCategory = category
+							break
+						}
+					}
+
 					log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
 					break
 				}
@@ -17354,11 +17378,383 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
 	// Need translation here, now that we have the action
 	// Should just do an app injection into the workflow?
-	for _, value := range value.Fields {
-		log.Printf("%s: %s", value.Key, value.Value)
+
+	foundFields := 0
+	missingFields := []string{}
+	baseFields := []string{}
+	_ = foundFields
+	for innerLabel, labelValue := range selectedCategory.RequiredFields {
+		if strings.ReplaceAll(strings.ToLower(innerLabel), " ", "_") != value.Label {
+			continue
+		}
+
+		baseFields = labelValue
+		missingFields = labelValue
+		for _, field := range value.Fields {
+			if ArrayContains(labelValue, field.Key) {
+				// Remove from missingFields
+				missingFields = RemoveFromArray(missingFields, field.Key)
+
+				foundFields += 1
+			}
+		}
+
+		break
+	}
+
+	// FIXME: Check if ALL fields for the target app can be fullfiled
+	// E.g. for Jira: Org_id is required.
+
+	if foundFields != len(baseFields) {
+		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v, have: %#v", baseFields, value.Fields)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
+		return
+
+	}
+
+	/*
+
+
+
+
+
+
+
+
+
+
+
+	 */
+
+	// 1. Generate the workflow based on the input above (make sure to set it to hidden)
+	// 2. Run the workflow
+	// 3. Get results for it
+	// 4. Delete it
+
+	standardType := "cases"
+
+	startId := uuid.NewV4().String()
+	newWorkflow := Workflow{
+		ID:        uuid.NewV4().String(),
+		Name:      fmt.Sprintf("Category action: %s", selectedAction.Name),
+		Generated: true,
+		Hidden:    true,
+		Start:     startId,
+		OrgId:     user.ActiveOrg.Id,
+	}
+
+	environment := "Cloud"
+	// FIXME: Make it dynamic based on the default env
+	if project.Environment != "cloud" {
+		environment = "Shuffle"
+	}
+
+	startAction := Action{
+		Name:        "get_standardized_data",
+		Label:       "Get standardized data",
+		AppName:     "Shuffle Tools",
+		AppVersion:  "1.2.0",
+		AppID:       "3e2bdf9d5069fe3f4746c29d68785a6a",
+		Environment: environment,
+		IsStartNode: true,
+		ID:          startId,
+		Parameters: []WorkflowAppActionParameter{
+			WorkflowAppActionParameter{
+				Name:      "json_input",
+				Value:     "$exec",
+				Multiline: true,
+				Variant:   "STATIC_VALUE",
+			},
+			WorkflowAppActionParameter{
+				Name:  "input_type",
+				Value: standardType,
+				Options: []string{
+					"cases",
+				},
+				Variant: "STATIC_VALUE",
+			},
+		},
+		Position: Position{
+			X: 0.0,
+			Y: 0.0,
+		},
+	}
+
+	log.Printf("\n\n[INFO] Added workflow %s\n\n", newWorkflow.ID)
+	newWorkflow.Actions = append(newWorkflow.Actions, startAction)
+
+	foundAuthenticationId := "819c8c78-f8a5-4235-87ae-d1b6170f1f4a"
+	refUrl := ""
+	if project.Environment == "cloud" {
+		location := "europe-west2"
+		if len(os.Getenv("SHUFFLE_GCEPROJECT_REGION")) > 0 {
+			location = os.Getenv("SHUFFLE_GCEPROJECT_REGION")
+		}
+
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		functionName := fmt.Sprintf("%s-%s", selectedApp.Name, selectedApp.ID)
+		functionName = strings.ToLower(strings.Replace(strings.Replace(strings.Replace(strings.Replace(strings.Replace(functionName, "_", "-", -1), ":", "-", -1), "-", "-", -1), " ", "-", -1), ".", "-", -1))
+
+		refUrl = fmt.Sprintf("https://%s-%s.cloudfunctions.net/%s", location, gceProject, functionName)
+	}
+
+	// Now start connecting it to the correct app (Jira?)
+	secondAction := Action{
+		Name:        selectedAction.Name,
+		Label:       selectedAction.Name,
+		AppName:     selectedApp.Name,
+		AppVersion:  selectedApp.AppVersion,
+		AppID:       selectedApp.ID,
+		Environment: environment,
+		IsStartNode: false,
+		ID:          uuid.NewV4().String(),
+		Parameters:  []WorkflowAppActionParameter{},
+		Position: Position{
+			X: 100.0,
+			Y: 100.0,
+		},
+		AuthenticationId: foundAuthenticationId,
+		IsValid:          true,
+		ReferenceUrl:     refUrl,
+	}
+
+	log.Printf("Required bodyfields: %#v", selectedAction.RequiredBodyFields)
+	for _, param := range selectedAction.Parameters {
+		secondAction.Parameters = append(secondAction.Parameters, param)
+	}
+
+	// Add params and such of course
+	newWorkflow.Actions = append(newWorkflow.Actions, secondAction)
+
+	newWorkflow.Branches = append(newWorkflow.Branches, Branch{
+		ID:            uuid.NewV4().String(),
+		SourceID:      startAction.ID,
+		DestinationID: secondAction.ID,
+		Label:         "",
+		HasError:      false,
+		Decorator:     false,
+		Conditions:    []Condition{},
+	})
+
+	// Set workflow in cache only?
+	// That way it can be loaded during execution
+
+	workflowBytes, err := json.Marshal(newWorkflow)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshal of workflow during cache setting: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed packing workflow. Please try again and contact support if this persists."}`)))
+		return
+	}
+
+	err = SetCache(ctx, fmt.Sprintf("workflow_%s", newWorkflow.ID), workflowBytes, 10)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for workflow during category run: %s", err)
+
+		SetWorkflow(ctx, newWorkflow, newWorkflow.ID)
+	}
+
+	log.Printf("[DEBUG] Done preparing workflow %s (%s) to be ran for category action %s", newWorkflow.Name, newWorkflow.ID, selectedAction.Name)
+
+	/*
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+	 */
+
+	execData := ExecutionStruct{
+		Start:             startId,
+		ExecutionSource:   "category_action",
+		ExecutionArgument: `{"title": "hello"}`,
+	}
+
+	newExecBody, _ := json.Marshal(execData)
+
+	// Starting execution
+	streamUrl := fmt.Sprintf("https://shuffler.io")
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		streamUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
+	}
+
+	streamUrl = fmt.Sprintf("%s/api/v1/workflows/%s/execute", streamUrl, newWorkflow.ID)
+
+	client := &http.Client{
+		Timeout: 5 * time.Second,
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		streamUrl,
+		bytes.NewBuffer(newExecBody),
+	)
+	if err != nil {
+		log.Printf("[WARNING] Error in new request for execute generated workflow: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed preparing new request. Contact support."}`)))
+		return
+	}
+
+	req.Header.Add("Authorization", request.Header.Get("Authorization"))
+	newresp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Error running body for execute generated workflow: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running generated app. Contact support."}`)))
+		return
+	}
+
+	executionBody, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body for execute generated workflow: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
+		return
+	}
+
+	workflowExecution := WorkflowExecution{}
+	err = json.Unmarshal(executionBody, &workflowExecution)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
+	}
+
+	returnBody := HandleRetValidation(ctx, workflowExecution, len(newWorkflow.Actions))
+	log.Printf("[INFO] Got response from workflow: %#v", string(returnBody.Result))
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(returnBody.Result))
+
+}
+
+func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just here to verify that the user is logged in
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in run category action: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	//log.Printf("[INFO] Found label %s in category %d with label %d", value.Label, foundIndex, labelIndex)
+
+	newapps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps in category action: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed loading apps. Contact support@shuffler.io"}`))
+		return
+	}
+
+	categories := GetAllAppCategories()
+	//AppCategory{
+	//	Name:         "Cases",
+	//	Color:        "",
+	//	Icon:         "cases",
+	//	ActionLabels: []string{"Create ticket"},
+	//	LabelApps: []AppCategoryLabel{
+	//		AppCategoryLabel{
+	//			Name: "Create ticket",
+	//			Apps: []WorkflowApp{
+	//			},
+	//		}
+	//	}
+	//},
+
+	// This is not fast, but ok with just a few hundred thousand iterations :>
+	log.Printf("[INFO] Starting mapping of labels from all %d apps", len(newapps))
+	for categoryIndex, _ := range categories {
+		categories[categoryIndex].AppLabels = []AppLabel{}
+	}
+	/*
+			for labelIndex, label := range category.ActionLabels {
+				//categories[categoryIndex].LabelApps = append(categories[categoryIndex].LabelApps, AppCategoryLabel{
+				//	Label:          label,
+				//	FormattedLabel: strings.ReplaceAll(strings.ToLower(label), " ", "_"),
+				//	Apps:           []WorkflowApp{},
+				//})
+			}
+		}
+	*/
+
+	for _, app := range newapps {
+		if len(app.Name) == 0 {
+			continue
+		}
+
+		if len(app.Categories) == 0 {
+			//log.Printf("[INFO] No categories: %#v (%s)", app.Name, app.ID)
+			continue
+		}
+
+		appLabels := []string{}
+		for _, action := range app.Actions {
+			// Compare with formatted label
+			if len(action.CategoryLabel) > 0 {
+				//&& strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == categories[categoryIndex].LabelApps[labelIndex].FormattedLabel {
+				//log.Printf("[INFO] Found label %s in category %d with label %d. App: %s", label, categoryIndex, labelIndex, app.Name)
+				appLabels = append(appLabels, action.CategoryLabel[0])
+
+				//AppLabels    []AppCategoryLabel `json:"app_labels"`
+
+			}
+		}
+
+		if len(appLabels) > 0 {
+			log.Printf("[DEBUG] '%s' Got labels (%s): %#v", app.Name, app.Categories[0], appLabels)
+			for categoryIndex, category := range categories {
+				if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
+					newApp := AppLabel{
+						AppName:    app.Name,
+						LargeImage: app.LargeImage,
+						ID:         app.ID,
+					}
+
+					// FIXME: May need to set the label to be the correct name according to the category's label
+					for _, appLabel := range appLabels {
+						newApp.Labels = append(newApp.Labels, LabelStruct{
+							Category: category.Name,
+							Label:    appLabel,
+						})
+					}
+
+					categories[categoryIndex].AppLabels = append(categories[categoryIndex].AppLabels, newApp)
+				}
+			}
+		}
+	}
+
+	newjson, err := json.Marshal(categories)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshal in get categories: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking categories. Please try again."}`)))
+		return
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	resp.Write(newjson)
 
 }

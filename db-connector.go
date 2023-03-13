@@ -3870,83 +3870,88 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		log.Printf("[WARNING] Failed to create client (storage - prioritizedapps): %s", err)
 	}
 
-	query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
-	for {
-		it := project.Dbclient.Run(ctx, query)
-
+	if user.ActiveOrg.Id != "" && user.ActiveOrg.Id != "2e7b6a08-b63b-4fc2-bd70-718091509db1" {
+		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
+		log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
 		for {
-			innerApp := WorkflowApp{}
-			_, err := it.Next(&innerApp)
-			if err != nil {
-				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					//log.Printf("[WARNING] Error in reference_org load: %s.", err)
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerApp := WorkflowApp{}
+				_, err := it.Next(&innerApp)
+				if err != nil {
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+						//log.Printf("[WARNING] Error in reference_org load: %s.", err)
+						continue
+					}
+
+					//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
+					break
+				}
+
+				if orgErr == nil && !ArrayContains(org.ActiveApps, innerApp.ID) {
 					continue
 				}
 
-				//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
-				break
-			}
+				if len(innerApp.Actions) == 0 {
+					//log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
-			if orgErr == nil && !ArrayContains(org.ActiveApps, innerApp.ID) {
-				continue
-			}
+					//project.BucketName := "shuffler.appspot.com"
+					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
+					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
+					log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
 
-			if len(innerApp.Actions) == 0 {
-				//log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
-
-				//project.BucketName := "shuffler.appspot.com"
-				fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
-				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-				//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
-
-				bucket := client.Bucket(project.BucketName)
-				obj := bucket.Object(fullParsedPath)
-				fileReader, err := obj.NewReader(ctx)
-				if err == nil {
-
-					data, err := ioutil.ReadAll(fileReader)
+					bucket := client.Bucket(project.BucketName)
+					obj := bucket.Object(fullParsedPath)
+					fileReader, err := obj.NewReader(ctx)
 					if err == nil {
-						err = json.Unmarshal(data, &innerApp)
-						if err != nil {
-							log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
-							continue
+
+						data, err := ioutil.ReadAll(fileReader)
+						if err == nil {
+							err = json.Unmarshal(data, &innerApp)
+							if err != nil {
+								log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
+								continue
+							}
 						}
 					}
+
+					//log.Printf("%s\n%s - %s\n%d\n", string(data), innerApp.Name, innerApp.ID, len(innerApp.Actions))
 				}
 
-				//log.Printf("%s\n%s - %s\n%d\n", string(data), innerApp.Name, innerApp.ID, len(innerApp.Actions))
+				allApps, innerApp = fixAppAppend(allApps, innerApp)
 			}
 
-			allApps, innerApp = fixAppAppend(allApps, innerApp)
-		}
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
 
-		if err != iterator.Done {
-			//log.Printf("[INFO] Failed fetching results: %v", err)
-			//break
-		}
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
 
-		// Get the cursor for the next page of results.
-		nextCursor, err := it.Cursor()
-		if err != nil {
-			log.Printf("Cursorerror: %s", err)
-			break
-		} else {
-			//log.Printf("NEXTCURSOR: %s", nextCursor)
-			nextStr := fmt.Sprintf("%s", nextCursor)
-			if cursorStr == nextStr {
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+				//cursorStr = nextCursor
+				//break
+			}
+
+			if len(allApps) > maxLen {
 				break
 			}
-
-			cursorStr = nextStr
-			query = query.Start(nextCursor)
-			//cursorStr = nextCursor
-			//break
-		}
-
-		if len(allApps) > maxLen {
-			break
 		}
 	}
+
+	//log.Printf("[INFO] After ref org search\n\n")
 
 	// Find public apps
 	publicApps := []WorkflowApp{}
@@ -3964,8 +3969,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
+	// May be better to just list all, then set to true?
+	// Is this the slow one?
 	if len(publicApps) == 0 {
-		query = datastore.NewQuery(nameKey).Filter("public =", true).Limit(queryLimit)
+		query := datastore.NewQuery(nameKey).Filter("public =", true).Limit(queryLimit)
 		for {
 			it := project.Dbclient.Run(ctx, query)
 
@@ -3984,7 +3991,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					log.Printf("App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+					log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
 					//project.BucketName := "shuffler.appspot.com"
 					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)

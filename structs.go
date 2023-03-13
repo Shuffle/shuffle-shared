@@ -837,6 +837,11 @@ type WorkflowExecution struct {
 	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
 }
 
+type Position struct {
+	X float64 `json:"x,omitempty" datastore:"x"`
+	Y float64 `json:"y,omitempty" datastore:"y"`
+}
+
 // This is for the nodes in a workflow, NOT the app action itself.
 type Action struct {
 	AppName           string                       `json:"app_name" datastore:"app_name"`
@@ -858,21 +863,18 @@ type Action struct {
 	Name              string                       `json:"name" datastore:"name"`
 	Parameters        []WorkflowAppActionParameter `json:"parameters" datastore: "parameters,noindex"`
 	ExecutionVariable Variable                     `json:"execution_variable,omitempty" datastore:"execution_variable,omitempty"`
-	Position          struct {
-		X float64 `json:"x,omitempty" datastore:"x"`
-		Y float64 `json:"y,omitempty" datastore:"y"`
-	} `json:"position,omitempty"`
-	Priority         int    `json:"priority,omitempty" datastore:"priority"`
-	AuthenticationId string `json:"authentication_id" datastore:"authentication_id"`
-	Example          string `json:"example,omitempty" datastore:"example,noindex"`
-	AuthNotRequired  bool   `json:"auth_not_required,omitempty" datastore:"auth_not_required" yaml:"auth_not_required"`
-	Category         string `json:"category" datastore:"category"`
-	ReferenceUrl     string `json:"reference_url" datastore:"reference_url"`
-	SubAction        bool   `json:"sub_action" datastore:"sub_action"`
-	SourceWorkflow   string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
-	RunMagicOutput   bool   `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
-	RunMagicInput    bool   `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
-	ExecutionDelay   int64  `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
+	Position          Position                     `json:"position,omitempty"`
+	Priority          int                          `json:"priority,omitempty" datastore:"priority"`
+	AuthenticationId  string                       `json:"authentication_id" datastore:"authentication_id"`
+	Example           string                       `json:"example,omitempty" datastore:"example,noindex"`
+	AuthNotRequired   bool                         `json:"auth_not_required,omitempty" datastore:"auth_not_required" yaml:"auth_not_required"`
+	Category          string                       `json:"category" datastore:"category"`
+	ReferenceUrl      string                       `json:"reference_url" datastore:"reference_url"`
+	SubAction         bool                         `json:"sub_action" datastore:"sub_action"`
+	SourceWorkflow    string                       `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	RunMagicOutput    bool                         `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
+	RunMagicInput     bool                         `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
+	ExecutionDelay    int64                        `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 }
 
 // Added environment for location to execute
@@ -995,6 +997,7 @@ type Workflow struct {
 	Status       string     `json:"status" datastore:"status"`
 	WorkflowType string     `json:"workflow_type" datastore:"workflow_type"`
 	Generated    bool       `json:"generated" datastore:"generated"`
+	Hidden       bool       `json:"hidden" datastore:"hidden"`
 }
 
 type Category struct {
@@ -3139,9 +3142,37 @@ type CategoryAction struct {
 	AuthenticationId string `json:"authentication_id"`
 }
 
+type LabelStruct struct {
+	Category string `json:"category"`
+	Label    string `json:"label"`
+}
+
+type AppLabel struct {
+	AppName    string        `json:"app_name"`
+	LargeImage string        `json:"large_image"`
+	ID         string        `json:"id"`
+	Labels     []LabelStruct `json:"labels"`
+}
+
+type AppCategoryLabel struct {
+	Label          string        `json:"label"`
+	FormattedLabel string        `json:"formatted_label"`
+	Apps           []WorkflowApp `json:"apps"`
+}
+
 type AppCategory struct {
-	Name         string   `json:"name"`
-	Color        string   `json:"color"`
-	Icon         string   `json:"icon"`
-	ActionLabels []string `json:"action_labels"`
+	Name           string              `json:"name"`
+	Color          string              `json:"color"`
+	Icon           string              `json:"icon"`
+	ActionLabels   []string            `json:"action_labels"`
+	AppLabels      []AppLabel          `json:"app_labels"`
+	RequiredFields map[string][]string `json:"required_fields"`
+}
+
+type SingleResult struct {
+	Success       bool     `json:"success"`
+	Id            string   `json:"id"`
+	Authorization string   `json:"authorization"`
+	Result        string   `json:"result"`
+	Errors        []string `json:"errors"`
 }
