@@ -1195,13 +1195,13 @@ type AlgoliaSearchWorkflow struct {
 	TimeEdited       int64             `json:"time_edited"`
 	Invalid          bool              `json:"invalid"`
 	Creator          string            `json:"creator,omitempty"`
-	Priority         int               `json:"priority"`
 	SourceIPLower    string            `json:"source_ip,omitempty"`
 	SourceIP         string            `json:"SourceIP,omitempty"`
 	Type             string            `json:"type"`
 	UsecaseIds       []string          `json:"usecase_ids"`
 	CreatorInfo      CreatorInfo       `json:"creator_info,omitempty"`
 	ActionReferences []ActionReference `json:"action_references,omitempty"`
+	Priority         int               `json:"priority"`
 }
 
 type ActionReference struct {
@@ -1230,6 +1230,7 @@ type AlgoliaSearchApp struct {
 	Invalid      bool     `json:"invalid"`
 	Creator      string   `json:"creator"`
 	AppVersion   string   `json:"app_version"`
+	Priority     int      `json:"priority"`
 }
 
 type ExecutionStruct struct {
@@ -2924,6 +2925,31 @@ type Usecase struct {
 	Priority        string        `json:"priority"`
 	WorkflowOutline string        `json:"workflow_outline"`
 	ExtraButtons    []ExtraButton `json:"extra_buttons"`
+}
+
+type CacheKeySearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string       `json:"_index"`
+			Type   string       `json:"_type"`
+			ID     string       `json:"_id"`
+			Score  float64      `json:"_score"`
+			Source CacheKeyData `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
 }
 
 type DealSearchWrapper struct {
