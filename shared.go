@@ -9640,7 +9640,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		if setExecVar {
-			log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (2)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+			log.Printf("[DEBUG][%s] Updating exec variable %s with new value of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 
 			if len(workflowExecution.Results) > 0 {
 				lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
