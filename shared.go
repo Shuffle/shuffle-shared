@@ -11845,6 +11845,69 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	return plaintext, nil
 }
 
+func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[DEBUG] Api authentication failed in list cache keys: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
+		return
+	}
+
+	//for key, value := range data.Apps {
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, fileId)
+	if err != nil {
+		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	keys, err := GetAllCacheKeys(ctx, org.Id)
+	if err != nil {
+		log.Printf("[INFO] Failed getting keys for org %s: %s", org.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	b, err := json.Marshal(keys)
+	if err != nil {
+		log.Printf("[WARNING] Failed to marshal cache keys for org %s: %s", org.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Something went wrong in cache key json management. Please refresh."}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {

@@ -7522,6 +7522,108 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 	return nil
 }
 
+func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) {
+	nameKey := "org_cache"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+
+	cacheKeys := []CacheKeyData{}
+	if project.DbType == "elasticsearch" {
+		log.Printf("GETTING cachekeys for org %s in item %s", orgId, nameKey)
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("Error encoding deal query: %s", err)
+			return cacheKeys, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get cachekeys): %s", err)
+			return cacheKeys, err
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return cacheKeys, err
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			log.Printf("[WARNING] Body of cachekeys is bad: %s", string(respBody))
+			return cacheKeys, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		wrapped := CacheKeySearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return cacheKeys, err
+		}
+
+		newCacheKeys := []CacheKeyData{}
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.OrgId != orgId {
+				continue
+			}
+
+			newCacheKeys = append(newCacheKeys, hit.Source)
+		}
+
+		log.Printf("[INFO] Got %d cachekeys for org %s (es)", len(newCacheKeys), orgId)
+		cacheKeys = newCacheKeys
+	} else {
+
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Limit(50)
+		_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting cacheKeys for org %s: %s", orgId, err)
+			return cacheKeys, err
+		}
+
+		log.Printf("[INFO] Got %d cacheKeys for org %s (datastore)", len(cacheKeys), orgId)
+	}
+
+	if project.CacheDb {
+		newcache, err := json.Marshal(cacheKeys)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
+			return cacheKeys, nil
+		}
+
+		err = SetCache(ctx, cacheKey, newcache, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache keys cache: %s", err)
+		}
+	}
+
+	return cacheKeys, nil
+}
+
 func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 	nameKey := "reseller_deal"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
