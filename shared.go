@@ -947,6 +947,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.Name = newOrg.Name
 		org.Id = newOrg.Id
 		org.Image = newOrg.Image
+		org.RegionUrl = newOrg.RegionUrl
+		org.Org = newOrg.Org
 	}
 
 	newjson, err := json.Marshal(org)
