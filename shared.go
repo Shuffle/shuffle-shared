@@ -9236,92 +9236,6 @@ func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowEx
 	}
 
 	// Skipping this since it's not needed anymore with loads of cache checking
-	/*
-		for _, executionItem := range foundNotExecuted {
-			cacheId := fmt.Sprintf("%s_%s_result", execution.ExecutionId, executionItem)
-			cache, err := GetCache(ctx, cacheId)
-			if err != nil {
-				//log.Printf("[WARNING] Couldn't find in fix exec %s: %s", cacheId, err)
-				continue
-			}
-
-			actionResult := ActionResult{}
-			cacheData := []byte(cache.([]uint8))
-			//log.Printf("Data: %s", string(cacheData))
-
-			// Just ensuring the data is good
-			err = json.Unmarshal(cacheData, &actionResult)
-			if err != nil {
-				//log.Printf("[WARNING] Failed unmarshal in fix exec %s: %s", cacheId, err)
-				continue
-			}
-
-			//log.Printf("[DEBUG] Rerunning request for %s", cacheId)
-			//go ResendActionResult(cacheData, 0)
-			log.Printf("\n\n[DEBUG] Should rerun (2)? %s (%s - %s)\n\n", actionResult.Action.Label, actionResult.Action.Name, actionResult.Action.ID)
-			//go ResendActionResult(cacheData, retries)
-
-			if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-
-				setExecVar := true
-				//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %s", actionResult.Result)
-				if strings.Contains(actionResult.Result, "\"success\":") {
-					type SubflowMapping struct {
-						Success bool `json:"success"`
-					}
-
-					var subflowData SubflowMapping
-					err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
-					if err != nil {
-						log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
-						setExecVar = false
-					} else {
-						if subflowData.Success == false {
-							setExecVar = false
-						}
-					}
-				}
-
-				if len(actionResult.Result) == 0 {
-					setExecVar = false
-				}
-
-				if setExecVar {
-					log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (3)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
-
-					if len(workflowExecution.Results) > 0 {
-						lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
-						_ = lastResult
-						//log.Printf("LAST: %s", lastResult)
-					}
-
-					actionResult.Action.ExecutionVariable.Value = actionResult.Result
-
-					foundIndex := -1
-					for i, executionVariable := range workflowExecution.ExecutionVariables {
-						if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
-							foundIndex = i
-							break
-						}
-					}
-
-					if foundIndex >= 0 {
-						workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
-					} else {
-						workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
-					}
-				} else {
-					log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
-				}
-			}
-
-			if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-				go ResendActionResult(cacheData, retries)
-			} else {
-				workflowExecution.Results = append(workflowExecution.Results, actionResult)
-			}
-		}
-	*/
 
 	saveToDb := false
 	extra := 0
@@ -9645,9 +9559,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[DEBUG][%s] Updating exec variable %s with new value of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 
 			if len(workflowExecution.Results) > 0 {
-				lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
-				_ = lastResult
-				//log.Printf("LAST: %s", lastResult)
+				// Should this be used?
+				// lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
 			}
 
 			actionResult.Action.ExecutionVariable.Value = actionResult.Result
@@ -9880,7 +9793,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				result.Result = "Aborted because of error in another node (2)"
 			}
 
-			if len(result.Result) > 0 {
+			if len(result.Result) > 0 && result.Status == "SUCCESS" {
 				lastResult = result.Result
 			}
 
@@ -9896,9 +9809,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	if actionResult.Status == "SKIPPED" {
-		//unfinishedNodes := []string{}
-		childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
-		_ = childNodes
+		//childNodes := FindChildNodes(workflowExecution, actionResult.Action.ID)
 
 		// See if it can even find it in here for skipped?
 		//log.Printf("childnodes of %s (%s): %d: %s", actionResult.Action.Label, actionResult.Action.Id, len(childNodes), childNodes)
@@ -10058,209 +9969,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 		}
-
-		/*
-				appendBadResults := true
-				appendResults := []ActionResult{}
-				for _, nodeId := range childNodes {
-					if nodeId == actionResult.Action.ID {
-						continue
-					}
-
-					curAction := Action{ID: ""}
-					for _, action := range workflowExecution.Workflow.Actions {
-						if action.ID == nodeId {
-							curAction = action
-							break
-						}
-					}
-
-					if len(curAction.ID) == 0 {
-						//log.Printf("Couldn't find subnode (0) %s as action. Checking triggers.", nodeId)
-						for _, trigger := range workflowExecution.Workflow.Triggers {
-							//if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
-							if trigger.ID == nodeId {
-								curAction = Action{
-									ID:      trigger.ID,
-									AppName: trigger.AppName,
-									Name:    trigger.AppName,
-									Label:   trigger.Label,
-								}
-
-								if trigger.AppName == "Shuffle Workflow" {
-									curAction.AppName = "shuffle-subflow"
-								}
-
-								break
-							}
-						}
-
-						if len(curAction.ID) == 0 {
-							//log.Printf("Couldn't find subnode (1) %s", nodeId)
-							continue
-						}
-					}
-
-					resultExists := false
-					for _, result := range workflowExecution.Results {
-						if result.Action.ID == curAction.ID {
-							resultExists = true
-							break
-						}
-					}
-
-					if curAction.Label == "Shuffle Tools_14" {
-						log.Printf("\n\n\n[DEBUG] FROM %s - FOUND childnode %s %s (%s). exists: %s\n\n\n", actionResult.Action.Label, curAction.ID, curAction.Name, curAction.Label, resultExists)
-					}
-
-					// Finds sub-nodes to be skipped if a parent node condition fails
-					skipIdCheck := false
-					if !resultExists {
-						// Check parents are done here. Only add it IF all parents are skipped
-						skipNodeAdd := false
-
-						// Find parent nodes that are also a child node of SKIPPED
-						parentNodes := []string{}
-						for _, branch := range workflowExecution.Workflow.Branches {
-
-							// If the current node has more branches, check those
-							if branch.DestinationID == curAction.ID {
-								if curAction.Label == "Shuffle Tools_14" {
-									log.Printf("Found branch!")
-								}
-
-								parentNodes = append(parentNodes, branch.SourceID)
-
-									//for _, childnode := range childNodes {
-									//	if childnode == branch.SourceID {
-									//		parentNodes = append(parentNodes, branch.SourceID)
-									//		break
-									//	}
-									//}
-							}
-						}
-
-						//log.Printf("Parents: %s", parentNodes)
-
-						for _, branch := range workflowExecution.Workflow.Branches {
-
-							// FIXME: Make this dynamic to curAction.ID's parent that we're checking from
-							//if branch.SourceID == actionResult.Action.ID {
-							if ArrayContains(parentNodes, branch.SourceID) {
-								// Check if the node has more destinations
-								// branch = old branch (original?)
-								ids := []string{}
-								for _, innerbranch := range workflowExecution.Workflow.Branches {
-									if innerbranch.DestinationID == branch.DestinationID {
-										ids = append(ids, innerbranch.SourceID)
-									}
-
-									//if innerbranch.ID == "70104246-45cf-4fa3-8b03-323d3cdf6434" {
-									//	log.Printf("Branch: %s", innerbranch)
-									//}
-								}
-
-								//if curAction.Label == "Shuffle Tools_4" {
-								//}
-
-								foundIds := []string{actionResult.Action.ID}
-								foundSuccess := []string{}
-								foundSkipped := []string{actionResult.Action.ID}
-
-								//log.Printf("\n\nAction: %s (%s). Branches: %d\n\n", curAction.Label, curAction.ID, len(ids))
-								// If more than one source branch for the target is found;
-								// Look for the result of the parent
-								if len(ids) > 1 {
-									for _, thisId := range ids {
-										if thisId == actionResult.Action.ID {
-											continue
-										}
-
-										//appendResults = append(appendResults, newResult)
-										tmpResults := append(workflowExecution.Results, appendResults...)
-										for _, result := range tmpResults {
-											if result.Action.ID == thisId {
-												log.Printf("[DEBUG] Found result for %s (%s): %s", result.Action.Label, thisId, result.Status)
-
-												foundIds = append(foundIds, thisId)
-												if result.Status == "SUCCESS" {
-													foundSuccess = append(foundSuccess, thisId)
-												} else {
-													foundSkipped = append(foundSkipped, thisId)
-												}
-											}
-										}
-									}
-								} else {
-									appendBadResults = true
-									skipIdCheck = true
-								}
-
-								if skipIdCheck {
-									// Pass here, as it's just here to skip the next part
-								} else if (len(foundSkipped) == len(foundIds)) && len(foundSkipped) == len(ids) {
-									appendBadResults = true
-								} else {
-									//log.Printf("\n\n\nNOT appending results for %s. Try later?\n\n\n", curAction.Label)
-									// appendResults = append(appendResults, newResult)
-									appendBadResults = false
-								}
-
-								//if len(foundIds) == len(ids) {
-								//	// Means you can continue
-								//	appendBadResults = false
-								//	break
-								//}
-							}
-						}
-
-						if !appendBadResults {
-							continue
-							//break
-						}
-
-						if !skipNodeAdd {
-							if curAction.Label == "Shuffle Tools_14" {
-								log.Printf("\n\n\n[DEBUG] Appending skip for node %s (%s - %s)\n\n\n", curAction.Name, curAction.Label, curAction.ID)
-							}
-
-							newResult := ActionResult{
-								Action:        curAction,
-								ExecutionId:   actionResult.ExecutionId,
-								Authorization: actionResult.Authorization,
-								Result:        fmt.Sprintf(`{"success": false, "reason": "Skipped because of previous node (%s) - 1"}`, actionResult.Action.Label),
-								StartedAt:     0,
-								CompletedAt:   0,
-								Status:        "SKIPPED",
-							}
-
-							appendResults = append(appendResults, newResult)
-
-							newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, curAction.ID)
-							cacheData := []byte("1")
-							err = SetCache(ctx, newExecId, cacheData, 2)
-							if err != nil {
-								log.Printf("[WARNING] Failed setting cache for skipped action %s: %s", newExecId, err)
-							} else {
-								//log.Printf("\n\n[DEBUG] Adding %s to cache. Name: %s\n\n", newExecId, action.Name)
-							}
-						} else {
-							//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
-							//var visited []string
-							//var executed []string
-							//var nextActions []string
-						}
-					}
-				}
-
-			//log.Printf("Append skipped results: %s", appendBadResults)
-			if len(appendResults) > 0 {
-				dbSave = true
-				for _, res := range appendResults {
-					workflowExecution.Results = append(workflowExecution.Results, res)
-				}
-			}
-		*/
 	}
 
 	// Related to notifications
@@ -10401,32 +10109,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				break
 			}
 
-			// FIXME: Check if ALL parents are skipped or if its just one. Otherwise execute it
-			//if result.Status == "SKIPPED" {
-			//	skippedNodes = true
-
-			//	// Checks if all parents are skipped or failed. Otherwise removes them from the results
-			//	for _, branch := range workflowExecution.Workflow.Branches {
-			//		if branch.DestinationID == result.Action.ID {
-			//			for _, subresult := range workflowExecution.Results {
-			//				if subresult.Action.ID == branch.SourceID {
-			//					if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
-			//						//log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
-			//						//log.Printf("Should remove resultIndex: %d", resultIndex)
-			//						finished = false
-			//						break
-			//					}
-			//				}
-			//			}
-			//		}
-
-			//		if !finished {
-			//			break
-			//		}
-			//	}
-			//}
-
-			lastResult = result.Result
+			if result.Status == "SUCCESS" {
+				lastResult = result.Result
+			}
 		}
 
 		//log.Printf("[debug] Finished? %s", finished)
@@ -10667,153 +10352,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	// Should only apply a few seconds after execution, otherwise it's bascially spam.
-	//log.Printf("Timestamps: %d vs now: %d", workflowExecution.StartedAt, time.Now().Unix())
-
-	// FIXME: May be better to do this by rerunning the workflow
-	// after 20 seconds to re-check it
-	// Don't want to run from the get-go
-
-	/*
-		if time.Now().Unix()-workflowExecution.StartedAt > 5 {
-			_, _, _, _, _, newExecuted, _, _ := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
-			foundNotExecuted := []string{}
-			for _, executedItem := range newExecuted {
-				if executedItem == actionResult.Action.ID {
-					continue
-				}
-
-				found := false
-				for _, result := range workflowExecution.Results {
-					if result.Action.ID == executedItem {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					foundNotExecuted = append(foundNotExecuted, executedItem)
-				}
-			}
-
-			if len(foundNotExecuted) > 0 {
-				// Running them right away?
-				validateFinishedExecution(ctx, workflowExecution, foundNotExecuted, retries)
-			} else {
-				//log.Printf("\n\n[WARNING] Rerunning checks for whether the execution is done at all.\n\n")
-
-				// FIXME: Doesn't take into accoutn subflows and user input trigger
-				allActions := workflowExecution.Workflow.Actions
-				for _, trigger := range workflowExecution.Workflow.Triggers {
-					//log.Printf("Appname trigger (0): %s", trigger.AppName)
-					if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
-						allActions = append(allActions, Action{
-							ID:      trigger.ID,
-							Name:    trigger.Name,
-							AppName: trigger.AppName,
-						})
-					}
-				}
-
-				for _, action := range allActions {
-					found := false
-					for _, result := range workflowExecution.Results {
-						if result.Action.ID == action.ID {
-							found = true
-							break
-						}
-					}
-
-					if found {
-						continue
-					}
-
-					//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
-					cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
-					cache, err := GetCache(ctx, cacheId)
-					if err != nil {
-						//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
-						continue
-					}
-
-					actionResult := ActionResult{}
-					cacheData := []byte(cache.([]uint8))
-
-					// Just ensuring the data is good
-					err = json.Unmarshal(cacheData, &actionResult)
-					if err != nil {
-						log.Printf("[WARNING] Failed unmarshal in fix exec %s (2): %s", cacheId, err)
-						continue
-					}
-
-					log.Printf("\n\n[DEBUG] Should rerun (1)? %s (%s - %s)\n\n", action.Label, action.Name, action.ID)
-
-					// If reruns, make sure it waits a bit for the next executions?
-					// This may cause one action that actually finished to get its result sent AFTER the next one, leading to missing information in subsequent nodes.
-					if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-
-						setExecVar := true
-						//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %s", actionResult.Result)
-						if strings.Contains(actionResult.Result, "\"success\":") {
-							type SubflowMapping struct {
-								Success bool `json:"success"`
-							}
-
-							var subflowData SubflowMapping
-							err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
-							if err != nil {
-								log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
-								setExecVar = false
-							} else {
-								if subflowData.Success == false {
-									setExecVar = false
-								}
-							}
-						}
-
-						if len(actionResult.Result) == 0 {
-							setExecVar = false
-						}
-
-						if setExecVar {
-							log.Printf("[DEBUG] Updating exec variable %s with new value of length %d (1)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
-
-							if len(workflowExecution.Results) > 0 {
-								lastResult := workflowExecution.Results[len(workflowExecution.Results)-1].Result
-								_ = lastResult
-								//log.Printf("LAST: %s", lastResult)
-							}
-
-							actionResult.Action.ExecutionVariable.Value = actionResult.Result
-
-							foundIndex := -1
-							for i, executionVariable := range workflowExecution.ExecutionVariables {
-								if executionVariable.Name == actionResult.Action.ExecutionVariable.Name {
-									foundIndex = i
-									break
-								}
-							}
-
-							if foundIndex >= 0 {
-								workflowExecution.ExecutionVariables[foundIndex] = actionResult.Action.ExecutionVariable
-							} else {
-								workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
-							}
-						} else {
-							log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
-						}
-					}
-
-					log.Printf("\n\n[INFO] Should rerun but is skipping as caching is waaay better!!!\n\n")
-					//workflowExecution.Results = append(workflowExecution.Results, actionResult)
-					if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-						go ResendActionResult(cacheData, 0)
-					} else {
-						workflowExecution.Results = append(workflowExecution.Results, actionResult)
-					}
-				}
-			}
-		}
-	*/
 
 	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
