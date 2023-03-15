@@ -3905,7 +3905,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	tmpworkflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting the workflow locally (save workflow): %s", err)
+		log.Printf("[WARNING] Failed getting the workflow %s locally (save workflow): %s", fileId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -4587,7 +4587,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				trigger.Status = "stopped"
 			}
 		} else if trigger.TriggerType == "SUBFLOW" {
-			for paramIndex, param := range trigger.Parameters {
+			for _, param := range trigger.Parameters {
 				if param.Name == "workflow" {
 					// Validate workflow exists
 					_, err := GetWorkflow(ctx, param.Value)
@@ -4597,8 +4597,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 							workflow.Errors = append(workflow.Errors, parsedError)
 						}
 
-						log.Printf("[INFO] Couldn't find subflow %s for workflow %s (%s). Setting to self as failover.", param.Value, workflow.Name, workflow.ID)
-						trigger.Parameters[paramIndex].Value = workflow.ID
+						log.Printf("[ERROR] Couldn't find subflow %s for workflow %s (%s). NOT setting to self as failover for now, and trusting authentication system instead.", param.Value, workflow.Name, workflow.ID)
+						//trigger.Parameters[paramIndex].Value = workflow.ID
 					}
 				}
 
@@ -7650,7 +7650,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			result.Result = "Aborted because of error in another node (1)"
 		}
 
-		if len(result.Result) > 0 {
+		if len(result.Result) > 0 && result.Status == "SUCCESS" {
 			lastResult = result.Result
 		}
 
@@ -12326,7 +12326,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		}
 
 		if param.Required && len(param.Value) == 0 {
-			//log.Printf("Param: %s", param)
 
 			if param.Name == "username_basic" {
 				param.Name = "username"
@@ -14475,7 +14474,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if len(curAuth.Id) == 0 {
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Auth ID %s doesn't exist", action.AuthenticationId), errors.New(fmt.Sprintf("Auth ID %s doesn't exist", action.AuthenticationId))
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName))
 			}
 
 			if curAuth.Encrypted {
@@ -14640,7 +14639,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				for _, param := range action.Parameters {
-					//log.Printf("Param: %s", param)
 					if param.Configuration {
 						continue
 					}
@@ -14763,8 +14761,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	// Not necessary with comments at all
 	workflowExecution.Workflow.Comments = []Comment{}
-	removeTriggers := []string{}
-	for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
+	for _, trigger := range workflowExecution.Workflow.Triggers {
 		//log.Printf("[INFO] ID: %s vs %s", trigger.ID, workflowExecution.Start)
 		if trigger.ID == workflowExecution.Start {
 			if trigger.AppName == "User Input" {
@@ -14814,98 +14811,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			} else {
 				// Replaces trigger with the subflow
-				//if trigger.AppName == "Shuffle Workflow" {
-				//	replaceActions := false
-				//	workflowAction := ""
-				//	for _, param := range trigger.Parameters {
-				//		if param.Name == "argument" && !strings.Contains(param.Value, ".#") {
-				//			replaceActions = true
-				//		}
 
-				//		if param.Name == "startnode" {
-				//			workflowAction = param.Value
-				//		}
-				//	}
-
-				//	if replaceActions {
-				//		replacementNodes, newBranches, lastnode := GetReplacementNodes(ctx, workflowExecution, trigger, trigger.Label)
-				//		log.Printf("REPLACEMENTS: %d, %d", len(replacementNodes), len(newBranches))
-				//		if len(replacementNodes) > 0 {
-				//			for _, action := range replacementNodes {
-				//				found := false
-
-				//				for subActionIndex, subaction := range newActions {
-				//					if subaction.ID == action.ID {
-				//						found = true
-				//						//newActions[subActionIndex].Name = action.Name
-				//						newActions[subActionIndex].Label = action.Label
-				//						break
-				//					}
-				//				}
-
-				//				if !found {
-				//					action.SubAction = true
-				//					newActions = append(newActions, action)
-				//				}
-
-				//				// Check if it's already set to have a value
-				//				for resultIndex, result := range defaultResults {
-				//					if result.Action.ID == action.ID {
-				//						defaultResults = append(defaultResults[:resultIndex], defaultResults[resultIndex+1:]...)
-				//						break
-				//					}
-				//				}
-				//			}
-
-				//			for _, branch := range newBranches {
-				//				workflowExecution.Workflow.Branches = append(workflowExecution.Workflow.Branches, branch)
-				//			}
-
-				//			// Append branches:
-				//			// parent -> new inner node (FIRST one)
-				//			for branchIndex, branch := range workflowExecution.Workflow.Branches {
-				//				if branch.DestinationID == trigger.ID {
-				//					log.Printf("REPLACE DESTINATION WITH %s!!", workflowAction)
-				//					workflowExecution.Workflow.Branches[branchIndex].DestinationID = workflowAction
-				//				}
-
-				//				if branch.SourceID == trigger.ID {
-				//					log.Printf("REPLACE SOURCE WITH LASTNODE %s!!", lastnode)
-				//					workflowExecution.Workflow.Branches[branchIndex].SourceID = lastnode
-				//				}
-				//			}
-
-				//			// Remove the trigger
-				//			removeTriggers = append(removeTriggers, workflowExecution.Workflow.Triggers[triggerIndex].ID)
-				//		}
-
-				//		log.Printf("NEW ACTION LENGTH %d, RESULT: %d, Triggers: %d, BRANCHES: %d", len(newActions), len(defaultResults), len(workflowExecution.Workflow.Triggers), len(workflowExecution.Workflow.Branches))
-				//	}
-				//}
-				_ = triggerIndex
 			}
 		}
 	}
-
-	//newTriggers := []Trigger{}
-	//for _, trigger := range workflowExecution.Workflow.Triggers {
-	//	found := false
-	//	for _, triggerId := range removeTriggers {
-	//		if trigger.ID == triggerId {
-	//			found = true
-	//			break
-	//		}
-	//	}
-
-	//	if found {
-	//		log.Printf("[WARNING] Removed trigger %s during execution", trigger.ID)
-	//		continue
-	//	}
-
-	//	newTriggers = append(newTriggers, trigger)
-	//}
-	//workflowExecution.Workflow.Triggers = newTriggers
-	_ = removeTriggers
 
 	if !startFound {
 		if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
@@ -16859,8 +16768,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				for _, parameter := range trigger.Parameters {
 					parameter.Variant = "STATIC_VALUE"
 					action.Parameters = append(action.Parameters, parameter)
-
-					log.Printf("Param: %#v -> %s", parameter.Name, parameter.Value)
 				}
 
 				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
