@@ -682,7 +682,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
 			dbSave = true
 		} else {
-			//log.Printf("\n\n\n[INFO] Set cache for %s with length %d", cacheKey, len(executionData))
 
 		}
 	} else {
@@ -3608,8 +3607,6 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		if err != nil {
 			log.Printf("[WARNING] Failed updating get app auth cache: %s", err)
 		}
-
-		//log.Printf("[DEBUG] Set cache for app auth %s with length %d", cacheKey, len(allworkflowappAuths))
 	}
 
 	//for _, env := range allworkflowappAuths {
@@ -3779,8 +3776,6 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		if err != nil {
 			log.Printf("[WARNING] Failed updating environment cache: %s", err)
 		}
-
-		log.Printf("[DEBUG] Set cache for environment %s", cacheKey)
 	}
 
 	return environments, nil
@@ -3796,7 +3791,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return GetAllWorkflowApps(ctx, 1000, 0)
 	}
 
-	log.Printf("[AUDIT] Getting apps for user %s with active org %s", user.Username, user.ActiveOrg.Id)
+	log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
 	allApps := []WorkflowApp{}
 	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
@@ -4497,13 +4492,11 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 	nameKey := fmt.Sprintf("workflowqueue-%s", id)
 	executions := []ExecutionRequest{}
 
-	amount := limit
-	q := datastore.NewQuery(nameKey).Limit(amount)
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
-			"size": amount,
+			"size": limit,
 			"sort": map[string]interface{}{
 				"priority": map[string]interface{}{
 					"order": "desc",
@@ -4533,7 +4526,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 		if res.StatusCode == 400 {
 			query = map[string]interface{}{
 				"from": 0,
-				"size": amount,
+				"size": limit,
 			}
 
 			if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -4597,9 +4590,15 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 			executions = append(executions, hit.Source)
 		}
 	} else {
+		//log.Printf("[DEBUG] Checking jobs from queue %s", nameKey)
+		//q := datastore.NewQuery(nameKey).Limit(limit)
+		q := datastore.NewQuery("workflowqueue-new-environment-for-shuffle_2e7b6a08-b63b-4fc2-bd70-718091509db1").Limit(limit)
 		_, err := project.Dbclient.GetAll(ctx, q, &executions)
 		if err != nil {
-			return ExecutionRequestWrapper{}, err
+			log.Printf("[WARNING] Error getting workflow queue: %s", err)
+			return ExecutionRequestWrapper{
+				Data: executions,
+			}, err
 		}
 	}
 

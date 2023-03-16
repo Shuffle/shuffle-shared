@@ -7681,6 +7681,22 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 	reason, reasonok := request.URL.Query()["reason"]
 	if reasonok {
 		parsedReason = reason[0]
+
+		// Custom reason handler for weird inputs
+		if strings.Contains(parsedReason, "manifest for registry") {
+			foundImageSplit := strings.Split(parsedReason, " ")
+			foundImage := ""
+			if len(foundImageSplit) > 7 {
+				foundImage = foundImageSplit[6]
+
+				foundImageSplit = strings.Split(foundImageSplit[6], ":")
+				if len(foundImageSplit) > 1 {
+					foundImage = foundImageSplit[1]
+				}
+			}
+
+			parsedReason = fmt.Sprintf("Couldn't find the Docker image %s. Did you activate the app?", foundImage)
+		}
 	}
 
 	returnData := SubflowData{
@@ -10352,7 +10368,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	// Should only apply a few seconds after execution, otherwise it's bascially spam.
-
 	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
 	}
@@ -14472,9 +14487,18 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
 	}
 
-	finished := ValidateFinished(ctx, 0, workflowExecution)
+	extra := 0
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+			continue
+		}
+
+		extra += 1
+	}
+
+	finished := ValidateFinished(ctx, extra, workflowExecution)
 	if finished {
-		log.Printf("[INFO] Already workflow already finished.")
+		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
 	}
 
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil

@@ -3202,3 +3202,7 @@ type SingleResult struct {
 	Result        string   `json:"result"`
 	Errors        []string `json:"errors"`
 }
+
+type DockerRequestCheck struct {
+	Name string `datastore:"name" json:"name" yaml:"name"`
+}
