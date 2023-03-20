@@ -2439,7 +2439,7 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	return nil
 }
 
-func GetTutorials(org Org, updateOrg bool) *Org {
+func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	log.Printf("[DEBUG] Getting init tutorials for org %s (%s)", org.Name, org.Id)
 
 	allSteps := []Tutorial{
@@ -2522,7 +2522,6 @@ func GetTutorials(org Org, updateOrg bool) *Org {
 	}
 
 	selectedUser := User{}
-	ctx := context.Background()
 	for _, inputUser := range org.Users {
 		user, err := GetUser(ctx, inputUser.Id)
 		if user.Role == "admin" && user.ActiveOrg.Id == org.Id {

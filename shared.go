@@ -7288,7 +7288,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role != "admin" {
 		log.Printf("[WARNING] Not admin: %s (%s).", user.Username, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
 	}
@@ -7365,15 +7365,15 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound {
-		log.Printf("User %s doesn't exist in organization for edit %s", user.Id, org.Id)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] User %s doesn't exist in organization for edit %s", user.Id, org.Id)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if !admin {
-		log.Printf("User %s doesn't have edit rights to %s", user.Id, org.Id)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] User %s doesn't have edit rights to %s", user.Id, org.Id)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7514,7 +7514,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	GetTutorials(*org, true)
+	GetTutorials(ctx, *org, true)
 
 	log.Printf("[INFO] Successfully updated org %s (%s)", org.Name, org.Id)
 	resp.WriteHeader(200)
