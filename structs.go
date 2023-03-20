@@ -640,6 +640,7 @@ type OrgMini struct {
 	CreatorOrg string     `json:"creator_org" datastore:"creator_org"`
 	Image      string     `json:"image" datastore:"image,noindex"`
 	ChildOrgs  []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
+	RegionUrl  string     `json:"region_url" datastore:"region_url"`
 }
 
 type Priority struct {
@@ -1222,7 +1223,6 @@ type AlgoliaSearchApp struct {
 	ObjectID     string   `json:"objectID"`
 	Actions      int      `json:"actions"`
 	Tags         []string `json:"tags"`
-	Categories   []string `json:"categories"`
 	AccessibleBy []string `json:"accessible_by"`
 	ImageUrl     string   `json:"image_url"`
 	TimeEdited   int64    `json:"time_edited"`
@@ -1231,6 +1231,8 @@ type AlgoliaSearchApp struct {
 	Creator      string   `json:"creator"`
 	AppVersion   string   `json:"app_version"`
 	Priority     int      `json:"priority"`
+	Categories   []string `json:"categories"`
+	ActionLabels []string `json:"action_labels"`
 }
 
 type ExecutionStruct struct {
@@ -3205,4 +3207,23 @@ type SingleResult struct {
 
 type DockerRequestCheck struct {
 	Name string `datastore:"name" json:"name" yaml:"name"`
+}
+
+type Recommendations struct {
+	AppName    string `json:"app_name"`
+	AppVersion string `json:"app_version"`
+	AppAction  string `json:"app_action"`
+	AppId      string `json:"app_id"`
+	LargeImage string `json:"large_image"`
+}
+
+type RecommendAction struct {
+	AppName         string            `json:"app_name"`
+	ActionId        string            `json:"action_id"`
+	Recommendations []Recommendations `json:"recommendations"`
+}
+
+type ActionRecommendations struct {
+	Success bool              `json:"success"`
+	Actions []RecommendAction `json:"actions"`
 }

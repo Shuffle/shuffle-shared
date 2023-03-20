@@ -1294,6 +1294,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
 		log.Printf("[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
+
 		if err != nil || len(workflowApp.Actions) == 0 {
 			log.Printf("[WARNING] Failed getting app in GetApp with name %s and ID %s. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
@@ -3796,7 +3797,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
 	// 1. Caching apps locally
-	cacheKey := fmt.Sprintf("apps_%s", user.Id)
+	// Make it based on org and not user :)
+	cacheKey := fmt.Sprintf("apps_%s", user.ActiveOrg.Id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -4124,6 +4126,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		allApps = append(allApps, newApps...)
 	}
 
+	// Also prioritize most used ones from app-framework on top?
+	slice.Sort(allApps[:], func(i, j int) bool {
+		return allApps[i].Edited > allApps[j].Edited
+	})
+
 	if len(allApps) > 0 {
 		// Finds references
 		allApps = findReferenceAppDocs(ctx, allApps)
@@ -4439,10 +4446,11 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 		}
 	}
 
-	if project.CacheDb {
-		//log.Printf("[INFO] Setting %d apps in cache for 10 minutes for %s", len(allApps), cacheKey)
+	slice.Sort(allApps[:], func(i, j int) bool {
+		return allApps[i].Edited > allApps[j].Edited
+	})
 
-		//requestCache.Set(cacheKey, &apps, cache.DefaultExpiration)
+	if project.CacheDb {
 		data, err := json.Marshal(allApps)
 		if err == nil {
 			err = SetCache(ctx, cacheKey, data, 30)

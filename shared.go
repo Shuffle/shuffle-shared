@@ -1081,7 +1081,8 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": false, "reason": "Successfully logged out"}`))
 }
 
-// Basically a search for apps that aren't activated yet
+// A search for apps based on name and such
+// This was before Algolia
 func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1089,7 +1090,6 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just need to be logged in
-	// FIXME - should have some permissions?
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in set new app: %s", err)
@@ -1098,7 +1098,6 @@ func GetSpecificApps(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME - shouldn't return everything :)
 	// Used for searching
 	returnData := fmt.Sprintf(`{"success": true, "reason": []}`)
 	resp.WriteHeader(200)
@@ -17327,12 +17326,29 @@ func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
 
 }
 
-func RecommendAction(resp http.ResponseWriter, request *http.Request) {
+// Hard-coded to test out how we can generate next steps in workflows
+// This could actually work when mapped back to usecases & with LLMs
 
+// Mainly tested with Outlook Office365 for now
+// Should be made based on:
+// - Usecases and their structure
+// - Active Apps (framework~)
+// - LLMs
+func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in get action recommendations: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	_ = user
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -17346,41 +17362,30 @@ func RecommendAction(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed unmarshalling workflow: %s", workflowerr)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
-	type Recommendations struct {
-		AppName   string `json:"app_name"`
-		AppAction string `json:"app_action"`
-	}
-
-	type Action struct {
-		AppName         string            `json:"app_name"`
-		ActionId        string            `json:"action_id"`
-		Recommendations []Recommendations `json:"recommendations"`
-	}
-
-	type RecommendAction struct {
-		Actions []Action `json:"actions"`
-	}
-
-	var recommendAction RecommendAction
+	var recommendAction ActionRecommendations
 	if len(workflow.Actions) > 0 {
 
 		for key, _ := range workflow.Actions {
 			var recommendations []Recommendations
-			var action Action
+			var action RecommendAction
 
 			app := workflow.Actions[key].AppName + "_" + workflow.Actions[key].AppVersion
 			if workflow.Actions[key].AppName == "Outlook_Office365" {
 				if workflow.Actions[key].Name == "get_emails" {
 					action.AppName = app
 					action.ActionId = workflow.Actions[key].ID
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read"})
-					recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_list_attachments"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_raw_email_as_file"})
+
+					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
+					recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list", AppVersion: "1.2.0", AppId: "3e2bdf9d5069fe3f4746c29d68785a6a"})
+					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_list_attachments", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
+					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_raw_email_as_file", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
+
 					action.Recommendations = recommendations
 					recommendAction.Actions = append(recommendAction.Actions, action)
+
 				} else if workflow.Actions[key].Name == "get_raw_email_as_file" {
 					action.AppName = app
 					action.ActionId = workflow.Actions[key].ID
@@ -17463,9 +17468,13 @@ func RecommendAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	recommendAction.Success = true
 	newjson, err := json.Marshal(recommendAction)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal recommendedAction: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	resp.WriteHeader(200)
