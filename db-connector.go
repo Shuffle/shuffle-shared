@@ -2381,7 +2381,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 	curOrg.Users = newUsers
 	if len(curOrg.Tutorials) == 0 {
-		curOrg = GetTutorials(*curOrg, true)
+		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
 
 	if project.CacheDb {
@@ -2591,7 +2591,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 
 	data.Users = newUsers
 	if len(data.Tutorials) == 0 {
-		data = *GetTutorials(data, false)
+		data = *GetTutorials(ctx, data, false)
 	}
 
 	// clear session_token and API_token for user
