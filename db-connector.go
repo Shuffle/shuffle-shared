@@ -466,6 +466,10 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 
 // FIXME: Add the option to set cache that expires at longer intervals
 func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
+	if len(name) == 0 {
+		log.Printf("[WARNING] Key '%s' is empty with value length %d and expiration %d. Skipping cache.", name, len(data), expiration)
+		return nil
+	}
 	//log.Printf("DATA SIZE: %d", len(data))
 	// Maxsize ish~
 
@@ -520,7 +524,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-						log.Printf("[WARNING] Failed setting cache for %s (1): %s", keyname, err)
+						log.Printf("[WARNING] Failed setting cache for '%s' (1): %s", keyname, err)
 					}
 					break
 				} else {
@@ -561,7 +565,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-					log.Printf("[WARNING] Failed setting cache for %s (2): %s", name, err)
+					log.Printf("[WARNING] Failed setting cache for key '%s' (2): %s", name, err)
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
 				}
@@ -648,7 +652,8 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for setapp: %s", err)
+			log.Printf("[WARNING] Failed setting cache for 'setapp' key %s: %s", cacheKey, err)
+
 		}
 
 		DeleteCache(ctx, fmt.Sprintf("openapi3_%s", id))
@@ -1222,7 +1227,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for get cloud app cache: %s", err)
+			log.Printf("[WARNING] Failed setting cache for get cloud app cache key '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -1334,7 +1339,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getapp: %s", err)
+			log.Printf("[WARNING] Failed setting cache for getapp key '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -1368,7 +1373,7 @@ func SetSubscriptionRecipient(ctx context.Context, sub SubscriptionRecipient, id
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for setworkflow: %s", err)
+			log.Printf("[WARNING] Failed setting cache for setworkflow key '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -1443,7 +1448,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getsub: %s", err)
+			log.Printf("[WARNING] Failed setting cache for getsub key '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -1609,7 +1614,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for find file md5: %s", err)
+			log.Printf("[WARNING] Failed setting cache for find file md5 %s: %s", cacheKey, err)
 		}
 	}
 
@@ -1759,7 +1764,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getenv: %s", err)
+			log.Printf("[WARNING] Failed setting cache for getenv '%s: %s", cacheKey, err)
 		}
 	}
 
@@ -1833,7 +1838,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -1907,7 +1912,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -2637,7 +2642,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, neworg, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for org: %s", err)
+			log.Printf("[WARNING] Failed setting cache for org '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -4857,7 +4862,7 @@ func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, op
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -4899,7 +4904,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for getworkflow: %s", err)
+			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -5366,7 +5371,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 
 		err = SetCache(ctx, cacheKey, hookData, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for gethook: %s", err)
+			log.Printf("[WARNING] Failed setting cache for gethook '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -5402,7 +5407,7 @@ func SetHook(ctx context.Context, hook Hook) error {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, hookId)
 		err = SetCache(ctx, cacheKey, hookData, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for hook: %s", err)
+			log.Printf("[WARNING] Failed setting cache for hook key '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -7051,7 +7056,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[ERROR] Failed setting cache for set cache key: %s", err)
+			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
 		}
 	}
 

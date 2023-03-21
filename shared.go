@@ -13595,7 +13595,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if len(string(body)) < 50 {
-			log.Printf("[DEBUG] Body: %s", string(body))
+			log.Printf("[DEBUG][%s] Body: %s", workflowExecution.ExecutionId, string(body))
+		} else {
+			// Here for debug purposes
+			log.Printf("[DEBUG][%s] Body len: %d", workflowExecution.ExecutionId, len(string(body)))
 		}
 
 		var execution ExecutionRequest
@@ -14071,7 +14074,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if setField {
 					curAuth.Fields = newFields
 
-					log.Printf("[DEBUG] Outer decryption debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+					//log.Printf("[DEBUG] Outer decryption debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
 				} else {
 					log.Printf("[ERROR] Outer decryption debugging for %s. Auth: %s. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
 
@@ -14538,7 +14541,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		ctx := GetContext(request)
 		workflowExecution := &WorkflowExecution{}
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
-		if sourceExecutionOk {
+		if sourceExecutionOk && len(sourceExecution) > 0 {
 			//log.Printf("[DEBUG] Got source exec %s", sourceExecution)
 			newExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
 			if err != nil {
