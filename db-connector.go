@@ -1486,7 +1486,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			"size": 1000,
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
-					"should": []map[string]interface{}{
+					"must": []map[string]interface{}{
 						map[string]interface{}{
 							"match": map[string]interface{}{
 								"md5_sum": md5,
@@ -1554,19 +1554,18 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			return files, err
 		}
 
-		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 && wrapped.Hits.Hits[0].Source.Status == "active" {
+		log.Printf("[DEBUG] Found %d similar files based on md5: %s", len(wrapped.Hits.Hits), md5)
+		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 && wrapped.Hits.Hits[0].Source.Status == "active" && wrapped.Hits.Hits[0].Source.Md5sum == md5 {
 			files = append(files, wrapped.Hits.Hits[0].Source)
 		} else {
 			//file = []Environment{}
 			for _, hit := range wrapped.Hits.Hits {
-				//log.Printf("[DEBUG] Hit: %s", hit)
-				//if hit.ID == id {
-				//	env = &hit.Source
-				//	break
-				//}
+				if hit.Source.Md5sum != md5 {
+					continue
+				}
+
 				if hit.Source.OrgId == orgId && hit.Source.Status == "active" {
 					files = append(files, hit.Source)
-					break
 				}
 
 				//environments = append(environments, hit.Source)
