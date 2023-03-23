@@ -3231,7 +3231,10 @@ func GetGmailFolders(client *http.Client) (OutlookFolders, error) {
 
 func getOutlookFolders(client *http.Client) (OutlookFolders, error) {
 	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/users/ec03b4f2-fccf-4c35-b0eb-be85a0f5dd43/mailFolders")
-	requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/mailFolders")
+	//requestUrl := fmt.Sprintf("https://graph.microsoft.com/v1.0/me/mailFolders")
+
+	// Include hidden folders
+	requestUrl := fmt.Sprintf("https://graph.microsoft.com/beta/me/mailFolders?$top=100&$expand=childFolders")
 
 	ret, err := client.Get(requestUrl)
 	if err != nil {
