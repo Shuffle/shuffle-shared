@@ -10599,7 +10599,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to activate workflow app (shared): %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
@@ -10690,14 +10690,14 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
 				} else {
 					log.Printf("[INFO] Added public app %s (%s) to org %s (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
-					cacheKey := fmt.Sprintf("apps_%s", user.Id)
-					DeleteCache(ctx, cacheKey)
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 				}
 			}
 		}
 	} else {
 		log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -11787,7 +11787,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
-		log.Printf("[WARNING] Error getting app (execute SINGLE workflow): %s", fileId)
+		log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", fileId)
 		return workflowExecution, err
 	}
 

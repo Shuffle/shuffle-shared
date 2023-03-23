@@ -1554,7 +1554,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			return files, err
 		}
 
-		log.Printf("[DEBUG] Found %d similar files based on md5: %s", len(wrapped.Hits.Hits), md5)
 		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 && wrapped.Hits.Hits[0].Source.Status == "active" && wrapped.Hits.Hits[0].Source.Md5sum == md5 {
 			files = append(files, wrapped.Hits.Hits[0].Source)
 		} else {
