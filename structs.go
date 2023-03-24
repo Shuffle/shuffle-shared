@@ -3227,3 +3227,24 @@ type ActionRecommendations struct {
 	Success bool              `json:"success"`
 	Actions []RecommendAction `json:"actions"`
 }
+
+type LabeledAction struct {
+	ActionName   string `json:"action_name"`
+	Label        string `json:"label"`
+	SuggestionID string `json:"suggestion_id"`
+	SuggestionBy string `json:"suggestion_by"`
+}
+
+type AppData struct {
+	AppName        string          `json:"app_name"`
+	AppId          string          `json:"app_id"`
+	AppVersion     string          `json:"app_version"`
+	Categories     []string        `json:"categories"`
+	ImageURL       string          `json:"image_url"`
+	LabeledActions []LabeledAction `json:"labeled_actions"`
+}
+
+type ActionLabel struct {
+	Creator   string    `json:"creator"`
+	LabelsFor []AppData `json:"labels_for"`
+}
