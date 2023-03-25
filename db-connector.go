@@ -8025,3 +8025,41 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 	return false
 }
+
+func SetSuggestion(ctx context.Context, suggestion Suggestion) error {
+	nameKey := "Suggestions"
+	timeNow := int64(time.Now().Unix())
+	suggestion.Edited = timeNow
+	if suggestion.Created == 0 {
+		suggestion.Created = timeNow
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(suggestion)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set suggestion: %s", err)
+		return nil
+	}
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, suggestion.SuggestionID, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, suggestion.SuggestionID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &suggestion); err != nil {
+			log.Printf("[WARNING] Error adding suggestion: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, suggestion.SuggestionID)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for set suggestion '%s': %s", cacheKey, err)
+		}
+	}
+
+	return nil
+}

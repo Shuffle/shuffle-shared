@@ -8437,6 +8437,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
 	err = checkUsername(data.Username)
 	if err != nil {
+		log.Printf("[INFO] Username is too short or bad for %s: %s", data.Username, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
@@ -8477,21 +8478,22 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	/*
-		// FIXME: Reenable activation?
-			if !userdata.Active {
-				log.Printf("[DEBUG] %s is not active, but tried to login. Error: %v", data.Username, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "This user is deactivated"}`))
-				return
-			}
+			// FIXME: Reenable activation?
+		if project.Environment == "cloud" && !userdata.Active {
+			log.Printf("[DEBUG] %s is not active, but tried to login. Error: %v", data.Username, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "This user is deactivated"}`))
+			return
+		}
 	*/
 
 	updateUser := false
 	if project.Environment == "cloud" {
-		if strings.HasSuffix(userdata.Username, "@shuffler.io") {
+		if strings.HasSuffix(strings.ToLower(userdata.Username), "@shuffler.io") {
 			if !userdata.Active {
+				log.Printf("[INFO] User %s with @shuffler suffix is not active.", userdata.Username)
 				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "You need to activate your account before logging in"}`)))
+				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "error: You need to activate your account before logging in"}`)))
 				return
 			}
 		}
@@ -8525,7 +8527,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 			if len(org.SSOConfig.SSOEntrypoint) > 0 {
 				log.Printf("[DEBUG] Should redirect user %s in org %s to SSO login at %s", userdata.Username, userdata.ActiveOrg.Id, org.SSOConfig.SSOEntrypoint)
-				// https://trial-7276434.okta.com/app/trial-7276434_shuffle_1/exk10dgh8tZNCaXGC697/sso/saml
 
 				// Check if the user has other orgs that can be swapped to - if so SWAP
 				userDomain := strings.Split(userdata.Username, "@")

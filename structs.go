@@ -3228,23 +3228,25 @@ type ActionRecommendations struct {
 	Actions []RecommendAction `json:"actions"`
 }
 
-type LabeledAction struct {
-	ActionName   string `json:"action_name"`
-	Label        string `json:"label"`
-	SuggestionID string `json:"suggestion_id"`
-	SuggestionBy string `json:"suggestion_by"`
+type AppLabelData struct {
+	AppName    string   `json:"app_name" datastore:"app_name"`
+	AppId      string   `json:"app_id" datastore:"app_id"`
+	AppVersion string   `json:"app_version" datastore:"app_version"`
+	Categories []string `json:"categories" datastore:"categories"`
+	ImageURL   string   `json:"image_url" datastore:"image_url"`
+	//LabeledActions []LabeledAction `json:"labeled_actions" datastore:"labeled_actions"`
+
+	ActionName string `json:"action_name" datastore:"action_name"`
+	Label      string `json:"label" datastore:"label"`
 }
 
-type AppData struct {
-	AppName        string          `json:"app_name"`
-	AppId          string          `json:"app_id"`
-	AppVersion     string          `json:"app_version"`
-	Categories     []string        `json:"categories"`
-	ImageURL       string          `json:"image_url"`
-	LabeledActions []LabeledAction `json:"labeled_actions"`
-}
+type Suggestion struct {
+	Creator string       `json:"creator" datastore:"creator"`
+	Type    string       `json:"type" datastore:"type"`
+	Label   AppLabelData `json:"label" datastore:"label"`
+	Created int64        `json:"created" datastore:"created"`
+	Edited  int64        `json:"edited" datastore:"edited"`
 
-type ActionLabel struct {
-	Creator   string    `json:"creator"`
-	LabelsFor []AppData `json:"labels_for"`
+	SuggestionID string `json:"suggestion_id" datastore:"suggestion_id"`
+	SuggestionBy string `json:"suggestion_by" datastore:"suggestion_by"`
 }
