@@ -3085,7 +3085,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 			apps = append(apps, hit.Source)
 		}
 	} else {
-		log.Printf("Looking for name %s in %s", appName, nameKey)
+		//log.Printf("Looking for name %s in %s", appName, nameKey)
 		q := datastore.NewQuery(nameKey).Filter("name =", appName)
 		_, err := project.Dbclient.GetAll(ctx, q, &apps)
 		if err != nil && len(apps) == 0 {
@@ -7801,7 +7801,7 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 	stats := []CreatorStats{}
 	nameKey := "creator_stats"
 
-	log.Printf("[INFO] Looking for name %s", creatorName)
+	log.Printf("[AUDIT] Looking for creator stats for name %s", creatorName)
 
 	q := datastore.NewQuery(nameKey).Filter("creator =", creatorName).Limit(1)
 	_, err := project.Dbclient.GetAll(ctx, q, &stats)
@@ -8062,4 +8062,80 @@ func SetSuggestion(ctx context.Context, suggestion Suggestion) error {
 	}
 
 	return nil
+}
+
+func GetSuggestions(ctx context.Context, creatorname string) ([]Suggestion, error) {
+	var suggestions []Suggestion
+
+	nameKey := "Suggestions"
+	if project.DbType == "elasticsearch" {
+		// Not implemented
+		return []Suggestion{}, nil
+	} else {
+		//log.Printf("Looking for name %s in %s", appName, nameKey)
+		q := datastore.NewQuery(nameKey).Filter("creator =", creatorname).Filter("status =", "")
+		_, err := project.Dbclient.GetAll(ctx, q, &suggestions)
+		if err != nil && len(suggestions) == 0 {
+			log.Printf("[WARNING] Failed getting suggestion for: %s. Err: %s", creatorname, err)
+			return suggestions, err
+		}
+	}
+
+	log.Printf("[INFO] Found %d suggestions for name %s in db-connector", len(suggestions), creatorname)
+
+	slice.Sort(suggestions[:], func(i, j int) bool {
+		return suggestions[i].Edited > suggestions[j].Edited
+	})
+
+	return suggestions, nil
+}
+
+func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
+	suggestion := &Suggestion{}
+	nameKey := "Suggestions"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %s", cacheData)
+			err = json.Unmarshal(cacheData, &suggestion)
+			if err == nil {
+				return suggestion, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+		}
+	}
+
+	if project.DbType == "elasticsearch" {
+		return suggestion, nil
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, suggestion); err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
+				err = nil
+			} else {
+				return suggestion, err
+			}
+		}
+	}
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for suggestion %s", cacheKey)
+		data, err := json.Marshal(suggestion)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getsuggestion: %s", err)
+			return suggestion, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getsuggestion'%s': %s", cacheKey, err)
+		}
+	}
+
+	return suggestion, nil
 }

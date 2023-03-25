@@ -3241,12 +3241,15 @@ type AppLabelData struct {
 }
 
 type Suggestion struct {
-	Creator string       `json:"creator" datastore:"creator"`
-	Type    string       `json:"type" datastore:"type"`
-	Label   AppLabelData `json:"label" datastore:"label"`
-	Created int64        `json:"created" datastore:"created"`
-	Edited  int64        `json:"edited" datastore:"edited"`
+	Creator   string       `json:"creator" datastore:"creator"`
+	CreatorId string       `json:"creator_id" datastore:"creator_id"`
+	Type      string       `json:"type" datastore:"type"`
+	Label     AppLabelData `json:"label" datastore:"label"`
+	Created   int64        `json:"created" datastore:"created"`
+	Edited    int64        `json:"edited" datastore:"edited"`
 
 	SuggestionID string `json:"suggestion_id" datastore:"suggestion_id"`
 	SuggestionBy string `json:"suggestion_by" datastore:"suggestion_by"`
+
+	Status string `json:"status" datastore:"status"`
 }
