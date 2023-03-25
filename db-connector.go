@@ -1648,7 +1648,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			"size": 1000,
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
-					"should": []map[string]interface{}{
+					"must": []map[string]interface{}{
 						map[string]interface{}{
 							"match": map[string]interface{}{
 								"Name": id,
@@ -1941,7 +1941,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			"size": 1000,
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
-					"should": []map[string]interface{}{
+					"must": []map[string]interface{}{
 						map[string]interface{}{
 							"match": map[string]interface{}{
 								"owner": user.Id,
@@ -7548,7 +7548,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) 
 			},
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
-					"should": []map[string]interface{}{
+					"must": []map[string]interface{}{
 						map[string]interface{}{
 							"match": map[string]interface{}{
 								"org_id": orgId,
