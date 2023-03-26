@@ -1221,18 +1221,20 @@ type AlgoliaSearchApp struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
 	ObjectID     string   `json:"objectID"`
-	Actions      int      `json:"actions"`
-	Tags         []string `json:"tags"`
-	AccessibleBy []string `json:"accessible_by"`
+	Creator      string   `json:"creator"`
+	AppVersion   string   `json:"app_version"`
 	ImageUrl     string   `json:"image_url"`
 	TimeEdited   int64    `json:"time_edited"`
 	Generated    bool     `json:"generated"`
 	Invalid      bool     `json:"invalid"`
-	Creator      string   `json:"creator"`
-	AppVersion   string   `json:"app_version"`
 	Priority     int      `json:"priority"`
+	Actions      int      `json:"actions"`
+	Tags         []string `json:"tags"`
+	AccessibleBy []string `json:"accessible_by"`
 	Categories   []string `json:"categories"`
 	ActionLabels []string `json:"action_labels"`
+	Triggers     []string `json:"triggers"`
+	Verified     bool     `json:"verified"`
 }
 
 type ExecutionStruct struct {
