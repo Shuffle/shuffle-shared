@@ -4600,9 +4600,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 			executions = append(executions, hit.Source)
 		}
 	} else {
-		//log.Printf("[DEBUG] Checking jobs from queue %s", nameKey)
-		//q := datastore.NewQuery(nameKey).Limit(limit)
-		q := datastore.NewQuery("workflowqueue-new-environment-for-shuffle_2e7b6a08-b63b-4fc2-bd70-718091509db1").Limit(limit)
+		q := datastore.NewQuery(nameKey).Limit(limit)
 		_, err := project.Dbclient.GetAll(ctx, q, &executions)
 		if err != nil {
 			log.Printf("[WARNING] Error getting workflow queue: %s", err)
