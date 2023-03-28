@@ -2793,7 +2793,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		for _, result := range execution.Results {
 			newParams := []WorkflowAppActionParameter{}
 			for _, param := range result.Action.Parameters {
-				//log.Printf("PARAM: %s", param)
 				if param.Configuration || strings.Contains(strings.ToLower(param.Name), "user") || strings.Contains(strings.ToLower(param.Name), "key") || strings.Contains(strings.ToLower(param.Name), "pass") {
 					param.Value = ""
 					//log.Printf("FOUND CONFIG: %s!!", param.Name)
@@ -2810,7 +2809,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		for _, action := range execution.Workflow.Actions {
 			newParams := []WorkflowAppActionParameter{}
 			for _, param := range action.Parameters {
-				//log.Printf("PARAM: %s", param)
 				if param.Configuration || strings.Contains(strings.ToLower(param.Name), "user") || strings.Contains(strings.ToLower(param.Name), "key") || strings.Contains(strings.ToLower(param.Name), "pass") {
 					param.Value = ""
 					//log.Printf("FOUND CONFIG: %s!!", param.Name)
@@ -6775,7 +6773,6 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 	dbKey := fmt.Sprintf("app_execution_values")
 	parameterNames := fmt.Sprintf("%s_%s", value.App, strings.Join(value.ParameterNames, "_"))
-	log.Printf("[INFO] PARAMNAME: %s", parameterNames)
 	if tmpData.WorkflowCheck {
 		// FIXME: Make this alphabetical
 		for _, value := range value.ParameterValues {
@@ -10208,7 +10205,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						for _, trigger := range parentExecution.Workflow.Triggers {
 							if trigger.ID == workflowExecution.ExecutionSourceNode {
 								for _, param := range trigger.Parameters {
-									//log.Printf("PARAM: %s", param)
 									if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 										isLooping = true
 										break
@@ -12433,7 +12429,6 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 							setExecution = false
 						}
 
-						//log.Printf("PARAM: %s", param)
 						if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 							isLooping = true
 						}
@@ -14513,14 +14508,113 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
 	}
 
+	// This is also handling triggers -> action translation now for subflow
 	extra := 0
+	newTriggers := []Trigger{}
 	for _, trigger := range workflowExecution.Workflow.Triggers {
 		if trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+			newTriggers = append(newTriggers, trigger)
 			continue
 		}
 
-		extra += 1
+		if trigger.TriggerType == "SUBFLOW" {
+			log.Printf("\n\n[INFO] Subflow trigger found during execution! envs: %#v \n\n", environments)
+
+			// Find branch that has the subflow as destinationID
+			foundenv := ""
+			for _, branch := range workflowExecution.Workflow.Branches {
+				if branch.DestinationID == trigger.ID {
+
+					// FIX: May not work for subflow -> subflow if they are added in opposite order or something weird
+					for _, action := range workflowExecution.Workflow.Actions {
+						if action.ID == branch.SourceID {
+							foundenv = action.Environment
+							break
+						}
+					}
+
+					if len(foundenv) > 0 {
+						break
+					}
+				}
+			}
+
+			// Backup env :>
+			if len(foundenv) == 0 && len(environments) > 0 {
+				foundenv = environments[0]
+			}
+
+			// Setting to default?
+			// environments := []string{}
+			action := GetAction(workflowExecution, trigger.ID, foundenv)
+
+			action.Label = trigger.Label
+			action.ID = trigger.ID
+			action.Name = "run_subflow"
+			action.AppName = "shuffle-subflow"
+			action.AppVersion = "1.1.0"
+
+			action.Parameters = []WorkflowAppActionParameter{}
+			for _, parameter := range trigger.Parameters {
+				parameter.Variant = "STATIC_VALUE"
+
+				if parameter.Name == "user_apikey" {
+					continue
+				}
+
+				action.Parameters = append(action.Parameters, parameter)
+			}
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "source_workflow",
+				Value: workflowExecution.Workflow.ID,
+			})
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "source_execution",
+				Value: workflowExecution.ExecutionId,
+			})
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "source_auth",
+				Value: workflowExecution.Authorization,
+			})
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "user_apikey",
+				Value: workflowExecution.Authorization,
+			})
+			log.Printf("Auth: %s", workflowExecution.Authorization)
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "source_node",
+				Value: action.ID,
+			})
+
+			backendUrl := ""
+			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+			}
+
+			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+			}
+
+			if len(backendUrl) > 0 {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:  "backend_url",
+					Value: backendUrl,
+				})
+			}
+
+			workflowExecution.Workflow.Actions = append(workflowExecution.Workflow.Actions, action)
+		} else {
+			newTriggers = append(newTriggers, trigger)
+			extra += 1
+		}
 	}
+
+	workflowExecution.Workflow.Triggers = newTriggers
 
 	finished := ValidateFinished(ctx, extra, workflowExecution)
 	if finished {
@@ -14576,6 +14670,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 			}
 
 		} else {
+			log.Printf("[AUDIT] No source_execution in test validation")
 			return false, ""
 		}
 
@@ -14590,10 +14685,11 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 			// Must origin from a parent workflow")
 
 			if sourceAuth[0] != workflowExecution.Authorization {
-				log.Printf("[WARNING] Bad authorization for workflowexecution defined.")
+				log.Printf("[AUDIT] Bad authorization for workflowexecution defined.")
 				return false, ""
 			}
 		} else {
+			log.Printf("[AUDIT] No source auth found. Bad auth.")
 			return false, ""
 		}
 
@@ -14613,12 +14709,12 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 			//}
 
 		} else {
-			//log.Printf("Did NOT get source workflow")
+			log.Printf("[AUDIT] Did NOT get source workflow in subflow execution")
 			return false, ""
 		}
 
 		if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
-			//e9274e37e53631a2321747b1be088f4d2631a6300a309eec9b4515c8528c35f4
+			log.Printf("[AUDIT] Bad org ID in workflowexecution defined.")
 			return false, ""
 		}
 
@@ -14638,7 +14734,15 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 				return true, workflowExecution.ExecutionOrg
 			}
 		}
+
+		for _, action := range workflowExecution.Workflow.Actions {
+			if sourceNode[0] == action.ID {
+				return true, workflowExecution.ExecutionOrg
+			}
+		}
 	}
+
+	log.Printf("[AUDIT] Bad auth for workflowexecution (bottom).")
 
 	return false, ""
 }
@@ -16219,7 +16323,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		// FIXME
 		// Execute, as we don't really care if env is not set? IDK
 		if action.Environment != environment { //&& action.Environment != "" {
-			//log.Printf("Action: %s", action)
 			if strings.ToLower(action.Environment) == strings.ToLower(environment) {
 				// Fixing names
 				action.Environment = environment
@@ -16343,7 +16446,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 			}
 
-			log.Printf("[DEBUG] Should execute %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
+			//log.Printf("[DEBUG] Should execute %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
 			if branchesFound == parentFinished {
 				action.Environment = environment
 				action.AppName = "shuffle-subflow"
@@ -16364,7 +16467,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						trigger = innertrigger
 						break
 					}
-
 				}
 
 				// FIXME: Add startnode from frontend
@@ -16395,19 +16497,19 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					Value: action.ID,
 				})
 
-				fakeUrl := ""
+				backendUrl := ""
 				if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-					fakeUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+					backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 				}
 
 				if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-					fakeUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+					backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 				}
 
-				if len(fakeUrl) > 0 {
+				if len(backendUrl) > 0 {
 					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 						Name:  "backend_url",
-						Value: fakeUrl,
+						Value: backendUrl,
 					})
 				}
 
@@ -16435,7 +16537,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 			}
 
-			log.Printf("[DEBUG] Should execute parent %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
+			//log.Printf("[DEBUG] Should execute parent %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
 			if branchesFound == parentFinished {
 
 				if action.ID == workflowExecution.Start {
@@ -16499,7 +16601,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					emailEnabled := false
 					subflowEnabled := false
 					for _, trigger := range trigger.Parameters {
-						//log.Printf("TRIGGER PARAM: %s", trigger)
 						if trigger.Name == "type" {
 							if strings.Contains(trigger.Value, "sms") {
 								smsEnabled = true
@@ -16561,24 +16662,24 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						Value: workflowExecution.Start,
 					})
 
-					fakeUrl := ""
+					backendUrl := ""
 					if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-						fakeUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+						backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 					}
 
 					if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-						fakeUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+						backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 					}
 
 					// Fallback
-					if len(fakeUrl) == 0 {
-						fakeUrl = "https://shuffler.io"
+					if len(backendUrl) == 0 {
+						backendUrl = "https://shuffler.io"
 					}
 
-					if len(fakeUrl) > 0 {
+					if len(backendUrl) > 0 {
 						action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 							Name:  "backend_url",
-							Value: fakeUrl,
+							Value: backendUrl,
 						})
 					}
 
@@ -16607,7 +16708,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 					/*
 						for _, trigger := range trigger.Parameters {
-							//log.Printf("TRIGGER PARAM: %s", trigger)
 							if trigger.Name == "email" {
 								itemsplit := strings.Split(trigger.Value, ",")
 								for _, mail := range itemsplit {
@@ -16692,7 +16792,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			log.Printf("[WARNING][%s] SKIP EXECUTION %s:%s with label %s", workflowExecution.ExecutionId, action.AppName, action.AppVersion, action.Label)
 			continue
 		} else {
-
 			// FIXME? This was a test to check if a result was finished or not after a certain time. Not viable for production (obv)
 
 			//time.Sleep(1 * time.Second)
