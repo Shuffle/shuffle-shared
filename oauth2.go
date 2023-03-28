@@ -3663,7 +3663,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	// Need to refresh the "code"? Is that a thing?
-	log.Printf("[INFO] Response: %#v", oauthResp)
+	//log.Printf("[INFO] Response: %#v", oauthResp)
 
 	// Cleans up the existing keys before adding new ones
 	if len(oauthResp.AccessToken) > 0 {

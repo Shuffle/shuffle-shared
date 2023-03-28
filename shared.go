@@ -4835,15 +4835,24 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	foundNodes := []string{}
 	for _, node := range allNodes {
 		for _, branch := range workflow.Branches {
-			//log.Println("branch")
-			//log.Println(node)
-			//log.Println(branch.DestinationID)
 			if node == branch.DestinationID || node == branch.SourceID {
 				foundNodes = append(foundNodes, node)
 				break
 			}
+
+			// Check if source parent
 		}
 	}
+
+	// Making sure to check if infinite loops exist
+	// This is now done during execution. Should be done on frontend & backend too
+	/*
+		for _, action := range workflow.Actions {
+			//log.Printf("[INFO] Checking childnodes for action %s (%s)", action.Label, action.ID)
+			childNodes := FindChildNodes(WorkflowExecution{Workflow: workflow}, action.ID, []string{}, []string{})
+			log.Printf("[INFO] Found %d childnodes for action %s (%s)", len(childNodes), action.Label, action.ID)
+		}
+	*/
 
 	// FIXME - append all nodes (actions, triggers etc) to one single array here
 	//log.Printf("PRE VARIABLES")
@@ -9676,7 +9685,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
 			//log.Printf("CHILD NODES: %d", len(childNodes))
-			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID)
+			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID, []string{}, []string{})
 			//log.Printf("\n\nFOUND %d CHILDNODES\n\n", len(childNodes))
 			for _, nodeId := range childNodes {
 				if nodeId == actionResult.Action.ID {
@@ -10534,7 +10543,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 // Finds the child nodes of a node in execution and returns them
 // Used if e.g. a node in a branch is exited, and all children have to be stopped
-func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string {
+func FindChildNodes(workflowExecution WorkflowExecution, nodeId string, parents, handledBranches []string) []string {
 	//log.Printf("\nNODE TO FIX: %s\n\n", nodeId)
 	allChildren := []string{nodeId}
 	//log.Printf("\n\n")
@@ -10544,10 +10553,20 @@ func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string
 	// 3. Sort it in the right order to handle merges properly
 	for _, branch := range workflowExecution.Workflow.Branches {
 		if branch.SourceID == nodeId {
+			if ArrayContains(parents, branch.DestinationID) {
+				continue
+			}
+
+			parents = append(parents, branch.SourceID)
+			if ArrayContains(handledBranches, branch.ID) {
+				continue
+			}
+
 			//log.Printf("NODE: %s, SRC: %s, CHILD: %s\n", nodeId, branch.SourceID, branch.DestinationID)
 			allChildren = append(allChildren, branch.DestinationID)
 
-			childNodes := FindChildNodes(workflowExecution, branch.DestinationID)
+			handledBranches = append(handledBranches, branch.ID)
+			childNodes := FindChildNodes(workflowExecution, branch.DestinationID, parents, handledBranches)
 			for _, bottomChild := range childNodes {
 				found := false
 
@@ -10568,6 +10587,10 @@ func FindChildNodes(workflowExecution WorkflowExecution, nodeId string) []string
 	// Remove potential duplicates
 	newNodes := []string{}
 	for _, tmpnode := range allChildren {
+		if tmpnode == nodeId {
+			continue
+		}
+
 		found := false
 		for _, newnode := range newNodes {
 			if newnode == tmpnode {
@@ -11182,7 +11205,7 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 		Workflow: *workflow,
 	}
 
-	childNodes := FindChildNodes(workflowExecution, workflowAction)
+	childNodes := FindChildNodes(workflowExecution, workflowAction, []string{}, []string{})
 	//log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
 	newActions := []Action{}
 	branches := []Branch{}
@@ -11379,7 +11402,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 
 	parsedData, err := base64.StdEncoding.DecodeString(string(data))
 	if err != nil {
-		log.Printf("[WARNING] Failed base64 decode for auth key '%s': '%s'. Data: '%s'. Returning as if this is valid.", data, err, string(data))
+		//log.Printf("[WARNING] Failed base64 decode for auth key '%s': '%s'. Data: '%s'. Returning as if this is valid.", data, err, string(data))
 		//return []byte{}, err
 		return data, nil
 	}
@@ -13936,7 +13959,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-	childNodes := FindChildNodes(workflowExecution, workflowExecution.Start)
+	childNodes := FindChildNodes(workflowExecution, workflowExecution.Start, []string{}, []string{})
 
 	//topic := "workflows"
 	startFound := false
@@ -15001,6 +15024,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		return
 	} else {
 		DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+		DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 		DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 		DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
 		DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
@@ -15818,9 +15842,14 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 	return newOrgs
 }
 
-func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecution, children map[string][]string, inputNode string) []string {
+func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecution, children map[string][]string, inputNode string, checkedNodes []string) []string {
 	nextActions := []string{}
 
+	if ArrayContains(checkedNodes, inputNode) {
+		return nextActions
+	}
+
+	checkedNodes = append(checkedNodes, inputNode)
 	parentRan := false
 	for _, result := range workflowExecution.Results {
 		if result.Action.ID == inputNode {
@@ -15872,7 +15901,7 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 			// Randomize order as to keep digging
 			//for _, child := range rand.Perm(children[inputNode]) {
 			for _, child := range children[inputNode] {
-				next := findMissingChildren(ctx, workflowExecution, children, child)
+				next := findMissingChildren(ctx, workflowExecution, children, child, checkedNodes)
 
 				// Only doing one are at a time as to SLOWLY dig down into it
 				if len(next) > 0 {
@@ -15956,7 +15985,7 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 	}
 
-	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode)
+	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode, []string{})
 
 	log.Printf("[DEBUG][%s] Checking what are next actions in workflow %s. Results: %d/%d. NextActions: %s", workflowExecution.ExecutionId, workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, nextActions)
 
@@ -16212,12 +16241,23 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			continueOuter = false
 		} else if len(parents[nextAction]) > 0 {
 			// FIXME - wait for parents to finish executing
+			childNodes := FindChildNodes(workflowExecution, nextAction, []string{}, []string{})
+			//childNodes := children[nextAction]
+			//log.Printf("[INFO] Child nodes for %s: %d", nextAction, len(childNodes))
+
 			for _, parent := range parents[nextAction] {
+				// Check if the parent is also a child. This can ensure continueation no matter what
+				if ArrayContains(childNodes, parent) {
+					log.Printf("[ERROR][%s] Parent %s is also a child of %s. Skipping parent check", workflowExecution.ExecutionId, parent, nextAction)
+					fixed += 1
+					continue
+				}
+
 				_, parentResult := GetResult(ctx, workflowExecution, parent)
 				if parentResult.Status == "FINISHED" || parentResult.Status == "SUCCESS" || parentResult.Status == "SKIPPED" || parentResult.Status == "FAILURE" {
 					fixed += 1
 				} else {
-					log.Printf("[WARNING] Parentstatus for %s is %s - NOT finished or skipped", parent, parentResult.Status)
+					log.Printf("[WARNING][%s] Parentstatus for %s is '%s' - NOT finished or skipped", workflowExecution.ExecutionId, parent, parentResult.Status)
 					// Should check if it's actually RAN at all?
 
 					parentId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, parent)
