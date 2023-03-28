@@ -1092,7 +1092,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return workflowExecution, err
 		}
 
@@ -1273,7 +1273,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return workflowApp, err
 		}
 
@@ -1403,7 +1403,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return sub, err
 		}
 
@@ -1792,7 +1792,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return workflow, err
 		}
 
@@ -1866,7 +1866,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		//log.Printf("GETTING ES USER %s",
 		//res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
 		//if err != nil {
-		//	log.Printf("[WARNING] Error: %s", err)
+		// log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 		//	return workflow, err
 		//}
 
@@ -2649,7 +2649,9 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 
 func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	session := &Session{}
-	cache, err := GetCache(ctx, thissession)
+
+	cacheKey := thissession
+	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
 		//log.Printf("CACHEDATA: %s", cacheData)
@@ -2666,7 +2668,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), thissession)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return session, err
 		}
 
@@ -2874,7 +2876,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return *api, err
 		}
 
@@ -3308,7 +3310,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), parsedKey)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return curUser, err
 		}
 
@@ -4674,7 +4676,7 @@ func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return workflowExecution, err
 		}
 
@@ -5042,12 +5044,14 @@ func GetScheduleByWorkflowId(ctx context.Context, workflowId string) (*ScheduleO
 
 func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error) {
 	nameKey := "schedules"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, schedulename)
 	curUser := &ScheduleOld{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), strings.ToLower(schedulename))
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &ScheduleOld{}, err
 		}
 
@@ -5329,7 +5333,8 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), hookId)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Hook{}, err
 		}
 
@@ -5412,12 +5417,14 @@ func SetHook(ctx context.Context, hook Hook) error {
 
 func GetNotification(ctx context.Context, id string) (*Notification, error) {
 	nameKey := "notifications"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	curFile := &Notification{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Notification{}, err
 		}
 
@@ -5451,12 +5458,14 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 
 func GetFile(ctx context.Context, id string) (*File, error) {
 	nameKey := "Files"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	curFile := &File{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &File{}, err
 		}
 
@@ -5936,7 +5945,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return appAuth, err
 		}
 
@@ -6073,12 +6082,14 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 
 func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 	nameKey := "trigger_auth"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	triggerauth := &TriggerAuth{}
 	if project.DbType == "elasticsearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), strings.ToLower(id))
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &TriggerAuth{}, err
 		}
 
@@ -6353,7 +6364,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
-					//log.Printf("[WARNING] Error: %s", err)
+					// log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 					break
 					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 					//} else {
@@ -7090,7 +7101,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return cacheData, err
 		}
 
@@ -7432,7 +7443,7 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error: %s", err)
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return usecase, err
 		}
 

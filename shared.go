@@ -14557,7 +14557,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			action.Parameters = []WorkflowAppActionParameter{}
 			for _, parameter := range trigger.Parameters {
 				parameter.Variant = "STATIC_VALUE"
-
 				if parameter.Name == "user_apikey" {
 					continue
 				}
