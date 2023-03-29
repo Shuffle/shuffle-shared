@@ -9182,102 +9182,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	return nil
 }
 
-// Re-validating whether the workflow is done or not IF a result should be found.
-func validateFinishedExecution(ctx context.Context, workflowExecution WorkflowExecution, executed []string, retries int64) {
-	var err error
-
-	execution := &WorkflowExecution{}
-	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "worker" || project.Environment == "") {
-		//log.Printf("[DEBUG] Defaulting to current workflow in worker")
-		execution = &workflowExecution
-	} else {
-		execution, err = GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-		if err != nil {
-			log.Printf("\n\n[WARNING] Failed to get workflow in fix it up: %s\n\n", err)
-			return
-		}
-	}
-
-	if execution.Status != "EXECUTING" {
-		log.Printf("[WARNING] Workflow is finished, but with status: %s", execution.Status)
-		return
-	}
-
-	// Make sure to deduplicate and update before checking
-	for _, action := range workflowExecution.Workflow.Actions {
-		found := false
-		for _, result := range workflowExecution.Results {
-			if result.Action.ID == action.ID {
-				found = true
-				break
-			}
-		}
-
-		if found {
-			continue
-		}
-
-		//log.Printf("[DEBUG] Maybe not handled yet: %s", action.ID)
-		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, action.ID)
-		cache, err := GetCache(ctx, cacheId)
-		if err != nil {
-			//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
-			continue
-		}
-
-		actionResult := ActionResult{}
-		cacheData := []byte(cache.([]uint8))
-
-		// Just ensuring the data is good
-		err = json.Unmarshal(cacheData, &actionResult)
-		if err != nil {
-			continue
-		} else {
-			workflowExecution.Results = append(workflowExecution.Results, actionResult)
-		}
-	}
-
-	foundNotExecuted := []string{}
-	for _, executedItem := range executed {
-		found := false
-		for _, result := range execution.Results {
-			if result.Action.ID == executedItem {
-				found = true
-				break
-			}
-		}
-
-		if !found {
-			foundNotExecuted = append(foundNotExecuted, executedItem)
-		}
-	}
-
-	if len(foundNotExecuted) == 0 {
-		//log.Printf("[DEBUG] No result missing that has been executed based on executed apps %s", executed)
-		return
-	}
-
-	// Skipping this since it's not needed anymore with loads of cache checking
-
-	saveToDb := false
-	extra := 0
-	for _, trigger := range execution.Workflow.Triggers {
-		//log.Printf("Appname trigger (0): %s", trigger.AppName)
-		if trigger.AppName == "User Input" || trigger.AppName == "Shuffle Workflow" {
-			extra += 1
-		}
-	}
-
-	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
-		saveToDb = true
-	}
-
-	err = SetWorkflowExecution(ctx, workflowExecution, saveToDb)
-	if err != nil {
-		log.Printf("[ERROR] Failed setting execution after rerun 2: %s", err)
-	}
-}
-
 func ResendActionResult(actionData []byte, retries int64) {
 	if project.Environment == "cloud" && retries == 0 {
 		retries = 4
@@ -9412,7 +9316,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
 	var err error
 	if actionResult.Action.ID == "" {
-		log.Printf("\n\n[ERROR] Failed handling EMPTY action %s (ParsedExecutionResult). Usually happens during worker run that sets everything?\n\n", actionResult)
+		log.Printf("\n\n[ERROR][%s] Failed handling EMPTY action %#v (ParsedExecutionResult). Usually happens during worker run that sets everything?\n\n", workflowExecution.ExecutionId, actionResult)
 
 		return &workflowExecution, true, nil
 	}
@@ -14508,6 +14412,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
 	}
 
+	// NEW check for subflow
 	// This is also handling triggers -> action translation now for subflow
 	extra := 0
 	newTriggers := []Trigger{}
@@ -14552,7 +14457,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			action.ID = trigger.ID
 			action.Name = "run_subflow"
 			action.AppName = "shuffle-subflow"
-			action.AppVersion = "1.1.0"
+			action.AppVersion = "1.0.0"
 
 			action.Parameters = []WorkflowAppActionParameter{}
 			for _, parameter := range trigger.Parameters {
