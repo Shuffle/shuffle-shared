@@ -3466,44 +3466,28 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	for _, field := range appAuth.Fields {
 		if field.Key == "authentication_url" {
 			url = field.Value
-		}
-		//log.Printf("KEY: %s", field.Key)
-		//log.Printf("%s", field.Value)
-
-		if field.Key == "code" {
+		} else if field.Key == "code" {
 			requestData.Code = field.Value
-		}
-
-		if field.Key == "client_secret" {
+		} else if field.Key == "client_secret" {
 			requestData.ClientSecret = field.Value
-		}
-
-		if field.Key == "client_id" {
+		} else if field.Key == "client_id" {
 			requestData.ClientId = field.Value
-		}
-
-		if field.Key == "scope" {
+		} else if field.Key == "scope" {
 			requestData.Scope = field.Value
-			//log.Printf("SCOPE: %s", field.Value)
-		}
+		} else if field.Key == "redirect_uri" {
 
-		if field.Key == "redirect_uri" {
 			requestData.RedirectUri = field.Value
-		}
-
-		if field.Key == "refresh_uri" || field.Key == "refresh_url" {
+		} else if field.Key == "refresh_uri" || field.Key == "refresh_url" {
 			//log.Printf("[DEBUG] Got refresh URL %s", field.Value)
 			refreshUrl = field.Value
-		}
-
-		if field.Key == "refresh_token" {
+		} else if field.Key == "refresh_token" {
 			//log.Printf("[DEBUG] Got refresh token %s", field.Value)
 			refreshToken = field.Value
-		}
-
-		if field.Key == "oauth_url" {
+		} else if field.Key == "oauth_url" {
 			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
 			oauthUrl = field.Value
+		} else {
+			log.Printf("\n\n[WARNING] Unknown oauth field %s\n\n", field.Key)
 		}
 	}
 
@@ -3560,7 +3544,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	respBody := []byte{}
 	if !refresh {
-		log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
+		//log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
+		log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s.", refreshUrl)
 		req, err := http.NewRequest(
 			"POST",
 			url,
@@ -3650,6 +3635,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	if strings.Contains(string(respBody), "error") {
 		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nV: %#v", string(respBody), v.Encode())
 	}
+
+	//log.Printf("RAW BODY: %s", string(respBody))
 
 	var oauthResp Oauth2Resp
 	err = json.Unmarshal(respBody, &oauthResp)

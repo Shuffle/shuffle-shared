@@ -12273,6 +12273,13 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 		}
 	}
 
+	// Check status is finished, and set timestamp for finished if it's 0
+	if execution.Status == "FINISHED" || execution.Status == "ABORTED" || execution.Status == "FAILED" {
+		if baseExecution.CompletedAt == 0 {
+			baseExecution.CompletedAt = time.Now().Unix()
+		}
+	}
+
 	// FIXME: Add extra here
 	//executionLength := len(baseExecution.Workflow.Actions)
 	//if executionLength != len(execution.Results) {
