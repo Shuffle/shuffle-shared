@@ -15994,9 +15994,11 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 // Added early 2023 as yet another way to standardize decisionmaking of app executions
 func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, environment string) (WorkflowExecution, []Action) {
 	// ensuring always latest
-	workflowExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow execution in Decide: %s", err)
+	} else {
+		workflowExecution = *newexec
 	}
 
 	startAction, extra, children, parents, visited, executed, nextActions, environments := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
