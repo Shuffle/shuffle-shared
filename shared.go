@@ -9328,16 +9328,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 	// Done elsewhere
-	/*
-		cache, err := GetCache(ctx, actionCacheId)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-
-			log.Printf("\n\n[DEBUG] Found cache for %s. This means the action result is already in. Value: '%s'!", actionCacheId, string(cacheData))
-
-			return &workflowExecution, true, errors.New(fmt.Sprintf("Data for action %s (%s) has already been ran.", actionResult.Action.Label, actionResult.Action.ID))
-		}
-	*/
 
 	// Don't set cache for triggers?
 	//log.Printf("\n\nACTIONRES: %s\n\nRES: %s\n", actionResult, actionResult.Result)
@@ -10167,7 +10157,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					//Check cache for whether the execution actually finished or not
 					// FIXMe: May need to get this from backend
 
-					cacheKey := fmt.Sprintf("workflowexecution-%s", subflowData.ExecutionId)
+					cacheKey := fmt.Sprintf("workflowexecution_%s", subflowData.ExecutionId)
 					if value, found := requestCache.Get(cacheKey); found {
 						parsedValue := WorkflowExecution{}
 						cacheData := []byte(value.([]uint8))
@@ -13368,7 +13358,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	workflowBytes, err := json.Marshal(workflow)
 	if err != nil {
-		log.Printf("Failed workflow unmarshal in execution: %s", err)
+		log.Printf("[WARNING] Failed workflow unmarshal in execution: %s", err)
 		return WorkflowExecution{}, ExecInfo{}, "", err
 	}
 
@@ -15550,7 +15540,7 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	}
 
 	if exec.Status == "FINISHED" || exec.Status == "FAILURE" {
-		cacheKey := fmt.Sprintf("workflowexecution-%s", executionId)
+		cacheKey := fmt.Sprintf("workflowexecution_%s", executionId)
 		err = SetCache(ctx, cacheKey, body, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for workflowexec key %s: %s", cacheKey, err)
@@ -16003,6 +15993,11 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 // Decideds what should happen next. Used both for cloud & onprem environments
 // Added early 2023 as yet another way to standardize decisionmaking of app executions
 func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, environment string) (WorkflowExecution, []Action) {
+	workflowExecution, err := shuffle.GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow execution in Decide: %s", err)
+	}
+
 	startAction, extra, children, parents, visited, executed, nextActions, environments := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
 	if len(startAction) == 0 {
 		startAction = workflowExecution.Start
@@ -16027,7 +16022,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	workflowExecution.Results = newResults
 	relevantActions := []Action{}
 
-	log.Printf("[INFO][%s] Inside execution with %d / %d results (extra: %d)", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, extra)
+	log.Printf("[INFO][%s] Inside Decide execution with %d / %d results (extra: %d)", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, extra)
 
 	if len(startAction) == 0 {
 		startAction = workflowExecution.Start
