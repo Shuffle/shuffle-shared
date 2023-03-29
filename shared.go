@@ -15993,7 +15993,8 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 // Decideds what should happen next. Used both for cloud & onprem environments
 // Added early 2023 as yet another way to standardize decisionmaking of app executions
 func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, environment string) (WorkflowExecution, []Action) {
-	workflowExecution, err := shuffle.GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	// ensuring always latest
+	workflowExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get workflow execution in Decide: %s", err)
 	}
