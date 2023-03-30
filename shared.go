@@ -9144,8 +9144,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			}
 
 			// This is probably bad for loops
-			if len(foundResult.Action.ID) == 0 {
-				log.Printf("\n\n[INFO] Couldn't find the result?\n\n")
+			if len(foundResult.Action.ID) == 0 && len(parentNode) == 0 {
+				log.Printf("\n\n[INFO] Couldn't find the result? Data: %s\n\n", string(resultData))
 				parsedAction := Action{
 					Label:       selectedTrigger.Label,
 					ID:          parentNode,

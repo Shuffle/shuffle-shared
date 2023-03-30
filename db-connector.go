@@ -8005,6 +8005,12 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 	//if (len(environments) == 1 && len(workflowExecution.Results) >= 1) || (len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) && len(workflowExecution.Workflow.Actions) > 0) {
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
+		for _, result := range workflowExecution.Results {
+			if result.Status == "EXECUTING" || result.Status == "WAITING" {
+				log.Printf("[WARNING][%s] Waiting for action %s to finish", workflowExecution.ExecutionId, result.Action.ID)
+				return false
+			}
+		}
 
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
