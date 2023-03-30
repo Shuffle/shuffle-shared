@@ -12767,7 +12767,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	userName := strings.ToLower(strings.TrimSpace(openidUser.Sub))
 	if !strings.Contains(userName, "@") {
-		log.Printf("[ERROR] Bad username, but allowing due to SSO: %s. Full Subject: %#v", userName, samlResp.Assertion.Subject)
+		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
 	}
 	redirectUrl := "/workflows"
 
