@@ -8876,7 +8876,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// From worker:
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
-		log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s. Should this be a specific worker? Specific worker is better if cache is NOT memcached", backendUrl)
+		log.Printf("[DEBUG][%s] Sending request for shuffle-subflow result to %s. Should this be a specific worker? Specific worker is better if cache is NOT memcached", subflowExecutionId, backendUrl)
 	}
 
 	//log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
@@ -8901,10 +8901,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		topClient = &http.Client{}
 	} else {
 		if len(httpProxy) > 0 {
-			log.Printf("Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 		}
 		if len(httpsProxy) > 0 {
-			log.Printf("Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
 		}
 	}
 
