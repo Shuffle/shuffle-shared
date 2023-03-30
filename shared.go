@@ -8995,6 +8995,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		}
 	}
 
+	foundResult.Action.ID = parentNode
+
 	// IF the workflow is looping, the result is added in the backend to not
 	// cause consistency issues. This means the result will be sent back, and instead
 	// Added to the workflow result by the backend itself.
@@ -9148,7 +9150,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			}
 
 			// This is probably bad for loops
-			if len(foundResult.Action.ID) == 0 && len(parentNode) == 0 {
+			if len(foundResult.Action.ID) == 0 {
 				log.Printf("\n\n[INFO] Couldn't find the result? Data: %s\n\n", string(resultData))
 				parsedAction := Action{
 					Label:       selectedTrigger.Label,
@@ -9178,6 +9180,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				sendRequest = true
 			} else {
+				log.Printf("[DEBUG] Found result. Sending result with input data")
+
 				foundResult.Result = string(parsedActionValue)
 				foundResult.ExecutionId = executionParent
 				foundResult.Authorization = parentAuth
