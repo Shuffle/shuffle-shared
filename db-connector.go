@@ -7985,6 +7985,8 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 
 func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 	// Keeping cache for 30-60 min due to rerun management
+	// FIXME: Add cleanup of workflowexecution & subflow data
+	// fmt.Sprintf("%s_%s_subflowresult", res.ExecutionId, parentNode)
 	if project.Environment == "cloud" {
 		return
 	}

@@ -9034,7 +9034,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 		// If found, loop through and make sure to check the result for ALL of them. If they're not in there, add them as values.
 		if parentNodeFound {
-			//log.Printf("[DEBUG] Found result for subflow. Adding!")
+			log.Printf("[DEBUG] Found result for subflow (parentNodeFound). Got %d parentSubflowResults", len(parentSubflowResult))
 
 			ranUpdate := false
 
@@ -9104,6 +9104,9 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				//log.Printf("[DEBUG] Should update with multiple results for the subflow. Fullres: %s!", string(foundResult.Result))
 
 			}
+		} else {
+			log.Printf("[DEBUG] Did not enter parentNodeFound in subflow loop")
+
 		}
 
 		// Check if the item alreayd exists or not in results
@@ -10026,7 +10029,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[INFO] Updating %s in workflow %s from %s to %s", actionResult.Action.ID, workflowExecution.ExecutionId, workflowExecution.Results[outerindex].Status, actionResult.Status)
+			log.Printf("[INFO] Updating %s in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
 			workflowExecution.Results[outerindex] = actionResult
 		} else {
 			//log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
@@ -10283,7 +10286,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				var subflowDataList []SubflowData
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
 				if err != nil || len(subflowDataList) == 0 {
-					log.Printf("\n\nNOT sinkholed")
+					log.Printf("\n\nNOT sinkholed: %s", err)
 					for resultIndex, result := range workflowExecution.Results {
 						if result.Action.ID == actionResult.Action.ID {
 							workflowExecution.Results[resultIndex] = actionResult
@@ -10292,7 +10295,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 
 				} else {
-					log.Printf("\n\nLIST NOT sinkholed (%d) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.\n\n", len(subflowDataList))
+					log.Printf("\n\nLIST sinkholed (%d) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.\n\n", len(subflowDataList))
 
 					// Set to executing, as the point is for the subflows themselves to update this part. This does NOT happen in the subflow, but in the parent workflow, which is waiting for results to be ingested, hence it's set to EXECUTING
 					workflowExecution.Status = "EXECUTING"
@@ -10302,6 +10305,18 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					for resultIndex, result := range workflowExecution.Results {
 						if result.Action.ID == actionResult.Action.ID {
 							workflowExecution.Results[resultIndex] = actionResult
+
+							actionResultBody, err := json.Marshal(workflowExecution.Results[resultIndex].Result)
+							if err == nil {
+								cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+								err = SetCache(ctx, cacheId, actionResultBody, 35)
+								if err != nil {
+									log.Printf("[ERROR] Failed setting cache for SUBFLOW to WAITING: %s", err)
+								} else {
+									log.Printf("[DEBUG] Set cache for SUBFLOW action result %s", cacheId)
+								}
+							}
+
 							break
 						}
 					}
