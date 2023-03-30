@@ -9214,13 +9214,16 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		}
 	}
 
-	actionResultBody, err := json.Marshal(foundResult)
-	if err == nil {
+	// This is to ensure cache is in time. Timing issues between parent & child nodes are awful :)
+	if isLooping {
 		cacheId := fmt.Sprintf("%s_%s_result", foundResult.ExecutionId, foundResult.Action.ID)
-		err = SetCache(ctx, cacheId, actionResultBody, 35)
+		err = SetCache(ctx, cacheId, resultData, 35)
 		if err != nil {
-			log.Printf("[WARNING] Couldn't set cache for subflow action result %s (3): %s", cacheId, err)
+			log.Printf("[WARNING] Couldn't set cache for subflow action result %s (4): %s", cacheId, err)
 		}
+
+		log.Printf("[DEBUG] Set cache for subflow action result loop %s (4) with 250 ms delay before request", cacheId)
+		time.Sleep(250 * time.Millisecond)
 	}
 
 	if sendRequest && len(resultData) > 0 {
@@ -16409,7 +16412,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				if parentResult.Status == "FINISHED" || parentResult.Status == "SUCCESS" || parentResult.Status == "SKIPPED" || parentResult.Status == "FAILURE" {
 					fixed += 1
 				} else {
-					log.Printf("[WARNING][%s] Parentstatus for %s is '%s' - NOT finished or skipped", workflowExecution.ExecutionId, parent, parentResult.Status)
+					log.Printf("[WARNING][%s] Parentstatus for node %s is '%s' - NOT success, finished or skipped", workflowExecution.ExecutionId, parent, parentResult.Status)
 					// Should check if it's actually RAN at all?
 
 					parentId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, parent)
