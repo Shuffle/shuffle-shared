@@ -1029,6 +1029,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 
 	workflowExecution.Results = newResults
 
+	// Check if finished too?
+
 	//UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, workflowExecution.Start, children, parents, visited, executed, nextActions, environments, extra)
 
 	return workflowExecution

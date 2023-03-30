@@ -9053,7 +9053,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 					//log.Printf("[DEBUG] Set the result for the node! Run update with %s", res)
 					finishedSubflows += 1
 				} else {
-					//log.Printf("[DEBUG] Does it have a result? %s", res)
+					res.ResultSet = true
 
 					if !res.ResultSet {
 						subflowResultCacheId = fmt.Sprintf("%s_%s_subflowresult", res.ExecutionId, parentNode)
@@ -9080,7 +9080,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			if finishedSubflows == len(newResults) {
 				log.Printf("[DEBUG] Finished workflow because status of all should be set to finished now")
+
+				// Set cache too :)
 				foundResult.Status = "FINISHED"
+
 			}
 
 			if ranUpdate {
@@ -9208,6 +9211,15 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				sendRequest = true
 			}
+		}
+	}
+
+	actionResultBody, err := json.Marshal(foundResult)
+	if err == nil {
+		cacheId := fmt.Sprintf("%s_%s_result", foundResult.ExecutionId, foundResult.Action.ID)
+		err = SetCache(ctx, cacheId, actionResultBody, 35)
+		if err != nil {
+			log.Printf("[WARNING] Couldn't set cache for subflow action result %s (3): %s", cacheId, err)
 		}
 	}
 
@@ -10029,7 +10041,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[INFO] Updating %s in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
+			log.Printf("[INFO][%s] Updating %s in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
 			workflowExecution.Results[outerindex] = actionResult
 		} else {
 			//log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
