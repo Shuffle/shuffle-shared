@@ -8939,7 +8939,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
-		log.Printf("[ERROR] Bad statuscode setting subresult with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
+		log.Printf("[ERROR] Bad statuscode setting subresult (1) with URL %s: %d, %s. Input data: %s", resultUrl, newresp.StatusCode, string(body), string(data))
 		return errors.New(fmt.Sprintf("Bad statuscode: %s", newresp.StatusCode))
 	}
 
@@ -15616,7 +15616,7 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
-		log.Printf("[ERROR] Bad statuscode setting subresult with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
+		log.Printf("[ERROR] Bad statuscode getting execution (2) with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
 		return exec, errors.New(fmt.Sprintf("Bad statuscode: %d", newresp.StatusCode))
 	}
 
