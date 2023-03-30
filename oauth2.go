@@ -3578,7 +3578,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			return appAuth, errors.New(fmt.Sprintf("Bad status code for URL %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 	} else {
-		log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
+		//log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
+		log.Printf("[DEBUG] Ran refresh for URL %s.", refreshUrl)
 
 		if len(refreshToken) == 0 {
 			log.Printf("[ERROR] No refresh token acquired for %s", refreshUrl)

@@ -8861,7 +8861,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// From worker:
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
-		//log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
+		log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
 	}
 
 	//log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
@@ -8956,6 +8956,27 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			}
 
 			break
+		}
+	}
+
+	// Because we changed out how we handle mid-flow triggers
+	if len(selectedTrigger.ID) == 0 {
+		for _, action := range newExecution.Workflow.Actions {
+			if action.ID == parentNode {
+				selectedTrigger = Trigger{
+					ID:    action.ID,
+					Label: action.Label,
+				}
+
+				for _, param := range action.Parameters {
+					if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+						isLooping = true
+						break
+					}
+				}
+
+				break
+			}
 		}
 	}
 
@@ -9069,11 +9090,12 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// Check if the item alreayd exists or not in results
 		//return nil
 	} else {
-
+		//log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
 		// 1. Get result of parentnode's subflow (foundResult.Result)
 		// 2. Try to marshal parent into a loop.
 		// 3. If possible, loop through and find the one matching SubflowData.ExecutionId with "executionParent"
 		// 4. If it's matching, update ONLY that one.
+
 		var subflowDataLoop []SubflowData
 		err = json.Unmarshal([]byte(foundResult.Result), &subflowDataLoop)
 		if err == nil {
@@ -9093,6 +9115,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			sendRequest = true
 		} else {
+			// In here maning no-loop?
 			actionValue := SubflowData{
 				Success:       true,
 				ExecutionId:   executionParent,
@@ -9107,15 +9130,14 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			// This is probably bad for loops
 			if len(foundResult.Action.ID) == 0 {
-				//log.Printf("Couldn't find the result!")
+				log.Printf("\n\n[INFO] Couldn't find the result?\n\n")
 				parsedAction := Action{
 					Label:       selectedTrigger.Label,
-					ID:          selectedTrigger.ID,
+					ID:          parentNode,
 					Name:        "run_subflow",
 					AppName:     "shuffle-subflow",
 					AppVersion:  "1.0.0",
 					Environment: selectedTrigger.Environment,
-					Parameters:  []WorkflowAppActionParameter{},
 				}
 
 				timeNow := time.Now().Unix()
@@ -9316,7 +9338,9 @@ func ResendActionResult(actionData []byte, retries int64) {
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
 	var err error
 	if actionResult.Action.ID == "" {
-		log.Printf("\n\n[ERROR][%s] Failed handling EMPTY action %#v (ParsedExecutionResult). Usually happens during worker run that sets everything?\n\n", workflowExecution.ExecutionId, actionResult)
+		// Can we find it based on label?
+
+		log.Printf("\n\n[ERROR][%s] Failed handling EMPTY action %#v (ParsedExecutionResult). Usually ONLY happens during worker run that sets everything?\n\n", workflowExecution.ExecutionId, actionResult)
 
 		return &workflowExecution, true, nil
 	}
@@ -13465,10 +13489,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			allowContinuation := false
 			if parentErr == nil {
+				found := false
 				for _, trigger := range parentExecution.Workflow.Triggers {
 					if trigger.ID != workflowExecution.ExecutionSourceNode {
 						continue
 					}
+
+					found = true
 
 					//$Get_Offenses.# -> Allow to run more
 					for _, param := range trigger.Parameters {
@@ -13482,6 +13509,31 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					if allowContinuation {
 						break
+					}
+				}
+
+				if !found {
+					// Added from subflow trigger -> action translation
+					for _, action := range parentExecution.Workflow.Actions {
+						if action.ID != workflowExecution.ExecutionSourceNode {
+							continue
+						}
+
+						found = true
+
+						//$Get_Offenses.# -> Allow to run more
+						for _, param := range action.Parameters {
+							if param.Name == "argument" {
+								if strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+									allowContinuation = true
+									break
+								}
+							}
+						}
+
+						if allowContinuation {
+							break
+						}
 					}
 				}
 			}
@@ -14420,7 +14472,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if trigger.TriggerType == "SUBFLOW" {
-			log.Printf("\n\n[INFO] Subflow trigger found during execution! envs: %#v \n\n", environments)
+			log.Printf("[INFO] Subflow trigger found during execution! envs: %#v", environments)
 
 			// Find branch that has the subflow as destinationID
 			foundenv := ""
