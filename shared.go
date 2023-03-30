@@ -10306,7 +10306,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						if result.Action.ID == actionResult.Action.ID {
 							workflowExecution.Results[resultIndex] = actionResult
 
-							actionResultBody, err := json.Marshal(workflowExecution.Results[resultIndex].Result)
+							actionResultBody, err := json.Marshal(actionResult)
 							if err == nil {
 								cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 								err = SetCache(ctx, cacheId, actionResultBody, 35)
