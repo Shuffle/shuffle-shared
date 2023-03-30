@@ -8983,6 +8983,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 					Label: action.Label,
 				}
 
+				foundResult.Action = action
+
 				for _, param := range action.Parameters {
 					if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 						isLooping = true
@@ -8994,8 +8996,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			}
 		}
 	}
-
-	foundResult.Action.ID = parentNode
 
 	// IF the workflow is looping, the result is added in the backend to not
 	// cause consistency issues. This means the result will be sent back, and instead
@@ -9110,6 +9110,11 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		//return nil
 	} else {
 		log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
+
+		if len(selectedTrigger.ID) > 0 {
+			foundResult.Action.ID = selectedTrigger.ID
+		}
+
 		// 1. Get result of parentnode's subflow (foundResult.Result)
 		// 2. Try to marshal parent into a loop.
 		// 3. If possible, loop through and find the one matching SubflowData.ExecutionId with "executionParent"
@@ -12760,7 +12765,10 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	userName := openidUser.Sub
+	userName := strings.ToLower(strings.TrimSpace(openidUser.Sub))
+	if !strings.Contains(userName, "@") {
+		log.Printf("[ERROR] Bad username, but allowing due to SSO: %s. Full Subject: %#v", userName, samlResp.Assertion.Subject)
+	}
 	redirectUrl := "/workflows"
 
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
@@ -13137,7 +13145,11 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	foundOrg := matchingOrgs[0]
-	userName := samlResp.Assertion.Subject.NameID.Text
+	userName := strings.ToLower(strings.TrimSpace(samlResp.Assertion.Subject.NameID.Text))
+	if !strings.Contains(userName, "@") {
+		log.Printf("[ERROR] Bad username, but allowing due to SSO: %s. Full Subject: %#v", userName, samlResp.Assertion.Subject)
+	}
+
 	if len(userName) == 0 {
 		log.Printf("[WARNING] Failed finding user - No name: %s", samlResp.Assertion.Subject)
 		resp.WriteHeader(401)
@@ -13309,7 +13321,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.CreationTime = time.Now().Unix()
 	newUser.Orgs = []string{foundOrg.Id}
 	newUser.LoginType = "SSO"
-	newUser.Role = "user"
+	newUser.Role = "admin"
 	newUser.Session = uuid.NewV4().String()
 
 	newUser.ActiveOrg.Id = matchingOrgs[0].Id
