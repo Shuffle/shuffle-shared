@@ -2741,9 +2741,8 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME - have a check for org etc too..
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+		if workflow.OrgId == user.ActiveOrg.Id {
 			log.Printf("[AUDIT] User %s is accessing workflow %s (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
@@ -5765,7 +5764,23 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		newUsers = append(newUsers, item)
 	}
 
-	newjson, err := json.Marshal(newUsers)
+	deduplicatedUsers := []User{}
+	for _, item := range newUsers {
+		found := false
+		for _, tmpUser := range deduplicatedUsers {
+			if tmpUser.Username == item.Username {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			log.Printf("[DEBUG] Adding user %s (%s) to list", item.Username, item.Id)
+			deduplicatedUsers = append(deduplicatedUsers, item)
+		}
+	}
+
+	newjson, err := json.Marshal(deduplicatedUsers)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshal in getusers: %s", err)
 		resp.WriteHeader(401)
@@ -8861,7 +8876,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// From worker:
 		//parsedRequest.BaseUrl = fmt.Sprintf("http://%s:%d", hostname, baseport)
 
-		log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s", backendUrl)
+		log.Printf("[DEBUG] Sending request for shuffle-subflow result to %s. Should this be a specific worker? Specific worker is better if cache is NOT memcached", backendUrl)
 	}
 
 	//log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
@@ -15536,7 +15551,20 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 
 func GetBackendexecution(ctx context.Context, executionId, authorization string) (WorkflowExecution, error) {
 	exec := WorkflowExecution{}
-	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", os.Getenv("BASE_URL"))
+
+	// Is polling the backend actually correct?
+	// Or should worker/backend talk to itself?
+	backendUrl := os.Getenv("BASE_URL")
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	// Should this be without worker? :thinking:
+	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
 
 	topClient := &http.Client{
 		Transport: &http.Transport{
@@ -15589,7 +15617,7 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 
 	if newresp.StatusCode != 200 {
 		log.Printf("[ERROR] Bad statuscode setting subresult with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
-		return exec, errors.New(fmt.Sprintf("Bad statuscode: %s", newresp.StatusCode))
+		return exec, errors.New(fmt.Sprintf("Bad statuscode: %d", newresp.StatusCode))
 	}
 
 	err = json.Unmarshal(body, &exec)
