@@ -9155,6 +9155,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			}
 
 			// This is probably bad for loops
+			timeNow := time.Now().Unix()
 			if len(foundResult.Action.ID) == 0 {
 				log.Printf("\n\n[INFO] Couldn't find the result? Data: %s\n\n", string(resultData))
 				parsedAction := Action{
@@ -9166,7 +9167,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 					Environment: selectedTrigger.Environment,
 				}
 
-				timeNow := time.Now().Unix()
 				newResult := ActionResult{
 					Action:        parsedAction,
 					ExecutionId:   executionParent,
@@ -9187,9 +9187,16 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			} else {
 				log.Printf("[DEBUG] Found result. Sending result with input data")
 
-				foundResult.Result = string(parsedActionValue)
-				foundResult.ExecutionId = executionParent
+				foundResult.StartedAt = timeNow
+				foundResult.CompletedAt = timeNow
 				foundResult.Authorization = parentAuth
+				foundResult.ExecutionId = executionParent
+				foundResult.Result = string(parsedActionValue)
+
+				if foundResult.Status == "" {
+					foundResult.Status = "SUCCESS"
+				}
+
 				resultData, err = json.Marshal(foundResult)
 				if err != nil {
 					log.Printf("[ERROR] Failed updating resultData (3): %s", err)
@@ -14514,7 +14521,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if trigger.TriggerType == "SUBFLOW" {
-			log.Printf("[INFO] Subflow trigger found during execution! envs: %#v", environments)
+			//log.Printf("[INFO] Subflow trigger found during execution! envs: %#v", environments)
 
 			// Find branch that has the subflow as destinationID
 			foundenv := ""
@@ -14579,7 +14586,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				Name:  "user_apikey",
 				Value: workflowExecution.Authorization,
 			})
-			log.Printf("Auth: %s", workflowExecution.Authorization)
 
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 				Name:  "source_node",
