@@ -694,6 +694,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
 	}
 
+	// Check if it's worker, as it doesn't have DB access
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
+		return nil
+	}
+
 	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
 		//log.Printf("[WARNING] SHOULD skip DB saving for execution")
@@ -1088,6 +1093,10 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			}
 		} else {
 		}
+	}
+
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
+		return workflowExecution, nil
 	}
 
 	if project.DbType == "elasticsearch" {

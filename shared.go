@@ -9011,7 +9011,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	sendRequest := false
 	resultData := []byte{}
 	if isLooping {
-		log.Printf("\n\n[DEBUG] ITS LOOPING - SHOULD ADD TO A LIST INSTEAD!\n\n")
+		//log.Printf("\n\n[DEBUG] ITS LOOPING - SHOULD ADD TO A LIST INSTEAD!\n\n")
 
 		// Saved for each subflow ID -> parentNode
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
@@ -9124,7 +9124,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// Check if the item alreayd exists or not in results
 		//return nil
 	} else {
-		log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
+		//log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
 
 		if len(selectedTrigger.ID) > 0 {
 			foundResult.Action.ID = selectedTrigger.ID
@@ -9236,7 +9236,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	}
 
 	if sendRequest && len(resultData) > 0 {
-		log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
+		//log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
 
 		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
 		req, err := http.NewRequest(
