@@ -9013,6 +9013,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	if isLooping {
 		log.Printf("\n\n[DEBUG] ITS LOOPING - SHOULD ADD TO A LIST INSTEAD!\n\n")
 
+		// Saved for each subflow ID -> parentNode
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
 		err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 30)
 		if err != nil {
@@ -9061,7 +9062,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				} else {
 					res.ResultSet = true
 
-					if !res.ResultSet {
+					// Overutilization of cache :>
+					if !res.ResultSet || len(res.Result) == 0 {
 						subflowResultCacheId = fmt.Sprintf("%s_%s_subflowresult", res.ExecutionId, parentNode)
 
 						cache, err := GetCache(ctx, subflowResultCacheId)
@@ -9087,7 +9089,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			if finishedSubflows == len(newResults) {
 				log.Printf("[DEBUG] Finished workflow because status of all should be set to finished now")
 
-				// Set cache too :)
+				// Status is used to determine if the current subflow is finished
+				//foundResult.Status = "SUCCESS"
 				foundResult.Status = "FINISHED"
 
 			}
@@ -9229,7 +9232,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		}
 
 		log.Printf("[DEBUG] Set cache for subflow action result loop %s (4) with 250 ms delay before request", cacheId)
-		time.Sleep(250 * time.Millisecond)
+		//time.Sleep(250 * time.Millisecond)
 	}
 
 	if sendRequest && len(resultData) > 0 {
@@ -10366,6 +10369,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	workflowExecution, newDbSave := compressExecution(ctx, workflowExecution, "mid-cleanup")
 	if !dbSave {
 		dbSave = newDbSave
+	}
+
+	// Does it work to cache it here?
+	err = SetWorkflowExecution(ctx, workflowExecution, dbSave)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed saving execution to DB: %s", workflowExecution.ExecutionId, err)
 	}
 
 	// Should only apply a few seconds after execution, otherwise it's bascially spam.
@@ -13646,7 +13655,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if err != nil {
 					log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
 				} else {
-					//log.Printf("\n\n[DEBUG] Adding %s to cache.\n\n", newExecId)
 				}
 			}
 		}
@@ -16478,7 +16486,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		//if err != nil {
 		//	log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
 		//} else {
-		//	//log.Printf("\n\n[DEBUG] Adding %s to cache. Name: %s\n\n", newExecId, action.Label)
 		//}
 
 		if action.AppName == "Shuffle Workflow" {
