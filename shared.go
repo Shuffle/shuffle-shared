@@ -9003,7 +9003,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	sendRequest := false
 	resultData := []byte{}
 	if isLooping {
-		//log.Printf("\n\n[DEBUG] ITS LOOPING - SHOULD ADD TO A LIST INSTEAD!\n\n")
+		log.Printf("\n\n[DEBUG] ITS LOOPING - SHOULD ADD TO A LIST INSTEAD!\n\n")
 
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
 		err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 30)
@@ -9091,6 +9091,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				}
 
 				foundResult.Result = string(baseResultData)
+				foundResult.ExecutionId = executionParent
+				foundResult.Authorization = parentAuth
 				resultData, err = json.Marshal(foundResult)
 				if err != nil {
 					log.Printf("[ERROR] Failed marshalling FULL subflow loop request data (2): %s", err)
@@ -9105,7 +9107,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// Check if the item alreayd exists or not in results
 		//return nil
 	} else {
-		//log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
+		log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
 		// 1. Get result of parentnode's subflow (foundResult.Result)
 		// 2. Try to marshal parent into a loop.
 		// 3. If possible, loop through and find the one matching SubflowData.ExecutionId with "executionParent"
@@ -9121,10 +9123,11 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				}
 			}
 
-			//bytes.NewBuffer([]byte(resultData)),
+			//foundResult.ExecutionId = executionParent
+			//foundResult.Authorization = parentAuth
 			resultData, err = json.Marshal(subflowDataLoop)
 			if err != nil {
-				log.Printf("[WARNING] Failed updating resultData: %s", err)
+				log.Printf("[WARNING] Failed updating resultData (4): %s", err)
 				return err
 			}
 
@@ -9140,6 +9143,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 			parsedActionValue, err := json.Marshal(actionValue)
 			if err != nil {
+				log.Printf("[ERROR] Failed updating resultData (1): %s", err)
 				return err
 			}
 
@@ -9168,14 +9172,18 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				resultData, err = json.Marshal(newResult)
 				if err != nil {
+					log.Printf("[ERROR] Failed updating resultData (2): %s", err)
 					return err
 				}
 
 				sendRequest = true
 			} else {
 				foundResult.Result = string(parsedActionValue)
+				foundResult.ExecutionId = executionParent
+				foundResult.Authorization = parentAuth
 				resultData, err = json.Marshal(foundResult)
 				if err != nil {
+					log.Printf("[ERROR] Failed updating resultData (3): %s", err)
 					return err
 				}
 
@@ -9185,7 +9193,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	}
 
 	if sendRequest && len(resultData) > 0 {
-		//log.Printf("SHOULD SEND REQUEST!")
+		log.Printf("[INFO][%s] Should send subflow request to backendURL %s. Data: %s!", executionParent, backendUrl, string(resultData))
+
 		streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
 		req, err := http.NewRequest(
 			"POST",
@@ -9204,14 +9213,16 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			return err
 		}
 
-		//body, err := ioutil.ReadAll(newresp.Body)
-		//if err != nil {
-		//	log.Printf("Failed reading body when waiting: %s", err)
-		//	return err
-		//}
-		//log.Printf("[INFO] ADDED NEW ACTION RESULT (%d): %s", newresp.StatusCode, body)
-		//_ = body
-		_ = newresp
+		defer newresp.Body.Close()
+		if newresp.StatusCode != 200 {
+			body, err := ioutil.ReadAll(newresp.Body)
+			if err != nil {
+				log.Printf("[INFO] Failed reading body after subflow request: %s", err)
+				return err
+			}
+
+			log.Printf("[ERROR] Failed running subflow request with data %s\n: %s", string(resultData), string(body))
+		}
 	} else {
 		log.Printf("[INFO] NOT sending request because data len is %d and request is %s", len(resultData), sendRequest)
 	}
