@@ -2630,6 +2630,12 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 func GetResult(ctx context.Context, workflowExecution WorkflowExecution, id string) (WorkflowExecution, ActionResult) {
 	for _, actionResult := range workflowExecution.Results {
 		if actionResult.Action.ID == id {
+			// ALWAYS relying on cache due to looping subflow issues
+			if actionResult.Status == "WAITING" || actionResult.Action.AppName == "shuffle-subflow" || actionResult.Action.AppName == "User Input" || actionResult.Action.AppName == "Shuffle Workflow" {
+				log.Printf("[DEBUG] Getting result from cache instead of execution for %s", id)
+				break
+			}
+
 			return workflowExecution, actionResult
 		}
 	}
