@@ -1015,12 +1015,33 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		}
 	}
 
-	// Clean up the results
+	// Deduplicat the results
 	handled := []string{}
 	newResults := []ActionResult{}
 	for _, result := range workflowExecution.Results {
 		if ArrayContains(handled, result.Action.ID) {
 			continue
+		}
+
+		// Happens for subflows at times
+		if result.Status == "WAITING" || result.Action.AppName == "shuffle-subflow" || result.Action.AppName == "User Input" || result.Action.AppName == "Shuffle Workflow" {
+			cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
+			cache, err := GetCache(ctx, cacheId)
+			if err != nil {
+				//log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+				continue
+			}
+
+			actionResult := ActionResult{}
+			cacheData := []byte(cache.([]uint8))
+
+			// Just ensuring the data is good
+			err = json.Unmarshal(cacheData, &actionResult)
+			if err == nil {
+				result = actionResult
+			} else {
+				log.Printf("[ERROR] Failed unmarshalling in fix exec for ID %s (3): %s", cacheId, err)
+			}
 		}
 
 		handled = append(handled, result.Action.ID)
