@@ -3407,10 +3407,6 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//CreatorSkills string `json:"creator_skills"`
-	//CreatorWorkStatus string `json:"creator_work_status"`
-	//CreatorSocial string `json:"creator_social"`
-
 	if len(t.Suborgs) > 0 && foundUser.Id != userInfo.Id {
 		log.Printf("[DEBUG] Got suborg change: %s", t.Suborgs)
 		// 1. Check if current users' active org is admin in same parent org as user
@@ -3455,57 +3451,64 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		// After done, check if ANY of the users' orgs are suborgs of active parent org. If they are, remove.
 		// Update: This piece runs anyway, in case the job is to REMOVE any suborg
 		//if len(addedOrgs) > 0 {
-		log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s", addedOrgs, foundUser.Orgs)
-		newUserOrgs := []string{}
-		for _, suborg := range foundUser.Orgs {
-			if suborg == userInfo.ActiveOrg.Id {
-				newUserOrgs = append(newUserOrgs, suborg)
-				continue
-			}
+		log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
 
-			foundOrg, err := GetOrg(ctx, suborg)
-			if err != nil {
-				log.Printf("[WARNING] Failed to get suborg in user edit (2) for %s (%s): %s", foundUser.Username, foundUser.Id, err)
-				newUserOrgs = append(newUserOrgs, suborg)
-				continue
-			}
+		// Removed for now due to multi-org chain deleting you from other org chains
 
-			// Slower but easier :)
-			parsedOrgs := []string{}
-			for _, item := range foundOrg.ManagerOrgs {
-				parsedOrgs = append(parsedOrgs, item.Id)
-			}
-
-			//if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
-			if !ArrayContains(parsedOrgs, suborg) {
-				if ArrayContains(t.Suborgs, suborg) {
-					log.Printf("[DEBUG] Reappending org %s", suborg)
+		/*
+			newUserOrgs := []string{}
+			for _, suborg := range foundUser.Orgs {
+				if suborg == userInfo.ActiveOrg.Id {
 					newUserOrgs = append(newUserOrgs, suborg)
-				} else {
-					log.Printf("[DEBUG] Skipping org %s", suborg)
-				}
-				//continue
-			}
-
-			log.Printf("[DEBUG] Should remove user %s (%s) from org %s if it doesn't exist in t.Suborgs", foundUser.Username, foundUser.Id, suborg)
-			newUsers := []User{}
-			for _, user := range foundOrg.Users {
-				if user.Id == foundUser.Id {
 					continue
 				}
 
-				newUsers = append(newUsers, user)
+				foundOrg, err := GetOrg(ctx, suborg)
+				if err != nil {
+					log.Printf("[WARNING] Failed to get suborg in user edit (2) for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+					newUserOrgs = append(newUserOrgs, suborg)
+					continue
+				}
+
+				// Slower but easier :)
+				parsedOrgs := []string{}
+				for _, item := range foundOrg.ManagerOrgs {
+					parsedOrgs = append(parsedOrgs, item.Id)
+				}
+
+				//if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
+				if !ArrayContains(parsedOrgs, suborg) {
+					if ArrayContains(t.Suborgs, suborg) {
+						log.Printf("[DEBUG] Reappending org %s", suborg)
+						newUserOrgs = append(newUserOrgs, suborg)
+					} else {
+						log.Printf("[DEBUG] Skipping org %s", suborg)
+					}
+
+					//continue
+				}
+
+				log.Printf("[DEBUG] Should remove user %s (%s) from org %s if it doesn't exist in t.Suborgs", foundUser.Username, foundUser.Id, suborg)
+				newUsers := []User{}
+				for _, user := range foundOrg.Users {
+					if user.Id == foundUser.Id {
+						continue
+					}
+
+					newUsers = append(newUsers, user)
+				}
+
+				foundOrg.Users = newUsers
+				err = SetOrg(ctx, *foundOrg, foundOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting org when changing user access: %s", err)
+				}
+
 			}
 
-			foundOrg.Users = newUsers
-			err = SetOrg(ctx, *foundOrg, foundOrg.Id)
-			if err != nil {
-				log.Printf("[WARNING] Failed setting org when changing user access: %s", err)
-			}
+			foundUser.Orgs = append(newUserOrgs, addedOrgs...)
+		*/
 
-		}
-
-		foundUser.Orgs = append(newUserOrgs, addedOrgs...)
 		log.Printf("[DEBUG] New orgs for %s (%s) is %s", foundUser.Username, foundUser.Id, foundUser.Orgs)
 		/*
 			for _, suborg := range addedOrgs {
@@ -7083,6 +7086,18 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Checking if it's a special region. All user-specific requests should
+	// go through shuffler.io and not subdomains
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Create Suborg request to main site handler (shuffler.io)")
+
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in creating sub org: %s", err)
@@ -7212,14 +7227,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Id:   orgId,
 	})
 
-	err = SetOrg(ctx, newOrg, newOrg.Id)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating parent org %s: %s", newOrg.Id, err)
@@ -7250,6 +7257,16 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed updating user when setting creating suborg (update admins - update): %s ", err)
 			continue
 		}
+
+		newOrg.Users = append(newOrg.Users, loopUser)
+	}
+
+	err = SetOrg(ctx, newOrg, newOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	user.Orgs = append(user.Orgs, newOrg.Id)
@@ -7261,25 +7278,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-
-	/*
-		if project.Environment != "cloud" {
-			log.Printf("[DEBUG] Starting cloud schedule for org %s (%s)", newOrg.Name, newOrg.Id)
-			interval := 15
-			log.Printf("[DEBUG] Should start schedule for org %s", newOrg.Name)
-			job := func() {
-				err := remoteOrgJobHandler(newOrg, interval)
-				if err != nil {
-					log.Printf("[ERROR] Failed request with remote org setup (3): %s", err)
-				}
-			}
-
-			jobret, err := newscheduler.Every(int(interval)).Seconds().NotImmediately().Run(job)
-			if err != nil {
-				log.Printf("[CRITICAL] Failed to schedule new org: %s", err)
-			}
-		}
-	*/
 
 	log.Printf("[INFO] User %s SUCCESSFULLY ADDED child org %s (%s) for parent %s (%s)", user.Username, newOrg.Name, newOrg.Id, parentOrg.Name, parentOrg.Id)
 	resp.WriteHeader(200)
@@ -16413,6 +16411,9 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			childNodes := FindChildNodes(workflowExecution, nextAction, []string{}, []string{})
 			//childNodes := children[nextAction]
 			//log.Printf("[INFO] Child nodes for %s: %d", nextAction, len(childNodes))
+
+			// FIX: Make sure this part checks for WAITING
+			// as it seems to sometimes skip subflow entirely
 
 			for _, parent := range parents[nextAction] {
 				// Check if the parent is also a child. This can ensure continueation no matter what
