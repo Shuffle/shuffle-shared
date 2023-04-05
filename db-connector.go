@@ -676,6 +676,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return nil
 	}
 
+	if len(workflowExecution.WorkflowId) == 0 {
+		log.Printf("[WARNING] Workflowexecution workflowId can't be empty.")
+		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	}
+
 	// Fixes missing pieces
 	workflowExecution = Fixexecution(ctx, workflowExecution)
 
@@ -6537,6 +6542,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
+					log.Printf("[WARNING] Error getting workflow executions: %s", err)
 					break
 				}
 

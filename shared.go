@@ -16,6 +16,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	//"os/exec"
+	mathrand "math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -2783,6 +2784,8 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	log.Printf("[DEBUG] Found %d executions for %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
@@ -5784,7 +5787,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !found {
-			log.Printf("[DEBUG] Adding user %s (%s) to list", item.Username, item.Id)
+			//log.Printf("[DEBUG] Adding user %s (%s) to list", item.Username, item.Id)
 			deduplicatedUsers = append(deduplicatedUsers, item)
 		}
 	}
@@ -7071,6 +7074,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	// Cleanup cache for the user
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 
@@ -7251,6 +7255,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		// Add org to user
 		foundUser.Orgs = append(foundUser.Orgs, newOrg.Id)
 		err = SetUser(ctx, foundUser, false)
 		if err != nil {
@@ -7258,6 +7263,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		// Add user to org
 		newOrg.Users = append(newOrg.Users, loopUser)
 	}
 
@@ -8077,11 +8083,22 @@ func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Id != hook.Owner && user.ActiveOrg.Id != hook.OrgId {
-		log.Printf("[WARNING] Wrong user (%s) for workflow %s", user.Username, hook.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	//if user.Id != hook.Owner && user.ActiveOrg.Id != hook.OrgId {
+	//	log.Printf("[WARNING] Wrong user (%s) for workflow %s", user.Username, hook.Id)
+	//	resp.WriteHeader(401)
+	//	resp.Write([]byte(`{"success": false}`))
+	//	return
+	//}
+
+	if user.Id != hook.Owner || len(user.Id) == 0 {
+		if hook.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+			log.Printf("[AUDIT] User %s is stopping hook for workflow %s as admin. Owner: %s", user.Username, hook.Workflows[0], hook.Owner)
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for hook %s (stop hook)", user.Username, hook.Workflows[0])
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	if len(hook.Workflows) > 0 {
@@ -8432,6 +8449,65 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
+func verifier() (*CodeVerifier, error) {
+	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
+	b := make([]byte, 32, 32)
+	for i := 0; i < 32; i++ {
+		b[i] = byte(r.Intn(255))
+	}
+	return CreateCodeVerifierFromBytes(b)
+}
+
+func GetOpenIdUrl(request *http.Request, org Org) string {
+	baseSSOUrl := org.SSOConfig.OpenIdAuthorization
+
+	codeChallenge := uuid.NewV4().String()
+	//h.Write([]byte(v.Value))
+	verifier, verifiererr := verifier()
+	if verifiererr == nil {
+		codeChallenge = verifier.Value
+	}
+
+	//log.Printf("[DEBUG] Got challenge value %s (pre state)", codeChallenge)
+
+	// https://192.168.55.222:3443/api/v1/login_openid
+	//location := strings.Split(request.URL.String(), "/")
+	//redirectUrl := url.QueryEscape("http://localhost:5001/api/v1/login_openid")
+	redirectUrl := url.QueryEscape(fmt.Sprintf("http://%s/api/v1/login_openid", request.Host))
+	if project.Environment != "cloud" && strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
+		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
+	}
+
+	if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
+	}
+
+	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
+
+	// has to happen after initial value is stored
+	if verifiererr == nil {
+		codeChallenge = verifier.CodeChallengeS256()
+	}
+
+	//log.Printf("[DEBUG] Got challenge value %s (POST state)", codeChallenge)
+
+	if len(org.SSOConfig.OpenIdClientSecret) > 0 {
+
+		//baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&client_secret=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, org.SSOConfig.OpenIdClientSecret)
+		state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s&challenge=%s", org.Id, redirectUrl, org.SSOConfig.OpenIdClientSecret)))
+		log.Printf("[INFO] URL: %s", redirectUrl)
+
+		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=id_token&scope=openid&redirect_uri=%s&state=%s&response_mode=form_post&nonce=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, state)
+		//baseSSOUrl += fmt.Sprintf("&client_secret=%s", org.SSOConfig.OpenIdClientSecret)
+		log.Printf("[DEBUG] Found OpenID url (client secret). Extra redirect check: %s - %s", request.URL.String(), baseSSOUrl)
+	} else {
+		log.Printf("[DEBUG] Found OpenID url (PKCE!!). Extra redirect check: %s", request.URL.String())
+		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
+	}
+
+	return baseSSOUrl
+}
+
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -8550,8 +8626,18 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			if len(org.SSOConfig.SSOEntrypoint) > 0 {
-				log.Printf("[DEBUG] Should redirect user %s in org %s to SSO login at %s", userdata.Username, userdata.ActiveOrg.Id, org.SSOConfig.SSOEntrypoint)
+			log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
+			if len(org.SSOConfig.SSOEntrypoint) > 0 || len(org.SSOConfig.OpenIdAuthorization) > 0 {
+				baseSSOUrl := org.SSOConfig.SSOEntrypoint
+				redirectKey := "SSO_REDIRECT"
+				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+					log.Printf("[INFO] OpenID login for %s", org.Id)
+					redirectKey = "SSO_REDIRECT"
+
+					baseSSOUrl = GetOpenIdUrl(request, *org)
+				}
+
+				log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
 
 				// Check if the user has other orgs that can be swapped to - if so SWAP
 				userDomain := strings.Split(userdata.Username, "@")
@@ -8581,7 +8667,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					// Shouldn't contain the domain of the users' email
-					log.Printf("[DEBUG] Found org for %s (%s) to check into instead of running SSO: %s", userdata.Username, userdata.Id, innerorg.Name)
+					log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", userdata.Username, userdata.Id, innerorg.Name)
 					userdata.ActiveOrg.Id = innerorg.Id
 					userdata.ActiveOrg.Name = innerorg.Name
 
@@ -8593,7 +8679,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				// user controllable field hmm :)
 				if !updateUser {
 					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "SSO_REDIRECT", "url": "%s"}`, org.SSOConfig.SSOEntrypoint)))
+					resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "%s", "url": "%s"}`, redirectKey, baseSSOUrl)))
 					return
 				}
 			}
@@ -13371,7 +13457,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.CreationTime = time.Now().Unix()
 	newUser.Orgs = []string{foundOrg.Id}
 	newUser.LoginType = "SSO"
-	newUser.Role = "admin"
+	newUser.Role = "user"
 	newUser.Session = uuid.NewV4().String()
 
 	newUser.ActiveOrg.Id = matchingOrgs[0].Id
