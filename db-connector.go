@@ -364,8 +364,11 @@ func DeleteCache(ctx context.Context, name string) error {
 
 // Cache handlers
 func GetCache(ctx context.Context, name string) (interface{}, error) {
-	if len(memcached) > 0 {
+	if len(name) == 0 {
+		return "", nil
+	}
 
+	if len(memcached) > 0 {
 		item, err := mc.Get(name)
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
@@ -379,10 +382,10 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				keyCount := 1
 				keyname := fmt.Sprintf("%s_%d", name, keyCount)
 				for {
-					if item, err := mc.Get(keyname); err == gomemcache.ErrCacheMiss {
+					if item, err := mc.Get(keyname); err != nil {
 						break
 					} else {
-						if totalData != nil && item.Value != nil {
+						if totalData != nil && item != nil && item.Value != nil {
 							totalData = append(totalData, item.Value...)
 						}
 
@@ -411,7 +414,8 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 
 	if project.Environment == "cloud" {
 
-		if item, err := memcache.Get(ctx, name); err == memcache.ErrCacheMiss {
+		if item, err := memcache.Get(ctx, name); err != nil {
+
 		} else if err != nil {
 			return "", errors.New(fmt.Sprintf("Failed getting CLOUD cache for %s: %s", name, err))
 		} else {
@@ -421,7 +425,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 				keyCount := 1
 				keyname := fmt.Sprintf("%s_%d", name, keyCount)
 				for {
-					if item, err := memcache.Get(ctx, keyname); err == memcache.ErrCacheMiss {
+					if item, err := memcache.Get(ctx, keyname); err != nil {
 						break
 					} else {
 						totalData = append(totalData, item.Value...)
@@ -6431,26 +6435,33 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int) ([]WorkflowExecution, error) {
 	index := "workflowexecution"
 
-	cacheKey := fmt.Sprintf("%s_%s_%d", index, workflowId, amount)
+	cacheKey := fmt.Sprintf("%s_%s", index, workflowId)
+	var executions []WorkflowExecution
 	var err error
 	totalMaxSize := 11184810
-	var executions []WorkflowExecution
-	if project.CacheDb {
-		cache, err := GetCache(ctx, cacheKey)
-		if err == nil {
-			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
-			err = json.Unmarshal(cacheData, &executions)
+	/*
+		if project.CacheDb {
+			cache, err := GetCache(ctx, cacheKey)
 			if err == nil {
-				//log.Printf("[DEBUG] Returned %d executions for workflow %s", len(executions), workflowId)
-				return executions, nil
+				cacheData := []byte(cache.([]uint8))
+				//log.Printf("CACHEDATA: %s", cacheData)
+				err = json.Unmarshal(cacheData, &executions)
+				if err == nil {
+					if len(executions) > amount {
+						executions = executions[:amount]
+					}
+
+					log.Printf("[DEBUG] Returned %d executions for workflow %s", len(executions), workflowId)
+
+					return executions, nil
+				} else {
+					log.Printf("[WARNING] Failed getting workflowexecutions for %s: %s", workflowId, err)
+				}
 			} else {
-				log.Printf("[WARNING] Failed getting workflowexecutions for %s: %s", workflowId, err)
+				//log.Printf("[WARNING] Failed getting execution cache for workflow %s", workflowId)
 			}
-		} else {
-			//log.Printf("[WARNING] Failed getting execution cache for workflow %s", workflowId)
 		}
-	}
+	*/
 
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer

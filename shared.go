@@ -2785,7 +2785,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] Found %d executions for %s", len(workflowExecutions), fileId)
+	log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
@@ -12505,13 +12505,17 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 		RunFixParentWorkflowResult(ctx, execution)
 	}
 
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", execution.WorkflowId))
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", execution.WorkflowId))
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_100", execution.WorkflowId))
+
 	return nil
 }
 
 func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution) error {
 	//log.Printf("IS IT SUBFLOW?")
 	if len(execution.ExecutionParent) > 0 && execution.Status != "EXECUTING" && (project.Environment == "onprem" || project.Environment == "cloud") {
-		log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", execution.Result, execution.ExecutionParent)
+		log.Printf("[DEBUG] Got the result '%s' for subflow of %s. Workflow: '%s' Check if this should be added to loop.", execution.Result, execution.ExecutionParent, execution.WorkflowId)
 
 		parentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
 		if err == nil {
@@ -14720,12 +14724,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				Value: action.ID,
 			})
 
-			backendUrl := ""
+			backendUrl := os.Getenv("BASE_URL")
 			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 			}
 
-			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 			}
 
@@ -14734,6 +14738,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					Name:  "backend_url",
 					Value: backendUrl,
 				})
+			} else {
+				log.Printf("[ERROR] No Backend URL found for subflow. May fail to connect properly.")
+
 			}
 
 			workflowExecution.Workflow.Actions = append(workflowExecution.Workflow.Actions, action)
@@ -14749,6 +14756,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	if finished {
 		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
 	}
+
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_100", workflowExecution.WorkflowId))
+
+	workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
 }
@@ -16649,7 +16662,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					Value: action.ID,
 				})
 
-				backendUrl := ""
+				backendUrl := os.Getenv("BASE_URL")
 				if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 					backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 				}
@@ -16814,7 +16827,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						Value: workflowExecution.Start,
 					})
 
-					backendUrl := ""
+					backendUrl := os.Getenv("BASE_URL")
 					if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 						backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 					}
