@@ -11680,7 +11680,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheData.Authorization = ""
 	cacheData.OrgId = ""
 
-	log.Printf("[INFO] Successfully GOT key %s for org %s", tmpData.Key, tmpData.OrgId)
+	log.Printf("[INFO] Successfully GOT key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 	b, err := json.Marshal(cacheData)
 	if err != nil {
 		log.Printf("[WARNING] Failed to GET cache key %s for org %s", tmpData.Key, tmpData.OrgId)
@@ -11804,7 +11804,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Successfully set key %s for org %s (%s)", tmpData.Key, org.Name, tmpData.OrgId)
+	log.Printf("[INFO] Successfully set key '%s' for org %s (%s)", tmpData.Key, org.Name, tmpData.OrgId)
 	type returnStruct struct {
 		Success bool `json:"success"`
 	}
