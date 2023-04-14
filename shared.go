@@ -12484,7 +12484,7 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 	err = SetWorkflowExecution(ctx, execution, true)
 	executionSet := true
 	if err == nil {
-		log.Printf("[INFO] Set workflowexecution based on new worker (>0.8.53) for execution %s. Actions: %d, Triggers: %d, Results: %d, Status: %s", execution.ExecutionId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status) //, execution.Result)
+		log.Printf("[INFO][%s] Set workflowexecution based on new worker (>0.8.53) for workflow %s. Actions: %d, Triggers: %d, Results: %d, Status: %s", execution.ExecutionId, execution.WorkflowId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status) //, execution.Result)
 		executionSet = true
 	} else {
 		log.Printf("[WARNING] Failed setting the execution for new worker (>0.8.53) - retrying once: %s. ExecutionId: %s, Actions: %d, Triggers: %d, Results: %d, Status: %s", err, execution.ExecutionId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status)
@@ -14823,7 +14823,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 
 		sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
 		if sourceAuthOk {
-			log.Printf("[DEBUG] Got source auth %s", sourceAuth)
+			//log.Printf("[DEBUG] Got source auth %s", sourceAuth)
 			// Must origin from a parent workflow")
 
 			if sourceAuth[0] != workflowExecution.Authorization {

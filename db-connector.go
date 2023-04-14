@@ -703,14 +703,20 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
 	}
 
-	// Check if it's worker, as it doesn't have DB access
-	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
+	// Weird workaround that only applies during local development
+	hostname, err := os.Hostname()
+	if err != nil || hostname == "debian" {
+		hostname = "shuffle-backend"
+	}
+
+	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
 		return nil
 	}
 
 	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
-		//log.Printf("[WARNING] SHOULD skip DB saving for execution")
+		log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+
 		return nil
 	} else {
 		// Deleting cache so that listing can work well
@@ -718,6 +724,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
 	}
+
+	log.Printf("[INFO] Saving execution %s to DB for workflow %s (%s)", workflowExecution.ExecutionId, workflowExecution.Workflow.Name, workflowExecution.WorkflowId)
 
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
@@ -954,19 +962,35 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 }
 
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
-
 	// Make sure to not having missing items in the execution
+	lastexecVar := map[string]ActionResult{}
 	for _, action := range workflowExecution.Workflow.Actions {
 		found := false
+		result := ActionResult{}
 
-		for _, result := range workflowExecution.Results {
-			if result.Action.ID == action.ID && result.Status != "WAITING" {
+		for _, innerresult := range workflowExecution.Results {
+			if innerresult.Action.ID == action.ID && innerresult.Status != "WAITING" {
 				found = true
+				result = innerresult
 				break
 			}
 		}
 
 		if found {
+			if len(action.ExecutionVariable.Name) > 0 {
+				//log.Printf("\n\n[INFO] Found execution variable %s (2)\n\n", result.Action.ExecutionVariable.Name)
+
+				// Check if key in lastexecVar
+				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
+
+					if lastexecVar[action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+						lastexecVar[action.ExecutionVariable.Name] = result
+					}
+				} else {
+					lastexecVar[action.ExecutionVariable.Name] = result
+				}
+			}
+
 			continue
 		}
 
@@ -977,13 +1001,27 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			continue
 		}
 
-		actionResult := ActionResult{}
 		cacheData := []byte(cache.([]uint8))
 
 		// Just ensuring the data is good
-		err = json.Unmarshal(cacheData, &actionResult)
+		err = json.Unmarshal(cacheData, &result)
 		if err == nil {
-			workflowExecution.Results = append(workflowExecution.Results, actionResult)
+			workflowExecution.Results = append(workflowExecution.Results, result)
+
+			if len(action.ExecutionVariable.Name) > 0 {
+				//log.Printf("\n\n[INFO] Found execution variable %s (1)\n\n", result.Action.ExecutionVariable.Name)
+
+				// Check if key in lastexecVar
+				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
+
+					if lastexecVar[action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+						lastexecVar[action.ExecutionVariable.Name] = result
+					}
+				} else {
+					lastexecVar[action.ExecutionVariable.Name] = result
+				}
+			}
+
 		} else {
 			log.Printf("[ERROR] Failed unmarshalling in fix exec for ID %s (1): %s", cacheId, err)
 		}
@@ -1043,9 +1081,18 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 
 	workflowExecution.Results = newResults
 
-	// Check if finished too?
+	//log.Printf("\n\n[INFO] Found %d execution variables. Needed: %d\n\n", len(lastexecVar), len(workflowExecution.Workflow.ExecutionVariables))
+	for varKey, variable := range workflowExecution.Workflow.ExecutionVariables {
 
-	//UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, workflowExecution.Start, children, parents, visited, executed, nextActions, environments, extra)
+		for key, value := range lastexecVar {
+			if key == variable.Name {
+				workflowExecution.Workflow.ExecutionVariables[varKey].Value = value.Result
+				break
+			}
+		}
+	}
+
+	// Check if finished too?
 
 	return workflowExecution
 }
@@ -4493,7 +4540,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	env = strings.ReplaceAll(env, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
-	log.Printf("[DEBUG] Adding to queue name %s", nameKey)
+	//log.Printf("[DEBUG] Adding to queue name %s", nameKey)
 
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
@@ -6467,14 +6514,15 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": amount,
-			"sort": map[string]interface{}{
-				"started_at": map[string]interface{}{
-					"order": "desc",
-				},
-			},
 			"query": map[string]interface{}{
-				"match": map[string]interface{}{
-					"workflow_id": workflowId,
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						{
+							"match": map[string]interface{}{
+								"workflow_id": workflowId,
+							},
+						},
+					},
 				},
 			},
 		}
@@ -6533,7 +6581,9 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 
 		executions = []WorkflowExecution{}
 		for _, hit := range wrapped.Hits.Hits {
-			executions = append(executions, hit.Source)
+			if hit.Source.WorkflowId == workflowId || hit.Source.Workflow.ID == workflowId {
+				executions = append(executions, hit.Source)
+			}
 		}
 
 		//return executions, nil
@@ -6650,6 +6700,8 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			}
 		}
 	}
+
+	log.Printf("[INFO] Returning %d executions with %d amount max", len(executions), amount)
 
 	slice.Sort(executions[:], func(i, j int) bool {
 		return executions[i].StartedAt > executions[j].StartedAt
