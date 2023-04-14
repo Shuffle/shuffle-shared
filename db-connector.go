@@ -2296,8 +2296,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
 	})
 
-	//log.Printf("Returning %d workflows", len(fixedWorkflows))
-
 	return fixedWorkflows, nil
 }
 
@@ -4679,7 +4677,6 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 		}
 	}
 
-	//log.Printf("[DEBUG] Returning %d executions", len(executions))
 	return ExecutionRequestWrapper{
 		Data: executions,
 	}, nil
@@ -6700,8 +6697,6 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			}
 		}
 	}
-
-	log.Printf("[INFO] Returning %d executions with %d amount max", len(executions), amount)
 
 	slice.Sort(executions[:], func(i, j int) bool {
 		return executions[i].StartedAt > executions[j].StartedAt
