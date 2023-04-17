@@ -11571,6 +11571,84 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
+func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[DEBUG] Api authentication failed in delete cache key: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	//for key, value := range data.Apps {
+	var orgId string
+	var cacheKey string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		orgId = location[4]
+		cacheKey = location[6]
+	}
+
+	if len(cacheKey) == 0 || len(orgId) == 0 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Missing org id or cache key"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	if orgId != user.ActiveOrg.Id {
+		log.Printf("[INFO] OrgId %s and %s don't match", orgId, user.ActiveOrg.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
+		return
+	}
+
+	cacheKey = strings.Trim(cacheKey, " ")
+	cacheId := fmt.Sprintf("%s_%s", orgId, cacheKey)
+	cacheData, err := GetCacheKey(ctx, cacheId)
+	if err != nil {
+		log.Printf("[WARNING] Failed to GET cache key %s for org %s", cacheKey, orgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
+		return
+	}
+
+	if cacheData.OrgId != user.ActiveOrg.Id {
+		log.Printf("[INFO] OrgId %s and %s don't match", cacheData.OrgId, user.ActiveOrg.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
+		return
+	}
+
+	entity := "org_cache"
+	cacheId = url.QueryEscape(cacheId)
+	if len(cacheId) > 128 {
+		cacheId = cacheId[0:127]
+	}
+
+	DeleteKey(ctx, entity, cacheId)
+	DeleteCache(ctx, cacheKey)
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheKey))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, orgId))
+
+	log.Printf("[INFO] Successfully Deleted key '%s' for org %s", cacheKey, orgId)
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {

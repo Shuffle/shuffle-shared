@@ -836,8 +836,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "harfanglab-edr"
-	appversion := "1.0.0"
+	appname := "http"
+	appversion := "1.3.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)
