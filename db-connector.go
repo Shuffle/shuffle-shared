@@ -3451,7 +3451,9 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		return nil
 	}
 
-	log.Printf("[INFO] Updating user %s (%s) with data length %d", user.Username, user.Id, len(data))
+	//log.Printf("[INFO] Updating user %s (%s) with data length %d", user.Username, user.Id, len(data))
+
+	// This may cause issues huh
 	if len(data) > 1000000 {
 		user.PrivateApps = []WorkflowApp{}
 
@@ -3891,6 +3893,28 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	allApps = user.PrivateApps
 	org, orgErr := GetOrg(ctx, user.ActiveOrg.Id)
+
+	log.Printf("ACTIVE APPS: %d", len(org.ActiveApps))
+
+	if orgErr == nil && len(org.ActiveApps) > 150 {
+		// No reason for it to be this big. Arbitrarily reducing.
+		same := []string{}
+		samecnt := 0
+		for _, activeApp := range org.ActiveApps {
+			if ArrayContains(same, activeApp) {
+				samecnt += 1
+				continue
+			}
+
+			same = append(same, activeApp)
+		}
+
+		org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
+		go SetOrg(ctx, *org, org.Id)
+	}
+
+	log.Printf("ACTIVE APPS: %d", len(org.ActiveApps))
+
 	if len(user.PrivateApps) > 0 && orgErr == nil {
 		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
 		orgChanged := false

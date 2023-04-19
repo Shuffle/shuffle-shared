@@ -7090,18 +7090,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Checking if it's a special region. All user-specific requests should
-	// go through shuffler.io and not subdomains
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting Create Suborg request to main site handler (shuffler.io)")
-
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
-
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in creating sub org: %s", err)
@@ -7110,8 +7098,31 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Checking if it's a special region. All user-specific requests should
+	// go through shuffler.io and not subdomains
+	ctx := GetContext(request)
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Create Suborg request to main site handler (shuffler.io)")
+
+			RedirectUserRequest(resp, request)
+
+			DeleteCache(ctx, user.ApiKey)
+			DeleteCache(ctx, user.Session)
+			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+			return
+		}
+	}
+
 	if user.Role != "admin" {
-		log.Printf("[WARNING] Not admin: %s (%s).", user.Username, user.Id)
+		log.Printf("[WARNING] Can't make suborg without being admin: %s (%s).", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
@@ -7165,7 +7176,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := GetContext(request)
 	parentOrg, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[WARNING] Organization %s doesn't exist: %s", tmpData.OrgId, err)
@@ -9487,6 +9497,17 @@ func ResendActionResult(actionData []byte, retries int64) {
 	//log.Printf("[DEBUG] Status %d and Body from rerun: %s", newresp.StatusCode, string(body))
 }
 
+// Function for translating action results into whatever.
+// Came about because of general issues with Oauth2
+func FixActionResultOutput(actionResult ActionResult) ActionResult {
+	if strings.Contains(actionResult.Result, "TypeError") && strings.Contains(actionResult.Result, "missing 1 required positional argument: 'access_token'") {
+		//log.Printf("\n\nTypeError  in actionresult!")
+		actionResult.Result = `{"success": false, "reason": "This App requires authentication with Oauth2. Make sure to authenticate it first."}`
+	}
+
+	return actionResult
+}
+
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
 	var err error
@@ -9503,6 +9524,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// 3. Find executed without a result
 	// 4. Ensure the result is NOT set when running an action
 
+	actionResult = FixActionResultOutput(actionResult)
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 	// Done elsewhere
 
@@ -11608,7 +11630,6 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	if orgId != user.ActiveOrg.Id {
 		log.Printf("[INFO] OrgId %s and %s don't match", orgId, user.ActiveOrg.Id)
 		resp.WriteHeader(401)
@@ -11777,8 +11798,11 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	user, usererr := HandleApiAuthentication(resp, request)
+
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
+		log.Printf("[WARNING] Failed reading body in set cache: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
 		return
@@ -11807,36 +11831,38 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if tmpData.OrgId != fileId {
-		log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
-		return
-	}
-
 	ctx := GetContext(request)
+
+	if len(tmpData.OrgId) == 0 {
+		//log.Printf("[INFO] No org id specified. User org: %#v", user.ActiveOrg)
+		tmpData.OrgId = user.ActiveOrg.Id
+	}
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[WARNING] Organization doesn't exist: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting exec: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
-		return
+		if len(tmpData.ExecutionId) > 0 {
+			log.Printf("[WARNING] Failed getting exec: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
+			return
+		}
+
+		workflowExecution.Authorization = uuid.NewV4().String()
 	}
 
 	// Allows for execution auth AND user auth
 	if workflowExecution.Authorization != tmpData.Authorization {
+
 		// Get the user?
-		user, err := HandleApiAuthentication(resp, request)
-		if err != nil {
+		if usererr != nil {
 			log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
@@ -11848,27 +11874,34 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 				resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
 				return
 			}
+
+			tmpData.OrgId = user.ActiveOrg.Id
+		}
+	} else {
+		if workflowExecution.Status != "EXECUTING" {
+			log.Printf("[INFO] Workflow '%s' isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
+			return
 		}
 
-		_ = user
+		if workflowExecution.ExecutionOrg != org.Id {
+			log.Printf("[INFO] Org '%s' wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
+			return
+		}
 	}
 
-	if workflowExecution.Status != "EXECUTING" {
-		log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+	if tmpData.OrgId != fileId {
+		log.Printf("[INFO] OrgId '%s' and '%s' don't match (set cache)", tmpData.OrgId, fileId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
-		return
-	}
-
-	if workflowExecution.ExecutionOrg != org.Id {
-		log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 		return
 	}
 
 	if len(tmpData.Value) == 0 {
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Value can't be empty"}`))
 		return
 	}
@@ -11876,13 +11909,13 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	err = SetCacheKey(ctx, tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed to set cache key %s for org %s", tmpData.Key, tmpData.OrgId)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "Failed to set data"}`))
 		return
 	}
 
-	log.Printf("[INFO] Successfully set key '%s' for org %s (%s)", tmpData.Key, org.Name, tmpData.OrgId)
+	log.Printf("[INFO] Successfully set key '%s' for org '%s' (%s)", tmpData.Key, org.Name, tmpData.OrgId)
 	type returnStruct struct {
 		Success bool `json:"success"`
 	}
