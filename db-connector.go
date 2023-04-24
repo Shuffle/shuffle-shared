@@ -373,7 +373,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
 		} else if err != nil {
-			log.Printf("[WARNING] Failed cache err: %s", err)
+			log.Printf("[ERROR] Failed cache err for key %s: %s", name, err)
 		} else {
 			//log.Printf("[INFO] Got new cache: %s", item)
 
@@ -401,7 +401,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 
 				// Random~ high number
 				if len(totalData) > 10062147 {
-					log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
+					//log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
 				}
 				return totalData, nil
 			} else {
@@ -442,7 +442,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 
 				// Random~ high number
 				if len(totalData) > 10062147 {
-					log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
+					//log.Printf("[WARNING] CACHE: TOTAL SIZE FOR %s: %d", name, len(totalData))
 				}
 				return totalData, nil
 			} else {
@@ -715,7 +715,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
-		log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+		//log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 
 		return nil
 	} else {
@@ -3879,7 +3879,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				return allApps, nil
 			} else {
 				log.Println(string(cacheData))
-				log.Printf("[ERROR] Failed unmarshaling apps: %s", err)
+				log.Printf("[ERROR] Failed unmarshaling apps (in cache): %s", err)
 				//log.Printf("[ERROR] DATALEN: %d", len(cacheData))
 			}
 		} else {
@@ -3893,9 +3893,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	allApps = user.PrivateApps
 	org, orgErr := GetOrg(ctx, user.ActiveOrg.Id)
-
-	log.Printf("ACTIVE APPS: %d", len(org.ActiveApps))
-
 	if orgErr == nil && len(org.ActiveApps) > 150 {
 		// No reason for it to be this big. Arbitrarily reducing.
 		same := []string{}
@@ -3913,7 +3910,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		go SetOrg(ctx, *org, org.Id)
 	}
 
-	log.Printf("ACTIVE APPS: %d", len(org.ActiveApps))
+	//log.Printf("ACTIVE APPS: %d", len(org.ActiveApps))
 
 	if len(user.PrivateApps) > 0 && orgErr == nil {
 		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
@@ -6624,7 +6621,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
-					log.Printf("[WARNING] Error getting workflow executions: %s", err)
+					//log.Printf("[WARNING] Error getting workflow executions: %s", err)
 					break
 				}
 

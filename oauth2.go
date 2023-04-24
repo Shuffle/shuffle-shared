@@ -3481,13 +3481,13 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			//log.Printf("[DEBUG] Got refresh URL %s", field.Value)
 			refreshUrl = field.Value
 		} else if field.Key == "refresh_token" {
-			//log.Printf("[DEBUG] Got refresh token %s", field.Value)
+			log.Printf("[DEBUG] Got refresh token %s", field.Value)
 			refreshToken = field.Value
 		} else if field.Key == "oauth_url" {
 			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
 			oauthUrl = field.Value
 		} else {
-			log.Printf("\n\n[WARNING] Unknown oauth field %s\n\n", field.Key)
+			log.Printf("[ERROR] Unparsed oauth2 field '%s' (not critical)", field.Key)
 		}
 	}
 
@@ -3545,7 +3545,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	respBody := []byte{}
 	if !refresh {
 		//log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
-		log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s.", refreshUrl)
+		log.Printf("[DEBUG] Ran NORMAL oauth2 (no refresh_token) for URL %s.", refreshUrl)
 		req, err := http.NewRequest(
 			"POST",
 			url,
@@ -3575,7 +3575,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		respBody = body
 		if newresp.StatusCode >= 300 {
-			return appAuth, errors.New(fmt.Sprintf("Bad status code for URL %s: %d. Message: %s", url, newresp.StatusCode, respBody))
+			return appAuth, errors.New(fmt.Sprintf("Bad status code for URL (NOT refresh) %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 	} else {
 		//log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
@@ -3617,7 +3617,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		if newresp.StatusCode >= 300 {
 			// Printing on error to handle in future instances
 			log.Printf("[ERROR] Oauth2 data for %s: %#v", requestRefreshUrl, newresp)
-			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh for URL %s: %d. Message: %s", url, newresp.StatusCode, respBody))
+			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh for URL (refresh) %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 
 		// Overwriting auth
@@ -3673,6 +3673,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if len(oauthResp.RefreshToken) > 0 {
+		log.Printf("\n\n[DEBUG] Refresh token: %s\n\n", oauthResp.RefreshToken)
+
 		newauth := []AuthenticationStore{}
 		for _, item := range appAuth.Fields {
 			if item.Key == "refresh_token" {

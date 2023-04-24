@@ -1386,42 +1386,45 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("[INFO] TYPE: %s", appAuth.Type)
 	if appAuth.Type == "oauth2" {
 		log.Printf("[DEBUG] OAUTH2 for workflow %s. User: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id)
-		workflow, err := GetWorkflow(ctx, appAuth.ReferenceWorkflow)
-		if err != nil {
-			log.Printf("[WARNING] WorkflowId %s doesn't exist (set oauth2)", appAuth.ReferenceWorkflow)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
 
-		if user.Id != workflow.Owner || len(user.Id) == 0 {
-			if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (set oauth2)", user.Username, workflow.ID)
-			} else if workflow.Public {
-				log.Printf("[AUDIT] Letting user %s access workflow %s FOR AUTH because it's public", user.Username, workflow.ID)
-			} else {
-				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
+		if len(appAuth.ReferenceWorkflow) > 0 {
+			workflow, err := GetWorkflow(ctx, appAuth.ReferenceWorkflow)
+			if err != nil {
+				log.Printf("[WARNING] WorkflowId %s doesn't exist (set oauth2)", appAuth.ReferenceWorkflow)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
 			}
-		}
 
-		// Finding count in same workflow & setting large image if missing
-		count := 0
-		for _, action := range workflow.Actions {
-			if action.AppName == appAuth.App.Name {
-				count += 1
-
-				if len(appAuth.App.LargeImage) == 0 && len(action.LargeImage) > 0 {
-					appAuth.App.LargeImage = action.LargeImage
+			if user.Id != workflow.Owner || len(user.Id) == 0 {
+				if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+					log.Printf("[AUDIT] User %s is accessing workflow %s as admin (set oauth2)", user.Username, workflow.ID)
+				} else if workflow.Public {
+					log.Printf("[AUDIT] Letting user %s access workflow %s FOR AUTH because it's public", user.Username, workflow.ID)
+				} else {
+					log.Printf("[AUDIT] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false}`))
+					return
 				}
-
 			}
-		}
 
-		appAuth.NodeCount = int64(count)
-		appAuth.WorkflowCount = 1
+			// Finding count in same workflow & setting large image if missing
+			count := 0
+			for _, action := range workflow.Actions {
+				if action.AppName == appAuth.App.Name {
+					count += 1
+
+					if len(appAuth.App.LargeImage) == 0 && len(action.LargeImage) > 0 {
+						appAuth.App.LargeImage = action.LargeImage
+					}
+
+				}
+			}
+
+			appAuth.NodeCount = int64(count)
+			appAuth.WorkflowCount = 1
+		}
 
 		_, err = RunOauth2Request(ctx, user, appAuth, false)
 		if err != nil {
@@ -2412,6 +2415,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 					return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
 				}
 
+				user.ApiKey = newApikey
 				user.SessionLogin = false
 				return *user, nil
 			}
@@ -2441,6 +2445,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		user.SessionLogin = false
+		user.ApiKey = newApikey
 		err = SetCache(ctx, newApikey, b, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
@@ -12028,20 +12033,52 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	}
 
 	newParams := []WorkflowAppActionParameter{}
-	if len(action.AuthenticationId) > 0 {
-		log.Printf("[INFO] Adding auth in single execution!")
-		curAuth, err := GetWorkflowAppAuthDatastore(ctx, action.AuthenticationId)
+	for _, param := range action.Parameters {
+		if param.Configuration && len(param.Value) == 0 {
+			continue
+		}
 
+		newParams = append(newParams, param)
+	}
+
+	isOauth2 := false
+	if len(action.AuthenticationId) > 0 {
+		curAuth, err := GetWorkflowAppAuthDatastore(ctx, action.AuthenticationId)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting authentication with ID %s for org %s: %s", action.AuthenticationId, user.ActiveOrg.Id, err)
 			return workflowExecution, err
 		}
 
+		if curAuth.Type == "oauth2" {
+			isOauth2 = true
+
+			for _, auth := range curAuth.Fields {
+				log.Printf("Oauth2 Field: %s", auth.Key)
+			}
+		}
+
 		if user.ActiveOrg.Id != curAuth.OrgId {
-			log.Printf("[WARNING] User %s tried to use bad auth %s", user.Id, action.AuthenticationId)
+			log.Printf("[WARNING] User '%s' (%s) in org %s tried to use bad auth %s from org %s during execution", user.Username, user.Id, user.ActiveOrg.Id, action.AuthenticationId, curAuth.OrgId)
 			return workflowExecution, err
 		}
 
+		// Handle fixing of order for the fields
+
+		/*
+			lastAccesstoken := -1
+			lastRefreshtoken := -1
+			for cnt, param := range action.Parameters {
+				if param.Type == "access_token" {
+					lastAccesstoken = cnt
+				}
+
+				if param.Type == "refresh_token" {
+					lastRefreshtoken = cnt
+				}
+			}
+		*/
+
+		newFields := []AuthenticationStore{}
 		if curAuth.Encrypted {
 			for _, field := range curAuth.Fields {
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
@@ -12056,8 +12093,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 					if strings.HasSuffix(string(newValue), "/") {
 						newValue = []byte(string(newValue)[0 : len(newValue)-1])
 					}
-
-					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
 				}
 
 				newParam := WorkflowAppActionParameter{
@@ -12066,9 +12101,13 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 					Value: string(newValue),
 				}
 
+				field.Value = string(newValue)
+				newFields = append(newFields, field)
 				newParams = append(newParams, newParam)
 			}
+
 		} else {
+			newFields = curAuth.Fields
 			//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
 			//err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
 			//if err != nil {
@@ -12086,6 +12125,20 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 			}
 		}
 
+		if isOauth2 {
+			log.Printf("\n[INFO] OAUTH2: %s\n", curAuth.Type)
+			curAuth.Fields = newFields
+
+			newAuth, err := RunOauth2Request(ctx, user, *curAuth, true)
+			if err != nil {
+				log.Printf("[ERROR] Failed running single action oauth2 refresh request for org %s: %s", user.ActiveOrg.Id, err)
+			} else {
+				curAuth = &newAuth
+			}
+
+			// Fix params from here? Did access token get added properly?
+		}
+
 		// Rebuild params with the right data. This is to prevent issues on the frontend
 
 		action.Parameters = newParams
@@ -12098,7 +12151,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		}
 
 		if param.Required && len(param.Value) == 0 {
-
 			if param.Name == "username_basic" {
 				param.Name = "username"
 			} else if param.Name == "password_basic" {
@@ -12116,10 +12168,55 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		newParams = append(newParams, param)
 	}
 
+	action.Parameters = newParams
+
+	if isOauth2 {
+
+		foundAction := WorkflowAppAction{}
+		for _, inner := range app.Actions {
+			//log.Printf("[INFO] Checking action %s vs %s", inner.Name, action.Name)
+			if inner.Name == action.Name {
+				foundAction = inner
+				break
+			}
+		}
+
+		if len(foundAction.Name) > 0 {
+			// Find the original and see if this matches?
+			// Seems wrong from Oauth2 :thinking:
+			newParams := []WorkflowAppActionParameter{}
+			for _, param := range action.Parameters {
+				//log.Printf("[DEBUG] Param: %s", param.Name)
+				found := false
+				for _, foundActionParam := range foundAction.Parameters {
+					if foundActionParam.Name == param.Name {
+						found = true
+						newParams = append(newParams, param)
+						break
+					}
+				}
+
+				if !found {
+					//log.Printf("[WARNING] Auth Param %s not found in action %s", param.Name, foundAction.Name)
+					if param.Name == "access_token" {
+						newParams = append(newParams, param)
+					}
+				}
+			}
+
+			action.Parameters = newParams
+		}
+
+		/*
+			for _, param := range action.Parameters {
+				log.Printf("[DEBUG] Param2: %s", param.Name)
+			}
+		*/
+	}
+
 	action.Sharing = app.Sharing
 	action.Public = app.Public
 	action.Generated = app.Generated
-	action.Parameters = newParams
 
 	workflow := Workflow{
 		Actions: []Action{
@@ -17155,10 +17252,79 @@ func GetAllAppCategories() []AppCategory {
 			Name:         "Cases",
 			Color:        "",
 			Icon:         "cases",
-			ActionLabels: []string{"Create ticket"},
+			ActionLabels: []string{"Create ticket", "List tickets", "Get ticket", "Create ticket", "Close ticket", "Add comment", "Update ticket"},
 			RequiredFields: map[string][]string{
-				"Create ticket": []string{"title", "description"},
+				"Create ticket": []string{"title"},
+				"Add comment":   []string{"comment"},
+				"Lis tickets":   []string{"time_range"},
 			},
+			OptionalFields: map[string][]string{
+				"Create ticket": []string{"description"},
+			},
+		},
+		AppCategory{
+			Name:           "Communication",
+			Color:          "",
+			Icon:           "communication",
+			ActionLabels:   []string{"List Messages", "Send Message", "Get Message", "Search messages"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
+		},
+		AppCategory{
+			Name:           "SIEM",
+			Color:          "",
+			Icon:           "siem",
+			ActionLabels:   []string{"Search", "List Alerts", "Close Alert", "Create detection", "Add to lookup list"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
+		},
+		AppCategory{
+			Name:           "Eradication",
+			Color:          "",
+			Icon:           "eradication",
+			ActionLabels:   []string{"List Alerts", "Close Alert", "Create detection", "Block hash", "Search Hosts", "Isolate host", "Unisolate host"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
+		},
+		AppCategory{
+			Name:           "Assets",
+			Color:          "",
+			Icon:           "assets",
+			ActionLabels:   []string{"List Assets", "Get Asset", "Search Assets", "Search Users", "Search endpoints", "Search vulnerabilities"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
+		},
+		AppCategory{
+			Name:           "Intel",
+			Color:          "",
+			Icon:           "intel",
+			ActionLabels:   []string{"Get IOC", "Search IOC", "Create IOC", "Update IOC", "Delete IOC"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
+		},
+		AppCategory{
+			Name:           "IAM",
+			Color:          "",
+			Icon:           "iam",
+			ActionLabels:   []string{"Reset Password", "Enable user", "Disable user", "Get Identity", "Get Asset", "Search Identity"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
+		},
+		AppCategory{
+			Name:           "Network",
+			Color:          "",
+			Icon:           "network",
+			ActionLabels:   []string{"Get Rules", "Allow IP", "Block IP"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
+		},
+		AppCategory{
+			Name:           "Other",
+			Color:          "",
+			Icon:           "other",
+			ActionLabels:   []string{"Update Info", "Get Info", "Get Status", "Get Version", "Get Health", "Get Config", "Get Configs", "Get Configs by type", "Get Configs by name", "Run script"},
+			RequiredFields: map[string][]string{},
+			OptionalFields: map[string][]string{},
 		},
 	}
 
@@ -17174,6 +17340,67 @@ func RemoveFromArray(array []string, element string) []string {
 	}
 
 	return array
+}
+
+func FindRelevantApps(appname string, apps []WorkflowApp) []WorkflowApp {
+	return []WorkflowApp{}
+}
+
+func FindMatchingCategoryApps(category string, apps []WorkflowApp, org *Org) []WorkflowApp {
+	category = strings.ToLower(category)
+	parsedCategories := map[string]Category{
+		"siem":          org.SecurityFramework.SIEM,
+		"email":         org.SecurityFramework.Communication,
+		"communication": org.SecurityFramework.Communication,
+		"assets":        org.SecurityFramework.Assets,
+		"cases":         org.SecurityFramework.Cases,
+		"network":       org.SecurityFramework.Network,
+		"intel":         org.SecurityFramework.Intel,
+		"eradication":   org.SecurityFramework.EDR,
+		"edr":           org.SecurityFramework.EDR,
+		"iam":           org.SecurityFramework.IAM,
+	}
+
+	var matchingApps []WorkflowApp
+	foundCategory, ok := parsedCategories[category]
+	if ok && len(foundCategory.Name) > 0 {
+		parsedCategoryNames := strings.Split(foundCategory.Name, ",")
+		for _, catApp := range parsedCategoryNames {
+			catApp = strings.ToLower(strings.TrimSpace(catApp))
+
+			found := false
+			for _, app := range apps {
+				if strings.ToLower(app.Name) == catApp {
+					matchingApps = append(matchingApps, app)
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				log.Printf("[INFO] Could not find app %s in category %s", catApp, category)
+			}
+		}
+	}
+
+	log.Printf("[INFO] Found %d apps in category %s", len(matchingApps), category)
+	if category == "email" {
+		category = "communication"
+	}
+
+	for _, app := range apps {
+		if len(app.Categories) == 0 {
+			continue
+		}
+
+		if strings.ToLower(app.Categories[0]) != category {
+			continue
+		}
+
+		matchingApps = append(matchingApps, app)
+	}
+
+	return matchingApps
 }
 
 // Apps to test:

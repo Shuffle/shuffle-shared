@@ -45,6 +45,15 @@ type RetStruct struct {
 	IntervalSeconds int64        `json:"interval_seconds"`
 }
 
+type AppMini struct {
+	Id                     string         `json:"id"`
+	Name                   string         `json:"name"`
+	Version                string         `json:"version"`
+	LargeImage             string         `json:"large_image"`
+	Authentication         Authentication `json:"authentication"`
+	AuthenticationRequired bool           `json:"authentication_required"`
+}
+
 type WorkflowApp struct {
 	Name        string `json:"name" yaml:"name" required:true datastore:"name"`
 	AppVersion  string `json:"app_version" yaml:"app_version" required:true datastore:"app_version"`
@@ -138,17 +147,21 @@ type WorkflowAppAction struct {
 	Description       string                       `json:"description" datastore:"description,noindex"`
 	ID                string                       `json:"id" datastore:"id" yaml:"id,omitempty"`
 	Name              string                       `json:"name" datastore:"name"`
+	AppID             string                       `json:"app_id" datastore:"app_id"`
+	AppName           string                       `json:"app_name,omitempty" datastore:"app_name"`
+	AppVersion        string                       `json:"app_version,omitempty" datastore:"app_version"`
 	Label             string                       `json:"label" datastore:"label"`
 	NodeType          string                       `json:"node_type" datastore:"node_type"`
 	Environment       string                       `json:"environment" datastore:"environment"`
 	Sharing           bool                         `json:"sharing" datastore:"sharing"`
 	PrivateID         string                       `json:"private_id" datastore:"private_id"`
 	PublicID          string                       `json:"public_id" datastore:"public_id"`
-	AppID             string                       `json:"app_id" datastore:"app_id"`
 	Tags              []string                     `json:"tags" datastore:"tags" yaml:"tags"`
+	LargeImage        string                       `json:"large_image" datastore:"large_image"`
 	Authentication    []AuthenticationStore        `json:"authentication" datastore:"authentication,noindex" yaml:"authentication,omitempty"`
 	Tested            bool                         `json:"tested" datastore:"tested" yaml:"tested"`
 	Parameters        []WorkflowAppActionParameter `json:"parameters" datastore: "parameters"`
+	InvalidParameters []WorkflowAppActionParameter `json:"previous_parameters,omitempty" datastore: "previous_parameters,noindex"`
 	ExecutionVariable Variable                     `json:"execution_variable" datastore:"execution_variables"`
 	Returns           struct {
 		Description string           `json:"description" datastore:"returns" yaml:"description,omitempty"`
@@ -863,6 +876,7 @@ type Action struct {
 	Environment       string                       `json:"environment,omitempty" datastore:"environment"`
 	Name              string                       `json:"name" datastore:"name"`
 	Parameters        []WorkflowAppActionParameter `json:"parameters" datastore: "parameters,noindex"`
+	InvalidParameters []WorkflowAppActionParameter `json:"previous_parameters,omitempty" datastore: "previous_parameters,noindex"`
 	ExecutionVariable Variable                     `json:"execution_variable,omitempty" datastore:"execution_variable,omitempty"`
 	Position          Position                     `json:"position,omitempty"`
 	Priority          int                          `json:"priority,omitempty" datastore:"priority"`
@@ -3197,6 +3211,7 @@ type AppCategory struct {
 	ActionLabels   []string            `json:"action_labels"`
 	AppLabels      []AppLabel          `json:"app_labels"`
 	RequiredFields map[string][]string `json:"required_fields"`
+	OptionalFields map[string][]string `json:"optional_fields"`
 }
 
 type SingleResult struct {

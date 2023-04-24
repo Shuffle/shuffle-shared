@@ -86,11 +86,19 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		return AlgoliaSearchApp{}, err
 	}
 
-	log.Printf("[INFO] Algolia hits for %s: %d", appname, len(newRecords))
+	log.Printf("[INFO] Algolia hits for '%s': %d", appname, len(newRecords))
 	for _, newRecord := range newRecords {
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if newApp == appname || newRecord.ObjectID == appname {
 			//return newRecord.ObjectID, nil
+			return newRecord, nil
+		}
+	}
+
+	// Second try with contains
+	for _, newRecord := range newRecords {
+		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
+		if strings.Contains(newApp, appname) {
 			return newRecord, nil
 		}
 	}

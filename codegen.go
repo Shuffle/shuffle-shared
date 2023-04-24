@@ -65,6 +65,16 @@ func CopyFile(fromfile, tofile string) error {
 	return nil
 }
 
+func GetCorrectActionName(parsed string) string {
+	if strings.HasPrefix(parsed, "post ") || strings.HasPrefix(parsed, "post_") {
+		parsed = parsed[5:]
+	} else if strings.HasPrefix(parsed, "get list") || strings.HasPrefix(parsed, "get_list") {
+		parsed = parsed[4:]
+	}
+
+	return parsed
+}
+
 func FormatAppfile(filedata string) (string, string) {
 	lines := strings.Split(filedata, "\n")
 
