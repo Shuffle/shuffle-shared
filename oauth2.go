@@ -3673,8 +3673,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if len(oauthResp.RefreshToken) > 0 {
-		log.Printf("\n\n[DEBUG] Refresh token: %s\n\n", oauthResp.RefreshToken)
-
 		newauth := []AuthenticationStore{}
 		for _, item := range appAuth.Fields {
 			if item.Key == "refresh_token" {

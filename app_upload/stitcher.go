@@ -425,7 +425,7 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 		HttpsTrigger:         &cloudfunctions.HttpsTrigger{},
 		MaxInstances:         0,
 		Name:                 functionName,
-		Runtime:              "python38",
+		Runtime:              "python311",
 		SourceArchiveUrl:     applocation,
 		ServiceAccountEmail:  serviceAccountEmail,
 	}
@@ -836,8 +836,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "microsoft-excel"
-	appversion := "1.0.0"
+	appname := "shuffle-tools"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

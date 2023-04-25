@@ -2637,8 +2637,8 @@ func GetResult(ctx context.Context, workflowExecution WorkflowExecution, id stri
 	for _, actionResult := range workflowExecution.Results {
 		if actionResult.Action.ID == id {
 			// ALWAYS relying on cache due to looping subflow issues
+			// Shouldn't go straight for a trigger
 			if actionResult.Status == "WAITING" || actionResult.Action.AppName == "shuffle-subflow" || actionResult.Action.AppName == "User Input" || actionResult.Action.AppName == "Shuffle Workflow" {
-				log.Printf("[DEBUG] Getting result from cache instead of execution for %s", id)
 				break
 			}
 
@@ -2790,7 +2790,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
+	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
@@ -4838,7 +4838,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(workflow.ExecutionVariables) > 0 {
-		log.Printf("[INFO] Found %d execution variable(s) for workflow %s", len(workflow.ExecutionVariables), workflow.ID)
+		log.Printf("[INFO] Found %d runtime variable(s) for workflow %s", len(workflow.ExecutionVariables), workflow.ID)
 	}
 
 	if len(workflow.WorkflowVariables) > 0 {
@@ -7266,7 +7266,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 		foundUser, err := GetUser(ctx, loopUser.Id)
 		if err != nil {
-			log.Printf("[WARNING] User with Identifier %s doesn't exist: %s (update admins - create)", loopUser.Id, err)
+			log.Printf("[ERROR] User with Identifier %s doesn't exist: %s (update admins - create)", loopUser.Id, err)
 			continue
 		}
 
@@ -7274,7 +7274,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		foundUser.Orgs = append(foundUser.Orgs, newOrg.Id)
 		err = SetUser(ctx, foundUser, false)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating user when setting creating suborg (update admins - update): %s ", err)
+			log.Printf("[ERROR] Failed updating user when setting creating suborg (update admins - update): %s ", err)
 			continue
 		}
 
@@ -9361,9 +9361,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			if err != nil {
 				log.Printf("[INFO] Failed reading body after subflow request: %s", err)
 				return err
+			} else {
+				log.Printf("[ERROR] Failed forwarding subflow request of length %d\n: %s", len(resultData), string(body))
+				//log.Printf("[ERROR] Failed forwarding subflow request %s\n: %s", string(resultData), string(body))
 			}
-
-			log.Printf("[ERROR] Failed running subflow request with data %s\n: %s", string(resultData), string(body))
 		}
 	} else {
 		log.Printf("[INFO] NOT sending request because data len is %d and request is %s", len(resultData), sendRequest)
@@ -9611,8 +9612,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
-		//log.Printf("[WARNING] Should maybe not set cache for subflow if it should wait for result.")
+		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	}
 
 	if setCache {
@@ -10321,7 +10321,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				} else
 			*/
 			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
-				log.Printf("[DEBUG] Found execution parent %s for workflow %s", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name)
+				log.Printf("[DEBUG] Found execution parent %s for workflow '%s' (%s)", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
 
 				err = updateExecutionParent(ctx, workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode, workflowExecution.ExecutionId)
 				if err != nil {
@@ -10398,7 +10398,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[WARNING] Sinkholing request of %s IF the subflow-result DOESNT have result. Value: %s", actionResult.Action.Label, actionResult.Result)
+			log.Printf("[WARNING][%s] Sinkholing request of %s IF the subflow-result DOESNT have result.", workflowExecution.ExecutionId, actionResult.Action.Label)
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
 				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem\n\n", workflowExecution.ExecutionId, len(workflowExecution.Results))
@@ -10430,7 +10430,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 
 				} else {
-					log.Printf("\n\nLIST sinkholed (%d) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.\n\n", len(subflowDataList))
+					log.Printf("[WARNING] LIST sinkholed (%d) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.", len(subflowDataList))
 
 					// Set to executing, as the point is for the subflows themselves to update this part. This does NOT happen in the subflow, but in the parent workflow, which is waiting for results to be ingested, hence it's set to EXECUTING
 					workflowExecution.Status = "EXECUTING"
@@ -10448,7 +10448,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								if err != nil {
 									log.Printf("[ERROR] Failed setting cache for SUBFLOW to WAITING: %s", err)
 								} else {
-									log.Printf("[DEBUG] Set cache for SUBFLOW action result %s", cacheId)
+									//log.Printf("[DEBUG] Set cache for SUBFLOW action result %s", cacheId)
 								}
 							}
 
@@ -10511,7 +10511,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				// Clean up results' actions
 
 				dbSave = true
-				log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
+				//log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
 				actionId := "execution_argument"
 
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
@@ -11944,20 +11944,30 @@ func CheckHookAuth(request *http.Request, auth string) error {
 		return nil
 	}
 
+	log.Printf("[INFO] Checking hook auth: %s", auth)
+	// Print headers
+	for name, headers := range request.Header {
+		name = strings.ToLower(name)
+		log.Printf("[INFO] %s = %s", name, headers)
+	}
+
 	authSplit := strings.Split(auth, "\n")
 	for _, line := range authSplit {
 		lineSplit := strings.Split(line, "=")
 		if strings.Contains(line, ":") {
-			lineSplit = strings.Split(line, "=")
+			lineSplit = strings.Split(line, ":")
 		}
 
-		if len(lineSplit) == 2 {
+		if len(lineSplit) >= 2 {
 			validationHeader := strings.ToLower(strings.TrimSpace(lineSplit[0]))
 			found := false
+
+			joinedItemValue := strings.Join(lineSplit[1:], "=")
+			log.Printf("[INFO] Checking %s = %s", validationHeader, joinedItemValue)
 			for key, value := range request.Header {
 				if strings.ToLower(key) == validationHeader && len(value) > 0 {
 					//log.Printf("FOUND KEY %s. Value: %s", validationHeader, value)
-					if value[0] == strings.TrimSpace(lineSplit[1]) {
+					if value[0] == strings.TrimSpace(joinedItemValue) {
 						found = true
 						break
 					}
@@ -14992,10 +15002,6 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 	fmt.Fprint(resp, "OK")
 }
 
-func GetAppRequirements() string {
-	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.6\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
-}
-
 // Extra validation sample to be used for workflow executions based on parent workflow instead of users' auth
 
 // Check if the execution data has correct info in it! Happens based on subflows.
@@ -16454,7 +16460,7 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 
 	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode, []string{})
 
-	log.Printf("[DEBUG][%s] Checking what are next actions in workflow %s. Results: %d/%d. NextActions: %s", workflowExecution.ExecutionId, workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, nextActions)
+	//log.Printf("[DEBUG][%s] Checking what are next actions in workflow %s. Results: %d/%d. NextActions: %s", workflowExecution.ExecutionId, workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, nextActions)
 
 	return nextActions
 }

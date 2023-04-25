@@ -184,7 +184,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 	if len(memcached) > 0 {
 		item, err := mc.Get(key)
 		if err == gomemcache.ErrCacheMiss {
-			log.Printf("[DEBUG] Increment memcache miss for %s: %s", key, err)
+			//log.Printf("[DEBUG] Increment memcache miss for %s: %s", key, err)
 
 			item := &gomemcache.Item{
 				Key:        key,
@@ -676,7 +676,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 	if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-		log.Printf("[INFO] Already finished! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
+		//log.Printf("[INFO] Already finished (set workflow)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
 		return nil
 	}
 
@@ -724,8 +724,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
 	}
-
-	log.Printf("[INFO] Saving execution %s to DB for workflow %s (%s)", workflowExecution.ExecutionId, workflowExecution.Workflow.Name, workflowExecution.WorkflowId)
 
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
@@ -3440,6 +3438,10 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
+
+	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 	if updateOrg {
 		user = fixUserOrg(ctx, user)
 	}
@@ -3476,10 +3478,6 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			return err
 		}
 	}
-
-	DeleteCache(ctx, user.ApiKey)
-	DeleteCache(ctx, user.Session)
-	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
@@ -3878,8 +3876,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			if err == nil {
 				return allApps, nil
 			} else {
-				log.Println(string(cacheData))
-				log.Printf("[ERROR] Failed unmarshaling apps (in cache): %s", err)
+				//log.Println(string(cacheData))
+				log.Printf("[ERROR] Failed unmarshaling apps (in cache). Is it stored or mapped together correctly?: %s", err)
+				DeleteCache(ctx, cacheKey)
 				//log.Printf("[ERROR] DATALEN: %d", len(cacheData))
 			}
 		} else {
@@ -6686,7 +6685,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 
 					executionmarshal, err = json.Marshal(executions)
 					if err == nil && len(executionmarshal) > totalMaxSize {
-						log.Printf("Length breaking (2): %d", len(executionmarshal))
+						//log.Printf("Length breaking (2): %d", len(executionmarshal))
 						break
 					}
 				}
@@ -7268,6 +7267,11 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
 	log.Printf("[DEBUG] Starting with memcached address '%s' (SHUFFLE_MEMCACHED). If this is empty, fallback to default (appengine / local)", memcached)
 
+	// In case of downtime / large requests
+	if len(memcached) > 0 {
+		mc.Timeout = 10 * time.Second
+	}
+
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(dbType) == "elasticsearch" || strings.ToLower(dbType) == "opensearch" {
 		project.Es = *GetEsConfig()
@@ -7460,7 +7464,7 @@ func UploadAppSpecFiles(ctx context.Context, client *storage.Client, api Workflo
 			return api, err
 		}
 
-		log.Printf("[DEBUG] Uploaded OpenAPI for %s to path: %s", api.ID, openApiPath)
+		log.Printf("[DEBUG] Uploaded OpenAPI for api with ID '%s' to path: %s", api.ID, openApiPath)
 	}
 
 	fullParsedPath := fmt.Sprintf("gs://%s/extra_specs/%s", project.BucketName, api.ID)
@@ -8113,7 +8117,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-			log.Printf("[INFO] Already finished! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
+			log.Printf("[INFO] Already finished (validate)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
 			return false
 		}
 
