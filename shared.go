@@ -5661,6 +5661,17 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Handle Settings request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	userInfo, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in settings: %s", err)
@@ -5693,6 +5704,17 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Users request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	user, err := HandleApiAuthentication(resp, request)
@@ -6249,6 +6271,17 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
@@ -7103,34 +7136,44 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role != "admin" {
+		log.Printf("[WARNING] Can't make suborg without being admin: %s (%s).", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	parentOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Organization %s doesn't exist or failed to load: %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Just for cache reseting across regions
+	for _, inneruser := range parentOrg.Users {
+		DeleteCache(ctx, inneruser.ApiKey)
+		DeleteCache(ctx, inneruser.Session)
+		DeleteCache(ctx, fmt.Sprintf("session_%s", inneruser.Session))
+		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Id))
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", inneruser.Id))
+		DeleteCache(ctx, fmt.Sprintf("apps_%s", inneruser.Id))
+		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Username))
+		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Id))
+	}
+
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
-	ctx := GetContext(request)
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Create Suborg request to main site handler (shuffler.io)")
 
 			RedirectUserRequest(resp, request)
-
-			DeleteCache(ctx, user.ApiKey)
-			DeleteCache(ctx, user.Session)
-			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			return
 		}
-	}
-
-	if user.Role != "admin" {
-		log.Printf("[WARNING] Can't make suborg without being admin: %s (%s).", user.Username, user.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
-		return
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -7178,14 +7221,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] User can't edit the org \"%s\"", tmpData.OrgId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
-		return
-	}
-
-	parentOrg, err := GetOrg(ctx, tmpData.OrgId)
-	if err != nil {
-		log.Printf("[WARNING] Organization %s doesn't exist: %s", tmpData.OrgId, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
@@ -7238,6 +7273,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		CloudSyncActive: parentOrg.CloudSyncActive,
 		CreatorOrg:      tmpData.OrgId,
 		ActiveApps:      parentOrg.ActiveApps,
+		Region:          parentOrg.Region,
+		RegionUrl:       parentOrg.RegionUrl,
 	}
 	//SyncFeatures:    parentOrg.SyncFeatures,
 
