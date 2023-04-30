@@ -1240,6 +1240,11 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (WorkflowApp, error) {
 	//project.BucketName := "shuffler.appspot.com"
+
+	if strings.HasSuffix(id, ".") {
+		id = id[:len(id)-1]
+	}
+
 	fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", id)
 	log.Printf("[DEBUG] Couldn't find working app for app with ID %s. Checking filepath gs://%s/%s (size too big)", id, project.BucketName, fullParsedPath)
 	//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
@@ -2921,6 +2926,15 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 	nameKey := "openapi3"
 	api := &ParsedOpenApi{}
 
+	if strings.HasSuffix(id, ".") {
+		id = id[:len(id)-1]
+	}
+
+	if len(id) > 32 {
+		log.Printf("[ERROR] ID %s is too long for datastore. Reducing to 32", id)
+		id = id[:32]
+	}
+
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -3985,7 +3999,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					//project.BucketName := "shuffler.appspot.com"
 					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
 					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-					log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
+					log.Printf("[WARNING] Couldn't find for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
 
 					bucket := client.Bucket(project.BucketName)
 					obj := bucket.Object(fullParsedPath)
@@ -4082,7 +4096,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					//project.BucketName := "shuffler.appspot.com"
 					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
 					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-					//log.Printf("[WARNING] Couldn't find  for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
+					//log.Printf("[WARNING] Couldn't find for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
 
 					bucket := client.Bucket(project.BucketName)
 					obj := bucket.Object(fullParsedPath)
@@ -8255,4 +8269,42 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 	}
 
 	return suggestion, nil
+}
+
+func SetConversation(ctx context.Context, input QueryInput) error {
+	nameKey := "conversations"
+
+	if len(input.Id) == 0 {
+		input.Id = uuid.NewV4().String()
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(input)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in conversation: %s", err)
+		return nil
+	}
+
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, input.Id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, input.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &input); err != nil {
+			log.Printf("[WARNING] Error adding conversation: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, input.Id)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for conversation '%s': %s", cacheKey, err)
+		}
+	}
+
+	return nil
 }

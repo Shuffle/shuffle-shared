@@ -1846,7 +1846,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 	headersFound := []string{}
 	if len(path.Get.Parameters) > 0 {
 		for counter, param := range path.Get.Parameters {
-			if param.Value.Schema == nil {
+			if param.Value == nil || param.Value.Schema == nil {
 				continue
 			} else if param.Value.In == "header" {
 				headersFound = append(headersFound, fmt.Sprintf("%s=%s", param.Value.Name, param.Value.Example))

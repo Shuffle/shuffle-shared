@@ -17390,6 +17390,10 @@ func FindRelevantApps(appname string, apps []WorkflowApp) []WorkflowApp {
 }
 
 func FindMatchingCategoryApps(category string, apps []WorkflowApp, org *Org) []WorkflowApp {
+	if len(category) == 0 {
+		return []WorkflowApp{}
+	}
+
 	category = strings.ToLower(category)
 	parsedCategories := map[string]Category{
 		"siem":          org.SecurityFramework.SIEM,
@@ -17426,7 +17430,7 @@ func FindMatchingCategoryApps(category string, apps []WorkflowApp, org *Org) []W
 		}
 	}
 
-	log.Printf("[INFO] Found %d apps in category %s", len(matchingApps), category)
+	log.Printf("[INFO] Found %d apps in category '%s'", len(matchingApps), category)
 	if category == "email" {
 		category = "communication"
 	}

@@ -21,6 +21,17 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
+type QueryInput struct {
+	Id           string `json:"id,omitempty"`
+	Query        string `json:"query"`
+	OutputFormat string `json:"output_format,omitempty"`
+
+	UserId      string `json:"user_id,omitempty"`
+	OrgId       string `json:"org_id,omitempty"`
+	TimeStarted int64  `json:"time_started,omitempty"`
+	TimeEnded   int64  `json:"time_ended,omitempty"`
+}
+
 type ExecutionRequestWrapper struct {
 	Data []ExecutionRequest `json:"data"`
 }
