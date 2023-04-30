@@ -368,6 +368,8 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		return "", nil
 	}
 
+	name = strings.Replace(name, " ", "_", -1)
+
 	if len(memcached) > 0 {
 		item, err := mc.Get(name)
 		if err == gomemcache.ErrCacheMiss {
@@ -474,8 +476,9 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 		log.Printf("[WARNING] Key '%s' is empty with value length %d and expiration %d. Skipping cache.", name, len(data), expiration)
 		return nil
 	}
-	//log.Printf("DATA SIZE: %d", len(data))
+
 	// Maxsize ish~
+	name = strings.Replace(name, " ", "_", -1)
 
 	// Splitting into multiple cache items
 	//if len(memcached) > 0 {
@@ -7146,8 +7149,12 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheId = cacheId[0:127]
 	}
 
+	// ensures it works in workflows properly
+	// URL encode
 	cacheId = url.QueryEscape(cacheId)
 	cacheData.Authorization = ""
+
+	log.Printf("Setting cache key: %s", cacheId)
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(cacheData)
@@ -7188,7 +7195,16 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		id = id[0:127]
 	}
 
+	log.Printf("ID in get cache: %s", id)
 	id = url.QueryEscape(id)
+
+	// 2e7b6a08-b63b-4fc2-bd70-718091509db1
+	// b0ef85ff-353c-4dbf-9e47-b9d0474dc14e
+	// 4.6.11.191
+
+	// 2e7b6a08-b63b-4fc2-bd70-718091509db1_b0ef85ff-353c-4dbf-9e47-b9d0474dc14e_4.6.11.191
+	// 2e7b6a08-b63b-4fc2-bd70-718091509db1_4.6.11.191
+
 	//fmt.Println("http://example.com/say?message="+url.QueryEscape(s))
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
@@ -7232,13 +7248,62 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 
 		cacheData = &wrapped.Source
 	} else {
-		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
+
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (2): %s", err)
 				err = nil
 			} else {
-				return cacheData, err
+				log.Printf("[ERROR] Error in cache key loading for %s: %s", id, err)
+
+				// Search for key by removing first uuid part
+				newId := id
+				orgId := ""
+				newIdSplit := strings.Split(id, "_")
+				if len(newIdSplit) > 1 {
+					orgId = newIdSplit[0]
+					newId = strings.Join(newIdSplit[1:], "_")
+				} else {
+					log.Printf("[ERROR] Failed splitting cache id %s", id)
+					return cacheData, err
+				}
+
+				// 2e7b6a08-b63b-4fc2-bd70-718091509db1
+				// b0ef85ff-353c-4dbf-9e47-b9d0474dc14e
+				// Skipped+because+of+previous+node+-+1
+
+				newId, err = url.QueryUnescape(newId)
+				if err != nil {
+					log.Printf("[ERROR] Failed unescaping cache id %s", newId)
+				}
+				log.Printf("New id: %s", newId)
+
+				// Search for it in datastore with key =
+				cacheKeys := []CacheKeyData{}
+				query := datastore.NewQuery(nameKey).Filter("Key =", newId).Limit(5)
+				_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting cacheKey %s: %s", newId, err)
+					return cacheData, err
+				}
+
+				if len(cacheKeys) > 0 {
+					for _, cacheKey := range cacheKeys {
+						if cacheKey.OrgId == orgId {
+							cacheData = &cacheKey
+							break
+						}
+					}
+
+					if cacheData.Key == "" {
+						return cacheData, errors.New("Key doesn't exist")
+					}
+				} else {
+					log.Printf("[WARNING] Failed getting cacheKey %s: %s", newId, err)
+
+					return cacheData, err
+				}
 			}
 		}
 	}

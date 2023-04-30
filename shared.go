@@ -11623,6 +11623,11 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Print keys
+	//for _, item := range keys {
+	//	log.Printf("[DEBUG] Db Key: %s", item.Key)
+	//}
+
 	b, err := json.Marshal(keys)
 	if err != nil {
 		log.Printf("[WARNING] Failed to marshal cache keys for org %s: %s", org.Id, err)
@@ -11679,30 +11684,45 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	cacheKey, err = url.QueryUnescape(strings.Trim(cacheKey, " "))
+	if err != nil {
+		log.Printf("[WARNING] Failed to unescape cache key %s: %s", err)
+		cacheKey = strings.Trim(cacheKey, " ")
+	}
+
+	cacheKey = strings.Replace(cacheKey, "%20", " ", -1)
 	cacheKey = strings.Trim(cacheKey, " ")
 	cacheId := fmt.Sprintf("%s_%s", orgId, cacheKey)
+
 	cacheData, err := GetCacheKey(ctx, cacheId)
-	if err != nil {
-		log.Printf("[WARNING] Failed to GET cache key %s for org %s", cacheKey, orgId)
+	if err != nil || cacheData.Key == "" {
+		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (delete)", cacheId, orgId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
 		return
 	}
 
 	if cacheData.OrgId != user.ActiveOrg.Id {
-		log.Printf("[INFO] OrgId %s and %s don't match", cacheData.OrgId, user.ActiveOrg.Id)
+		log.Printf("[INFO] OrgId '%s' and '%s' don't match", cacheData.OrgId, user.ActiveOrg.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 		return
 	}
 
 	entity := "org_cache"
-	cacheId = url.QueryEscape(cacheId)
-	if len(cacheId) > 128 {
-		cacheId = cacheId[0:127]
-	}
 
 	DeleteKey(ctx, entity, cacheId)
+	if len(cacheData.WorkflowId) > 0 {
+		escapedKey := url.QueryEscape(cacheKey)
+
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", orgId, cacheData.WorkflowId, cacheData.Key))
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", orgId, cacheData.WorkflowId, escapedKey))
+
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, cacheData.Key))
+
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, escapedKey))
+	}
+
 	DeleteCache(ctx, cacheKey)
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheKey))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, orgId))
@@ -11810,7 +11830,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
 	if err != nil {
-		log.Printf("[WARNING] Failed to GET cache key %s for org %s", tmpData.Key, tmpData.OrgId)
+		log.Printf("[WARNING] Failed to GET cache key %s for org %s (get)", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
 		return
