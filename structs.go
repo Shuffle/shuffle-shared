@@ -21,15 +21,35 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
+type AppContext struct {
+	AppName         string `json:"app_name"`
+	ActionName      string `json:"action_name"`
+	Label           string `json:"label"`
+	ExampleResponse string `json:"example_response,omitempty" datastore:"example_response,noindex"`
+}
+
 type QueryInput struct {
+	// Required
+	Query string `json:"query"`
+
+	// Output helpers
 	Id           string `json:"id,omitempty"`
-	Query        string `json:"query"`
 	OutputFormat string `json:"output_format,omitempty"`
 
-	UserId      string `json:"user_id,omitempty"`
-	OrgId       string `json:"org_id,omitempty"`
-	TimeStarted int64  `json:"time_started,omitempty"`
-	TimeEnded   int64  `json:"time_ended,omitempty"`
+	// App helpers
+	WorkflowId string                       `json:"workflow_id"`
+	AppName    string                       `json:"app_name,omitempty"`
+	AppId      string                       `json:"app_id,omitempty"`
+	Category   string                       `json:"category,omitempty"`
+	ActionName string                       `json:"action_name,omitempty"`
+	Parameters []WorkflowAppActionParameter `json:"parameters,omitempty"`
+
+	// Optional Input Parameters for more context
+	AppContext  []AppContext `json:"app_context,omitempty"`
+	UserId      string       `json:"user_id,omitempty"`
+	OrgId       string       `json:"org_id,omitempty"`
+	TimeStarted int64        `json:"time_started,omitempty"`
+	TimeEnded   int64        `json:"time_ended,omitempty"`
 }
 
 type ExecutionRequestWrapper struct {

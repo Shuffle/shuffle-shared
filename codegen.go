@@ -70,6 +70,12 @@ func GetCorrectActionName(parsed string) string {
 		parsed = parsed[5:]
 	} else if strings.HasPrefix(parsed, "get list") || strings.HasPrefix(parsed, "get_list") {
 		parsed = parsed[4:]
+	} else if strings.HasPrefix(parsed, "head ") || strings.HasPrefix(parsed, "head_") {
+		parsed = parsed[5:]
+	} else if strings.HasPrefix(parsed, "put ") || strings.HasPrefix(parsed, "put_") {
+		parsed = parsed[4:]
+	} else if strings.HasPrefix(parsed, "patch ") || strings.HasPrefix(parsed, "patch_") {
+		parsed = parsed[6:]
 	}
 
 	return parsed

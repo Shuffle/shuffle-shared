@@ -52,7 +52,9 @@ import (
 var project ShuffleStorage
 var baseDockerName = "frikky/shuffle"
 var SSOUrl = ""
-var usecaseData = `[
+
+func GetUsecaseData() string {
+	return (`[
     {
         "name": "1. Collect",
         "color": "#c51152",
@@ -371,7 +373,8 @@ var usecaseData = `[
             }
         ]
     }
-]`
+]`)
+}
 
 var sandboxProject = "shuffle-sandbox-337810"
 
@@ -15783,7 +15786,7 @@ func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	//ctx := GetContext(request)
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(usecaseData))
+	resp.Write([]byte(GetUsecaseData()))
 }
 
 func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
@@ -16236,7 +16239,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 	// Matching org priority with usecases & previously built workflows
 	if len(org.MainPriority) > 0 && len(workflows) > 0 {
 		var usecases UsecaseLinks
-		err = json.Unmarshal([]byte(usecaseData), &usecases)
+		err = json.Unmarshal([]byte(GetUsecaseData()), &usecases)
 		if err == nil {
 			log.Printf("[DEBUG] Got parsed usecases for %s - should check priority vs mainpriority (%s)", org.Name, org.MainPriority)
 

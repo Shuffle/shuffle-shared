@@ -2004,8 +2004,22 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		user.Role = "admin"
 	}
 
-	// Appending the users' workflows
+	// Cache
+
 	var err error
+	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &workflows)
+			if err == nil {
+				return workflows, nil
+			}
+		}
+	}
+
+	// Appending the users' workflows
 	nameKey := "workflow"
 	log.Printf("[AUDIT] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
 	if project.DbType == "elasticsearch" {
@@ -2301,6 +2315,18 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	slice.Sort(fixedWorkflows[:], func(i, j int) bool {
 		return fixedWorkflows[i].Edited > fixedWorkflows[j].Edited
 	})
+
+	if project.CacheDb {
+		newjson, err := json.Marshal(fixedWorkflows)
+		if err != nil {
+			return fixedWorkflows, nil
+		}
+
+		err = SetCache(ctx, cacheKey, newjson, 15)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
+		}
+	}
 
 	return fixedWorkflows, nil
 }
