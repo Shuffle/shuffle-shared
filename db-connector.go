@@ -8399,3 +8399,45 @@ func SetConversation(ctx context.Context, input QueryInput) error {
 
 	return nil
 }
+
+func SetenvStats(ctx context.Context, input OrborusStats) error {
+	nameKey := "environment_stats"
+
+	if len(input.Id) == 0 {
+		input.Id = uuid.NewV4().String()
+	}
+
+	if input.Timestamp == 0 {
+		input.Timestamp = time.Now().Unix()
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(input)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in conversation: %s", err)
+		return nil
+	}
+
+	if project.DbType == "elasticsearch" {
+		err = indexEs(ctx, nameKey, input.Id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, input.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &input); err != nil {
+			log.Printf("[WARNING] Error adding conversation: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, input.Id)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for conversation '%s': %s", cacheKey, err)
+		}
+	}
+
+	return nil
+}

@@ -3305,3 +3305,23 @@ type Suggestion struct {
 
 	Status string `json:"status" datastore:"status"`
 }
+
+// Parse out CPU, memory and disk. Make struct
+type OrborusStats struct {
+	Id string `json:"id"`
+
+	OrgId        string `json:"org_id"`
+	Environment  string `json:"environment"`
+	OrborusLabel string `json:"orborus_label"`
+	Timestamp    int64  `json:"timestamp"`
+
+	// General
+	CPU    int `json:"cpu"`
+	Disk   int `json:"disk"`
+	Memory int `json:"memory"`
+
+	// Docker
+	AppContainers    int `json:"app_containers"`
+	WorkerContainers int `json:"worker_containers"`
+	TotalContainers  int `json:"total_containers"`
+}
