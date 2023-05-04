@@ -47,6 +47,7 @@ type QueryInput struct {
 	// Optional Input Parameters for more context
 	AppContext  []AppContext `json:"app_context,omitempty"`
 	UserId      string       `json:"user_id,omitempty"`
+	Username    string       `json:"username,omitempty"`
 	OrgId       string       `json:"org_id,omitempty"`
 	TimeStarted int64        `json:"time_started,omitempty"`
 	TimeEnded   int64        `json:"time_ended,omitempty"`
@@ -83,6 +84,9 @@ type AppMini struct {
 	LargeImage             string         `json:"large_image"`
 	Authentication         Authentication `json:"authentication"`
 	AuthenticationRequired bool           `json:"authentication_required"`
+
+	ActionName string `json:"action_name,omitempty"`
+	Category   string `json:"category,omitempty"`
 }
 
 type WorkflowApp struct {

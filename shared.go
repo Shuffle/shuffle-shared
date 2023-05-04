@@ -851,10 +851,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIX: Add a way to get Org branding without being logged in
-	// First usage: For workflow executions without being logged in
-	// Maybe make it based on execution_id + authorization as an example?
-
 	admin := false
 	userFound := false
 	for _, inneruser := range org.Users {
@@ -936,6 +932,37 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		if err == nil {
 			//log.Printf("Envs: %s", len(envs))
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
+		}
+	}
+
+	// Make sure to add all orgs that are childs if you have access
+	org.ChildOrgs = []OrgMini{}
+	for _, orgloop := range user.Orgs {
+		suborg, err := GetOrg(ctx, orgloop)
+		if err != nil {
+			continue
+		}
+
+		// Check if current user is in that org
+		found := false
+		for _, userloop := range suborg.Users {
+			if userloop.Id == user.Id {
+				found = true
+			}
+		}
+
+		if !found {
+			continue
+		}
+
+		if suborg.CreatorOrg == org.Id {
+			org.ChildOrgs = append(org.ChildOrgs, OrgMini{
+				Id:         suborg.Id,
+				Name:       suborg.Name,
+				CreatorOrg: suborg.CreatorOrg,
+				Image:      suborg.Image,
+				RegionUrl:  suborg.RegionUrl,
+			})
 		}
 	}
 
@@ -2492,7 +2519,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[DEBUG] No valid session token for ID %s. Setting cookie to expire.", sessionToken)
+			log.Printf("[ERROR] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
 
 			if resp != nil {
 				http.SetCookie(resp, newCookie)
@@ -2511,7 +2538,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			_, err1 := request.Cookie("session_token")
 			if err1 != nil {
-				log.Printf("[DEBUG] Setting missing session_token for user %s (%s)", user.Username, user.Id)
+				log.Printf("[DEBUG] Setting missing session_token for user %s (%s) (1)", user.Username, user.Id)
 				newCookie.Name = "session_token"
 				if resp != nil {
 					http.SetCookie(resp, newCookie)
@@ -2520,7 +2547,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			_, err2 := request.Cookie("__session")
 			if err2 != nil {
-				log.Printf("[DEBUG] Setting missing __session for user %s (%s)", user.Username, user.Id)
+				log.Printf("[DEBUG] Setting missing __session for user %s (%s) (2)", user.Username, user.Id)
 				newCookie.Name = "__session"
 				if resp != nil {
 					http.SetCookie(resp, newCookie)
@@ -3413,16 +3440,52 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 				//foundUser.PublicProfile.SpecializedApps = creator.SpecializedApps
 			}
-		} else {
-			log.Printf("[ERROR] Failed to find creator with username %s: %s", username, err)
 		}
 	}
 
 	if len(t.Suborgs) > 0 && foundUser.Id != userInfo.Id {
-		log.Printf("[DEBUG] Got suborg change: %s", t.Suborgs)
+		//log.Printf("[DEBUG] Got suborg change: %s", t.Suborgs)
 		// 1. Check if current users' active org is admin in same parent org as user
 		// 2. Make sure the user should have access to suborg
 		// 3. Make sure it's ONLY changing orgs based on parent org
+
+		// Check which ones the current user has access to
+		parentOrgId := userInfo.ActiveOrg.Id
+		newSuborgs := []string{}
+		for _, suborg := range t.Suborgs {
+			if suborg == "REMOVE" {
+				newSuborgs = append(newSuborgs, suborg)
+				continue
+			}
+
+			found := false
+			org, err := GetOrg(ctx, suborg)
+			if err != nil {
+				continue
+			}
+
+			if org.CreatorOrg != parentOrgId {
+				continue
+			}
+
+			for _, userOrg := range org.Users {
+				if userOrg.Id == userInfo.Id {
+					found = true
+					break
+				}
+			}
+
+			if found {
+				newSuborgs = append(newSuborgs, suborg)
+			}
+		}
+
+		t.Suborgs = newSuborgs
+		//log.Printf("[DEBUG] Valid suborgs: %s", t.Suborgs)
+
+		// 244199a7-0009-44af-aefb-55da92334583
+		// 583816e5-40ab-4212-8c7a-e54c8edd6b74
+
 		addedOrgs := []string{}
 		for _, suborg := range t.Suborgs {
 			if suborg == "REMOVE" {
@@ -3446,13 +3509,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			// Slower but easier :)
-			parsedOrgs := []string{}
+			parsedOrgs := []string{foundOrg.CreatorOrg}
 			for _, item := range foundOrg.ManagerOrgs {
 				parsedOrgs = append(parsedOrgs, item.Id)
 			}
 
 			if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
-				log.Printf("[ERROR] The Org %s SHOULD NOT BE ADDED for %s (%s): %s. This may indicate a test of the API, as the frontend shouldn't allow it.", suborg, foundUser.Username, foundUser.Id, err)
+				log.Printf("[ERROR] The Org %s (%s) SHOULD NOT BE ADDED for %s (%s): %s. This may indicate a test of the API, as the frontend shouldn't allow it.", foundOrg.Name, suborg, foundUser.Username, foundUser.Id, err)
 				continue
 			}
 
@@ -3465,87 +3528,74 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
 
 		// Removed for now due to multi-org chain deleting you from other org chains
-
-		/*
-			newUserOrgs := []string{}
-			for _, suborg := range foundUser.Orgs {
-				if suborg == userInfo.ActiveOrg.Id {
-					newUserOrgs = append(newUserOrgs, suborg)
-					continue
-				}
-
-				foundOrg, err := GetOrg(ctx, suborg)
-				if err != nil {
-					log.Printf("[WARNING] Failed to get suborg in user edit (2) for %s (%s): %s", foundUser.Username, foundUser.Id, err)
-					newUserOrgs = append(newUserOrgs, suborg)
-					continue
-				}
-
-				// Slower but easier :)
-				parsedOrgs := []string{}
-				for _, item := range foundOrg.ManagerOrgs {
-					parsedOrgs = append(parsedOrgs, item.Id)
-				}
-
-				//if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
-				if !ArrayContains(parsedOrgs, suborg) {
-					if ArrayContains(t.Suborgs, suborg) {
-						log.Printf("[DEBUG] Reappending org %s", suborg)
-						newUserOrgs = append(newUserOrgs, suborg)
-					} else {
-						log.Printf("[DEBUG] Skipping org %s", suborg)
-					}
-
-					//continue
-				}
-
-				log.Printf("[DEBUG] Should remove user %s (%s) from org %s if it doesn't exist in t.Suborgs", foundUser.Username, foundUser.Id, suborg)
-				newUsers := []User{}
-				for _, user := range foundOrg.Users {
-					if user.Id == foundUser.Id {
-						continue
-					}
-
-					newUsers = append(newUsers, user)
-				}
-
-				foundOrg.Users = newUsers
-				err = SetOrg(ctx, *foundOrg, foundOrg.Id)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting org when changing user access: %s", err)
-				}
-
+		newUserOrgs := []string{}
+		for _, suborg := range foundUser.Orgs {
+			if suborg == userInfo.ActiveOrg.Id {
+				newUserOrgs = append(newUserOrgs, suborg)
+				continue
 			}
 
-			foundUser.Orgs = append(newUserOrgs, addedOrgs...)
-		*/
+			foundOrg, err := GetOrg(ctx, suborg)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get suborg in user edit (2) for %s (%s): %s", foundUser.Username, foundUser.Id, err)
+				newUserOrgs = append(newUserOrgs, suborg)
+				continue
+			}
+
+			// Check if it has anything to do with the parent org, otherwise don't touch it
+			// CreatorOrg, ManagerOrgs, Suborgs
+			orgRelevancies := []string{foundOrg.CreatorOrg}
+			for _, item := range foundOrg.ManagerOrgs {
+				orgRelevancies = append(orgRelevancies, item.Id)
+			}
+			for _, item := range foundOrg.ChildOrgs {
+				orgRelevancies = append(orgRelevancies, item.Id)
+			}
+			if !ArrayContains(orgRelevancies, userInfo.ActiveOrg.Id) {
+				newUserOrgs = append(newUserOrgs, suborg)
+				log.Printf("[DEBUG] Org %s (%s) is not relevant to parent org %s (%s). Skipping.", foundOrg.Name, foundOrg.Id, userInfo.ActiveOrg.Name, userInfo.ActiveOrg.Id)
+				continue
+			}
+
+			// Slower but easier :)
+			parsedOrgs := []string{foundOrg.CreatorOrg}
+			for _, item := range foundOrg.ManagerOrgs {
+				parsedOrgs = append(parsedOrgs, item.Id)
+			}
+
+			//if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
+			if !ArrayContains(parsedOrgs, suborg) {
+				if ArrayContains(t.Suborgs, suborg) {
+					log.Printf("[DEBUG] Reappending org %s", suborg)
+					newUserOrgs = append(newUserOrgs, suborg)
+				} else {
+					log.Printf("[DEBUG] Skipping org %s", suborg)
+				}
+
+				continue
+			}
+
+			log.Printf("[DEBUG] Should remove user %s (%s) from org %s if it doesn't exist in t.Suborgs", foundUser.Username, foundUser.Id, suborg)
+			newUsers := []User{}
+			for _, user := range foundOrg.Users {
+				if user.Id == foundUser.Id {
+					continue
+				}
+
+				newUsers = append(newUsers, user)
+			}
+
+			foundOrg.Users = newUsers
+			err = SetOrg(ctx, *foundOrg, foundOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org when changing user access: %s", err)
+			}
+
+		}
+
+		foundUser.Orgs = append(newUserOrgs, addedOrgs...)
 
 		log.Printf("[DEBUG] New orgs for %s (%s) is %s", foundUser.Username, foundUser.Id, foundUser.Orgs)
-		/*
-			for _, suborg := range addedOrgs {
-				foundOrg, err := GetOrg(ctx, suborg)
-				if err != nil {
-					continue
-				}
-
-				found := false
-				for _, user := range foundOrg.Users {
-					if user.Id == foundUser.Id {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					// FIXME: Use the same roles as in parent
-					foundOrg.Users = append(foundorg.Users, UserMini{
-						Username: foundUser.Username,
-						Id:       foundUser.Id,
-						Role:     foundUser.Role,
-					})
-				}
-			}
-		*/
 	}
 
 	err = SetUser(ctx, foundUser, orgUpdater)
@@ -8529,6 +8579,10 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 	//location := strings.Split(request.URL.String(), "/")
 	//redirectUrl := url.QueryEscape("http://localhost:5001/api/v1/login_openid")
 	redirectUrl := url.QueryEscape(fmt.Sprintf("http://%s/api/v1/login_openid", request.Host))
+	if project.Environment == "cloud" {
+		redirectUrl = url.QueryEscape(fmt.Sprintf("https://shuffler.io/api/v1/login_openid"))
+	}
+
 	if project.Environment != "cloud" && strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
 	}
@@ -10879,6 +10933,12 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+	DeleteCache(ctx, "all_apps")
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 
 	// If onprem, it should autobuild the container(s) from here
 
