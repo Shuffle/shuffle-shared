@@ -3558,6 +3558,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Add("Accept", "application/json")
 		newresp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed running Oauth2 request for %s: %s", url, err)
@@ -3600,6 +3601,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Add("Accept", "application/json")
 		newresp, err := client.Do(req)
 		if err != nil {
 			return appAuth, err
@@ -3634,17 +3636,54 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if strings.Contains(string(respBody), "error") {
-		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nV: %#v", string(respBody), v.Encode())
+		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v", string(respBody), v.Encode())
+
 	}
 
-	//log.Printf("RAW BODY: %s", string(respBody))
-
+	// Check if we have an authentication token and pre-set it
 	var oauthResp Oauth2Resp
+	for _, field := range appAuth.Fields {
+		if field.Key == "access_token" {
+			oauthResp.AccessToken = field.Value
+			break
+		}
+	}
+
 	err = json.Unmarshal(respBody, &oauthResp)
 	if err != nil {
 		if len(oauthResp.AccessToken) == 0 {
-			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2): %s. Data: %s", respBody, err)
-			return appAuth, err
+			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2): %s. Data: %s. Trying to map to oauthResp anyway", respBody, err)
+			// respBody as queries -> oauthResp
+			// access_token=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&scope=notifications%2Cproject%2Crepo%2Cuser&token_type=bearer.
+			changed := false
+			if strings.Contains(string(respBody), "access_token") {
+				for _, item := range strings.Split(string(respBody), "&") {
+					if !strings.Contains(item, "=") {
+						continue
+					}
+
+					changed = true
+					if strings.Contains(item, "access_token") {
+						oauthResp.AccessToken = strings.Split(item, "=")[1]
+					}
+
+					if strings.Contains(item, "scope") {
+						oauthResp.Scope = strings.Split(item, "=")[1]
+					}
+
+					if strings.Contains(item, "token_type") {
+						oauthResp.TokenType = strings.Split(item, "=")[1]
+					}
+
+					if strings.Contains(item, "refresh_token") || strings.Contains(item, "refresh") {
+						oauthResp.RefreshToken = strings.Split(item, "=")[1]
+					}
+				}
+			}
+
+			if !changed {
+				return appAuth, err
+			}
 		} else {
 			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2) (2): %s. Continuing anyway as we have an access token", err)
 		}

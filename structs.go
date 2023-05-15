@@ -3314,11 +3314,26 @@ type OrborusStats struct {
 	Environment  string `json:"environment"`
 	OrborusLabel string `json:"orborus_label"`
 	Timestamp    int64  `json:"timestamp"`
+	Swarm        bool   `json:"swarm"`
+	Kubernetes   bool   `json:"kubernetes"`
+
+	// Shuffle
+	MaxQueue int `json:"max_queue"`
+	Queue    int `json:"queue"`
+	PollTime int `json:"poll_time"`
 
 	// General
-	CPU    int `json:"cpu"`
-	Disk   int `json:"disk"`
-	Memory int `json:"memory"`
+	MaxCPU     int     `json:"max_cpu"`
+	CPU        int     `json:"cpu"`
+	CPUPercent float64 `json:"cpu_percent"`
+
+	MaxMemory     int     `json:"max_memory"`
+	Memory        int     `json:"memory"`
+	MemoryPercent float64 `json:"memory_percent"`
+
+	MaxDisk     int     `json:"max_disk"`
+	Disk        int     `json:"disk"`
+	DiskPercent float64 `json:"disk_percent"`
 
 	// Docker
 	AppContainers    int `json:"app_containers"`

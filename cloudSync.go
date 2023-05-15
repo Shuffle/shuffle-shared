@@ -536,7 +536,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	if err == nil {
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
-			org.SyncFeatures.AppExecutions.Limit = 5000
+			org.SyncFeatures.AppExecutions.Limit = 10000
 		} else {
 			// FIXME: Not strictly enforcing other limits yet
 			// Should just warn our team about them going over
@@ -554,4 +554,124 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	}
 
 	return org, nil
+}
+
+func RunActionAI(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in get action AI: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting the organization`)))
+		return
+	}
+
+	log.Printf("[DEBUG] Running action AI for org %s (%s). Cloud sync: %#v and %#v", org.Name, org.Id, org.CloudSyncActive, org.CloudSync)
+	if !org.CloudSync {
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud sync is not active for this organization"}`)))
+		return
+	}
+
+	// For now, just redirecting
+	log.Printf("[DEBUG] Redirecting Action AI request to main site handler (shuffler.io)")
+
+	// Add api-key from the org sync
+	if org.SyncConfig.Apikey != "" {
+		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", org.SyncConfig.Apikey))
+
+		// Remove cookie header after checking if it exists
+		if request.Header.Get("Cookie") != "" {
+			request.Header.Del("Cookie")
+		}
+	}
+
+	RedirectUserRequest(resp, request)
+	return
+}
+
+func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
+	proxyScheme := "https"
+	proxyHost := fmt.Sprintf("shuffler.io")
+
+	httpClient := &http.Client{
+		Timeout: 120 * time.Second,
+	}
+
+	//fmt.Fprint(resp, "OK")
+	//http.Redirect(resp, request, "https://europe-west2-shuffler.cloudfunctions.net/ShuffleSSR", 303)
+	body, err := ioutil.ReadAll(req.Body)
+	if err != nil {
+		log.Printf("[ERROR] Issue in SSR body proxy: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	//req.Body = ioutil.NopCloser(bytes.NewReader(body))
+	url := fmt.Sprintf("%s://%s%s", proxyScheme, proxyHost, req.RequestURI)
+	log.Printf("[DEBUG] Request (%s) request URL: %s. More: %s", req.Method, url, req.URL.String())
+
+	proxyReq, err := http.NewRequest(req.Method, url, bytes.NewReader(body))
+	if err != nil {
+		log.Printf("[ERROR] Failed handling proxy request: %s", err)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// We may want to filter some headers, otherwise we could just use a shallow copy
+	proxyReq.Header = make(http.Header)
+	for h, val := range req.Header {
+		proxyReq.Header[h] = val
+	}
+
+	newresp, err := httpClient.Do(proxyReq)
+	if err != nil {
+		log.Printf("[ERROR] Issue in SSR newresp for %s - should retry: %s", url, err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	defer newresp.Body.Close()
+
+	urlbody, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	//log.Printf("RESP: %s", urlbody)
+	for key, value := range newresp.Header {
+		//log.Printf("%s %s", key, value)
+		for _, item := range value {
+			w.Header().Set(key, item)
+		}
+	}
+
+	w.WriteHeader(newresp.StatusCode)
+	w.Write(urlbody)
+
+	// Need to clear cache in case user gets updated in db
+	// with a new session and such. This only forces a new search,
+	// and shouldn't get them logged out
+	ctx := GetContext(req)
+	c, err := req.Cookie("session_token")
+	if err != nil {
+		c, err = req.Cookie("__session")
+	}
+
+	if err == nil {
+		DeleteCache(ctx, fmt.Sprintf("session_%s", c.Value))
+	}
 }

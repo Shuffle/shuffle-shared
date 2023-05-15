@@ -892,7 +892,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("LIMIT: %s", org.SyncFeatures.AppExecutions.Limit)
 		orgChanged := false
 		if org.SyncFeatures.AppExecutions.Limit == 0 || org.SyncFeatures.AppExecutions.Limit == 1500 {
-			org.SyncFeatures.AppExecutions.Limit = 5000
+			org.SyncFeatures.AppExecutions.Limit = 10000
 			orgChanged = true
 		}
 
@@ -2667,8 +2667,13 @@ func GetResult(ctx context.Context, workflowExecution WorkflowExecution, id stri
 	for _, actionResult := range workflowExecution.Results {
 		if actionResult.Action.ID == id {
 			// ALWAYS relying on cache due to looping subflow issues
-			// Shouldn't go straight for a trigger
-			if actionResult.Status == "WAITING" || actionResult.Action.AppName == "shuffle-subflow" || actionResult.Action.AppName == "User Input" || actionResult.Action.AppName == "Shuffle Workflow" {
+			if actionResult.Status == "WAITING" && actionResult.Action.AppName == "User Input" {
+				break
+			}
+
+			if actionResult.Action.AppName == "shuffle-subflow" && project.Environment == "cloud" {
+				//if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+				//log.Printf("[INFO] Skipping due to cache requirement for subflow")
 				break
 			}
 
@@ -8480,80 +8485,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(appdata)
 }
 
-func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
-	proxyScheme := "https"
-	proxyHost := fmt.Sprintf("shuffler.io")
-
-	httpClient := &http.Client{
-		Timeout: 10 * time.Second,
-	}
-
-	//fmt.Fprint(resp, "OK")
-	//http.Redirect(resp, request, "https://europe-west2-shuffler.cloudfunctions.net/ShuffleSSR", 303)
-	body, err := ioutil.ReadAll(req.Body)
-	if err != nil {
-		log.Printf("[ERROR] Issue in SSR body proxy: %s", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	//req.Body = ioutil.NopCloser(bytes.NewReader(body))
-	url := fmt.Sprintf("%s://%s%s", proxyScheme, proxyHost, req.RequestURI)
-	log.Printf("[DEBUG] Request (%s) Proxy request URL: %s. More: %s", req.Method, url, req.URL.String())
-
-	proxyReq, err := http.NewRequest(req.Method, url, bytes.NewReader(body))
-	if err != nil {
-		log.Printf("[ERROR] Failed handling proxy request: %s", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// We may want to filter some headers, otherwise we could just use a shallow copy
-	proxyReq.Header = make(http.Header)
-	for h, val := range req.Header {
-		proxyReq.Header[h] = val
-	}
-
-	newresp, err := httpClient.Do(proxyReq)
-	if err != nil {
-		log.Printf("[ERROR] Issue in SSR newresp for %s - should retry: %s", url, err)
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	defer newresp.Body.Close()
-
-	urlbody, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
-	}
-
-	//log.Printf("RESP: %s", urlbody)
-	for key, value := range newresp.Header {
-		//log.Printf("%s %s", key, value)
-		for _, item := range value {
-			w.Header().Set(key, item)
-		}
-	}
-
-	w.WriteHeader(newresp.StatusCode)
-	w.Write(urlbody)
-
-	// Need to clear cache in case user gets updated in db
-	// with a new session and such. This only forces a new search,
-	// and shouldn't get them logged out
-	ctx := GetContext(req)
-	c, err := req.Cookie("session_token")
-	if err != nil {
-		c, err = req.Cookie("__session")
-	}
-
-	if err == nil {
-		DeleteCache(ctx, fmt.Sprintf("session_%s", c.Value))
-	}
-}
-
 func verifier() (*CodeVerifier, error) {
 	r := mathrand.New(mathrand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, 32, 32)
@@ -12182,9 +12113,9 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		if curAuth.Type == "oauth2" {
 			isOauth2 = true
 
-			for _, auth := range curAuth.Fields {
-				log.Printf("Oauth2 Field: %s", auth.Key)
-			}
+			//for _, auth := range curAuth.Fields {
+			//	log.Printf("Oauth2 Field: %s", auth.Key)
+			//}
 		}
 
 		if user.ActiveOrg.Id != curAuth.OrgId {
@@ -16145,11 +16076,20 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	return exec, nil
 }
 
-func addPriority(org Org, priority Priority) (*Org, bool) {
-	updated := false
+func addPriority(org Org, priority Priority, updated bool) (*Org, bool) {
 	if len(org.Priorities) < 5 {
-		org.Priorities = append(org.Priorities, priority)
-		updated = true
+		found := false
+		for _, p := range org.Priorities {
+			if p.Name == priority.Name {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			org.Priorities = append(org.Priorities, priority)
+			updated = true
+		}
 	}
 
 	//log.Printf("Priorities: %d", len(org.Priorities))
@@ -16189,11 +16129,30 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 			Type:        "notifications",
 			Active:      true,
 			URL:         fmt.Sprintf("/admin"),
-		})
+		}, updated)
 
 		if updated {
 			orgUpdated = true
 		}
+	}
+
+	// Notify about hybrid
+	if project.Environment == "cloud" {
+		org, updated = addPriority(*org, Priority{
+			Name:        fmt.Sprintf("Try Hybrid Shuffle by connecting environments"),
+			Description: "Hybrid Shuffle allows you to connect to your datacenter and run workflows on your datacenter servers, and get the results in the cloud.",
+			Type:        "hybrid",
+			Active:      true,
+			URL:         fmt.Sprintf("/admin?tab=environments"),
+		}, updated)
+	} else {
+		org, updated = addPriority(*org, Priority{
+			Name:        fmt.Sprintf("Get more functionality by connecting to the cloud"),
+			Description: "Get access to webhooks, schedules and other functions by connecting to the cloud. Try it out for free, or contact our team if you want to learn more!",
+			Type:        "hybrid",
+			Active:      true,
+			URL:         fmt.Sprintf("/admin"),
+		}, updated)
 	}
 
 	var notifications []Notification
@@ -16209,7 +16168,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 				Type:        "notifications",
 				Active:      true,
 				URL:         fmt.Sprintf("/notifications"),
-			})
+			}, updated)
 
 			if updated {
 				orgUpdated = true
@@ -16276,7 +16235,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 						Type:        "definition",
 						Active:      true,
 						URL:         fmt.Sprintf("/detectionframework"),
-					})
+					}, updated)
 
 					if updated {
 						orgUpdated = true
@@ -16362,7 +16321,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 						Type:        "usecase",
 						Active:      true,
 						URL:         fmt.Sprintf("/usecases?selected_object=%s", subusecase.Name),
-					})
+					}, updated)
 
 					if updated {
 						orgUpdated = true
@@ -16789,7 +16748,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			}
 
 			// If it's not executed and not in nextActions
-			// FIXME: Check if the item's parents are finished. If they're not, skip.
 		}
 	}
 
@@ -16805,9 +16763,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 	// IF NOT VISITED && IN toExecuteOnPrem
 	// SKIP if it's not onprem
-
-	// FIXME: In this loop, there may be an ordering issue where a subflow and other triggers don't wait for all parent nodes to finish, due to that happening farther down in the loop. That means they may execute with only a single parent node actually being finishing.
-	// FIXME: Look at how to fix it by moving it farther down. PS: Fixing this, means it should be fixed in the worker too. Make them generic in shuffle mod
 	for _, nextAction := range nextActions {
 		//log.Printf("[DEBUG] Handling nextAction %s", nextAction)
 		action := GetAction(workflowExecution, nextAction, environment)
@@ -16833,21 +16788,14 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		}
 
 		// check whether the parent is finished executing
-		//log.Printf("%s has %d parents", nextAction, len(parents[nextAction]))
 
 		fixed := 0
 		continueOuter := true
 		if action.IsStartNode {
 			continueOuter = false
 		} else if len(parents[nextAction]) > 0 {
-			// FIXME - wait for parents to finish executing
+			// Wait for parents to finish executing
 			childNodes := FindChildNodes(workflowExecution, nextAction, []string{}, []string{})
-			//childNodes := children[nextAction]
-			//log.Printf("[INFO] Child nodes for %s: %d", nextAction, len(childNodes))
-
-			// FIX: Make sure this part checks for WAITING
-			// as it seems to sometimes skip subflow entirely
-
 			for _, parent := range parents[nextAction] {
 				// Check if the parent is also a child. This can ensure continueation no matter what
 				if ArrayContains(childNodes, parent) {
@@ -16877,6 +16825,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				continueOuter = false
 			}
 		} else {
+			log.Printf("[INFO] No parents for %s", action.Label)
 			continueOuter = false
 		}
 
@@ -17311,6 +17260,8 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			//	}
 			//}
 		}
+
+		// Verify if parents are done
 
 		log.Printf("[INFO][%s] Should execute %s:%s (%s) with label %s", workflowExecution.ExecutionId, action.AppName, action.AppVersion, action.ID, action.Label)
 		relevantActions = append(relevantActions, action)
@@ -18256,4 +18207,73 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 	resp.WriteHeader(200)
 	resp.Write(newjson)
 
+}
+
+func HandleGetenvStats(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in stop executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during stop executions")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	ctx := GetContext(request)
+	environmentName := fileId
+	if len(fileId) != 36 {
+		log.Printf("[DEBUG] Environment length %d for %s is not good for env Stats. Attempting to find the actual ID for it", len(fileId), fileId)
+
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting environments to validate: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to validate environment"}`))
+			return
+		}
+
+		for _, environment := range environments {
+			if environment.Name == fileId && len(environment.Id) > 0 {
+				environmentName = fileId
+				fileId = environment.Id
+				break
+			}
+		}
+
+		if len(fileId) != 36 {
+			log.Printf("[WARNING] Failed getting environments to validate. New FileId: %s", fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed updating environment"}`))
+			return
+		}
+	}
+
+	// Should get stats for this
+	_ = environmentName
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }

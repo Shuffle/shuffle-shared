@@ -173,6 +173,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
+	// Should be made org-wide instead? Right now, it's cross org
 	ctx := GetContext(request)
 	notifications, err := GetUserNotifications(ctx, user.Id)
 	if err != nil && len(notifications) == 0 {
@@ -182,9 +183,13 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	//log.Printf("[AUDIT] Got %d notifications for user %s (%s)", len(notifications), user.Username, user.Id)
+
 	newNotifications := []Notification{}
 	for _, notification := range notifications {
+		// Check how long ago?
 		if notification.Read {
+			//log.Printf("[DEBUG] Skipping read notification %s", notification.Title)
 			continue
 		}
 

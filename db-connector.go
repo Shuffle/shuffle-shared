@@ -880,7 +880,18 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 
 func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) error {
 	cacheKey := fmt.Sprintf("%s-actions", executionId)
-	//log.Printf("\n\nSHOULD UPDATE VARIABLES FOR %s. Next: %s\n\n", executionId, nextActions)
+
+	// Get first and check if too many changes
+	_, _, oldchildren, oldparents, _, _, _, _ := GetExecutionVariables(ctx, executionId)
+
+	// Don't allow certain parts to update
+	if len(oldchildren) > 0 {
+		children = oldchildren
+	}
+
+	if len(oldparents) > 0 {
+		parents = oldparents
+	}
 
 	newVariableWrapper := ExecutionVariableWrapper{
 		StartNode:    startnode,
@@ -922,7 +933,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 			return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 		}
 	} else {
-		//log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
+		log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
 	}
 
 	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
@@ -1249,7 +1260,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 	}
 
 	fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", id)
-	log.Printf("[DEBUG] Couldn't find working app for app with ID %s. Checking filepath gs://%s/%s (size too big)", id, project.BucketName, fullParsedPath)
+	//log.Printf("[DEBUG] Couldn't find working app for app with ID %s. Checking filepath gs://%s/%s (size too big)", id, project.BucketName, fullParsedPath)
 	//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
 
 	cacheKey := fmt.Sprintf("cloud_file_app_%s", id)
@@ -1715,13 +1726,12 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 
-		// FIXME: Don't do name = here, but ID
 		// Or search?
 		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
-					"must": []map[string]interface{}{
+					"should": []map[string]interface{}{
 						map[string]interface{}{
 							"match": map[string]interface{}{
 								"Name": id,
@@ -1733,6 +1743,11 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 							},
 						},
 					},
+				},
+			},
+			"sort": map[string]interface{}{
+				"created": map[string]interface{}{
+					"order": "desc",
 				},
 			},
 		}
@@ -1788,6 +1803,8 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		if err != nil {
 			return env, err
 		}
+
+		log.Printf("[DEBUG] Got %d environments for id: %s", len(wrapped.Hits.Hits), id)
 
 		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 {
 			env = &wrapped.Hits.Hits[0].Source
@@ -2408,7 +2425,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 
 		if res.StatusCode == 404 {
-			log.Printf("[WARNING] Failed getting org - status: %d - %s", 404, string(respBody))
+			log.Printf("[WARNING] Failed getting org '%s' - status: 404 - %s", id, string(respBody))
 			return &Org{}, errors.New("Org doesn't exist")
 		}
 
@@ -4028,7 +4045,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					//project.BucketName := "shuffler.appspot.com"
 					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
 					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-					log.Printf("[WARNING] Couldn't find for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
+					//log.Printf("[WARNING] Couldn't find for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
 
 					bucket := client.Bucket(project.BucketName)
 					obj := bucket.Object(fullParsedPath)
@@ -4120,7 +4137,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+					//log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
 					//project.BucketName := "shuffler.appspot.com"
 					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
@@ -4725,7 +4742,6 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 
 		executions = []ExecutionRequest{}
 		for _, hit := range wrapped.Hits.Hits {
-			//log.Printf("[DEBUG] Priority: %d", hit.Source.Priority)
 
 			executions = append(executions, hit.Source)
 		}
@@ -7831,6 +7847,11 @@ func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) 
 		log.Printf("[INFO] Got %d cacheKeys for org %s (datastore)", len(cacheKeys), orgId)
 	}
 
+	// Sort by edited field
+	slice.Sort(cacheKeys[:], func(i, j int) bool {
+		return cacheKeys[i].Edited > cacheKeys[j].Edited
+	})
+
 	if project.CacheDb {
 		newcache, err := json.Marshal(cacheKeys)
 		if err != nil {
@@ -8203,12 +8224,13 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 		DeleteCache(ctx, cacheId)
 	}
 
-	cacheKey := fmt.Sprintf("%s-actions", workflowExecution.ExecutionId)
-	DeleteCache(ctx, cacheKey)
+	// This caused problems somehow
+	//cacheKey := fmt.Sprintf("%s-actions", workflowExecution.ExecutionId)
+	//DeleteCache(ctx, cacheKey)
 }
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
-	log.Printf("[INFO][%s] Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 
 	//if (len(environments) == 1 && len(workflowExecution.Results) >= 1) || (len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) && len(workflowExecution.Workflow.Actions) > 0) {
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
@@ -8426,7 +8448,7 @@ func SetenvStats(ctx context.Context, input OrborusStats) error {
 	} else {
 		key := datastore.NameKey(nameKey, input.Id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &input); err != nil {
-			log.Printf("[WARNING] Error adding conversation: %s", err)
+			log.Printf("[WARNING] Error adding stats: %s", err)
 			return err
 		}
 	}
