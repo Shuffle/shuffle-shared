@@ -699,6 +699,14 @@ type Priority struct {
 	URL         string `json:"url" datastore:"url"`
 }
 
+type LeadInfo struct {
+	Student  bool `json:"student,omitempty" datastore:"student"`
+	Lead     bool `json:"lead,omitempty" datastore:"lead"`
+	POV      bool `json:"pov,omitempty" datastore:"pov"`
+	DemoDone bool `json:"demo_done,omitempty" datastore:"demo_done"`
+	Customer bool `json:"customer,omitempty" datastore:"customer"`
+}
+
 type Org struct {
 	Name              string                `json:"name" datastore:"name"`
 	Description       string                `json:"description" datastore:"description"`
@@ -732,6 +740,7 @@ type Org struct {
 	Region            string                `json:"region" datastore:"region"`
 	RegionUrl         string                `json:"region_url" datastore:"region_url"`
 	Tutorials         []Tutorial            `json:"tutorials" datastore:"tutorials"`
+	LeadInfo          LeadInfo              `json:"lead_info,omitempty" datastore:"lead_info"`
 }
 
 type PartnerInfo struct {
@@ -2159,6 +2168,7 @@ type HandleInfo struct {
 	AppExecutionsUsage int64           `json:"app_execution_usage"`
 	RegionUrl          string          `json:"region_url"`
 	Tutorials          []Tutorial      `json:"tutorials"`
+	Support            bool            `json:"support"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`

@@ -852,25 +852,31 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	admin := false
-	userFound := false
-	for _, inneruser := range org.Users {
-		if inneruser.Id == user.Id {
-			userFound = true
+	if user.SupportAccess == true {
+		admin = true
+		sanitizeOrg = false
 
-			if inneruser.Role == "admin" {
-				admin = true
+	} else {
+		userFound := false
+		for _, inneruser := range org.Users {
+			if inneruser.Id == user.Id {
+				userFound = true
+
+				if inneruser.Role == "admin" {
+					admin = true
+				}
+
+				break
 			}
-
-			break
 		}
-	}
 
-	if !userFound && !sanitizeOrg {
-		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
-		return
+		if !userFound && !sanitizeOrg {
+			log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, org.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
+			return
 
+		}
 	}
 
 	if !admin {
@@ -980,6 +986,11 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.Image = newOrg.Image
 		org.RegionUrl = newOrg.RegionUrl
 		org.Org = newOrg.Org
+
+	}
+
+	if !user.SupportAccess {
+		org.LeadInfo = LeadInfo{}
 	}
 
 	newjson, err := json.Marshal(org)
@@ -7278,7 +7289,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] User can't edit the org \"%s\"", tmpData.OrgId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
+		resp.Write([]byte(`{"success": false, "No permission to edit this org (1)"}`))
 		return
 	}
 
@@ -7451,6 +7462,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		Priority    string    `json:"priority" datastore:"priority"`
 		Defaults    Defaults  `json:"defaults" datastore:"defaults"`
 		SSOConfig   SSOConfig `json:"sso_config" datastore:"sso_config"`
+		LeadInfo    []string  `json:"lead_info" datastore:"lead_info"`
 	}
 
 	var tmpData ReturnData
@@ -7476,11 +7488,17 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
+	admin := false
 	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] User can't edit org %s (active: %s)", fileId, user.ActiveOrg.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "No permission to edit this org"}`))
-		return
+		if !user.SupportAccess {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "No permission to edit this org (2)"}`))
+			return
+		}
+
+		log.Printf("[AUDIT] User %s (%s) is editing org %s (%s) with support access", user.Username, user.Id, fileId, user.ActiveOrg.Id)
+		admin = true
 	}
 
 	ctx := GetContext(request)
@@ -7492,7 +7510,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	admin := false
 	userFound := false
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
@@ -7505,7 +7522,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !userFound {
+	if !userFound && !user.SupportAccess {
 		log.Printf("[WARNING] User %s doesn't exist in organization for edit %s", user.Id, org.Id)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
@@ -7589,6 +7606,33 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if len(org.Defaults.NotificationWorkflow) > 0 && len(org.Defaults.NotificationWorkflow) != 36 {
 		log.Printf("[WARNING] Notification Workflow ID %s is not valid.", org.Defaults.NotificationWorkflow)
+	}
+
+	if len(tmpData.LeadInfo) > 0 && user.SupportAccess {
+		log.Printf("[INFO] Updating lead info for %s to %s", org.Id, tmpData.LeadInfo)
+
+		for _, lead := range tmpData.LeadInfo {
+			if lead == "student" {
+				org.LeadInfo.Student = true
+			}
+
+			if lead == "lead" {
+				org.LeadInfo.Lead = true
+			}
+
+			if lead == "pov" {
+				org.LeadInfo.POV = true
+			}
+
+			if lead == "demo started" {
+				org.LeadInfo.DemoDone = true
+			}
+
+			if lead == "customer" {
+				org.LeadInfo.Customer = true
+			}
+		}
+
 	}
 
 	// Built a system around this now, which checks for the actual org. Only works onprem so far.
@@ -8628,6 +8672,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
+	org := Org{}
 	updateUser := false
 	if project.Environment == "cloud" {
 		if strings.HasSuffix(strings.ToLower(userdata.Username), "@shuffler.io") {
@@ -8645,7 +8690,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
 		if err == nil {
 			//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
-			org := baseOrg
+			org = *baseOrg
 			if len(baseOrg.ManagerOrgs) > 0 {
 
 				// Use auth from parent org if user is also in that one
@@ -8661,7 +8706,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 					if found {
 						log.Printf("[WARNING] Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
-						org = newOrg
+						org = *newOrg
 					}
 				}
 			}
@@ -8674,7 +8719,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] OpenID login for %s", org.Id)
 					redirectKey = "SSO_REDIRECT"
 
-					baseSSOUrl = GetOpenIdUrl(request, *org)
+					baseSSOUrl = GetOpenIdUrl(request, org)
 				}
 
 				log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
@@ -8801,9 +8846,35 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		Timestamp: time.Now().Unix(),
 	})
 
+	tutorialsFinished := []Tutorial{}
+	for _, tutorial := range userdata.PersonalInfo.Tutorials {
+		tutorialsFinished = append(tutorialsFinished, Tutorial{
+			Name: tutorial,
+		})
+	}
+
+	if len(org.Id) == 0 {
+		newOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+		if err == nil {
+			org = *newOrg
+		}
+	}
+
+	if len(org.SecurityFramework.SIEM.Name) > 0 || len(org.SecurityFramework.Network.Name) > 0 || len(org.SecurityFramework.EDR.Name) > 0 || len(org.SecurityFramework.Cases.Name) > 0 || len(org.SecurityFramework.IAM.Name) > 0 || len(org.SecurityFramework.Assets.Name) > 0 || len(org.SecurityFramework.Intel.Name) > 0 || len(org.SecurityFramework.Communication.Name) > 0 {
+		tutorialsFinished = append(tutorialsFinished, Tutorial{
+			Name: "find_integrations",
+		})
+	}
+
+	for _, tutorial := range org.Tutorials {
+		tutorialsFinished = append(tutorialsFinished, tutorial)
+	}
+
+	//log.Printf("[INFO] Tutorials finished: %v", tutorialsFinished)
+
 	returnValue := HandleInfo{
 		Success:   true,
-		Tutorials: []Tutorial{},
+		Tutorials: tutorialsFinished,
 	}
 
 	loginData := `{"success": true}`
