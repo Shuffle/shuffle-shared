@@ -662,7 +662,6 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 
 	// generate a random string - preferably 6 or 8 characters
 	randomStr := randStr(8, "alphanum")
-	//fmt.Println(randomStr)
 
 	// For Google Authenticator purpose
 	// for more details see
@@ -1634,7 +1633,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Println("[WARNING] Failed getting environments: %s", err)
+		log.Printf("[WARNING] Failed getting environments: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get environments when setting"}`))
 		return
@@ -1642,7 +1641,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("[WARNING] Failed reading environment body: %s", err)
+		log.Printf("[WARNING] Failed reading environment body: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to read data"}`)))
 		return
@@ -2466,7 +2465,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		// Make specific check for just service user?
 		// Get the user based on APIkey here
-		//log.Println(apikeyCheck[1])
 		userdata, err := GetApikey(ctx, apikeyCheck[1])
 		if err != nil {
 			//log.Printf("[WARNING] Apikey %s doesn't exist: %s", apikey, err)
@@ -2646,7 +2644,6 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	*/
 	//_, err = GetApp(ctx, id)
 	//if err == nil {
-	//	log.Println("You're supposed to be able to continue now.")
 	//}
 
 	// FIXME - FIX AUTH WITH APP
@@ -3221,7 +3218,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("[WARNING] Failed reading body in update user: %s", err)
+		log.Printf("[WARNING] Failed reading body in update user: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Required field: user_id"}`)))
 		return
@@ -3932,7 +3929,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Saved new workflow %s with name %s", workflow.ID, workflow.Name)
 
 	resp.WriteHeader(200)
-	//log.Println(string(workflowjson))
 	resp.Write(workflowjson)
 }
 
@@ -3943,7 +3939,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Println("Start")
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
 		log.Printf("[WARNING] Api authentication failed in save workflow: %s", userErr)
@@ -3959,7 +3954,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Println("PostUser")
 	location := strings.Split(request.URL.String(), "/")
 
 	var fileId string
@@ -4845,7 +4839,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		//log.Println("TRIGGERS")
 		allNodes = append(allNodes, trigger.ID)
 		newTriggers = append(newTriggers, trigger)
 	}
@@ -4971,7 +4964,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// FIXME - might be a sploit to run someone elses app if getAllWorkflowApps
 	// doesn't check sharing=true
 	// Have to do it like this to add the user's apps
-	//log.Println("Apps set starting")
 	//log.Printf("EXIT ON ERROR: %s", workflow.Configuration.ExitOnError)
 
 	// Started getting the single apps, but if it's weird, this is faster
@@ -4980,7 +4972,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	//if len(workflow.Actions) > 0 {
 	//	index := -1
 	//	for indexFound, action := range workflow.Actions {
-	//		//log.Println("Apps set done")
 	//		if workflow.Start == action.ID {
 	//			index = indexFound
 	//		}
@@ -5661,7 +5652,7 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 
 		body, err := ioutil.ReadAll(request.Body)
 		if err != nil {
-			log.Println("Failed reading body")
+			log.Printf("Failed reading body")
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Missing field: user_id"}`)))
 			return
@@ -5924,7 +5915,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("[WARNING] Failed reading body")
+		log.Printf("[WARNING] Failed reading body")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
@@ -5934,7 +5925,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	var t PasswordChange
 	err = json.Unmarshal(body, &t)
 	if err != nil {
-		log.Println("Failed unmarshaling")
+		log.Printf("Failed unmarshaling")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
@@ -8884,7 +8875,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(userdata.Session) != 0 {
-		log.Println("[INFO] User session exists - resetting session")
+		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
 
 		newCookie := &http.Cookie{
@@ -9650,9 +9641,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				var subflowData SubflowMapping
 				err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
 				if err == nil && subflowData.Success == false {
-					log.Printf("[INFO] Userinput subflow failed. Should abort workflow or continue execution by default?")
+					log.Printf("[INFO][%s] Userinput subflow failed. Should abort workflow or continue execution by default?", actionResult.ExecutionId)
 				} else {
-					log.Printf("[INFO] Subflow succeeded. Should continue execution by default? Value: %s", actionResult.Result)
+					log.Printf("[INFO][%s] Subflow succeeded. Should continue execution by default? Value: %s", actionResult.ExecutionId, actionResult.Result)
 				}
 			}
 
@@ -11010,7 +11001,7 @@ func GetExecutionbody(body []byte) string {
 		} else {
 			parsedBody = string(jsonString)
 		}
-		//fmt.Println(err)
+		//fmt.Printf(err)
 		//log.Printf("BODY: %s", newbody)
 	}
 
@@ -11148,11 +11139,11 @@ func FixBadJsonBody(parsedBody []byte) []byte {
 	//for _, result := range results {
 	//	// But if you don't know the field types, you can use type switching to determine (safe):
 	//	// Keep in mind that, since this is a map, the order is not guaranteed.
-	//	fmt.Println("\nType Switching: ")
+	//	fmt.Printf("\nType Switching: ")
 	//	for k := range result {
 	//	}
 
-	//	fmt.Println("------------------------------")
+	//	fmt.Printf("------------------------------")
 	//}
 
 	return []byte(totalObject)
@@ -11198,10 +11189,10 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	//newbody := string(body)
 	//newbody = strings.TrimSpace(newbody)
 	//body = []byte(newbody)
-	//log.Println(string(body))
+	//log.Printf(string(body))
 	//tmpbody, err := yaml.YAMLToJSON(body)
-	//log.Println(err)
-	//log.Println(string(tmpbody))
+	//log.Printf(err)
+	//log.Printf(string(tmpbody))
 
 	// This has to be done in a weird way because Datastore doesn't
 	// support map[string]interface and similar (openapi3.Swagger)
@@ -11243,7 +11234,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] OpenAPI: %s", version.OpenAPI)
 
 	if strings.HasPrefix(version.Swagger, "3.") || strings.HasPrefix(version.OpenAPI, "3.") {
-		log.Println("[INFO] Handling v3 API")
+		log.Printf("[INFO] Handling v3 API")
 		swaggerLoader := openapi3.NewSwaggerLoader()
 		swaggerLoader.IsExternalRefsAllowed = true
 		swagger, err := swaggerLoader.LoadSwaggerFromData(body)
@@ -11291,9 +11282,9 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		return
 	} else { //strings.HasPrefix(version.Swagger, "2.") || strings.HasPrefix(version.OpenAPI, "2.") {
 		// Convert
-		log.Println("[WARNING] Handling v2 API")
+		log.Printf("[WARNING] Handling v2 API")
 		swagger := openapi2.Swagger{}
-		//log.Println(string(body))
+		//log.Printf(string(body))
 		err = json.Unmarshal(body, &swagger)
 		if err != nil {
 			log.Printf("[WARNING] Json error for v2 - trying yaml next: %s", err)
@@ -12428,7 +12419,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		}
 
 		cnt += 1
-		//log.Println("Cnt: %d", cnt)
+		//log.Printf("Cnt: %d", cnt)
 		if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
 			break
 		}
@@ -12686,7 +12677,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		names = append(names, githubResp)
 	}
 
-	//log.Println(names)
+	//log.Printf(names)
 	result.Success = true
 	result.Reason = "Success"
 	result.List = names
@@ -13915,7 +13906,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		return WorkflowExecution{}, ExecInfo{}, "", err
 	}
 
-	//log.Println(workflow)
+	//log.Printf(workflow)
 	var workflowExecution WorkflowExecution
 	err = json.Unmarshal(workflowBytes, &workflowExecution.Workflow)
 	if err != nil {
@@ -14167,22 +14158,24 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		authorization, authorizationok := request.URL.Query()["authorization"]
 		if answerok && referenceok && authorizationok {
 			// If answer is false, reference execution with result
-			log.Printf("[INFO] Should update reference execution and return, no need for further execution!")
+			log.Printf("[INFO] Should update reference execution and return, no need for further execution! exec ref: %s. Auth: %s", referenceId[0], authorization[0])
 
 			// Get the reference execution
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
-				log.Printf("Failed getting execution (execution) %s: %s", referenceId[0], err)
+				log.Printf("[INFO] Failed getting execution (execution) %s: %s", referenceId[0], err)
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
+			log.Printf("[INFO] Got execution %s. Workflow: %s", oldExecution.ExecutionId, oldExecution.Workflow.Name)
+
 			if oldExecution.Workflow.ID != workflow.ID {
-				log.Println("Wrong workflowid!")
+				log.Printf("[INFO] Wrong workflowid!")
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Bad workflow ID in get %s", referenceId), errors.New("Bad workflow ID")
 			}
 
 			if authorization[0] != oldExecution.Authorization {
-				log.Println("[AUDIT][%s] Wrong authorization for execution during userinput! %s vs %s", referenceId[0], authorization[0], oldExecution.Authorization)
+				log.Printf("[AUDIT][%s] Wrong authorization for execution during userinput! %s vs %s", referenceId[0], authorization[0], oldExecution.Authorization)
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Bad authorization in get %s", referenceId), errors.New("Bad authorization key")
 			}
 
@@ -14196,18 +14189,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
-			//log.Printf("%s", oldExecution.Results)
+			log.Printf("Result len: %d", len(oldExecution.Results))
 			newResults := []ActionResult{}
 			foundresult := ActionResult{}
 			for _, result := range oldExecution.Results {
-				log.Printf("%s - %s", result.Action.ID, start[0])
+				log.Printf("Action: %s - %s", result.Action.ID, start[0])
 				if result.Status == "WAITING" {
-					//if result.Action.ID == start[0] {
+					log.Printf("Found result: %s (%s)", result.Action.Label, result.Action.ID)
 
 					var userinputResp UserInputResponse
 					err = json.Unmarshal([]byte(result.Result), &userinputResp)
 					// Error here should just be warnings
-					log.Printf("\n\n[DEBUG] Failed unmarshalling userinput: %s\n\n", err)
+					if err != nil {
+						log.Printf("\n\n[DEBUG] Failed unmarshalling userinput (not critical): %s\n\n", err)
+					}
 
 					//if err == nil {
 					userinputResp.ClickInfo.Clicked = true
@@ -14266,26 +14261,33 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					foundresult = result
 					newResults = append(newResults, result)
 					break
-
 				}
 			}
 
-			// FIXME: Should SEND the result here instead of just updating it.
 			//log.Printf("[INFO] Answer is OK AND reference is OK!")
 
-			b, err := json.Marshal(foundresult)
-			log.Printf("Sending result: %s", string(b))
-
+			//if err != nil {
+			oldExecution.Results = newResults
+			err = SetWorkflowExecution(ctx, *oldExecution, true)
 			if err != nil {
-				oldExecution.Results = newResults
-				err = SetWorkflowExecution(ctx, *oldExecution, true)
+				log.Printf("Error saving workflow execution actionresult setting: %s", err)
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed setting workflowexecution actionresult in execution: %s", err), err
+			}
+
+			if foundresult.Action.AppName != "" {
+				b, err := json.Marshal(foundresult)
 				if err != nil {
-					log.Printf("Error saving workflow execution actionresult setting: %s", err)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed setting workflowexecution actionresult in execution: %s", err), err
+					log.Printf("[ERROR] Error marshalling actionresult: %s", err)
+				} else {
+					log.Printf("[INFO] Sending result: %s", string(b))
+					ResendActionResult(b, 4)
 				}
 			} else {
-				ResendActionResult(b, 4)
+				log.Printf("[INFO] No actionresult found for WAITING node")
 			}
+
+			// Add new execution to queue?
+			//if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 
 			return WorkflowExecution{}, ExecInfo{}, "", errors.New("User Input")
 		}

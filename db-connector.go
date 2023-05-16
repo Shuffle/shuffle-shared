@@ -716,7 +716,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return nil
 	}
 
-	//requestCache.Set(cacheKey, &workflowExecution, cache.DefaultExpiration)
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
 		//log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 
@@ -1168,7 +1167,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	}
 
 	if project.DbType == "elasticsearch" {
-		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
@@ -1192,6 +1190,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, err
 		}
 
+		//log.Printf("[DEBUG] Found execution %s from ES with %d results. Actions: %d", id, len(wrapped.Source.Results), len(wrapped.Source.Workflow.Actions))
 		workflowExecution = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
@@ -1232,9 +1231,13 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
+	//log.Printf("[DEBUG] Returned execution %s with %d results (1)", id, len(workflowExecution.Results))
+
 	// Fixes missing pieces
 	newexec := Fixexecution(ctx, *workflowExecution)
 	workflowExecution = &newexec
+
+	//log.Printf("[DEBUG] Returned execution %s with %d results (2)", id, len(workflowExecution.Results))
 
 	if project.CacheDb {
 		newexecution, err := json.Marshal(workflowExecution)
@@ -1564,7 +1567,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 	if project.DbType == "elasticsearch" {
 		var buf bytes.Buffer
 
-		// FIXME: Don't do name = here, but ID
 		// Or search?
 		query := map[string]interface{}{
 			"size": 1000,
