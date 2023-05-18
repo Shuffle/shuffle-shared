@@ -8219,6 +8219,11 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 		return
 	}
 
+	// As worker will be killed off anyway otherwise
+	if os.Getenv("SHUFFLE_SWARM_CONFIG") != "run" {
+		return
+	}
+
 	log.Printf("[INFO][%s] Cleaning up cache for all %d results.", workflowExecution.ExecutionId, len(workflowExecution.Results))
 
 	for _, result := range workflowExecution.Results {
