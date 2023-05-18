@@ -670,7 +670,8 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 }
 
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
-	//log.Printf("\n\n\nRESULT: %s\n\n\n", workflowExecution.Status)
+	//log.Printf("\n\n\nRESULT: %s\n\n\n. Save: %t", workflowExecution.Status, dbSave)
+
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
 		log.Printf("[WARNING] Workflowexeciton executionId can't be empty.")
@@ -679,7 +680,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 	if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-		//log.Printf("[INFO] Already finished (set workflow)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
+		log.Printf("[INFO] Already finished (set workflow)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
 		return nil
 	}
 
@@ -713,6 +714,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
+		log.Printf("[INFO] Not saving execution to DB, since we are running in swarm mode.")
 		return nil
 	}
 
@@ -721,7 +723,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
-		//log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+		log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 
 		return nil
 	}
@@ -733,6 +735,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)
 			return err
 		}
+
+		//log.Printf("[INFO] Successfully saved new execution %s. Timestamp: %d!", workflowExecution.ExecutionId, workflowExecution.StartedAt)
 	} else {
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
 
@@ -1559,7 +1563,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 				return files, nil
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for env: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for file: %s", err)
 		}
 	}
 
@@ -6602,6 +6606,11 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 					},
 				},
 			},
+			"sort": map[string]interface{}{
+				"started_at": map[string]interface{}{
+					"order": "desc",
+				},
+			},
 		}
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding executions query: %s", err)
@@ -7439,14 +7448,26 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 func GetEsConfig() *elasticsearch.Client {
 	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
 	if len(esUrl) == 0 {
-		esUrl = "http://shuffle-opensearch:9200"
+		esUrl = "https://shuffle-opensearch:9200"
 	}
+
+	username := os.Getenv("SHUFFLE_OPENSEARCH_USERNAME")
+	if len(username) == 0 {
+		username = "admin"
+	}
+
+	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
+	if len(password) == 0 {
+		password = "admin"
+	}
+
+	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)
 
 	// https://github.com/elastic/go-elasticsearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/elasticsearch.go#L98
 	config := elasticsearch.Config{
 		Addresses:     strings.Split(esUrl, ","),
-		Username:      os.Getenv("SHUFFLE_OPENSEARCH_USERNAME"),
-		Password:      os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD"),
+		Username:      username,
+		Password:      password,
 		APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
 		CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
 		MaxRetries:    5,
