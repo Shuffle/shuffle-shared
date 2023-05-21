@@ -14413,6 +14413,16 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Fix names of parameters
 		for paramIndex, param := range item.Parameters {
+
+			// Added after problem with api-secret -> apisecret
+			if strings.Contains(param.Description, "header") {
+				continue
+			}
+
+			if strings.Contains(param.Description, "query") {
+				continue
+			}
+
 			newName := GetValidParameters([]string{param.Name})
 			if len(newName) > 0 {
 				workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Name = newName[0]

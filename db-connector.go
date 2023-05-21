@@ -3033,7 +3033,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			//project.BucketName := "shuffler.appspot.com"
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
 			//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-			log.Printf("[DEBUG] Couldn't find openapi for %s. Checking filepath gs://%s/%s (size too big). Error: %s", id, project.BucketName, fullParsedPath, err)
+			//log.Printf("[DEBUG] Couldn't find openapi for %s. Checking filepath gs://%s/%s (size too big). Error: %s", id, project.BucketName, fullParsedPath, err)
 
 			client, err := storage.NewClient(ctx)
 			if err != nil {

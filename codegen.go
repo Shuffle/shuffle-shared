@@ -318,6 +318,8 @@ func GetValidParameters(parameters []string) []string {
 
 		originalParam := param
 
+		// Something with dashes not working?
+
 		for key, val := range pythonReplacements {
 			param = strings.Replace(param, key, val, -1)
 		}
@@ -793,8 +795,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "create") {
-		//log.Printf("\n%s", data)
+	if strings.Contains(strings.ToLower(functionname), "users_list") {
+		log.Printf("\n%s", data)
 	}
 
 	return functionname, data
