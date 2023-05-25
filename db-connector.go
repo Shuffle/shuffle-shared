@@ -4280,6 +4280,47 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		allApps = append(allApps, newApps...)
 	}
 
+	// Deduplicate (e.g. multiple gmail)
+	dedupedApps := []WorkflowApp{}
+	for _, app := range allApps {
+		found := false
+		replaceIndex := -1
+		for dedupIndex, dedupApp := range dedupedApps {
+			// Name, owner, ID, parent ID
+			if strings.ToLower(dedupApp.Name) == strings.ToLower(app.Name) {
+				found = true
+				replaceIndex = dedupIndex
+			}
+		}
+
+		if !found {
+			dedupedApps = append(dedupedApps, app)
+			continue
+		}
+
+		//log.Printf("[INFO] Found duplicate app: %s. Dedup index: %d", app.Name, replaceIndex)
+		// If owner of dedup, don't change
+		if dedupedApps[replaceIndex].Owner == user.Id {
+			//log.Printf("[INFO] Owner of deduped app is user. Not replacing.")
+			continue
+		}
+
+		if app.Edited > dedupedApps[replaceIndex].Edited {
+			log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
+			dedupedApps[replaceIndex] = app
+			continue
+		}
+
+		// Check if image, and other doesn't have
+		if len(dedupedApps[replaceIndex].LargeImage) == 0 && len(app.LargeImage) > 0 {
+			log.Printf("[INFO] Replacing deduped app with image in get apps: %s", app.Name)
+			dedupedApps[replaceIndex] = app
+			continue
+		}
+	}
+
+	allApps = dedupedApps
+
 	// Also prioritize most used ones from app-framework on top?
 	slice.Sort(allApps[:], func(i, j int) bool {
 		return allApps[i].Edited > allApps[j].Edited

@@ -1218,14 +1218,6 @@ func GetAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME: Auth to get the right ones only
-	//if user.Role != "admin" {
-	//	log.Printf("User isn't admin")
-	//	resp.WriteHeader(401)
-	//	resp.Write([]byte(`{"success": false}`))
-	//	return
-	//}
-
 	ctx := GetContext(request)
 	allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	if err != nil {

@@ -3487,7 +3487,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
 			oauthUrl = field.Value
 		} else {
-			log.Printf("[ERROR] Unparsed oauth2 field '%s' (not critical)", field.Key)
+			log.Printf("[ERROR][%s] Unparsed oauth2 field '%s' (not critical)", appAuth.Id, field.Key)
 		}
 	}
 
@@ -3499,7 +3499,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	}
 
-	log.Printf("[DEBUG] Making request to %s for Oauth2 token. User: '%s' ('%s')", url, user.Username, user.Id)
+	log.Printf("[DEBUG][%s] Making request to %s for Oauth2 token. User: '%s' ('%s')", appAuth.Id, url, user.Username, user.Id)
 	//log.Printf("[DEBUG] Verbose Requestdata: Sending request to %#v with requestdata %#v", url, requestData)
 	if len(url) == 0 {
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
@@ -3545,7 +3545,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	respBody := []byte{}
 	if !refresh {
 		//log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
-		log.Printf("[DEBUG] Ran NORMAL oauth2 (no refresh_token) for URL %s.", refreshUrl)
+		log.Printf("[DEBUG][%s] Ran NORMAL oauth2 (no refresh_token) for URL %s.", appAuth.Id, refreshUrl)
 		req, err := http.NewRequest(
 			"POST",
 			url,
@@ -3580,7 +3580,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	} else {
 		//log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
-		log.Printf("[DEBUG] Ran refresh for URL %s.", refreshUrl)
+		log.Printf("[DEBUG][%s] Ran refresh for URL %s.", appAuth.Id, refreshUrl)
 
 		if len(refreshToken) == 0 {
 			log.Printf("[ERROR] No refresh token acquired for %s", refreshUrl)
