@@ -11663,7 +11663,22 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	keys, err := GetAllCacheKeys(ctx, org.Id)
+	maxAmount := 20
+	top, topOk := request.URL.Query()["top"]
+	if topOk && len(top) > 0 {
+		val, err := strconv.Atoi(top[0])
+		if err == nil {
+			maxAmount = val
+		}
+	}
+
+	cursor := ""
+	cursorList, cursorOk := request.URL.Query()["cursor"]
+	if cursorOk && len(cursorList) > 0 {
+		cursor = cursorList[0]
+	}
+
+	keys, newCursor, err := GetAllCacheKeys(ctx, org.Id, maxAmount, cursor)
 	if err != nil {
 		log.Printf("[INFO] Failed getting keys for org %s: %s", org.Id, err)
 		resp.WriteHeader(500)
@@ -11671,12 +11686,13 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Print keys
-	//for _, item := range keys {
-	//	log.Printf("[DEBUG] Db Key: %s", item.Key)
-	//}
+	newReturn := CacheReturn{
+		Success: true,
+		Keys:    keys,
+		Cursor:  newCursor,
+	}
 
-	b, err := json.Marshal(keys)
+	b, err := json.Marshal(newReturn)
 	if err != nil {
 		log.Printf("[WARNING] Failed to marshal cache keys for org %s: %s", org.Id, err)
 		resp.WriteHeader(500)
@@ -14505,8 +14521,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Environment is not defined for %s", action.Name), errors.New("Environment not defined!")
 		}
 
-		// FIXME: Authentication parameters
 		if len(action.AuthenticationId) > 0 {
+			//log.Printf("Action for
+
 			if len(allAuths) == 0 {
 				allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
 				if err != nil {

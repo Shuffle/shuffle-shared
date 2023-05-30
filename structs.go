@@ -3350,3 +3350,10 @@ type OrborusStats struct {
 	WorkerContainers int `json:"worker_containers"`
 	TotalContainers  int `json:"total_containers"`
 }
+
+// Create struct
+type CacheReturn struct {
+	Success bool           `json:"success"`
+	Keys    []CacheKeyData `json:"keys"`
+	Cursor  string         `json:"cursor"`
+}

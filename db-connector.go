@@ -935,7 +935,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 			return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 		}
 	} else {
-		log.Printf("[ERROR][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
+		log.Printf("[WARNING][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
 	}
 
 	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
@@ -1338,6 +1338,8 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 				//log.Printf("CACHEDATA: %s", cacheData)
 				err = json.Unmarshal(cacheData, &workflowApp)
 				if err == nil {
+
+					// Grabbing extra files necessary
 					if (len(workflowApp.ID) == 0 || len(workflowApp.Actions) == 0) && project.Environment == "cloud" {
 						tmpApp, err := getCloudFileApp(ctx, *workflowApp, id)
 
@@ -1348,8 +1350,9 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 						} else {
 							log.Printf("[DEBUG] Failed remote loading app '%s' (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
 						}
+					} else {
+						return workflowApp, nil
 					}
-
 				}
 			} else {
 				//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
@@ -1388,7 +1391,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
-		log.Printf("[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
+		log.Printf("\n\n[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
 
 		if err != nil || len(workflowApp.Actions) == 0 {
 			log.Printf("[WARNING] Failed getting app in GetApp with name %s and ID %s. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
@@ -7824,16 +7827,17 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 	return nil
 }
 
-func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) {
+func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor string) ([]CacheKeyData, string, error) {
 	nameKey := "org_cache"
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, inputcursor, orgId)
 
+	cursor := ""
 	cacheKeys := []CacheKeyData{}
 	if project.DbType == "elasticsearch" {
 		log.Printf("GETTING cachekeys for org %s in item %s", orgId, nameKey)
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"size": 1000,
+			"size": max,
 			"sort": map[string]interface{}{
 				"edited": map[string]interface{}{
 					"order": "desc",
@@ -7854,7 +7858,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) 
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("Error encoding deal query: %s", err)
-			return cacheKeys, err
+			return cacheKeys, "", err
 		}
 
 		// Perform the search request.
@@ -7867,24 +7871,24 @@ func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) 
 
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get cachekeys): %s", err)
-			return cacheKeys, err
+			return cacheKeys, "", err
 		}
 
 		defer res.Body.Close()
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			return cacheKeys, err
+			return cacheKeys, "", err
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			log.Printf("[WARNING] Body of cachekeys is bad: %s", string(respBody))
-			return cacheKeys, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return cacheKeys, "", errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		wrapped := CacheKeySearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
-			return cacheKeys, err
+			return cacheKeys, "", err
 		}
 
 		newCacheKeys := []CacheKeyData{}
@@ -7900,11 +7904,56 @@ func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) 
 		cacheKeys = newCacheKeys
 	} else {
 
-		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Limit(50)
-		_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
-		if err != nil {
-			log.Printf("[WARNING] Failed getting cacheKeys for org %s: %s", orgId, err)
-			return cacheKeys, err
+		// Query datastore with pages
+
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Limit(max)
+		//.Cursor(inputcursor)
+
+		// Skip page in query
+		cursorStr := inputcursor
+		var err error
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := CacheKeyData{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					break
+				}
+
+				cacheKeys = append(cacheKeys, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[ERROR] Failed fetching results for cache: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				//log.Printf("NEXTCURSOR: %s", nextCursor)
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+
+				cursor = cursorStr
+				//cursorStr = nextCursor
+				//break
+			}
+
+			if len(cacheKeys) >= max {
+				break
+			}
 		}
 
 		log.Printf("[INFO] Got %d cacheKeys for org %s (datastore)", len(cacheKeys), orgId)
@@ -7919,7 +7968,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) 
 		newcache, err := json.Marshal(cacheKeys)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
-			return cacheKeys, nil
+			return cacheKeys, cursor, nil
 		}
 
 		err = SetCache(ctx, cacheKey, newcache, 30)
@@ -7928,7 +7977,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string) ([]CacheKeyData, error) 
 		}
 	}
 
-	return cacheKeys, nil
+	return cacheKeys, cursor, nil
 }
 
 func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
