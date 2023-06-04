@@ -3894,7 +3894,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 					org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d workflows created. Find more using Workflow Templates or public Workflows.", len(workflows)+1)
 					if len(workflows) > 0 {
 						org.Tutorials[tutorialIndex].Done = true
-						org.Tutorials[tutorialIndex].Link = "/search?tab=workflows"
+						//org.Tutorials[tutorialIndex].Link = "/search?tab=workflows"
+						org.Tutorials[tutorialIndex].Link = "/usecases"
 					}
 
 					updated = true
@@ -15610,7 +15611,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 
 	for tutorialIndex, tutorial := range org.Tutorials {
 		if tutorial.Name == "Find relevant apps" {
-			org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d out of %d apps configured", cnt, 8)
+			org.Tutorials[tutorialIndex].Description = fmt.Sprintf("%d out of %d apps configured. Find more relevant apps in the search bar.", cnt, 8)
 
 			if cnt > 0 {
 				org.Tutorials[tutorialIndex].Done = true
@@ -16167,20 +16168,18 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	return exec, nil
 }
 
-func addPriority(org Org, priority Priority, updated bool) (*Org, bool) {
-	if len(org.Priorities) < 5 {
-		found := false
-		for _, p := range org.Priorities {
-			if p.Name == priority.Name {
-				found = true
-				break
-			}
+func AddPriority(org Org, priority Priority, updated bool) (*Org, bool) {
+	found := false
+	for _, p := range org.Priorities {
+		if p.Name == priority.Name {
+			found = true
+			break
 		}
+	}
 
-		if !found {
-			org.Priorities = append(org.Priorities, priority)
-			updated = true
-		}
+	if !found {
+		org.Priorities = append(org.Priorities, priority)
+		updated = true
 	}
 
 	//log.Printf("Priorities: %d", len(org.Priorities))
@@ -16214,12 +16213,13 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 	}
 
 	if len(org.Defaults.NotificationWorkflow) == 0 {
-		org, updated = addPriority(*org, Priority{
+		org, updated = AddPriority(*org, Priority{
 			Name:        fmt.Sprintf("You haven't defined a notification workflow yet."),
 			Description: "Notification workflows are used to automate your notification handling. These can be used to alert yourself in other systems when issues are found in your current- or sub-organizations",
 			Type:        "notifications",
 			Active:      true,
-			URL:         fmt.Sprintf("/admin"),
+			URL:         fmt.Sprintf("/admin?admin_tab=organization"),
+			Severity:    2,
 		}, updated)
 
 		if updated {
@@ -16229,20 +16229,22 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 	// Notify about hybrid
 	if project.Environment == "cloud" {
-		org, updated = addPriority(*org, Priority{
+		org, updated = AddPriority(*org, Priority{
 			Name:        fmt.Sprintf("Try Hybrid Shuffle by connecting environments"),
 			Description: "Hybrid Shuffle allows you to connect to your datacenter and run workflows on your datacenter servers, and get the results in the cloud.",
 			Type:        "hybrid",
 			Active:      true,
 			URL:         fmt.Sprintf("/admin?tab=environments"),
+			Severity:    3,
 		}, updated)
 	} else {
-		org, updated = addPriority(*org, Priority{
+		org, updated = AddPriority(*org, Priority{
 			Name:        fmt.Sprintf("Get more functionality by connecting to the cloud"),
 			Description: "Get access to webhooks, schedules and other functions by connecting to the cloud. Try it out for free, or contact our team if you want to learn more!",
 			Type:        "hybrid",
 			Active:      true,
-			URL:         fmt.Sprintf("/admin"),
+			URL:         fmt.Sprintf("/admin?admin_tab=cloud_sync"),
+			Severity:    2,
 		}, updated)
 	}
 
@@ -16253,12 +16255,13 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 		//log.Printf("CACHEDATA: %s", cacheData)
 		err = json.Unmarshal(cacheData, &notifications)
 		if err == nil && len(notifications) > 0 {
-			org, updated = addPriority(*org, Priority{
+			org, updated = AddPriority(*org, Priority{
 				Name:        fmt.Sprintf("You have %d unhandled notifications.", len(notifications)),
 				Description: "Notifications help make your workflow infrastructure stable. Click the notification icon in the top right to see all open ones.",
 				Type:        "notifications",
 				Active:      true,
 				URL:         fmt.Sprintf("/notifications"),
+				Severity:    1,
 			}, updated)
 
 			if updated {
@@ -16320,12 +16323,13 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 				// Checking again to see if specifying either should be a priority
 				if org.SecurityFramework.SIEM.Name == "" || org.SecurityFramework.EDR.Name == "" || org.SecurityFramework.Communication.Name == "" {
-					org, updated = addPriority(*org, Priority{
+					org, updated = AddPriority(*org, Priority{
 						Name:        "Apps for Email, EDR & SIEM should be specified",
 						Description: "The most common usecases are based on Email, EDR & SIEM. If these aren't specified Shuffle won't be used optimally.",
 						Type:        "definition",
 						Active:      true,
-						URL:         fmt.Sprintf("/detectionframework"),
+						URL:         fmt.Sprintf("/usecases"),
+						Severity:    2,
 					}, updated)
 
 					if updated {
@@ -16406,12 +16410,13 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 						}
 					}
 
-					org, updated = addPriority(*org, Priority{
+					org, updated = AddPriority(*org, Priority{
 						Name:        fmt.Sprintf("Complete the prioritized usecase %s", subusecase.Name),
 						Description: fmt.Sprintf("Usecases are prioritized based on your Organizations Main Priority and matching priorities from Shuffle towards that priority. %s is most likely one of your highest priorities. Dismiss this priority to get new priorities.", subusecase.Name),
 						Type:        "usecase",
 						Active:      true,
 						URL:         fmt.Sprintf("/usecases?selected_object=%s", subusecase.Name),
+						Severity:    2,
 					}, updated)
 
 					if updated {
@@ -16424,6 +16429,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 	if orgUpdated {
 		log.Printf("[DEBUG] Should update org with %d notifications", len(org.Priorities))
+		go SetOrg(ctx, *org, org.Id)
 	}
 
 	return org.Priorities, nil
@@ -18196,6 +18202,7 @@ func HandleRecommendationAction(resp http.ResponseWriter, request *http.Request)
 		}
 
 		if prio.Name != recommendation.Name {
+			//log.Printf("[DEBUG] '%s' is not '%s'", prio.Name, recommendation.Name)
 			continue
 		}
 

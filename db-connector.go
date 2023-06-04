@@ -2681,8 +2681,8 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	if len(org.Users) > 1 {
 		allSteps[2].Description = fmt.Sprintf("%d users invited and org name changed.", len(org.Users))
 		if strings.ToLower(org.Org) == strings.ToLower(org.Name) {
-			allSteps[2].Description = "Edit your org name and invite teammates"
-			allSteps[2].Link = "/admin?tab=organization"
+			allSteps[2].Description = "Edit your org name and image, and invite your teammates to build together"
+			allSteps[2].Link = "/admin?tab=users"
 		} else {
 			allSteps[2].Done = true
 		}
@@ -2692,15 +2692,15 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 		workflows, _ := GetAllWorkflowsByQuery(ctx, selectedUser)
 		if len(workflows) > 1 {
 			allSteps[1].Done = true
-			allSteps[1].Description = fmt.Sprintf("%d workflows created. Find more workflows in /search", len(workflows))
-			allSteps[1].Link = "/search?tab=workflows"
+			allSteps[1].Description = fmt.Sprintf("%d workflows created. Find more workflows in the searchbar or on /usecases", len(workflows))
+			allSteps[1].Link = "/usecases"
 		}
 	}
 
 	if org.SSOConfig.SSOEntrypoint != "" && org.Defaults.NotificationWorkflow != "" {
 		allSteps[3].Done = true
 	} else {
-		allSteps[3].Link = "/admin?tab=organization&subtab=configure"
+		allSteps[3].Link = "/admin?admin_tab=organization"
 	}
 
 	org.Tutorials = allSteps

@@ -697,6 +697,7 @@ type Priority struct {
 	Type        string `json:"type" datastore:"type"`
 	Active      bool   `json:"active" datastore:"active"`
 	URL         string `json:"url" datastore:"url"`
+	Severity    int    `json:"severity" datastore:"severity"` // 1 = high, 2 = mid, 3 = low
 }
 
 type LeadInfo struct {
