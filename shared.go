@@ -1607,7 +1607,6 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// FIXME: Overhaul the top part.
 	// Only admin can change environments, but if there are no users, anyone can make (first)
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -1679,7 +1678,8 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	defaults := 0
 	parsedEnvs := []Environment{}
 	for _, env := range newEnvironments {
-		if env.Type == "cloud" && env.Archived {
+		if project.Environment == "cloud" && env.Type == "cloud" && env.Archived {
+			log.Printf("[WARNING] User %s (%s) tried to disable the cloud environment", user.Username, user.Id)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Can't disable cloud environments"}`))
 			return
@@ -8332,6 +8332,8 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
+	log.Printf("[INFO] Running GetWorkflowAppConfig for '%s'", fileId)
+
 	ctx := GetContext(request)
 	app, err := GetApp(ctx, fileId, User{}, false)
 	if err != nil {
@@ -8341,13 +8343,9 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	app.ReferenceUrl = ""
+	log.Printf("[INFO] Successfully got app %s", fileId)
 
-	//if IsValid       bool   `json:"is_valid" yaml:"is_valid" required:true datastore:"is_valid"`
-	// Sharing       bool   `json:"sharing" yaml:"sharing" required:false datastore:"sharing"`
-	//log.Printf("Sharing: %s", app.Sharing)
-	//log.Printf("Generated: %s", app.Generated)
-	//log.Printf("Downloaded: %s", app.Downloaded)
+	app.ReferenceUrl = ""
 
 	type AppParser struct {
 		Success bool   `json:"success"`
@@ -8377,7 +8375,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	user, userErr := HandleApiAuthentication(resp, request)
-	//log.Printf("USER: %s", user.Id)
+	log.Printf("[INFO] User: %s", user.Username)
 
 	openapi, openapiok := request.URL.Query()["openapi"]
 	//if app.Sharing || app.Public || (project.Environment == "cloud" && user.Id == "what") {
@@ -8446,7 +8444,8 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] Any admin can GET %s (%s), since it doesn't have an owner (GET).", app.Name, app.ID)
 		} else {
 			exit := true
-			//log.Printf("[INFO] Check published: %s", app.PublishedId)
+
+			log.Printf("[INFO] Check published: %s", app.PublishedId)
 			if len(app.PublishedId) > 0 {
 
 				// FIXME: is this privacy / vulnerability?
@@ -18143,6 +18142,83 @@ func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(newjson)
 
+}
+
+func HandleRecommendationAction(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in modify recommendation: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		http.Error(resp, "Error reading request body", http.StatusInternalServerError)
+		return
+	}
+
+	var recommendation RecommendationAction
+	err = json.Unmarshal(body, &recommendation)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling recommendation: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	availableActions := []string{"dismiss"}
+	if !ArrayContains(availableActions, recommendation.Action) {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting your org details"}`))
+		return
+	}
+
+	changed := false
+	for prioIndex, prio := range org.Priorities {
+		if !prio.Active {
+			continue
+		}
+
+		if prio.Name != recommendation.Name {
+			continue
+		}
+
+		// dismiss first, other later :)
+		if recommendation.Action == "dismiss" {
+			org.Priorities[prioIndex].Active = false
+			changed = true
+			break
+		}
+	}
+
+	if changed {
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating org during priority updates: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": true}`))
+			return
+		}
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }
 
 // Hard-coded to test out how we can generate next steps in workflows

@@ -1330,33 +1330,32 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
 	workflowApp := &WorkflowApp{}
-	if !skipCache {
-		if project.CacheDb {
-			cache, err := GetCache(ctx, cacheKey)
+	if !skipCache && project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %s", cacheData)
+			err = json.Unmarshal(cacheData, &workflowApp)
 			if err == nil {
-				cacheData := []byte(cache.([]uint8))
-				//log.Printf("CACHEDATA: %s", cacheData)
-				err = json.Unmarshal(cacheData, &workflowApp)
-				if err == nil {
 
-					// Grabbing extra files necessary
-					if (len(workflowApp.ID) == 0 || len(workflowApp.Actions) == 0) && project.Environment == "cloud" {
-						tmpApp, err := getCloudFileApp(ctx, *workflowApp, id)
+				// Grabbing extra files necessary
+				if (len(workflowApp.ID) == 0 || len(workflowApp.Actions) == 0) && project.Environment == "cloud" {
+					tmpApp, err := getCloudFileApp(ctx, *workflowApp, id)
 
-						if err == nil {
-							log.Printf("[DEBUG] Got app '%s' (%s) with %d actions from file (cache)", workflowApp.Name, workflowApp.ID, len(tmpApp.Actions))
-							workflowApp = &tmpApp
-							return workflowApp, nil
-						} else {
-							log.Printf("[DEBUG] Failed remote loading app '%s' (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
-						}
-					} else {
+					if err == nil {
+						log.Printf("[DEBUG] Got app '%s' (%s) with %d actions from file (cache)", workflowApp.Name, workflowApp.ID, len(tmpApp.Actions))
+						workflowApp = &tmpApp
 						return workflowApp, nil
+					} else {
+						log.Printf("[DEBUG] Failed remote loading app '%s' (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
 					}
+				} else {
+					return workflowApp, nil
 				}
-			} else {
-				//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 			}
+		} else {
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	} else {
 		log.Printf("[DEBUG] Skipping cache check in get app for ID %s", id)
@@ -1389,8 +1388,11 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 		workflowApp = &wrapped.Source
 	} else {
+		log.Printf("[DEBUG] Getting app from datastore for ID %s", id)
+
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
+
 		log.Printf("\n\n[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
 
 		if err != nil || len(workflowApp.Actions) == 0 {
@@ -1419,10 +1421,6 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		}
 	}
 
-	if workflowApp.ID == "" {
-		return &WorkflowApp{}, errors.New(fmt.Sprintf("Couldn't find app %s", id))
-	}
-
 	if project.CacheDb {
 		data, err := json.Marshal(workflowApp)
 		if err != nil {
@@ -1430,10 +1428,14 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			return workflowApp, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getapp key '%s': %s", cacheKey, err)
 		}
+	}
+
+	if workflowApp.ID == "" {
+		return workflowApp, errors.New(fmt.Sprintf("Couldn't find app %s", id))
 	}
 
 	return workflowApp, nil
@@ -2691,6 +2693,10 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 }
 
 func SetOrg(ctx context.Context, data Org, id string) error {
+	if len(id) == 0 {
+		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
+	}
+
 	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
 	if data.Created == 0 {
@@ -3075,7 +3081,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			return *api, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating openapi cache: %s", err)
 		}

@@ -461,7 +461,7 @@ type User struct {
 	FirstSetup        bool          `datastore:"first_setup" json:"first_setup"`
 	LoginType         string        `datastore:"login_type" json:"login_type"`
 	GeneratedUsername string        `datastore:"generated_username" json:"generated_username"`
-	SessionLogin      bool          `datastore:"session_login" json:"session_login"` // Whether or not it's logged in with session
+	SessionLogin      bool          `datastore:"session_login" json:"session_login"` // Whether it's a login with session or API (used to verify access)
 
 	// Starting web3 integration
 	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
@@ -3283,6 +3283,11 @@ type RecommendAction struct {
 	AppName         string            `json:"app_name"`
 	ActionId        string            `json:"action_id"`
 	Recommendations []Recommendations `json:"recommendations"`
+}
+
+type RecommendationAction struct {
+	Action string `json:"action"`
+	Name   string `json:"name"`
 }
 
 type ActionRecommendations struct {
