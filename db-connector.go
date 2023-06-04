@@ -730,6 +730,25 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// New struct, to not add body, author etc
 	if project.DbType == "elasticsearch" {
+		// Need to fix an indexing problem?
+		// "mapper [workflow.actions.position.x] cannot be changed from type [float] to [long]"
+
+		// Position doesn't matter in execution. Maybe just set all to 0?
+		for actionIndex, _ := range workflowExecution.Workflow.Actions {
+			workflowExecution.Workflow.Actions[actionIndex].Position.X = float64(0)
+			workflowExecution.Workflow.Actions[actionIndex].Position.Y = float64(0)
+		}
+
+		for actionIndex, _ := range workflowExecution.Workflow.Triggers {
+			workflowExecution.Workflow.Triggers[actionIndex].Position.X = float64(0)
+			workflowExecution.Workflow.Triggers[actionIndex].Position.Y = float64(0)
+		}
+
+		for actionIndex, _ := range workflowExecution.Workflow.Comments {
+			workflowExecution.Workflow.Comments[actionIndex].Position.X = float64(0)
+			workflowExecution.Workflow.Comments[actionIndex].Position.Y = float64(0)
+		}
+
 		err = indexEs(ctx, nameKey, workflowExecution.ExecutionId, executionData)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving new execution %s: %s", workflowExecution.ExecutionId, err)

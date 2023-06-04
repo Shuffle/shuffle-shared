@@ -14277,7 +14277,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			oldExecution.Results = newResults
 			err = SetWorkflowExecution(ctx, *oldExecution, true)
 			if err != nil {
-				log.Printf("Error saving workflow execution actionresult setting: %s", err)
+				log.Printf("[WARNING] Error saving workflow execution actionresult setting: %s", err)
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed setting workflowexecution actionresult in execution: %s", err), err
 			}
 
