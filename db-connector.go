@@ -22,7 +22,6 @@ import (
 	"cloud.google.com/go/datastore"
 	"github.com/Masterminds/semver"
 	"github.com/bradfitz/slice"
-	"github.com/frikky/go-elasticsearch/v8/esapi"
 	uuid "github.com/satori/go.uuid"
 
 	//"github.com/frikky/kin-openapi/openapi3"
@@ -33,7 +32,12 @@ import (
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
 	"google.golang.org/appengine/memcache"
 
-	elasticsearch "github.com/frikky/go-elasticsearch/v8"
+	//"github.com/frikky/go-opensearch/v8/esapi"
+	//opensearch "github.com/frikky/go-opensearch/v8"
+
+	//"github.com/opensearch-project/go-opensearch/v8/osapi"
+	opensearch "github.com/opensearch-project/opensearch-go"
+	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )
 
 var requestCache *cache.Cache
@@ -43,6 +47,18 @@ var mc = gomemcache.New(memcached)
 var maxCacheSize = 1020000
 
 //var maxCacheSize = 2000000
+
+type ShuffleStorage struct {
+	GceProject    string
+	Dbclient      datastore.Client
+	StorageClient storage.Client
+	Environment   string
+	CacheDb       bool
+	Es            opensearch.Client
+	DbType        string
+	CloudUrl      string
+	BucketName    string
+}
 
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
@@ -620,7 +636,7 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 		return nil
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, workflowapp.ID, data)
 		if err != nil {
 			return err
@@ -729,7 +745,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// New struct, to not add body, author etc
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		// Need to fix an indexing problem?
 		// "mapper [workflow.actions.position.x] cannot be changed from type [float] to [long]"
 
@@ -1188,7 +1204,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		return workflowExecution, nil
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
@@ -1380,7 +1396,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		log.Printf("[DEBUG] Skipping cache check in get app for ID %s", id)
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -1470,7 +1486,7 @@ func SetSubscriptionRecipient(ctx context.Context, sub SubscriptionRecipient, id
 		log.Printf("[WARNING] Failed marshalling in setGmailSub: %s", err)
 		return nil
 	}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
@@ -1513,7 +1529,7 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -1591,7 +1607,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
 		// Or search?
@@ -1752,7 +1768,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
 		// Or search?
@@ -1907,7 +1923,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -1981,7 +1997,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		//res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
 		//if err != nil {
@@ -2068,7 +2084,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	// Appending the users' workflows
 	nameKey := "workflow"
 	log.Printf("[AUDIT] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -2438,7 +2454,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	setOrg := false
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -2552,7 +2568,8 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 }
 
 func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
-	req := esapi.IndexRequest{
+	//req := esapi.IndexRequest{
+	req := opensearchapi.IndexRequest{
 		Index:      strings.ToLower(GetESIndexPrefix(nameKey)),
 		DocumentID: id,
 		Body:       strings.NewReader(string(bytes)),
@@ -2745,7 +2762,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	// clear session_token and API_token for user
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		b, err := json.Marshal(data)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling %s - %s: %s", id, nameKey, err)
@@ -2811,7 +2828,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	}
 
 	nameKey := "sessions"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), thissession)
 		if err != nil {
@@ -2868,7 +2885,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 		return errors.New("Value to delete must be larger than 0")
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(entity)), value)
 
 		if err != nil {
@@ -2921,7 +2938,7 @@ func SetApikey(ctx context.Context, Userdata User) error {
 	nameKey := "apikey"
 
 	// New struct, to not add body, author etc
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(Userdata)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling user in set apikey: %s", err)
@@ -2945,7 +2962,7 @@ func SetApikey(ctx context.Context, Userdata User) error {
 
 func SetOpenApiDatastore(ctx context.Context, id string, openapi ParsedOpenApi) error {
 	nameKey := "openapi3"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(openapi)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling user: %s", err)
@@ -3028,7 +3045,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -3119,7 +3136,7 @@ func SetSession(ctx context.Context, user User, value string) error {
 	user.Session = value
 
 	nameKey := "Users"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(user)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling user: %s", err)
@@ -3149,7 +3166,7 @@ func SetSession(ctx context.Context, user User, value string) error {
 		sessiondata.Id = user.Id
 		nameKey = "sessions"
 
-		if project.DbType == "elasticsearch" {
+		if project.DbType == "opensearch" {
 			data, err := json.Marshal(sessiondata)
 			if err != nil {
 				log.Printf("[WARNING] Failed marshalling session %s", err)
@@ -3176,7 +3193,7 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	var apps []WorkflowApp
 
 	nameKey := "workflowapp"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -3260,7 +3277,7 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
 
 	nameKey := "Users"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -3353,7 +3370,7 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 	var users []User
 
 	nameKey := "Users"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -3462,7 +3479,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	}
 
 	nameKey := "Users"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), parsedKey)
 		if err != nil {
@@ -3559,7 +3576,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, parsedKey, data)
 		if err != nil {
 			return err
@@ -3679,7 +3696,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -3801,7 +3818,7 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -4489,7 +4506,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 	}
 
 	nameKey := "workflowapp"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 
 		// FIXME: Overwrite necessary?
@@ -4695,7 +4712,7 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	//log.Printf("[DEBUG] Adding to queue name %s", nameKey)
 
 	// New struct, to not add body, author etc
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(executionRequest)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in setworkflow: %s", err)
@@ -4723,7 +4740,7 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 	nameKey := fmt.Sprintf("workflowqueue-%s", id)
 	executions := []ExecutionRequest{}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -4852,7 +4869,7 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 		log.Printf("[WARNING] Failed marshalling in newValue: %s", err)
 		return nil
 	}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, newvalue.Id, data)
 		if err != nil {
 			return err
@@ -4889,7 +4906,7 @@ func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -4942,7 +4959,7 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 	index := "openseacollection"
 
 	var executions []OpenseaAsset
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		newCollection := strings.Replace(collectionName, "-", " ", -1)
 		query := map[string]interface{}{
@@ -5060,7 +5077,7 @@ func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, op
 		log.Printf("[WARNING] Failed marshalling in set collection: %s", err)
 		return nil
 	}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
@@ -5102,7 +5119,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
 		return nil
 	}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
@@ -5164,7 +5181,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	}
 
 	// New struct, to not add body, author etc
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(workflowappauth)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set app auth: %s", err)
@@ -5212,7 +5229,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 
 	// New struct, to not add body, author etc
 	//log.Printf("[INFO] SETTING ENVIRONMENT %s", env.Id)
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(env)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set env: %s", err)
@@ -5240,7 +5257,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 func GetScheduleByWorkflowId(ctx context.Context, workflowId string) (*ScheduleOld, error) {
 	nameKey := "schedules"
 	curSchedule := &ScheduleOld{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		return curSchedule, errors.New("Not implemented")
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("workflow_id =", workflowId).Limit(1)
@@ -5264,7 +5281,7 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, schedulename)
 	curUser := &ScheduleOld{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), strings.ToLower(schedulename))
 		if err != nil {
@@ -5322,7 +5339,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	// Query for the specific API-key in users
 	nameKey := "Users"
 	var users []User
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -5431,7 +5448,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	// Query for the specific API-key in users
 	nameKey := "Users"
 	var users []User
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -5546,7 +5563,7 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 	//log.Printf("DBTYPE: %s", project.DbType)
 
 	var err error
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), hookId)
 		if err != nil {
@@ -5607,7 +5624,7 @@ func SetHook(ctx context.Context, hook Hook) error {
 	}
 	hookId := strings.ToLower(hook.Id)
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, hookId, hookData)
 		if err != nil {
 			return err
@@ -5637,7 +5654,7 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	curFile := &Notification{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -5678,7 +5695,7 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	curFile := &File{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -5725,7 +5742,7 @@ func SetNotification(ctx context.Context, notification Notification) error {
 	nameKey := "notifications"
 	//log.Printf("SETTING NOTIFICATION: %s", notification)
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(notification)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling set notification: %s", err)
@@ -5760,7 +5777,7 @@ func SetFile(ctx context.Context, file File) error {
 		file.CreatedAt = timeNow
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(file)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling set file: %s", err)
@@ -5801,7 +5818,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -5912,7 +5929,7 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 	var notifications []Notification
 
 	nameKey := "notifications"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -6023,7 +6040,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 	var files []File
 
 	nameKey := "Files"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -6158,7 +6175,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	}
 
 	// New struct, to not add body, author etc
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -6210,7 +6227,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 	var schedules []ScheduleOld
 
 	nameKey := "schedules"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -6302,7 +6319,7 @@ func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	triggerauth := &TriggerAuth{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), strings.ToLower(id))
 		if err != nil {
@@ -6341,7 +6358,7 @@ func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
 	nameKey := "trigger_auth"
 
 	// New struct, to not add body, author etc
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(trigger)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set trigger auth: %s", err)
@@ -6366,7 +6383,7 @@ func SetTriggerAuth(ctx context.Context, trigger TriggerAuth) error {
 // Index = Username
 func DeleteKeys(ctx context.Context, entity string, value []string) error {
 	// Non indexed User data
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		for _, item := range value {
 			DeleteKey(ctx, entity, item)
 		}
@@ -6401,7 +6418,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 	index := "Users"
 
 	users := []User{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"from": 0,
@@ -6481,7 +6498,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 	index := "workflowexecution"
 	var executions []WorkflowExecution
 	var err error
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -6660,7 +6677,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 		}
 	*/
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": amount,
@@ -6932,7 +6949,7 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 	nameKey := "Organizations"
 
 	var orgs []Org
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1,
@@ -7021,7 +7038,7 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 	index := "Organizations"
 
 	var orgs []Org
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -7102,7 +7119,7 @@ func SetSchedule(ctx context.Context, schedule ScheduleOld) error {
 	nameKey := "schedules"
 
 	// New struct, to not add body, author etc
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		data, err := json.Marshal(schedule)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in setschedule: %s", err)
@@ -7130,7 +7147,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 	var err error
 
 	// Appending the users' workflows
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -7283,7 +7300,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		log.Printf("[ERROR] Failed marshalling in set cache key: %s", err)
 		return nil
 	}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, cacheId, data)
 		if err != nil {
 			return err
@@ -7343,7 +7360,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -7447,6 +7464,10 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 }
 
 func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
+	if dbType == "elasticsearch" {
+		dbType = "opensearch"
+	}
+
 	project = ShuffleStorage{
 		Dbclient:      dbclient,
 		StorageClient: storageClient,
@@ -7473,7 +7494,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
-	if strings.ToLower(dbType) == "elasticsearch" || strings.ToLower(dbType) == "opensearch" {
+	if strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch" {
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
@@ -7514,7 +7535,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	return project, nil
 }
 
-func GetEsConfig() *elasticsearch.Client {
+func GetEsConfig() *opensearch.Client {
 	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
 	if len(esUrl) == 0 {
 		esUrl = "https://shuffle-opensearch:9200"
@@ -7532,16 +7553,16 @@ func GetEsConfig() *elasticsearch.Client {
 
 	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)
 
-	// https://github.com/elastic/go-elasticsearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/elasticsearch.go#L98
-	config := elasticsearch.Config{
+	// https://github.com/elastic/go-opensearch/blob/f741c073f324c15d3d401d945ee05b0c410bd06d/opensearch.go#L98
+	config := opensearch.Config{
 		Addresses:     strings.Split(esUrl, ","),
 		Username:      username,
 		Password:      password,
-		APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
-		CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
 		MaxRetries:    5,
 		RetryOnStatus: []int{500, 502, 503, 504, 429, 403},
 	}
+	//APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
+	//CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
 
 	//config.Transport.TLSClientConfig
 	//transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -7574,7 +7595,7 @@ func GetEsConfig() *elasticsearch.Client {
 		InsecureSkipVerify: skipSSLVerify,
 	}
 
-	//https://github.com/elastic/go-elasticsearch/blob/master/_examples/security/elasticsearch-cluster.yml
+	//https://github.com/elastic/go-opensearch/blob/master/_examples/security/opensearch-cluster.yml
 	certificateLocation := os.Getenv("SHUFFLE_OPENSEARCH_CERTIFICATE_FILE")
 	if len(certificateLocation) > 0 {
 		cert, err := ioutil.ReadFile(certificateLocation)
@@ -7597,7 +7618,7 @@ func GetEsConfig() *elasticsearch.Client {
 	}
 	config.Transport = transport
 
-	es, err := elasticsearch.NewClient(config)
+	es, err := opensearch.NewClient(config)
 	if err != nil {
 		log.Fatalf("[DEBUG] Database client for ELASTICSEARCH error during init (fatal): %s", err)
 	}
@@ -7613,8 +7634,8 @@ func SetJoinPrizedraw2021(ctx context.Context, inputItem PrizedrawSubmitter) err
 		inputItem.Created = timeNow
 	}
 
-	if project.DbType == "elasticsearch" {
-		return errors.New("No elasticsearch handler for this API ")
+	if project.DbType == "opensearch" {
+		return errors.New("No opensearch handler for this API ")
 	} else {
 		key := datastore.NameKey(nameKey, inputItem.ID, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &inputItem); err != nil {
@@ -7707,7 +7728,7 @@ func SetUsecase(ctx context.Context, usecase Usecase, optionalEditedSecondsOffse
 		return nil
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, name, data)
 		if err != nil {
 			return err
@@ -7751,7 +7772,7 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
@@ -7828,7 +7849,7 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 	}
 
 	// FIXMe: Shouldn't really be possible, but may be useful for hybrid (?)
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, deal.ID, data)
 		if err != nil {
 			return err
@@ -7858,7 +7879,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 
 	cursor := ""
 	cacheKeys := []CacheKeyData{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		log.Printf("GETTING cachekeys for org %s in item %s", orgId, nameKey)
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8010,7 +8031,7 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
 
 	deals := []ResellerDeal{}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		log.Printf("GETTING deals for org %s in item %s", orgId, nameKey)
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8126,7 +8147,7 @@ func GetAppStats(ctx context.Context, id string) (*Conversionevents, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		return &Conversionevents{}, errors.New("es api not supported yet")
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
@@ -8157,7 +8178,7 @@ func GetHostedOAuth(ctx context.Context, id string) (*DataToSend, error) {
 	stats := &DataToSend{}
 
 	nameKey := "oauth2_storage"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		return &DataToSend{}, errors.New("es api not supported for custom oauth")
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
@@ -8426,7 +8447,7 @@ func SetSuggestion(ctx context.Context, suggestion Suggestion) error {
 		log.Printf("[WARNING] Failed marshalling in set suggestion: %s", err)
 		return nil
 	}
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, suggestion.SuggestionID, data)
 		if err != nil {
 			return err
@@ -8454,7 +8475,7 @@ func GetSuggestions(ctx context.Context, creatorname string) ([]Suggestion, erro
 	var suggestions []Suggestion
 
 	nameKey := "Suggestions"
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		// Not implemented
 		return []Suggestion{}, nil
 	} else {
@@ -8495,7 +8516,7 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 		}
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		return suggestion, nil
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
@@ -8540,7 +8561,7 @@ func SetConversation(ctx context.Context, input QueryInput) error {
 		return nil
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, input.Id, data)
 		if err != nil {
 			return err
@@ -8582,7 +8603,7 @@ func SetenvStats(ctx context.Context, input OrborusStats) error {
 		return nil
 	}
 
-	if project.DbType == "elasticsearch" {
+	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, input.Id, data)
 		if err != nil {
 			return err

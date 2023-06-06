@@ -3748,7 +3748,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 					//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
 					nodeId := uuid.NewV4().String()
 					workflow.Start = nodeId
-					newActions = append(newActions, Action{
+					newAction := Action{
 						Label:       "Change Me",
 						Name:        "repeat_back_to_me",
 						Environment: envName,
@@ -3760,10 +3760,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 								Multiline: true,
 							},
 						},
-						Position: struct {
-							X float64 "json:\"x,omitempty\" datastore:\"x\""
-							Y float64 "json:\"y,omitempty\" datastore:\"y\""
-						}{X: 449.5, Y: 446},
 						Priority:    0,
 						Errors:      []string{},
 						ID:          nodeId,
@@ -3776,7 +3772,13 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 						AppVersion:  item.AppVersion,
 						AppID:       item.ID,
 						LargeImage:  item.LargeImage,
-					})
+					}
+					newAction.Position = Position{
+						X: 449.5,
+						Y: 446,
+					}
+
+					newActions = append(newActions, newAction)
 
 					break
 				}
@@ -10585,7 +10587,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	dbSave := false
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
-		if project.DbType != "elasticsearch" {
+		if project.DbType != "opensearch" {
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 

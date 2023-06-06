@@ -3,23 +3,7 @@ package shuffle
 import (
 	"encoding/xml"
 	"time"
-
-	"cloud.google.com/go/datastore"
-	"cloud.google.com/go/storage"
-	"github.com/frikky/go-elasticsearch/v8"
 )
-
-type ShuffleStorage struct {
-	GceProject    string
-	Dbclient      datastore.Client
-	StorageClient storage.Client
-	Environment   string
-	CacheDb       bool
-	Es            elasticsearch.Client
-	DbType        string
-	CloudUrl      string
-	BucketName    string
-}
 
 type AppContext struct {
 	AppName         string `json:"app_name"`
@@ -897,8 +881,8 @@ type WorkflowExecution struct {
 }
 
 type Position struct {
-	X float64 `json:"x,omitempty" datastore:"x"`
-	Y float64 `json:"y,omitempty" datastore:"y"`
+	X float64 `json:"x" datastore:"x"`
+	Y float64 `json:"y" datastore:"y"`
 }
 
 // This is for the nodes in a workflow, NOT the app action itself.
