@@ -1010,6 +1010,23 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	return string(data), nil
 }
 
+func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
+	//cleaning whitespace
+	cleanedString := strings.ReplaceAll(workflowExecution.ExecutionArgument, " ", "")
+	if (strings.Contains(cleanedString, "{{")) || (strings.Contains(cleanedString, "{%")) {
+		// here, we are targeting the case where the execution argument is a template
+		// we need to remove the curly braces and the percent signs
+		// payloads containing: {% python %}, {{ }} and {% %} are sanitized.
+		sanitizedString := strings.ReplaceAll(workflowExecution.ExecutionArgument, "%", "")
+		sanitizedString = strings.ReplaceAll(sanitizedString, "{", "")
+		sanitizedString = strings.ReplaceAll(sanitizedString, "}", "")
+		
+		workflowExecution.ExecutionArgument = sanitizedString
+	}
+
+	return workflowExecution
+}
+
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
@@ -1143,7 +1160,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 
 	// Check if finished too?
 
-	return workflowExecution
+	finalWorkflowExecution := SanitizeExecution(workflowExecution)
+
+	return finalWorkflowExecution
 }
 
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
