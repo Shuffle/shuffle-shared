@@ -1011,6 +1011,10 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 }
 
 func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
+	if project.Environment == "cloud" {
+		return workflowExecution
+	}
+
 	//cleaning whitespace
 	cleanedString := strings.ReplaceAll(workflowExecution.ExecutionArgument, " ", "")
 	if (strings.Contains(cleanedString, "{{")) || (strings.Contains(cleanedString, "{%")) {
