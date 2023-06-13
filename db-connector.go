@@ -1015,20 +1015,47 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 		return workflowExecution
 	}
 
-	//cleaning whitespace
-	cleanedString := strings.ReplaceAll(workflowExecution.ExecutionArgument, " ", "")
-	if (strings.Contains(cleanedString, "{{")) || (strings.Contains(cleanedString, "{%")) {
-		// here, we are targeting the case where the execution argument is a template
-		// we need to remove the curly braces and the percent signs
-		// payloads containing: {% python %}, {{ }} and {% %} are sanitized.
-		sanitizedString := strings.ReplaceAll(workflowExecution.ExecutionArgument, "%", "")
-		sanitizedString = strings.ReplaceAll(sanitizedString, "{", "")
-		sanitizedString = strings.ReplaceAll(sanitizedString, "}", "")
-		
-		workflowExecution.ExecutionArgument = sanitizedString
+	workflowExecution.ExecutionArgument = sanitizeString(workflowExecution.ExecutionArgument)
+	for i:= range workflowExecution.Results {
+		workflowExecution.Results[i].Result = sanitizeString(workflowExecution.Results[i].Result)
+	}
+
+	// Sanitize ExecutionVariables
+	for i := range workflowExecution.ExecutionVariables {
+		workflowExecution.ExecutionVariables[i].Value = sanitizeString(workflowExecution.ExecutionVariables[i].Value)
 	}
 
 	return workflowExecution
+}
+
+func sanitizeString(input string) string {
+	// Cleaning whitespace
+
+	// Sanitize instances of {{...}}
+	for strings.Contains(input, "{{") && strings.Contains(input, "}}") {
+		startIndex := strings.Index(input, "{{")
+		endIndex := strings.Index(input, "}}") + 2
+
+		if startIndex >= 0 && endIndex > startIndex {
+			input = input[:startIndex] + input[endIndex:]
+		} else {
+			break // Exit the loop if opening and closing tags don't exist for each other
+		}
+	}
+
+	// Sanitize instances of {%...%}
+	for strings.Contains(input, "{%") && strings.Contains(input, "%}") {
+		startIndex := strings.Index(input, "{%")
+		endIndex := strings.Index(input, "%}") + 2
+
+		if startIndex >= 0 && endIndex > startIndex {
+			input = input[:startIndex] + input[endIndex:]
+		} else {
+			break // Exit the loop if opening and closing tags don't exist for each other
+		}
+	}
+
+	return input
 }
 
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
