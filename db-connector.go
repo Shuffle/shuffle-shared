@@ -1010,6 +1010,61 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	return string(data), nil
 }
 
+func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
+	sanitizeLiquid := os.Getenv("LIQUID_SANITIZE_INPUT")
+
+	if sanitizeLiquid == "" {
+		sanitizeLiquid = "true" // Set default value to "true" if not set
+	}
+	
+	if project.Environment == "cloud" || sanitizeLiquid != "true" {
+		log.Printf("[INFO] Skipping sanitizing for liquid execution since we are in cloud")
+
+		return workflowExecution
+	}
+
+	workflowExecution.ExecutionArgument = sanitizeString(workflowExecution.ExecutionArgument)
+	for i:= range workflowExecution.Results {
+		workflowExecution.Results[i].Result = sanitizeString(workflowExecution.Results[i].Result)
+	}
+
+	// Sanitize ExecutionVariables
+	for i := range workflowExecution.ExecutionVariables {
+		workflowExecution.ExecutionVariables[i].Value = sanitizeString(workflowExecution.ExecutionVariables[i].Value)
+	}
+
+	return workflowExecution
+}
+
+func sanitizeString(input string) string {
+
+	// Sanitize instances of {{...}}
+	for strings.Contains(input, "{{") && strings.Contains(input, "}}") {
+		startIndex := strings.Index(input, "{{")
+		endIndex := strings.Index(input, "}}") + 2
+
+		if startIndex >= 0 && endIndex > startIndex {
+			input = input[:startIndex] + input[endIndex:]
+		} else {
+			break // Exit the loop if opening and closing tags don't exist for each other
+		}
+	}
+
+	// Sanitize instances of {%...%}
+	for strings.Contains(input, "{%") && strings.Contains(input, "%}") {
+		startIndex := strings.Index(input, "{%")
+		endIndex := strings.Index(input, "%}") + 2
+
+		if startIndex >= 0 && endIndex > startIndex {
+			input = input[:startIndex] + input[endIndex:]
+		} else {
+			break // Same here
+		}
+	}
+
+	return input
+}
+
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
@@ -1143,7 +1198,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 
 	// Check if finished too?
 
-	return workflowExecution
+	finalWorkflowExecution := SanitizeExecution(workflowExecution)
+
+	return finalWorkflowExecution
 }
 
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
