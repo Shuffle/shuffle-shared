@@ -1011,7 +1011,12 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 }
 
 func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
-	if project.Environment == "cloud" {
+	sanitizeLiquid := os.Getenv("LIQUID_SANITIZE_INPUT")
+	if sanitizeLiquid == "" {
+		sanitizeLiquid = "true" // Set default value to "true" if not set
+	}
+	
+	if project.Environment == "cloud" || sanitizeLiquid != "true" {
 		return workflowExecution
 	}
 
@@ -1191,9 +1196,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 
 	// Check if finished too?
 
-	finalWorkflowExecution := SanitizeExecution(workflowExecution)
+	// finalWorkflowExecution := SanitizeExecution(workflowExecution)
 
-	return finalWorkflowExecution
+	// return finalWorkflowExecution
+
+	return workflowExecution
 }
 
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
