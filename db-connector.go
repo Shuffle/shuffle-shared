@@ -1019,7 +1019,7 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 	
 	if project.Environment == "cloud" || sanitizeLiquid != "true" {
 		log.Printf("[INFO] Skipping sanitizing for liquid execution since we are in cloud")
-		
+
 		return workflowExecution
 	}
 
@@ -1037,7 +1037,6 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 }
 
 func sanitizeString(input string) string {
-	// Cleaning whitespace
 
 	// Sanitize instances of {{...}}
 	for strings.Contains(input, "{{") && strings.Contains(input, "}}") {
@@ -1059,7 +1058,7 @@ func sanitizeString(input string) string {
 		if startIndex >= 0 && endIndex > startIndex {
 			input = input[:startIndex] + input[endIndex:]
 		} else {
-			break // Exit the loop if opening and closing tags don't exist for each other
+			break // Same here
 		}
 	}
 
