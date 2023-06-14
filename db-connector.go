@@ -15,6 +15,7 @@ import (
 
 	//"strconv"
 	//"encoding/binary"
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -742,7 +743,15 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
 		//log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 
-		return nil
+		if project.Environment != "cloud" {
+			return nil
+		}
+
+		// Randomly saving once every 5 times
+		// Just making sure results are saved
+		if rand.Intn(5) != 1 {
+			return nil
+		}
 	}
 
 	// New struct, to not add body, author etc
@@ -1017,15 +1026,15 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 	if sanitizeLiquid == "" {
 		sanitizeLiquid = "true" // Set default value to "true" if not set
 	}
-	
+
 	if project.Environment == "cloud" || sanitizeLiquid != "true" {
-		log.Printf("[INFO] Skipping sanitizing for liquid execution since we are in cloud")
+		//log.Printf("[INFO] Skipping sanitizing for liquid execution since we are in cloud")
 
 		return workflowExecution
 	}
 
 	workflowExecution.ExecutionArgument = sanitizeString(workflowExecution.ExecutionArgument)
-	for i:= range workflowExecution.Results {
+	for i := range workflowExecution.Results {
 		workflowExecution.Results[i].Result = sanitizeString(workflowExecution.Results[i].Result)
 	}
 
@@ -1353,6 +1362,9 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 }
 
 func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (WorkflowApp, error) {
+	if len(workflowApp.Name) == 0 {
+		return workflowApp, nil
+	}
 	//project.BucketName := "shuffler.appspot.com"
 
 	if strings.HasSuffix(id, ".") {
@@ -1420,10 +1432,14 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 }
 
 func GetApp(ctx context.Context, id string, user User, skipCache bool) (*WorkflowApp, error) {
+	workflowApp := &WorkflowApp{}
+	if len(id) == 0 {
+		return workflowApp, errors.New("No ID provided to get an app")
+	}
+
 	nameKey := "workflowapp"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
-	workflowApp := &WorkflowApp{}
 	if !skipCache && project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 

@@ -3057,6 +3057,8 @@ type UsecaseLinks []struct {
 		Blogpost       string     `json:"blogpost,omitempty"`
 		ReferenceImage string     `json:"reference_image,omitempty"`
 		Matches        []Workflow `json:"matches"`
+		Keywords       []string   `json:"keywords"`
+		KeywordMatches []string   `json:"keyword_matches"`
 	} `json:"list"`
 }
 
