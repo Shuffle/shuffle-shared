@@ -489,6 +489,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 // FIXME: Add the option to set cache that expires at longer intervals
 func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
 	if len(name) == 0 {
+		log.Printf(string(data))
 		log.Printf("[WARNING] Key '%s' is empty with value length %d and expiration %d. Skipping cache.", name, len(data), expiration)
 		return nil
 	}
@@ -739,7 +740,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_100", nameKey, workflowExecution.WorkflowId))
 	if !dbSave && workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) > 1 {
-		log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+		//log.Printf("[WARNING][%s] SHOULD skip DB saving for execution. Status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 
 		return nil
 	}
@@ -1026,6 +1027,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		}
 
 		if found {
+			// Handles execution vars
 			if len(action.ExecutionVariable.Name) > 0 {
 				//log.Printf("\n\n[INFO] Found execution variable %s (2)\n\n", result.Action.ExecutionVariable.Name)
 
@@ -1428,7 +1430,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
 
-		log.Printf("\n\n[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
+		//log.Printf("\n\n[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
 
 		if err != nil || len(workflowApp.Actions) == 0 {
 			log.Printf("[WARNING] Failed getting app in GetApp with name %s and ID %s. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
@@ -8381,7 +8383,6 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 	}
 
 	log.Printf("[INFO][%s] Cleaning up cache for all %d results.", workflowExecution.ExecutionId, len(workflowExecution.Results))
-
 	for _, result := range workflowExecution.Results {
 		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
 		DeleteCache(ctx, cacheId)
