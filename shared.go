@@ -6243,7 +6243,6 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	location := strings.Split(request.URL.String(), "/")
-
 	var fileId string
 	if location[1] == "api" {
 		if len(location) <= 4 {
@@ -6274,10 +6273,6 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("\n\nGetting workflow %s. Data: %s\nPublic: %s\n", fileId, workflow, workflow.Public)
-
-	// CHECK orgs of user, or if user is owner
-	// FIXME - add org check too, and not just owner
 	// Check workflow.Sharing == private / public / org  too
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		// Added org-reader as the user should be able to read everything in an org
@@ -6312,11 +6307,30 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	for key, _ := range workflow.Actions {
+		// RefUrl not necessary anymore, as we migrated to getting apps during exec
 		workflow.Actions[key].ReferenceUrl = ""
 
 		// Never helpful when this is red
 		if workflow.Actions[key].AppName == "Shuffle Tools" {
 			workflow.Actions[key].IsValid = true
+		}
+
+		if !workflow.Actions[key].IsValid {
+			log.Printf("[AUDIT] Invalid action: %s (%s)", workflow.Actions[key].Label, workflow.Actions[key].ID)
+
+			// Check if all fields are set
+			// Check if auth is set (autofilled)
+			isValid := true
+			for _, param := range workflow.Actions[key].Parameters {
+				if param.Required && len(param.Value) == 0 {
+					isValid = false
+					break
+				}
+			}
+
+			if isValid {
+				workflow.Actions[key].IsValid = true
+			}
 		}
 	}
 
