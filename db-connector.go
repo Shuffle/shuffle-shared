@@ -2568,6 +2568,17 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		curOrg = GetTutorials(ctx, *curOrg, true)
 	}
 
+	// Making sure to skip old irrelevant priorities
+	newPriorities := []Priority{}
+	for _, priority := range curOrg.Priorities {
+		if priority.Type == "usecases" {
+			continue
+		}
+
+		newPriorities = append(newPriorities, priority)
+	}
+	curOrg.Priorities = newPriorities
+
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {

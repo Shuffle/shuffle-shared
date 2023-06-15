@@ -859,6 +859,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	sanitizeOrg := false
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
+
+		// This is specifically for public workflows
 		referenceId, referenceok := request.URL.Query()["reference_execution"]
 		authorization, authorizationok := request.URL.Query()["authorization"]
 		if referenceok && authorizationok {
@@ -888,6 +890,22 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	if user.SupportAccess == true {
 		admin = true
 		sanitizeOrg = false
+
+		// Update active org for user to this one?
+		// This makes it possible to walk around in the UI for the org
+		if user.ActiveOrg.Id != org.Id {
+			log.Printf("[AUDIT] User %s (%s) is admin and has access to org %s. Updating active org to this one.", user.Username, user.Id, org.Id)
+			user.ActiveOrg.Id = org.Id
+			user.ActiveOrg.Name = org.Name
+			user.Role = "admin"
+
+			SetUser(ctx, &user, false)
+
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+		}
 
 	} else {
 		userFound := false
@@ -7627,29 +7645,33 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(tmpData.Priority) > 0 {
-		if len(org.MainPriority) == 0 {
-			org.MainPriority = tmpData.Priority
-			sendOrgUpdaterHook = true
-		}
+	/*
+		// Old code that had frontend buttons.
+		// Now we discover this instead
+			if len(tmpData.Priority) > 0 {
+				if len(org.MainPriority) == 0 {
+					org.MainPriority = tmpData.Priority
+					sendOrgUpdaterHook = true
+				}
 
-		found := false
-		for _, prio := range org.Priorities {
-			if prio.Name == tmpData.Priority {
-				found = true
+				found := false
+				for _, prio := range org.Priorities {
+					if prio.Name == tmpData.Priority {
+						found = true
+					}
+				}
+
+				if !found {
+					org.Priorities = append(org.Priorities, Priority{
+						Name:        tmpData.Priority,
+						Description: fmt.Sprintf("Priority %s decided by user.", tmpData.Priority),
+						Type:        "usecases",
+						Active:      true,
+						URL:         fmt.Sprintf("/usecases"),
+					})
+				}
 			}
-		}
-
-		if !found {
-			org.Priorities = append(org.Priorities, Priority{
-				Name:        tmpData.Priority,
-				Description: fmt.Sprintf("Priority %s decided by user.", tmpData.Priority),
-				Type:        "usecases",
-				Active:      true,
-				URL:         fmt.Sprintf("/usecases"),
-			})
-		}
-	}
+	*/
 
 	//if len(tmpData.SSOConfig) > 0 {
 	if len(tmpData.SSOConfig.SSOEntrypoint) > 0 || len(tmpData.SSOConfig.OpenIdClientId) > 0 || len(tmpData.SSOConfig.OpenIdClientSecret) > 0 || len(tmpData.SSOConfig.OpenIdAuthorization) > 0 || len(tmpData.SSOConfig.OpenIdToken) > 0 {
@@ -7765,7 +7787,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	GetTutorials(ctx, *org, true)
 
-	log.Printf("[INFO] Successfully updated org %s (%s)", org.Name, org.Id)
+	log.Printf("[INFO] Successfully updated org %s (%s) with %d priorities", org.Name, org.Id, len(org.Priorities))
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
 
@@ -18490,17 +18512,9 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	// 2. Suggest public workflows (cloud)
 	// 3. Use workflow template (local)
 	var updated bool
-	var workflows []Workflow
-	cache, err := GetCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-	if err != nil {
-		log.Printf("[WARNING] No workflows cached for user %s", user.Id)
-		return org, orgUpdated
-	}
-
-	cacheData := []byte(cache.([]uint8))
-	err = json.Unmarshal(cacheData, &workflows)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user)
 	if err != nil || len(workflows) == 0 {
-		log.Printf("[WARNING] No workflows cached for user %s (2)", user.Id)
+		log.Printf("[WARNING] No workflows cached found user %s (2)", user.Id)
 		return org, orgUpdated
 	}
 
