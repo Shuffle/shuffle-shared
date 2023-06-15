@@ -2991,26 +2991,25 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		newWorkflows = append(newWorkflows, workflow)
 	}
 
-	log.Printf("[INFO] Found %d usecaseIds for user %s", len(usecaseIds), user.Username)
-
 	// Get the org as well to manage priorities
 	// Only happens on first load, so it's like once per session~
 	if len(usecaseIds) > 0 {
-		log.Printf("[DEBUG] Getting usecases for %d workflows", len(workflows))
-
 		org, err := GetOrg(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting org %s for user %s during workflow load: %s", user.ActiveOrg.Id, user.Username, err)
 		} else {
-			for _, priority := range org.Priorities {
+			for prioIndex, priority := range org.Priorities {
 				if priority.Type != "usecase" || priority.Active != true {
 					continue
 				}
 
 				for _, usecaseId := range usecaseIds {
-					log.Printf("[DEBUG] Checking usecase %s against priority %s", usecaseId, priority.Name)
 					if strings.Contains(strings.ToLower(priority.Name), strings.ToLower(usecaseId)) {
-						log.Printf("\n\n[DEBUG] Found usecase %s in priority %s\n\n", usecaseId, priority.Name)
+						//log.Printf("\n\n[DEBUG] Found usecase %s in priority %s\n\n", usecaseId, priority.Name)
+						org.Priorities[prioIndex].Active = false
+
+						SetOrg(ctx, *org, org.Id)
+						break
 					}
 				}
 			}
