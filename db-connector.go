@@ -392,7 +392,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
 		} else if err != nil {
-			log.Printf("[ERROR] Failed cache err for key %s: %s", name, err)
+			log.Printf("[DEBUG] Failed to find cache for key %s: %s", name, err)
 		} else {
 			//log.Printf("[INFO] Got new cache: %s", item)
 
@@ -2459,7 +2459,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			return fixedWorkflows, nil
 		}
 
-		err = SetCache(ctx, cacheKey, newjson, 15)
+		err = SetCache(ctx, cacheKey, newjson, 60)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
 		}

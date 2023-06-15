@@ -685,11 +685,12 @@ type Priority struct {
 }
 
 type LeadInfo struct {
-	Student  bool `json:"student,omitempty" datastore:"student"`
-	Lead     bool `json:"lead,omitempty" datastore:"lead"`
-	POV      bool `json:"pov,omitempty" datastore:"pov"`
-	DemoDone bool `json:"demo_done,omitempty" datastore:"demo_done"`
-	Customer bool `json:"customer,omitempty" datastore:"customer"`
+	Contacted bool `json:"contacted,omitempty" datastore:"contacted"`
+	Student   bool `json:"student,omitempty" datastore:"student"`
+	Lead      bool `json:"lead,omitempty" datastore:"lead"`
+	POV       bool `json:"pov,omitempty" datastore:"pov"`
+	DemoDone  bool `json:"demo_done,omitempty" datastore:"demo_done"`
+	Customer  bool `json:"customer,omitempty" datastore:"customer"`
 }
 
 type Org struct {
@@ -719,8 +720,8 @@ type Org struct {
 	Disabled          bool                  `json:"disabled" datastore:"disabled"`
 	PartnerInfo       PartnerInfo           `json:"partner_info" datastore:"partner_info"`
 	SSOConfig         SSOConfig             `json:"sso_config" datastore:"sso_config"`
-	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework""`
-	Priorities        []Priority            `json:"priorities" datastore:"priorities"`
+	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework,noindex"`
+	Priorities        []Priority            `json:"priorities" datastore:"priorities,noindex"`
 	MainPriority      string                `json:"main_priority" datastore:"main_priority"`
 	Region            string                `json:"region" datastore:"region"`
 	RegionUrl         string                `json:"region_url" datastore:"region_url"`
@@ -3044,21 +3045,22 @@ type UsecaseLinks []struct {
 	Name  string `json:"name"`
 	Color string `json:"color"`
 	List  []struct {
-		Name     string `json:"name"`
+		Name     string `json:"name" datastore:"name"`
 		Priority int    `json:"priority"`
 		Type     string `json:"type"`
+		Last     string `json:"last"`
 		Items    struct {
 			Name  string `json:"name"`
 			Items struct {
 			} `json:"items"`
 		} `json:"items,omitempty"`
-		Description    string     `json:"description,omitempty"`
+		Description    string     `json:"description,omitempty" datastore:"description,noindex"`
 		Video          string     `json:"video,omitempty"`
 		Blogpost       string     `json:"blogpost,omitempty"`
 		ReferenceImage string     `json:"reference_image,omitempty"`
 		Matches        []Workflow `json:"matches"`
 		Keywords       []string   `json:"keywords"`
-		KeywordMatches []string   `json:"keyword_matches"`
+		KeywordMatches int        `json:"keyword_matches"`
 	} `json:"list"`
 }
 

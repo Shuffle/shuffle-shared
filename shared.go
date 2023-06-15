@@ -63,6 +63,7 @@ func GetUsecaseData() string {
                 "name": "Email management",
 								"priority": 100,
 								"type": "communication",
+								"last": "cases", 
                 "items": {
                     "name": "Release a quarantined message",
                     "items": {}
@@ -72,6 +73,7 @@ func GetUsecaseData() string {
                 "name": "EDR to ticket",
 								"priority": 100,
 								"type": "edr",
+								"last": "cases",
                 "items": {
                     "name": "Get host information",
                     "items": {}
@@ -81,6 +83,7 @@ func GetUsecaseData() string {
                 "name": "SIEM to ticket",
 								"priority": 100,
 								"type": "siem",
+								"last": "cases",
 								"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
 								"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
 								"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
@@ -110,6 +113,8 @@ func GetUsecaseData() string {
             {
                 "name": "Firewall alerts",
 								"priority": 90,
+								"type": "network",
+								"last": "cases",
                 "items": {
                     "name": "URL filtering",
                     "items": {}
@@ -117,6 +122,8 @@ func GetUsecaseData() string {
             },
             {
                 "name": "IDS/IPS alerts",
+								"type": "network",
+								"last": "cases",
 								"priority": 90,
                 "items": {
                     "name": "Manage policies",
@@ -137,6 +144,7 @@ func GetUsecaseData() string {
             {
                 "name": "Internal Enrichment",
 								"priority": 100,
+								"type": "intel",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -145,6 +153,7 @@ func GetUsecaseData() string {
             {
                 "name": "External historical Enrichment",
 								"priority": 90,
+								"type": "intel",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -153,14 +162,16 @@ func GetUsecaseData() string {
             {
                 "name": "Sandbox",
 								"priority": 60,
+								"type": "intel",
                 "items": {
-                    "name": "Use a sandbox to analyze something in real-time",
+                    "name": "Use a sandbox to analyze",
                     "items": {}
                 }
             },
             {
                 "name": "Realtime",
 								"priority": 50,
+								"type": "intel",
                 "items": {
                     "name": "Analyze screenshots, websites etc. in realtime",
                     "items": {}
@@ -175,6 +186,7 @@ func GetUsecaseData() string {
             {
                 "name": "Search SIEM (Sigma)",
 								"priority": 90,
+								"type": "siem",
                 "items": {
                     "name": "Endpoint",
                     "items": {}
@@ -182,12 +194,14 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Search EDR (OSQuery)",
+								"type": "edr",
 								"priority": 90,
                 "items": {}
             },
             {
                 "name": "Search emails (Sublime)",
 								"priority": 90,
+								"type": "communication",
                 "items": {
                     "name": "Check headers and IOCs",
                     "items": {}
@@ -196,31 +210,31 @@ func GetUsecaseData() string {
             {
                 "name": "Search IOCs (ioc-finder)",
 								"priority": 50,
+								"type": "intel",
                 "items": {}
             },
             {
                 "name": "Search files (Yara)",
 								"priority": 50,
+								"type": "intel",
                 "items": {}
             },
             {
                 "name": "Memory Analysis (Volatility)",
 								"priority": 50,
+								"type": "intel",
                 "items": {}
             },
             {
                 "name": "IDS & IPS (Snort/Surricata)",
 								"priority": 50,
-                "items": {}
-            },
-            {
-                "name": "Validate old tickets",
-								"priority": 50,
+								"type": "network",
                 "items": {}
             },
             {
                 "name": "Honeypot access",
 								"priority": 50,
+								"type": "network",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -235,36 +249,44 @@ func GetUsecaseData() string {
             {
                 "name": "Eradicate malware",
 								"priority": 90,
+								"type": "intel",
                 "items": {}
             },
             {
                 "name": "Quarantine host(s)",
 								"priority": 90,
+								"type": "edr",
                 "items": {}
             },
             {
                 "name": "Block IPs, URLs, Domains and Hashes",
 								"priority": 90,
+								"type": "network",
                 "items": {}
             },
             {
                 "name": "Trigger scans",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Update indicators (FW, EDR, SIEM...)",
 								"priority": 50,
+								"type": "intel",
                 "items": {}
             },
             {
                 "name": "Autoblock activity when threat intel is received",
 								"priority": 50,
+								"type": "intel",
+								"last": "iam",
                 "items": {}
             },
             {
                 "name": "Lock/Delete/Reset account",
 								"priority": 50,
+								"type": "iam",
                 "items": {}
             },
             {
@@ -296,11 +318,13 @@ func GetUsecaseData() string {
             {
                 "name": "Discover vulnerabilities",
 								"priority": 80,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Discover assets",
 								"priority": 80,
+								"type": "assets",
                 "items": {}
             },
             {
@@ -349,7 +373,7 @@ func GetUsecaseData() string {
                 "items": {}
             },
             {
-                "name": "Domain investigation with LetsEncrypt",
+                "name": "Monitor domain creation and expiration",
 								"priority": 50,
                 "items": {}
             },
@@ -371,7 +395,7 @@ func GetUsecaseData() string {
             {
                 "name": "Reporting",
 								"priority": 50,
-								"keywords": ["report", "reporting", "sheets", "excel",],
+								"keywords": ["report", "reporting", "sheets", "excel"],
 								"keyword_matches": 1,
                 "items": {
                     "name": "Monthly reports",
@@ -2940,16 +2964,15 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	usecaseIds := []string{}
 	newWorkflows := []Workflow{}
 	for _, workflow := range workflows {
 		if workflow.OrgId != user.ActiveOrg.Id {
-			//log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
 			continue
 		}
 
 		newActions := []Action{}
 		for _, action := range workflow.Actions {
-			//log.Printf("Image: %s", action.LargeImage)
 			// Removed because of exports. These are needed there.
 			//action.LargeImage = ""
 			//action.SmallImage = ""
@@ -2959,13 +2982,39 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 		workflow.Actions = newActions
 
-		// Skipping these as they're related to onprem workflows in cloud
-		//log.Printf("ENVIRONMENT: %s", workflow.ExecutionEnvironment)
+		// Skipping these as they're related to onprem workflows in cloud (orborus)
 		if project.Environment == "cloud" && workflow.ExecutionEnvironment == "onprem" {
 			continue
 		}
 
+		usecaseIds = append(usecaseIds, workflow.UsecaseIds...)
 		newWorkflows = append(newWorkflows, workflow)
+	}
+
+	log.Printf("[INFO] Found %d usecaseIds for user %s", len(usecaseIds), user.Username)
+
+	// Get the org as well to manage priorities
+	// Only happens on first load, so it's like once per session~
+	if len(usecaseIds) > 0 {
+		log.Printf("[DEBUG] Getting usecases for %d workflows", len(workflows))
+
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org %s for user %s during workflow load: %s", user.ActiveOrg.Id, user.Username, err)
+		} else {
+			for _, priority := range org.Priorities {
+				if priority.Type != "usecase" || priority.Active != true {
+					continue
+				}
+
+				for _, usecaseId := range usecaseIds {
+					log.Printf("[DEBUG] Checking usecase %s against priority %s", usecaseId, priority.Name)
+					if strings.Contains(strings.ToLower(priority.Name), strings.ToLower(usecaseId)) {
+						log.Printf("\n\n[DEBUG] Found usecase %s in priority %s\n\n", usecaseId, priority.Name)
+					}
+				}
+			}
+		}
 	}
 
 	//log.Printf("[INFO] Returning %d workflows", len(newWorkflows))
@@ -5178,7 +5227,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if curappaction.Name != action.Name {
 					// FIXME: Find the actual active app?
 
-					log.Printf("[ERROR] Action %s in app %s doesn't exist.", action.Name, curapp.Name)
+					log.Printf("[ERROR] Action '%s' in app %s doesn't exist. Workflow: %s (%s)", action.Name, curapp.Name, workflow.Name, workflow.ID)
 					thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)
 					workflow.Errors = append(workflow.Errors, thisError)
 					workflow.IsValid = false
@@ -7034,6 +7083,12 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	// Just getting here for later
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in change org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
 
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
@@ -7043,6 +7098,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
@@ -7060,13 +7116,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Checking user error
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed change org: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+	go GetAllWorkflowsByQuery(context.Background(), user)
+	go GetPrioritizedApps(context.Background(), user)
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
@@ -7622,6 +7673,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] Updating lead info for %s to %s", org.Id, tmpData.LeadInfo)
 
 		for _, lead := range tmpData.LeadInfo {
+			if lead == "contacted" {
+				org.LeadInfo.Contacted = true
+			}
+
 			if lead == "student" {
 				org.LeadInfo.Student = true
 			}
@@ -16399,11 +16454,10 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 		orgUpdated = true
 	}
 
-	log.Printf("[INFO] Finding workflow suggestions for %s (%s)", org.Name, org.Id)
 	org, orgUpdated = GetWorkflowSuggestions(ctx, user, org, orgUpdated)
 
 	if orgUpdated {
-		log.Printf("[DEBUG] Should update org with %d notifications", len(org.Priorities))
+		log.Printf("[DEBUG] Should update org with %d priorities", len(org.Priorities))
 		go SetOrg(ctx, *org, org.Id)
 	}
 
@@ -18436,252 +18490,322 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	// 1. Suggest based on usecases
 	// 2. Suggest public workflows (cloud)
 	// 3. Use workflow template (local)
-
 	var updated bool
 	var workflows []Workflow
 	cache, err := GetCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		err = json.Unmarshal(cacheData, &workflows)
-		if err == nil && len(workflows) > 0 {
-			//log.Printf("Should find siem, edr and comms based on apps in use in workflows")
-			for _, workflow := range workflows {
-				for _, action := range workflow.Actions {
-					if len(action.Category) == 0 {
-						continue
-					}
-
-					//log.Printf("%s:%s = %s", action.AppName, action.AppVersion, action.Category)
-					if org.SecurityFramework.Communication.Name == "" && (action.Category == "Communication" || action.Category == "email") {
-						orgUpdated = true
-						org.SecurityFramework.Communication = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-
-					if org.SecurityFramework.Intel.Name == "" && action.Category == "Intel" {
-						orgUpdated = true
-						org.SecurityFramework.Intel = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-
-					if org.SecurityFramework.Network.Name == "" && action.Category == "Network" {
-						orgUpdated = true
-						org.SecurityFramework.Network = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-
-					if org.SecurityFramework.Assets.Name == "" && action.Category == "Assets" {
-						orgUpdated = true
-						org.SecurityFramework.Assets = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-
-					if org.SecurityFramework.Cases.Name == "" && action.Category == "Cases" {
-						orgUpdated = true
-						org.SecurityFramework.Cases = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-
-					if org.SecurityFramework.SIEM.Name == "" && action.Category == "SIEM" {
-						orgUpdated = true
-						org.SecurityFramework.SIEM = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-
-					if org.SecurityFramework.EDR.Name == "" && action.Category == "EDR" {
-						orgUpdated = true
-						org.SecurityFramework.EDR = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-
-					if org.SecurityFramework.IAM.Name == "" && action.Category == "IAM" {
-						orgUpdated = true
-						org.SecurityFramework.IAM = Category{
-							Name:        action.Name,
-							Count:       1,
-							Description: "",
-							LargeImage:  action.LargeImage,
-							ID:          action.AppID,
-						}
-					}
-				}
-			}
-
-			// Checking again to see if specifying either should be a priority
-			if org.SecurityFramework.SIEM.Name == "" || org.SecurityFramework.EDR.Name == "" || org.SecurityFramework.Communication.Name == "" {
-				org, updated = AddPriority(*org, Priority{
-					Name:        "Apps for Email, EDR & SIEM should be specified",
-					Description: "The most common usecases are based on Email, EDR & SIEM. If these aren't specified Shuffle won't be used optimally.",
-					Type:        "definition",
-					Active:      true,
-					URL:         fmt.Sprintf("/usecases"),
-					Severity:    2,
-				}, updated)
-
-				if updated {
-					orgUpdated = true
-				}
-			}
-		}
-	} else {
-		//log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
+	if err != nil {
+		log.Printf("[WARNING] No workflows cached for user %s", user.Id)
+		return org, orgUpdated
 	}
 
-	// Checking which workflows SHOULD have a usecase attached to them
-	if len(workflows) > 0 {
-		for _, workflow := range workflows {
-			if len(workflow.UsecaseIds) != 0 {
+	cacheData := []byte(cache.([]uint8))
+	err = json.Unmarshal(cacheData, &workflows)
+	if err != nil || len(workflows) == 0 {
+		log.Printf("[WARNING] No workflows cached for user %s (2)", user.Id)
+		return org, orgUpdated
+	}
+
+	log.Printf("[INFO] Finding workflow suggestions for %s (%s) based on %d workflows", org.Name, org.Id, len(workflows))
+	for _, workflow := range workflows {
+		for _, action := range workflow.Actions {
+			if len(action.Category) == 0 {
 				continue
 			}
 
-			//log.Printf("[INFO] No usecase for workflow %s", workflow.Name)
+			//log.Printf("%s:%s = %s", action.AppName, action.AppVersion, action.Category)
+			if org.SecurityFramework.Communication.Name == "" && (action.Category == "Communication" || action.Category == "email") {
+				orgUpdated = true
+				org.SecurityFramework.Communication = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
 
-			// Sample: If email (get/trigger) & cases (create ticket) in same workflow -> email usecase = done
-			// If excel/sheets is used, reporting
-			// Add keywords to usecases? Check if anything matching in:
-			// - name
-			// - action name
-			// - action label(s)
-			// - action description
+			if org.SecurityFramework.Intel.Name == "" && action.Category == "Intel" {
+				orgUpdated = true
+				org.SecurityFramework.Intel = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
+
+			if org.SecurityFramework.Network.Name == "" && action.Category == "Network" {
+				orgUpdated = true
+				org.SecurityFramework.Network = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
+
+			if org.SecurityFramework.Assets.Name == "" && action.Category == "Assets" {
+				orgUpdated = true
+				org.SecurityFramework.Assets = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
+
+			if org.SecurityFramework.Cases.Name == "" && action.Category == "Cases" {
+				orgUpdated = true
+				org.SecurityFramework.Cases = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
+
+			if org.SecurityFramework.SIEM.Name == "" && action.Category == "SIEM" {
+				orgUpdated = true
+				org.SecurityFramework.SIEM = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
+
+			if org.SecurityFramework.EDR.Name == "" && action.Category == "EDR" {
+				orgUpdated = true
+				org.SecurityFramework.EDR = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
+
+			if org.SecurityFramework.IAM.Name == "" && action.Category == "IAM" {
+				orgUpdated = true
+				org.SecurityFramework.IAM = Category{
+					Name:        action.Name,
+					Count:       1,
+					Description: "",
+					LargeImage:  action.LargeImage,
+					ID:          action.AppID,
+				}
+			}
+		}
+	}
+
+	// Checking again to see if specifying either should be a priority
+	if org.SecurityFramework.SIEM.Name == "" || org.SecurityFramework.EDR.Name == "" || org.SecurityFramework.Communication.Name == "" {
+		org, updated = AddPriority(*org, Priority{
+			Name:        "Apps for Email, EDR & SIEM should be specified",
+			Description: "The most common usecases are based on Email, EDR & SIEM. If these aren't specified Shuffle won't be used optimally.",
+			Type:        "apps",
+			Active:      true,
+			URL:         fmt.Sprintf("/welcome?tab=2"),
+			Severity:    2,
+		}, updated)
+
+		if updated {
+			orgUpdated = true
+		}
+	}
+
+	// Checking which workflows SHOULD have a usecase attached to them
+	for _, workflow := range workflows {
+		if len(workflow.UsecaseIds) != 0 {
+			continue
 		}
 
+		//log.Printf("[INFO] No usecase for workflow %s", workflow.Name)
+
+		// Sample: If email (get/trigger) & cases (create ticket) in same workflow -> email usecase = done
+		// If excel/sheets is used, reporting
+		// Add keywords to usecases? Check if anything matching in:
+		// - name
+		// - action name
+		// - action label(s)
+		// - action description
 	}
 
 	// Matching org priority with usecases & previously built workflows
-	if len(workflows) > 0 {
-		var usecases UsecaseLinks
-		err = json.Unmarshal([]byte(GetUsecaseData()), &usecases)
-		if err == nil {
-			log.Printf("[DEBUG] Got parsed usecases for %s - should check priority vs mainpriority (%s)", org.Name, org.MainPriority)
+	var usecases UsecaseLinks
+	err = json.Unmarshal([]byte(GetUsecaseData()), &usecases)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal usecase data (priorities): %s", err)
+	} else {
+		log.Printf("[DEBUG] Got parsed usecases for %s - should check priority vs mainpriority (%s)", org.Name, org.MainPriority)
 
-			for usecaseIndex, usecase := range usecases {
-				//if usecase.Name != org.MainPriority {
-				//	continue
-				//}
+		selectedAppName := ""
+		selectedAppImage := ""
+		innerUpdate := false
+		for usecaseIndex, usecase := range usecases {
+			//if usecase.Name != org.MainPriority {
+			//	continue
+			//}
 
-				// match them with usecases here
-				for _, workflow := range workflows {
-					if len(workflow.UsecaseIds) == 0 {
-						continue
-					}
+			// match them with usecases here
+			for _, workflow := range workflows {
+				if len(workflow.UsecaseIds) == 0 {
+					continue
+				}
 
-					// Fidning matching usecase for workflow
-					for _, workflowUsecase := range workflow.UsecaseIds {
-						newUsecasename := strings.ToLower(workflowUsecase)
+				// Fidning matching usecase for workflow
+				for _, workflowUsecase := range workflow.UsecaseIds {
+					newUsecasename := strings.ToLower(workflowUsecase)
 
-						for subusecaseIndex, subusecase := range usecase.List {
-							if newUsecasename == strings.ToLower(subusecase.Name) {
-								usecases[usecaseIndex].List[subusecaseIndex].Matches = append(usecases[usecaseIndex].List[subusecaseIndex].Matches, workflow)
-								break
-							}
+					for subusecaseIndex, subusecase := range usecase.List {
+						if newUsecasename == strings.ToLower(subusecase.Name) {
+							usecases[usecaseIndex].List[subusecaseIndex].Matches = append(usecases[usecaseIndex].List[subusecaseIndex].Matches, workflow)
+							break
 						}
 					}
 				}
+			}
 
-				// Sort sub-usecases by priority
-				slice.Sort(usecase.List[:], func(i, j int) bool {
-					return usecase.List[i].Priority > usecase.List[j].Priority
-				})
+			// Sort sub-usecases by priority
+			slice.Sort(usecase.List[:], func(i, j int) bool {
+				return usecase.List[i].Priority > usecase.List[j].Priority
+			})
 
-				//log.Printf("[DEBUG] Priorities for %s", usecase.Name)
-				cntAdded := 0
-				for _, subusecase := range usecase.List {
-					// Check if it has a workflow attached to it too?
-					//log.Printf("%s = %d. Matches: %d", subusecase.Name, subusecase.Priority, len(subusecase.Matches))
+			//log.Printf("[DEBUG] Priorities for %s", usecase.Name)
+			cntAdded := 0
+			for _, subusecase := range usecase.List {
+				// Check if it has a workflow attached to it too?
+				//log.Printf("%s = %d. Matches: %d", subusecase.Name, subusecase.Priority, len(subusecase.Matches))
 
-					if len(subusecase.Matches) == 0 {
+				// Matches = matching usecases that have workflows attached to them
+				// This means if it exists, don't add it as priority
+				if len(subusecase.Matches) > 0 {
+					continue
+				}
+
+				if strings.ToLower(subusecase.Type) == "iam" {
+					if org.SecurityFramework.IAM.Name == "" {
 						continue
 					}
 
-					//if len(subusecase.Type) == 0 {
-					//	continue
-					//}
+					selectedAppName = org.SecurityFramework.IAM.Name
+					selectedAppImage = org.SecurityFramework.IAM.LargeImage
+				}
 
-					if strings.ToLower(subusecase.Type) == "siem" && org.SecurityFramework.SIEM.Name == "" {
+				if strings.ToLower(subusecase.Type) == "siem" {
+					if org.SecurityFramework.SIEM.Name == "" {
 						continue
 					}
 
-					if strings.ToLower(subusecase.Type) == "edr" && org.SecurityFramework.EDR.Name == "" {
+					selectedAppName = org.SecurityFramework.SIEM.Name
+					selectedAppImage = org.SecurityFramework.SIEM.LargeImage
+				}
+
+				if strings.ToLower(subusecase.Type) == "edr" {
+					if org.SecurityFramework.EDR.Name == "" {
 						continue
 					}
 
-					if strings.ToLower(subusecase.Type) == "communication" && org.SecurityFramework.Communication.Name == "" {
+					selectedAppName = org.SecurityFramework.EDR.Name
+					selectedAppImage = org.SecurityFramework.EDR.LargeImage
+				}
+
+				if strings.ToLower(subusecase.Type) == "communication" {
+					if org.SecurityFramework.Communication.Name == "" {
 						continue
 					}
 
-					if strings.ToLower(subusecase.Type) == "assets" && org.SecurityFramework.Assets.Name == "" {
+					selectedAppName = org.SecurityFramework.Communication.Name
+					selectedAppImage = org.SecurityFramework.Communication.LargeImage
+				}
+
+				if strings.ToLower(subusecase.Type) == "assets" {
+					if org.SecurityFramework.Assets.Name == "" {
 						continue
 					}
 
-					if strings.ToLower(subusecase.Type) == "cases" && org.SecurityFramework.Cases.Name == "" {
+					selectedAppName = org.SecurityFramework.Assets.Name
+					selectedAppImage = org.SecurityFramework.Assets.LargeImage
+				}
+
+				if strings.ToLower(subusecase.Type) == "cases" {
+					if org.SecurityFramework.Cases.Name == "" {
 						continue
 					}
 
-					if strings.ToLower(subusecase.Type) == "network" && org.SecurityFramework.Network.Name == "" {
+					selectedAppName = org.SecurityFramework.Cases.Name
+					selectedAppImage = org.SecurityFramework.Cases.LargeImage
+				}
+
+				if strings.ToLower(subusecase.Type) == "network" {
+					if org.SecurityFramework.Network.Name == "" {
 						continue
 					}
 
-					if strings.ToLower(subusecase.Type) == "intel" && org.SecurityFramework.Intel.Name == "" {
+					selectedAppName = org.SecurityFramework.Network.Name
+					selectedAppImage = org.SecurityFramework.Network.LargeImage
+				}
+
+				if strings.ToLower(subusecase.Type) == "intel" {
+					if org.SecurityFramework.Intel.Name == "" {
 						continue
 					}
 
-					if strings.ToLower(subusecase.Type) == "iam" && org.SecurityFramework.IAM.Name == "" {
-						continue
-					}
+					selectedAppName = org.SecurityFramework.Intel.Name
+					selectedAppImage = org.SecurityFramework.Intel.LargeImage
+				}
 
-					// Should find info about the usecase
-					org, updated = AddPriority(*org, Priority{
-						Name:        fmt.Sprintf("Usecase: %s", subusecase.Name),
-						Description: fmt.Sprintf("Name: %s, Priority: %d, Dismiss this priority to get new priorities.", subusecase.Name, subusecase.Priority),
-						Type:        "usecase",
-						Active:      true,
-						URL:         fmt.Sprintf("/usecases?selected_object=%s", subusecase.Name),
-						Severity:    3,
-					}, updated)
+				usecaseDescription := "A priority usecase for your organization."
+				if len(selectedAppName) > 0 && len(selectedAppImage) > 0 {
+					usecaseDescription = fmt.Sprintf("%s&%s", strings.Replace(selectedAppName, "_", " ", -1), selectedAppImage)
 
-					if updated {
-						log.Printf("[DEBUG] Added priority for %s", subusecase.Name)
-
-						cntAdded += 1
-						orgUpdated = true
-						break
+					// Adding "last" node as well
+					if strings.ToLower(subusecase.Last) == "iam" && org.SecurityFramework.IAM.Name != "" && org.SecurityFramework.IAM.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.IAM.Name, "_", " ", -1), org.SecurityFramework.IAM.LargeImage)
+					} else if strings.ToLower(subusecase.Last) == "siem" && org.SecurityFramework.SIEM.Name != "" && org.SecurityFramework.SIEM.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.SIEM.Name, "_", " ", -1), org.SecurityFramework.SIEM.LargeImage)
+					} else if strings.ToLower(subusecase.Last) == "edr" && org.SecurityFramework.EDR.Name != "" && org.SecurityFramework.EDR.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.EDR.Name, "_", " ", -1), org.SecurityFramework.EDR.LargeImage)
+					} else if strings.ToLower(subusecase.Last) == "communication" && org.SecurityFramework.Communication.Name != "" && org.SecurityFramework.Communication.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.Communication.Name, "_", " ", -1), org.SecurityFramework.Communication.LargeImage)
+					} else if strings.ToLower(subusecase.Last) == "assets" && org.SecurityFramework.Assets.Name != "" && org.SecurityFramework.Assets.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.Assets.Name, "_", " ", -1), org.SecurityFramework.Assets.LargeImage)
+					} else if strings.ToLower(subusecase.Last) == "cases" && org.SecurityFramework.Cases.Name != "" && org.SecurityFramework.Cases.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.Cases.Name, "_", " ", -1), org.SecurityFramework.Cases.LargeImage)
+					} else if strings.ToLower(subusecase.Last) == "network" && org.SecurityFramework.Network.Name != "" && org.SecurityFramework.Network.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.Network.Name, "_", " ", -1), org.SecurityFramework.Network.LargeImage)
+					} else if strings.ToLower(subusecase.Last) == "intel" && org.SecurityFramework.Intel.Name != "" && org.SecurityFramework.Intel.LargeImage != "" {
+						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.Intel.Name, "_", " ", -1), org.SecurityFramework.Intel.LargeImage)
 					}
 				}
+
+				// Should find info about the usecase
+				// No description as this has custom rendering
+				org, innerUpdate = AddPriority(*org, Priority{
+					Name:        fmt.Sprintf("Suggested Usecase: %s", subusecase.Name),
+					Description: usecaseDescription,
+					Type:        "usecase",
+					Active:      true,
+					URL:         fmt.Sprintf("/usecases?selected_object=%s", subusecase.Name),
+					Severity:    3,
+				}, updated)
+
+				if innerUpdate {
+					log.Printf("[DEBUG] Added priority for %s", subusecase.Name)
+
+					cntAdded += 1
+					orgUpdated = true
+					break
+				}
+			}
+
+			if innerUpdate {
+				break
 			}
 		}
 	}
