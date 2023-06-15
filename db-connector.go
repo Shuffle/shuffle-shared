@@ -2322,7 +2322,13 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		}
 
 	} else {
-		query := datastore.NewQuery(nameKey).Filter("owner =", user.Id).Limit(limit)
+
+		log.Printf("[INFO] Appending workflows (ADMIN) for organization %s (2)", user.ActiveOrg.Id)
+		query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+		//if project.Environment != "cloud" {
+		//	query = query.Order("-edited")
+		//}
+
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)
@@ -2344,7 +2350,17 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 					}
 				}
 
-				workflows = append(workflows, innerWorkflow)
+				found := false
+				for _, loopedWorkflow := range workflows {
+					if loopedWorkflow.ID == innerWorkflow.ID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					workflows = append(workflows, innerWorkflow)
+				}
 			}
 
 			if err != iterator.Done {
@@ -2368,74 +2384,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				query = query.Start(nextCursor)
 				//cursorStr = nextCursor
 				//break
-			}
-		}
-
-		// q *datastore.Query
-
-		if user.Role == "admin" {
-			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s (2)", user.ActiveOrg.Id)
-			query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
-			//if project.Environment != "cloud" {
-			//	query = query.Order("-edited")
-			//}
-
-			cursorStr := ""
-			for {
-				it := project.Dbclient.Run(ctx, query)
-
-				for {
-					innerWorkflow := Workflow{}
-					_, err := it.Next(&innerWorkflow)
-					if err != nil {
-						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-							log.Printf("[INFO] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
-							innerWorkflow.Org = []OrgMini{user.ActiveOrg}
-							err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
-							if err != nil {
-								log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
-							}
-						} else {
-							//log.Printf("[WARNING] Workflow iterator issue: %s", err)
-							break
-						}
-					}
-
-					found := false
-					for _, loopedWorkflow := range workflows {
-						if loopedWorkflow.ID == innerWorkflow.ID {
-							found = true
-							break
-						}
-					}
-
-					if !found {
-						workflows = append(workflows, innerWorkflow)
-					}
-				}
-
-				if err != iterator.Done {
-					//log.Printf("[INFO] Failed fetching results: %v", err)
-					//break
-				}
-
-				// Get the cursor for the next page of results.
-				nextCursor, err := it.Cursor()
-				if err != nil {
-					log.Printf("Cursorerror: %s", err)
-					break
-				} else {
-					//log.Printf("NEXTCURSOR: %s", nextCursor)
-					nextStr := fmt.Sprintf("%s", nextCursor)
-					if cursorStr == nextStr {
-						break
-					}
-
-					cursorStr = nextStr
-					query = query.Start(nextCursor)
-					//cursorStr = nextCursor
-					//break
-				}
 			}
 		}
 	}
