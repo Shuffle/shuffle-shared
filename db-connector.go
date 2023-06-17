@@ -3,7 +3,9 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -5128,6 +5130,63 @@ func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, op
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
+		}
+	}
+
+	return nil
+}
+
+func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
+	nameKey := "workflow_revisions"
+	timeNow := int64(time.Now().Unix())
+	workflow.Edited = timeNow
+	if workflow.Created == 0 {
+		workflow.Created = timeNow
+	}
+
+	// Tet ID to be an md5 for name+ID+action+triggers+variables
+	// this makes sure overwrites don't happen, and duplicates aren't kept
+	// json marshal actions
+	actionData, actionerr := json.Marshal(workflow.Actions)
+	triggerData, triggererr := json.Marshal(workflow.Triggers)
+	variableData, variableerr := json.Marshal(workflow.WorkflowVariables)
+
+	if actionerr != nil || triggererr != nil || variableerr != nil {
+		log.Printf("[WARNING] Failed marshalling in set workflow revision: %s", actionerr)
+		return nil
+	}
+
+	workflowHashString := fmt.Sprintf("%s_%s_%s_%s_%s", workflow.Name, workflow.ID, string(actionData), string(triggerData), string(variableData))
+	// md5 of workflowHashString
+	hasher := md5.New()
+	hasher.Write([]byte(workflowHashString))
+	workflowHash := hex.EncodeToString(hasher.Sum(nil))
+	workflow.RevisionId = workflowHash
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(workflow)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set workflow revision: %s", err)
+		return nil
+	}
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, workflow.RevisionId, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, workflow.RevisionId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &workflow); err != nil {
+			log.Printf("[WARNING] Error adding workflow revision: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, workflow.RevisionId)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for set workflow revision '%s': %s", cacheKey, err)
 		}
 	}
 

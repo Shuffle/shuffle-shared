@@ -1035,6 +1035,7 @@ type Workflow struct {
 		Url  string `json:"url" datastore:"url" yaml:"url"`
 	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
 	PublishedId  string     `json:"published_id" yaml:"published_id"`
+	RevisionId   string     `json:"revision_id" yaml:"revision_id"`
 	Subflows     []Workflow `json:"subflows,omitempty" yaml:"subflows"`
 	UsecaseIds   []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
 	Blogpost     string     `json:"blogpost" yaml:"blogpost"`

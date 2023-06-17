@@ -5545,6 +5545,16 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Save a backup version of the workflow
+	// This is to be used for loading in workflows in the future
+	// It automatically changes the ID to be unique
+	workflow.OrgId = user.ActiveOrg.Id
+	workflow.ExecutingOrg = OrgMini{
+		Id:   user.ActiveOrg.Id,
+		Name: user.ActiveOrg.Name,
+	}
+	SetWorkflowRevision(ctx, workflow)
+
 	//totalOldActions := len(tmpworkflow.Actions)
 	//totalNewActions := len(workflow.Actions)
 	//err = increaseStatisticsField(ctx, "total_workflow_actions", workflow.ID, int64(totalNewActions-totalOldActions), workflow.OrgId)
@@ -18819,7 +18829,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 				}, updated)
 
 				if innerUpdate {
-					log.Printf("[DEBUG] Added priority for %s", subusecase.Name)
+					log.Printf("[DEBUG] Org %s (%s) got added priority for %s", org.Name, org.Id, subusecase.Name)
 
 					cntAdded += 1
 					orgUpdated = true
