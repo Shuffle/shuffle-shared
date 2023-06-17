@@ -91,6 +91,8 @@ func GetUsecaseData() string {
                 "items": {}
             },
             {
+								"type": "cases",
+								"last": "cases",
                 "name": "2-way Ticket synchronization",
 								"priority": 60,
                 "items": {}
@@ -98,16 +100,21 @@ func GetUsecaseData() string {
             {
                 "name": "ChatOps",
 								"priority": 70,
+								"type": "communication",
+								"last": "cases",
                 "items": {}
             },
             {
                 "name": "Threat Intel received",
 								"priority": 50,
+								"type": "intel",
+								"last": "cases",
                 "items": {}
             },
             {
                 "name": "Assign tickets",
-								"priority": 30,
+								"type": "cases",
+								"priority": 60,
                 "items": {}
             },
             {
@@ -129,11 +136,6 @@ func GetUsecaseData() string {
                     "name": "Manage policies",
                     "items": {}
                 }
-            },
-            {
-                "name": "Deduplicate information",
-								"priority": 70,
-                "items": {}
             }
         ]
     },
@@ -292,16 +294,19 @@ func GetUsecaseData() string {
             {
                 "name": "Lock vault",
 								"priority": 50,
+								"type": "iam",
                 "items": {}
             },
             {
                 "name": "Increase authentication",
 								"priority": 50,
+								"type": "iam",
                 "items": {}
             },
             {
                 "name": "Get policies from assets",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
@@ -330,66 +335,79 @@ func GetUsecaseData() string {
             {
                 "name": "Ensure policies are followed",
 								"priority": 80,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Find Inactive users",
 								"priority": 50,
+								"type": "iam",
                 "items": {}
             },
             {
                 "name": "Botnet tracker",
 								"priority": 50,
+								"type": "network",
                 "items": {}
             },
             {
                 "name": "Ensure access rights match HR systems",
 								"priority": 50,
+								"type": "iam",
                 "items": {}
             },
             {
                 "name": "Ensure onboarding is followed",
 								"priority": 50,
+								"type": "iam",
                 "items": {}
             },
             {
-                "name": "Third party apps in SaaS",
+                "name": "Track third party SaaS apps",
 								"priority": 50,
+								"type": "iam",
                 "items": {}
             },
             {
                 "name": "Devices used for your cloud account",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
-                "name": "Too much access in GCP/Azure/AWS/ other clouds",
+                "name": "Too much access in GCP/Azure/AWS other clouds",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Certificate validation",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor domain creation and expiration",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor new DNS entries for domain with passive DNS",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor and track password dumps",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor for mentions of domain on darknet sites",
 								"priority": 50,
+								"type": "assets",
                 "items": {}
             },
             {
