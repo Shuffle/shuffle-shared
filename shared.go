@@ -7737,7 +7737,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Only send for cloud
+	// Sends tracker for this on cloud
 	if sendOrgUpdaterHook && project.Environment == "cloud" {
 		signupWebhook := os.Getenv("WEBSITE_ORG_WEBHOOK")
 		if strings.HasPrefix(signupWebhook, "http") {
@@ -8845,6 +8845,11 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", userdata.Username, userdata.Id, innerorg.Name)
 					userdata.ActiveOrg.Id = innerorg.Id
 					userdata.ActiveOrg.Name = innerorg.Name
+
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.Id))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Username))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Id))
 
 					updateUser = true
 					break
@@ -13800,6 +13805,11 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 				if project.Environment == "cloud" {
 					user.ActiveOrg.Id = matchingOrgs[0].Id
+
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 				}
 
 				//log.Printf("SESSION: %s", user.Session)
