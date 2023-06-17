@@ -7563,6 +7563,8 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 				log.Printf("[WARNING] Error loading orgs: %s", err)
 			}
 		}
+	} else {
+		// Fix potential cloud init problems here
 	}
 
 	return project, nil

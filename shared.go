@@ -8728,7 +8728,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		for _, user := range users {
 			if user.Id == "" && user.Username == "" {
-				log.Printf(`[WARNING] Username %s (%s) isn't valid. Amount of users checked: %d (1)`, user.Username, user.Id, len(users))
+				log.Printf(`[AUDIT] Username %s (%s) isn't valid (2). Amount of users checked: %d (1)`, user.Username, user.Id, len(users))
 				continue
 			}
 
@@ -8872,7 +8872,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if userdata.Id == "" && userdata.Username == "" {
-		log.Printf(`[ERROR] Username %s isn't valid. Amount of users checked: %d (2)`, data.Username, len(users))
+		log.Printf(`[AUDIT] Login for Username %s isn't valid with that password. Amount of users checked: %d (2)`, data.Username, len(users))
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Username and/or password is incorrect"}`)))
 		return
@@ -13731,7 +13731,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	matchingOrgs, err := GetOrgByField(ctx, "sso_config.sso_certificate", parsedX509Key)
-	if err != nil {
+	if err != nil && len(matchingOrgs) == 0 {
 		log.Printf("[DEBUG] BYTES FROM REQUEST (DEBUG): %s", string(bytesXML))
 
 		log.Printf("[WARNING] Bad certificate (%d): Failed to find a org with certificate matching the SSO", len(parsedX509Key))
@@ -16479,7 +16479,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 	if orgUpdated {
 		log.Printf("[DEBUG] Should update org with %d priorities", len(org.Priorities))
-		go SetOrg(ctx, *org, org.Id)
+		SetOrg(ctx, *org, org.Id)
 	}
 
 	return org.Priorities, nil
@@ -18513,8 +18513,8 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	// 3. Use workflow template (local)
 	var updated bool
 	workflows, err := GetAllWorkflowsByQuery(ctx, user)
-	if err != nil || len(workflows) == 0 {
-		log.Printf("[WARNING] No workflows cached found user %s (2)", user.Id)
+	if err != nil {
+		log.Printf("[WARNING] No workflows found for user %s (2)", user.Id)
 		return org, orgUpdated
 	}
 
