@@ -15662,6 +15662,13 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to set detection framework: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}}`))
+		return
+	}
+
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read: %s", err)
@@ -15730,52 +15737,76 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
+	value.Type = strings.ToLower(value.Type)
 	if value.Type == "email" {
-		value.Type = "comms"
+		value.Type = "communication"
 	}
 
 	if value.Type == "eradication" {
 		value.Type = "edr"
 	}
 
+	if value.Type == "edr & av" {
+		value.Type = "edr"
+	}
+
+	appPriority := Priority{}
+	prioIndex := -1
+	for i, priority := range org.Priorities {
+		if priority.Type == "apps" && strings.Contains(strings.ToLower(priority.Name), value.Type) && strings.Contains(priority.Name, "/8)") {
+			appPriority = priority
+			prioIndex = i
+			break
+		}
+	}
+
+	log.Printf("[INFO] Found app priority (%s) with name '%s'", value.Type, appPriority.Name)
+	if prioIndex >= 0 && strings.Contains(strings.ToLower(appPriority.Name), value.Type) {
+		if value.ID == "remove" {
+			org.Priorities[prioIndex].Active = true
+		} else {
+			org.Priorities[prioIndex].Active = false
+		}
+	}
+
 	// 1. Check if the app exists and the user has access to it. If public/sharing ->
 
-	if strings.ToLower(value.Type) == "siem" {
+	if value.Type == "siem" {
 		org.SecurityFramework.SIEM.Name = app.Name
 		org.SecurityFramework.SIEM.Description = app.Description
 		org.SecurityFramework.SIEM.ID = app.ID
 		org.SecurityFramework.SIEM.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "network" {
+	} else if value.Type == "network" {
 		org.SecurityFramework.Network.Name = app.Name
 		org.SecurityFramework.Network.Description = app.Description
 		org.SecurityFramework.Network.ID = app.ID
 		org.SecurityFramework.Network.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "edr" || strings.ToLower(value.Type) == "edr & av" || strings.ToLower(value.Type) == "eradication" {
+	} else if value.Type == "edr" {
 		org.SecurityFramework.EDR.Name = app.Name
 		org.SecurityFramework.EDR.Description = app.Description
 		org.SecurityFramework.EDR.ID = app.ID
 		org.SecurityFramework.EDR.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "cases" {
+	} else if value.Type == "cases" {
 		org.SecurityFramework.Cases.Name = app.Name
 		org.SecurityFramework.Cases.Description = app.Description
 		org.SecurityFramework.Cases.ID = app.ID
 		org.SecurityFramework.Cases.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "iam" {
+	} else if value.Type == "iam" {
 		org.SecurityFramework.IAM.Name = app.Name
 		org.SecurityFramework.IAM.Description = app.Description
 		org.SecurityFramework.IAM.ID = app.ID
 		org.SecurityFramework.IAM.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "assets" {
+	} else if value.Type == "assets" {
 		org.SecurityFramework.Assets.Name = app.Name
 		org.SecurityFramework.Assets.Description = app.Description
 		org.SecurityFramework.Assets.ID = app.ID
 		org.SecurityFramework.Assets.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "intel" {
+	} else if value.Type == "intel" {
 		org.SecurityFramework.Intel.Name = app.Name
 		org.SecurityFramework.Intel.Description = app.Description
 		org.SecurityFramework.Intel.ID = app.ID
 		org.SecurityFramework.Intel.LargeImage = app.LargeImage
-	} else if strings.ToLower(value.Type) == "comms" || strings.ToLower(value.Type) == "communication" || strings.ToLower(value.Type) == "email" {
+	} else if value.Type == "communication" {
 		org.SecurityFramework.Communication.Name = app.Name
 		org.SecurityFramework.Communication.Description = app.Description
 		org.SecurityFramework.Communication.ID = app.ID
@@ -18641,33 +18672,33 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	amountDone := 0
 	if missingType == "" && org.SecurityFramework.SIEM.Name == "" {
 		missingType = "SIEM"
-		amountDone = 0
+		amountDone = 1
 	} else if missingType == "" && org.SecurityFramework.Communication.Name == "" {
 		missingType = "Email"
-		amountDone = 1
+		amountDone = 2
 	} else if missingType == "" && org.SecurityFramework.EDR.Name == "" {
 		missingType = "EDR"
-		amountDone = 2
+		amountDone = 3
 	} else if missingType == "" && org.SecurityFramework.Cases.Name == "" {
 		missingType = "Cases"
-		amountDone = 3
+		amountDone = 4
 	} else if missingType == "" && org.SecurityFramework.Intel.Name == "" {
 		missingType = "Intel"
-		amountDone = 4
+		amountDone = 5
 	} else if missingType == "" && org.SecurityFramework.Network.Name == "" {
 		missingType = "Network"
-		amountDone = 5
+		amountDone = 6
 	} else if missingType == "" && org.SecurityFramework.Assets.Name == "" {
 		missingType = "Assets"
-		amountDone = 6
+		amountDone = 7
 	} else if missingType == "" && org.SecurityFramework.IAM.Name == "" {
 		missingType = "IAM"
-		amountDone = 7
+		amountDone = 8
 	}
 
 	if len(missingType) > 0 {
 		org, updated = AddPriority(*org, Priority{
-			Name:        fmt.Sprintf("An %s App hasn't been specified (%d/8)", missingType, amountDone),
+			Name:        fmt.Sprintf("Your Organizations' %s App hasn't been specified (%d/8)", missingType, amountDone),
 			Description: fmt.Sprintf("Your %s system should be specified to enable us to suggest relevant usecases to you", missingType),
 			Type:        "apps",
 			Active:      true,
