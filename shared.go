@@ -18637,20 +18637,49 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	}
 
 	// Checking again to see if specifying either should be a priority
-	if org.SecurityFramework.SIEM.Name == "" || org.SecurityFramework.EDR.Name == "" || org.SecurityFramework.Communication.Name == "" {
+	missingType := ""
+	amountDone := 0
+	if missingType == "" && org.SecurityFramework.SIEM.Name == "" {
+		missingType = "SIEM"
+		amountDone = 0
+	} else if missingType == "" && org.SecurityFramework.Communication.Name == "" {
+		missingType = "Email"
+		amountDone = 1
+	} else if missingType == "" && org.SecurityFramework.EDR.Name == "" {
+		missingType = "EDR"
+		amountDone = 2
+	} else if missingType == "" && org.SecurityFramework.Cases.Name == "" {
+		missingType = "Cases"
+		amountDone = 3
+	} else if missingType == "" && org.SecurityFramework.Intel.Name == "" {
+		missingType = "Intel"
+		amountDone = 4
+	} else if missingType == "" && org.SecurityFramework.Network.Name == "" {
+		missingType = "Network"
+		amountDone = 5
+	} else if missingType == "" && org.SecurityFramework.Assets.Name == "" {
+		missingType = "Assets"
+		amountDone = 6
+	} else if missingType == "" && org.SecurityFramework.IAM.Name == "" {
+		missingType = "IAM"
+		amountDone = 7
+	}
+
+	if len(missingType) > 0 {
 		org, updated = AddPriority(*org, Priority{
-			Name:        "Apps for Email, EDR & SIEM should be specified",
-			Description: "The most common usecases are based on Email, EDR & SIEM. If these aren't specified Shuffle won't be used optimally.",
+			Name:        fmt.Sprintf("An %s App hasn't been specified (%d/8)", missingType, amountDone),
+			Description: fmt.Sprintf("Your %s system should be specified to enable us to suggest relevant usecases to you", missingType),
 			Type:        "apps",
 			Active:      true,
-			URL:         fmt.Sprintf("/welcome?tab=2"),
-			Severity:    2,
+			URL:         fmt.Sprintf("/welcome?tab=2&target=%s", missingType),
+			Severity:    3,
 		}, updated)
 
 		if updated {
 			orgUpdated = true
 		}
 	}
+	//org.SecurityFramework.EDR.Name == "" || org.SecurityFramework.Communication.Name == "" {
 
 	// Checking which workflows SHOULD have a usecase attached to them
 	for _, workflow := range workflows {
@@ -18793,7 +18822,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 					selectedAppImage = org.SecurityFramework.Intel.LargeImage
 				}
 
-				usecaseDescription := "A priority usecase for your organization."
+				usecaseDescription := "A priority usecase for your organization has been found. Click explore to learn more."
 				if len(selectedAppName) > 0 && len(selectedAppImage) > 0 {
 					usecaseDescription = fmt.Sprintf("%s&%s", strings.Replace(selectedAppName, "_", " ", -1), selectedAppImage)
 
