@@ -6410,7 +6410,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !workflow.Actions[key].IsValid {
-			log.Printf("[AUDIT] Invalid action: %s (%s)", workflow.Actions[key].Label, workflow.Actions[key].ID)
+			log.Printf("[AUDIT] Invalid action in workflow %s (%s): %s (%s)", workflow.Name, workflow.ID, workflow.Actions[key].Label, workflow.Actions[key].ID)
 
 			// Check if all fields are set
 			// Check if auth is set (autofilled)

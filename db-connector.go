@@ -2339,7 +2339,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[INFO] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
+						log.Printf("[ERROR] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
 						innerWorkflow.Org = []OrgMini{user.ActiveOrg}
 						err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
 						if err != nil {
@@ -4386,14 +4386,14 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 
 		if app.Edited > dedupedApps[replaceIndex].Edited {
-			log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
+			//log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
 			dedupedApps[replaceIndex] = app
 			continue
 		}
 
 		// Check if image, and other doesn't have
 		if len(dedupedApps[replaceIndex].LargeImage) == 0 && len(app.LargeImage) > 0 {
-			log.Printf("[INFO] Replacing deduped app with image in get apps: %s", app.Name)
+			//log.Printf("[INFO] Replacing deduped app with image in get apps (2): %s", app.Name)
 			dedupedApps[replaceIndex] = app
 			continue
 		}
