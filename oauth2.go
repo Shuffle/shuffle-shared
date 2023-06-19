@@ -3487,7 +3487,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
 			oauthUrl = field.Value
 		} else {
-			log.Printf("[ERROR][%s] Unparsed oauth2 field '%s' (not critical)", appAuth.Id, field.Key)
+			log.Printf("[INFO][%s] Unparsed oauth2 field '%s' (not critical)", appAuth.Id, field.Key)
 		}
 	}
 

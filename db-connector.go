@@ -789,7 +789,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		log.Printf("[INFO] Saving execution %s with status %s and %d/%d results (not including subflows) - 2", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 
-		key := datastore.NameKey(nameKey, workflowExecution.ExecutionId, nil)
+		key := datastore.NameKey(nameKey, strings.ToLower(workflowExecution.ExecutionId), nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
 			log.Printf("[WARNING] Error adding workflow_execution to datastore: %s", err)
 
@@ -1270,7 +1270,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		}
 	}
 
-	if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker" {
+	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && project.Environment != "cloud" {
 		return workflowExecution, nil
 	}
 
@@ -1301,9 +1301,11 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		//log.Printf("[DEBUG] Found execution %s from ES with %d results. Actions: %d", id, len(wrapped.Source.Results), len(wrapped.Source.Workflow.Actions))
 		workflowExecution = &wrapped.Source
 	} else {
+		log.Printf("[WARNING] Getting execution ID %s from DB", id)
+
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
-			return &WorkflowExecution{}, err
+			return workflowExecution, err
 		}
 
 		// A workaround for large bits of information for execution argument
@@ -1423,7 +1425,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 			return workflowApp, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for get cloud app cache key '%s': %s", cacheKey, err)
 		}
@@ -4103,7 +4105,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	if user.ActiveOrg.Id != "" && user.ActiveOrg.Id != "2e7b6a08-b63b-4fc2-bd70-718091509db1" {
 		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
-		log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
+		//log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
 		for {
 			it := project.Dbclient.Run(ctx, query)
 

@@ -7161,9 +7161,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	go GetAllWorkflowsByQuery(context.Background(), user)
-	go GetPrioritizedApps(context.Background(), user)
-
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		resp.WriteHeader(401)
@@ -7286,6 +7283,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Cleanup cache for the user
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
@@ -14087,8 +14085,6 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 
 // // New execution with firestore
 func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *http.Request, maxExecutionDepth int64) (WorkflowExecution, ExecInfo, string, error) {
-	log.Printf("[INFO] At start of prepare exec")
-
 	workflowBytes, err := json.Marshal(workflow)
 	if err != nil {
 		log.Printf("[WARNING] Failed workflow unmarshal in execution: %s", err)
@@ -14107,8 +14103,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.ExecutionOrg = workflow.OrgId
 		workflowExecution.OrgId = workflow.OrgId
 	}
-
-	log.Printf("[INFO] Checking request methods and such")
 
 	makeNew := true
 	start, startok := request.URL.Query()["start"]
