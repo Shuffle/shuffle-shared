@@ -7626,6 +7626,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if user.SupportAccess {
+		userFound = true
+		admin = true
+	}
+
 	if !userFound && !user.SupportAccess {
 		log.Printf("[WARNING] User %s doesn't exist in organization for edit %s", user.Id, org.Id)
 		resp.WriteHeader(400)
