@@ -311,6 +311,7 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Run ansible scripts",
+								"type": "assets",
 								"priority": 50,
                 "items": {}
             }
@@ -413,6 +414,7 @@ func GetUsecaseData() string {
             {
                 "name": "Reporting",
 								"priority": 50,
+								"type": "assets",
 								"keywords": ["report", "reporting", "sheets", "excel"],
 								"keyword_matches": 1,
                 "items": {
@@ -2609,7 +2611,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			_, err1 := request.Cookie("session_token")
 			if err1 != nil {
-				log.Printf("[DEBUG] Setting missing session_token for user %s (%s) (1)", user.Username, user.Id)
+				//log.Printf("[DEBUG] Setting missing session_token for user %s (%s) (1)", user.Username, user.Id)
 				newCookie.Name = "session_token"
 				if resp != nil {
 					http.SetCookie(resp, newCookie)
@@ -2618,7 +2620,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			_, err2 := request.Cookie("__session")
 			if err2 != nil {
-				log.Printf("[DEBUG] Setting missing __session for user %s (%s) (2)", user.Username, user.Id)
+				//log.Printf("[DEBUG] Setting missing __session for user %s (%s) (2)", user.Username, user.Id)
 				newCookie.Name = "__session"
 				if resp != nil {
 					http.SetCookie(resp, newCookie)
@@ -7156,6 +7158,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
 
 			return
 		}
@@ -7288,6 +7291,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+	DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
@@ -7627,6 +7631,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.SupportAccess {
+		log.Printf("[AUDIT] User %s (%s) is editing org %s (%s) with support access", user.Username, user.Id, fileId, user.ActiveOrg.Id)
 		userFound = true
 		admin = true
 	}
@@ -7762,8 +7767,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("Org: %s", org)
 	err = SetOrg(ctx, *org, org.Id)
 	if err != nil {
-		log.Printf("User %s doesn't have edit rights to %s", user.Id, org.Id)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Failed to edit org %s: %s", org.Id, err)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
