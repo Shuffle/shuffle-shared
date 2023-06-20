@@ -441,20 +441,25 @@ func GetContext(request *http.Request) context.Context {
 }
 
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
-
-	// FIXME - this is to handle multiple frontends in test rofl
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
+
 	if len(origin) > 0 {
 		resp.Header().Set("Access-Control-Allow-Origin", origin[0])
+
+		// Location testing
 		//resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
+		//resp.Header().Set("Access-Control-Allow-Origin", "https://us.shuffler.io")
+		//resp.Header().Set("Access-Control-Allow-Origin", "https://eu.shuffler.io")
+		//resp.Header().Set("Access-Control-Allow-Origin", "https://in.shuffler.io")
 		//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
 	} else {
 		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:4201")
 	}
+
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
-	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me")
-	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, POST, PATCH")
+	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, org_id, Authorization")
+	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
 	if request.Method == "OPTIONS" {
@@ -1361,8 +1366,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[AUDIT] Setting new authentication for user %s (%s)", user.Username, user.Id)
-
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read in new app auth: %s", err)
@@ -1380,6 +1383,8 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("[AUDIT] Setting new app authentication for app %s with user %s (%s)", appAuth.App.Name, user.Username, user.Id)
+
 	ctx := GetContext(request)
 	if len(appAuth.Id) == 0 {
 		appAuth.Id = uuid.NewV4().String()
@@ -1388,15 +1393,15 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		if err == nil {
 			// OrgId         string                `json:"org_id" datastore:"org_id"`
 			if auth.OrgId != user.ActiveOrg.Id {
-				log.Printf("[WARNING] User isn't a part of the right org during auth edit")
-				resp.WriteHeader(409)
+				log.Printf("[WARNING] User %s (%s) isn't a part of the right org during auth edit", user.Username, user.Id)
+				resp.WriteHeader(403)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": ":("}`)))
 				return
 			}
 
 			if user.Role != "admin" {
-				log.Printf("[AUDIT] User isn't admin during auth edit")
-				resp.WriteHeader(409)
+				log.Printf("[AUDIT] User %s (%s) isn't admin during auth edit", user.Username, user.Id)
+				resp.WriteHeader(403)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": ":("}`)))
 				return
 			}
@@ -1409,7 +1414,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if auth.App.Name != appAuth.App.Name {
-				log.Printf("[WARNING] User tried to modify auth")
+				log.Printf("[AUDIT] User %s (%s) tried to modify auth, but appname was wrong", user.Username, user.Id)
 				resp.WriteHeader(409)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad app configuration: need to specify correct name"}`)))
 				return
@@ -2478,7 +2483,9 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	apikey := request.Header.Get("Authorization")
+	org_id := request.Header.Get("Org-id")
 
+	// Loop headers
 	ctx := GetContext(request)
 	user := &User{}
 	if len(apikey) > 0 {
@@ -2508,7 +2515,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			newApikey = newApikey[0:248]
 		}
 
-		cache, err := GetCache(ctx, newApikey)
+		cache, err := GetCache(ctx, newApikey+org_id)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &user)
@@ -2547,9 +2554,26 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			return User{}, err
 		}
 
+		if len(org_id) > 0 {
+			found := false
+			for _, org := range userdata.Orgs {
+				if org == org_id {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return User{}, errors.New("User doesn't have access to this org")
+			}
+
+			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", user.Username, user.Id, org_id)
+			user.ActiveOrg.Id = org_id
+		}
+
 		user.SessionLogin = false
 		user.ApiKey = newApikey
-		err = SetCache(ctx, newApikey, b, 30)
+		err = SetCache(ctx, newApikey+org_id, b, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
@@ -2651,6 +2675,25 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 
 			return User{}, errors.New(fmt.Sprintf("Couldn't find user"))
+		}
+
+		// This is to be able to overwrite access with available orgs
+		// Org needs to match one the user already has access to
+		if len(org_id) > 0 {
+			found := false
+			for _, org := range user.Orgs {
+				if org == org_id {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return User{}, errors.New("User doesn't have access to this org")
+			}
+
+			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", user.Username, user.Id, org_id)
+			user.ActiveOrg.Id = org_id
 		}
 
 		// We're using the session to find the user anyway, which is NOT user controlled
