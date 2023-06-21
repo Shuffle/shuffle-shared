@@ -2590,7 +2590,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 			return curOrg, nil
 		}
 
-		err = SetCache(ctx, cacheKey, neworg, 30)
+		err = SetCache(ctx, cacheKey, neworg, 1440)
 		if err != nil {
 			log.Printf("[ERROR] Failed updating org cache: %s", err)
 		}
@@ -2839,7 +2839,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-		err = SetCache(ctx, cacheKey, neworg, 30)
+		err = SetCache(ctx, cacheKey, neworg, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org '%s': %s", cacheKey, err)
 		}
@@ -3573,7 +3573,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 			return curUser, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating cache: %s", err)
 		}
@@ -3629,13 +3629,13 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating user cache (ID): %s", err)
 		}
 
 		cacheKey = fmt.Sprintf("user_%s", strings.ToLower(user.Username))
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating user cache (username): %s", err)
 		}

@@ -458,7 +458,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
-	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, org_id, Authorization")
+	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Authorization")
 	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
@@ -1487,7 +1487,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 				}
 			} else {
-				log.Printf("[INFO] Org %s already has app %s active.", user.ActiveOrg.Id, app.ID)
+				log.Printf("[INFO] Org %s (%s) already has app %s active.", user.ActiveOrg.Name, user.ActiveOrg.Id, app.ID)
 			}
 		}
 	}
@@ -2482,12 +2482,22 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 }
 
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
+	var err error
 	apikey := request.Header.Get("Authorization")
-	org_id := request.Header.Get("Org-id")
+	org_id := request.Header.Get("Org-Id")
+
+	user := &User{}
+	org := &Org{}
+	ctx := GetContext(request)
+	if len(org_id) > 0 {
+		// Get the org
+		org, err = GetOrg(ctx, org_id)
+		if err != nil || org.Id != org_id {
+			return User{}, errors.New("Invalid org id specified")
+		}
+	}
 
 	// Loop headers
-	ctx := GetContext(request)
-	user := &User{}
 	if len(apikey) > 0 {
 		if !strings.HasPrefix(apikey, "Bearer ") {
 
@@ -2548,11 +2558,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		// Caching both bad and good apikeys :)
-		b, err := json.Marshal(userdata)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling: %s", err)
-			return User{}, err
-		}
 
 		if len(org_id) > 0 {
 			found := false
@@ -2567,12 +2572,22 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return User{}, errors.New("User doesn't have access to this org")
 			}
 
-			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", user.Username, user.Id, org_id)
-			user.ActiveOrg.Id = org_id
+			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", userdata.Username, userdata.Id, org_id)
+			userdata.ActiveOrg.Id = org_id
+			userdata.ActiveOrg.Name = org.Name
+			userdata.ActiveOrg.Image = org.Image
+
 		}
 
-		user.SessionLogin = false
-		user.ApiKey = newApikey
+		userdata.SessionLogin = false
+		userdata.ApiKey = newApikey
+
+		b, err := json.Marshal(userdata)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling: %s", err)
+			return User{}, err
+		}
+
 		err = SetCache(ctx, newApikey+org_id, b, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
@@ -2694,6 +2709,8 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", user.Username, user.Id, org_id)
 			user.ActiveOrg.Id = org_id
+			user.ActiveOrg.Name = org.Name
+			user.ActiveOrg.Image = org.Image
 		}
 
 		// We're using the session to find the user anyway, which is NOT user controlled
