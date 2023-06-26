@@ -1098,6 +1098,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
@@ -1106,6 +1107,10 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 			RedirectUserRequest(resp, request)
 
+			// Wait 1 second to ensure that the redirect is handled
+			time.Sleep(1 * time.Second)
+
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(userInfo.Username)))
@@ -1113,8 +1118,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
 
 			// FIXME: Allow superfluous cleanups?
-			// Point is: should it continue running the logout to
-			// ensure cookies are cleared?
+			// Point is: should it continue running the logout to ensure cookies are cleared?
 			// Keeping it for now to ensure cleanup.
 			return
 		}
@@ -1383,7 +1387,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[AUDIT] Setting new app authentication for app %s with user %s (%s)", appAuth.App.Name, user.Username, user.Id)
+	log.Printf("[AUDIT] Setting new app authentication for app %s with user %s (%s) in org %s (%s)", appAuth.App.Name, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	ctx := GetContext(request)
 	if len(appAuth.Id) == 0 {
@@ -1506,14 +1510,14 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if user.Id != workflow.Owner || len(user.Id) == 0 {
-				if workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
+				if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
 					log.Printf("[AUDIT] User %s is accessing workflow '%s' as admin (set oauth2)", user.Username, workflow.ID)
 				} else if workflow.Public {
 					log.Printf("[AUDIT] Letting user %s access workflow %s FOR AUTH because it's public", user.Username, workflow.ID)
 				} else {
 					log.Printf("[AUDIT] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
-					resp.WriteHeader(401)
-					resp.Write([]byte(`{"success": false}`))
+					resp.WriteHeader(403)
+					resp.Write([]byte(`{"success": false, "reason": "Your user can't set authentication for this workflow."}`))
 					return
 				}
 			}
@@ -2337,8 +2341,6 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 			continue
 		}
 
-		//log.Printf("[DEBUG] Got execution with status %s!", execution.Status)
-
 		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape(`{"success": False, "reason": "Shuffle's automated cleanup bot stopped this execution as it didn't finish within 30 minutes."}`))
 		//log.Printf("Url: %s", streamUrl)
 		req, err := http.NewRequest(
@@ -2631,7 +2633,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
-			log.Printf("[ERROR] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
+			log.Printf("[WARNING] No valid session token for ID %s. Setting cookie to expire. May cause fallback problems.", sessionToken)
 
 			if resp != nil {
 				http.SetCookie(resp, newCookie)
@@ -6472,7 +6474,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !workflow.Actions[key].IsValid {
-			log.Printf("[AUDIT] Invalid action in workflow %s (%s): %s (%s)", workflow.Name, workflow.ID, workflow.Actions[key].Label, workflow.Actions[key].ID)
+			log.Printf("[AUDIT] Invalid action in workflow '%s' (%s): '%s' (%s)", workflow.Name, workflow.ID, workflow.Actions[key].Label, workflow.Actions[key].ID)
 
 			// Check if all fields are set
 			// Check if auth is set (autofilled)
@@ -7970,7 +7972,6 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		//log.Printf("User: %s, org: %s vs %s", user.Role, workflowExecution.Workflow.OrgId, user.ActiveOrg.Id)
 		if user.Id != workflowExecution.Workflow.Owner {
 			if workflowExecution.Workflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
 				log.Printf("[AUDIT] User %s is aborting execution %s as admin", user.Username, workflowExecution.Workflow.ID)
@@ -8164,7 +8165,7 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting workflowexecution status to abort"}`)))
 		return
 	} else {
-		log.Printf("[INFO] Set workflowexecution %s to aborted.", workflowExecution.ExecutionId)
+		log.Printf("[INFO][%s] Set workflowexecution to aborted.", workflowExecution.ExecutionId)
 	}
 
 	resp.WriteHeader(200)
@@ -8574,7 +8575,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	user, userErr := HandleApiAuthentication(resp, request)
-	log.Printf("[INFO] User: %s", user.Username)
 
 	openapi, openapiok := request.URL.Query()["openapi"]
 	//if app.Sharing || app.Public || (project.Environment == "cloud" && user.Id == "what") {
@@ -14184,7 +14184,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		// This one doesn't really matter.
-		log.Printf("[INFO] Running POST execution with body of length %d for workflow %s", len(string(body)), workflowExecution.Workflow.ID)
+		log.Printf("[INFO][%s] Running POST execution with body of length %d for workflow %s", workflowExecution.ExecutionId, len(string(body)), workflowExecution.Workflow.ID)
 
 		if len(body) >= 4 {
 			if body[0] == 34 && body[len(body)-1] == 34 {
@@ -14368,7 +14368,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		//log.Printf("Execution data: %s", execution)
 		if len(execution.Start) == 36 && len(workflow.Actions) > 0 {
-			log.Printf("[INFO] Should start execution on node %s", execution.Start)
+			log.Printf("[INFO][%s] Should start execution on node %s", execution.ExecutionId, execution.Start)
 			workflowExecution.Start = execution.Start
 
 			found := false
@@ -14418,8 +14418,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				log.Printf("[INFO] Failed getting execution (execution) %s: %s", referenceId[0], err)
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
-
-			log.Printf("[INFO] Got execution %s. Workflow: %s", oldExecution.ExecutionId, oldExecution.Workflow.Name)
 
 			if oldExecution.Workflow.ID != workflow.ID {
 				log.Printf("[INFO] Wrong workflowid!")
@@ -14683,7 +14681,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.ExecutionSource = "default"
 	}
 
-	log.Printf("[INFO] Execution source is '%s' for execution ID %s in workflow %s. Organization: %s", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
+	log.Printf("[INFO][%s] Execution source is '%s' in workflow %s. Organization: %s", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
 
 	workflowExecution.ExecutionVariables = workflow.ExecutionVariables
 	if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
@@ -14706,6 +14704,19 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			// Added after problem with api-secret -> apisecret
 			if strings.Contains(param.Description, "header") {
+				if strings.Contains(param.Value, "=undefined") {
+					newheaders := []string{}
+					for _, line := range strings.Split(param.Value, "\n") {
+						if !strings.Contains(line, "=undefined") {
+							newheaders = append(newheaders, line)
+							continue
+						}
+
+						log.Printf("\n\nFound line to fix in headers: %s\n\n", line)
+					}
+
+					item.Parameters[paramIndex].Value = strings.Join(newheaders, "\n")
+				}
 				continue
 			}
 
@@ -14825,6 +14836,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if len(curAuth.Id) == 0 {
+				//log.Printf("[WARNING] App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName)
+				//continue
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName))
 			}
 
@@ -14872,7 +14885,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					//log.Printf("[DEBUG] Outer decryption debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
 				} else {
-					log.Printf("[ERROR] Outer decryption debugging for %s. Auth: %s. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+					log.Printf("[ERROR] Outer decryption debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
 
 				}
 			} else {
@@ -14969,7 +14982,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							*/
 						}
 
-						log.Printf("[DEBUG] Setting new auth to index: %d and curauth", authIndex)
+						//log.Printf("[DEBUG] Setting new auth to index: %d and curauth", authIndex)
 						allAuths[authIndex] = newAuth
 
 						// Does the oauth2 replacement
@@ -16813,7 +16826,7 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 
 		if foundCnt != 2 {
-			log.Printf("[INFO] Missing branch fullfillment!")
+			//log.Printf("[INFO] Missing branch fullfillment for src + dst!")
 		}
 	}
 
@@ -17105,7 +17118,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				continueOuter = false
 			}
 		} else {
-			log.Printf("[INFO] No parents for %s", action.Label)
+			//log.Printf("[INFO] No parents for %s", action.Label)
 			continueOuter = false
 		}
 
@@ -17524,7 +17537,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 			//time.Sleep(1 * time.Second)
 			//validateExecution, err := shuffle.GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-			//log.Printf("Got execution with %d results", len(validateExecution.Results))
 			//if err == nil {
 			//	skipAction := false
 			//	for _, result := range validateExecution.Results {

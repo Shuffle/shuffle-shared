@@ -592,7 +592,8 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-					log.Printf("[WARNING] Failed setting cache for key '%s' (2): %s", name, err)
+					log.Printf("[WARNING] Failed setting cache for key '%s' with data size %d (2): %s", name, len(data), err)
+					// func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
 				}
@@ -787,7 +788,10 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	} else {
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
 
-		log.Printf("[INFO] Saving execution %s with status %s and %d/%d results (not including subflows) - 2", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+		// Print 1 out of X times
+		if rand.Intn(8) == 1 {
+			log.Printf("[INFO][%s] Saving execution with status %s and %d/%d results (not including subflows) - 2", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+		}
 
 		key := datastore.NameKey(nameKey, strings.ToLower(workflowExecution.ExecutionId), nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
@@ -1301,8 +1305,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		//log.Printf("[DEBUG] Found execution %s from ES with %d results. Actions: %d", id, len(wrapped.Source.Results), len(wrapped.Source.Workflow.Actions))
 		workflowExecution = &wrapped.Source
 	} else {
-		log.Printf("[WARNING] Getting execution ID %s from DB", id)
-
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
 			return workflowExecution, err
@@ -1322,11 +1324,10 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				log.Printf("[DEBUG] Found a new value to parse with exec argument")
 				workflowExecution.ExecutionArgument = newValue
 			}
-
 		}
 
 		// Parsing as file.
-		log.Printf("[DEBUG] Getting execution %s. Results: ~%d/%d", id, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+		//log.Printf("[DEBUG] Got execution %s. Results: ~%d/%d", id, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 		for valueIndex, value := range workflowExecution.Results {
 			if strings.Contains(value.Result, "Result too large to handle") {
 				//log.Printf("[DEBUG] Found prefix %s to be replaced (2)", value.Result)
@@ -1472,7 +1473,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	} else {
-		log.Printf("[DEBUG] Skipping cache check in get app for ID %s", id)
+		//log.Printf("[DEBUG] Skipping cache check in get app for ID %s", id)
 	}
 
 	if project.DbType == "opensearch" {
@@ -3813,6 +3814,22 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		}
 	}
 
+	// Deduplicate keys
+	for _, auth := range allworkflowappAuths {
+		allFields := []string{}
+		newFields := []AuthenticationStore{}
+		for _, field := range auth.Fields {
+			if ArrayContains(allFields, field.Key) {
+				continue
+			}
+
+			allFields = append(allFields, field.Key)
+			newFields = append(newFields, field)
+		}
+
+		auth.Fields = newFields
+	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(allworkflowappAuths)
 		if err != nil {
@@ -4097,11 +4114,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	nameKey := "workflowapp"
+	var err error
 
-	client, err := storage.NewClient(ctx)
-	if err != nil {
-		log.Printf("[WARNING] Failed to create client (storage - prioritizedapps): %s", err)
-	}
+	//storageclient, err := storage.NewClient(ctx)
+	//if err != nil {
+	//	log.Printf("[WARNING] Failed to create client (storage - prioritizedapps): %s", err)
+	//}
 
 	if user.ActiveOrg.Id != "" && user.ActiveOrg.Id != "2e7b6a08-b63b-4fc2-bd70-718091509db1" {
 		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
@@ -4127,29 +4145,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					//log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+					log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
-					//project.BucketName := "shuffler.appspot.com"
-					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
-					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-					//log.Printf("[WARNING] Couldn't find for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
-
-					bucket := client.Bucket(project.BucketName)
-					obj := bucket.Object(fullParsedPath)
-					fileReader, err := obj.NewReader(ctx)
+					foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
 					if err == nil {
-
-						data, err := ioutil.ReadAll(fileReader)
-						if err == nil {
-							err = json.Unmarshal(data, &innerApp)
-							if err != nil {
-								log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
-								continue
-							}
-						}
+						innerApp = foundApp
 					}
-
-					//log.Printf("%s\n%s - %s\n%d\n", string(data), innerApp.Name, innerApp.ID, len(innerApp.Actions))
 				}
 
 				allApps, innerApp = fixAppAppend(allApps, innerApp)
@@ -4224,26 +4225,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					//log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+					log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
 
-					//project.BucketName := "shuffler.appspot.com"
-					fullParsedPath := fmt.Sprintf("extra_specs/%s/appspec.json", innerApp.ID)
-					//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
-					//log.Printf("[WARNING] Couldn't find for %s. Should check filepath gs://%s/%s (size too big)", innerApp.ID, project.BucketName, fullParsedPath)
-
-					bucket := client.Bucket(project.BucketName)
-					obj := bucket.Object(fullParsedPath)
-					fileReader, err := obj.NewReader(ctx)
+					foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
 					if err == nil {
-
-						data, err := ioutil.ReadAll(fileReader)
-						if err == nil {
-							err = json.Unmarshal(data, &innerApp)
-							if err != nil {
-								log.Printf("[WARNING] Failed unmarshaling from remote store: %s", err)
-								continue
-							}
-						}
+						innerApp = foundApp
 					}
 
 					//log.Printf("%s\n%s - %s\n%d\n", string(data), innerApp.Name, innerApp.ID, len(innerApp.Actions))
@@ -4352,7 +4338,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					log.Printf("[WARNING] Failed to find app while parsing app %s: %s", app.Name, err)
 					continue
 				} else {
-					log.Printf("[DEBUG] Found action %s (%s) directly with %d actions", app.Name, app.ID, len(newApp.Actions))
+					//log.Printf("[DEBUG] Found action %s (%s) directly with %d actions", app.Name, app.ID, len(newApp.Actions))
 					newApps[appIndex] = *newApp
 				}
 
@@ -6427,6 +6413,19 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 		}
 	}
 
+	allFields := []string{}
+	newFields := []AuthenticationStore{}
+	for _, field := range appAuth.Fields {
+		if ArrayContains(allFields, field.Key) {
+			continue
+		}
+
+		allFields = append(allFields, field.Key)
+		newFields = append(newFields, field)
+	}
+
+	appAuth.Fields = newFields
+
 	if project.CacheDb {
 		data, err := json.Marshal(appAuth)
 		if err != nil {
@@ -7512,7 +7511,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	cacheId = url.QueryEscape(cacheId)
 	cacheData.Authorization = ""
 
-	log.Printf("Setting cache key: %s", cacheId)
+	//log.Printf("Setting cache key: %s", cacheId)
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(cacheData)
@@ -8614,9 +8613,12 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 }
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
-	log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	// Print 1/5 times to
 
-	//if (len(environments) == 1 && len(workflowExecution.Results) >= 1) || (len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) && len(workflowExecution.Workflow.Actions) > 0) {
+	if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
+		log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	}
+
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		for _, result := range workflowExecution.Results {
 			if result.Status == "EXECUTING" || result.Status == "WAITING" {

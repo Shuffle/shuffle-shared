@@ -2502,13 +2502,13 @@ func handleIndividualEmailUploads(ctx context.Context, gmailClient *http.Client,
 
 		err = SetFile(ctx, newFile)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting gmail file for ID %s in message %s (1)", part.Body.AttachmentID, message.ID)
+			log.Printf("[ERROR] Failed setting gmail file for ID %s in message %s (1): %s", part.Body.AttachmentID, message.ID, err)
 			continue
 		}
 
-		parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
+		parsedData, err := base64.URLEncoding.DecodeString(attachment.Data)
 		if err != nil {
-			log.Printf("[WARNING] Failed base64 decoding file bytes %s in message %s (1)", part.Body.AttachmentID, message.ID)
+			log.Printf("[ERROR] Failed base64 decoding file bytes for attachment ID %s in message %s. Attachment size: %d. err: %s (1)", part.Body.AttachmentID, message.ID, len(attachment.Data), err)
 			if len(parsedData) == 0 {
 				continue
 			}
@@ -2516,7 +2516,7 @@ func handleIndividualEmailUploads(ctx context.Context, gmailClient *http.Client,
 
 		_, err = uploadFile(ctx, &newFile, "", parsedData)
 		if err != nil {
-			log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s (1)", part.Body.AttachmentID, message.ID)
+			log.Printf("[ERROR] Failed uploading gmail attachment %s in message %s (1): %s", part.Body.AttachmentID, message.ID, err)
 			continue
 		}
 
@@ -2677,7 +2677,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[DEBUG] Got last message: %s with snippet %s!", newHistoryId, lastMessage.Snippet)
 
 			handledIds = append(handledIds, fmt.Sprintf("%d", findHistory.HistoryId))
-			err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)), 30)
+			err = SetCache(ctx, gmailUserInfo, []byte(fmt.Sprintf("%d", findHistory.HistoryId)), 1440)
 			if err != nil {
 				log.Printf("[WARNING] Failed updating gmail user %s cache: %s (2)", gmailUserInfo, err)
 			} else {
@@ -2859,7 +2859,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					parsedData, err := base64.StdEncoding.DecodeString(attachment.Data)
+					parsedData, err := base64.URLEncoding.DecodeString(attachment.Data)
 					if err != nil {
 						log.Printf("[WARNING] Failed base64 decoding bytes %s in message %s: %s. Continuing anyway (2)", part.Body.AttachmentID, message.ID, err)
 						if len(parsedData) == 0 {
@@ -2912,7 +2912,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData []byte) error {
 	log.Printf("[INFO] Sending %d bytes to webhook %s", len(mappedData), webhookUrl)
 	client := &http.Client{
-		Timeout: 2 * time.Second,
+		Timeout: 5 * time.Second,
 	}
 
 	req, err := http.NewRequest(

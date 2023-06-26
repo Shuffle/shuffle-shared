@@ -3352,3 +3352,49 @@ type CacheReturn struct {
 	Keys    []CacheKeyData `json:"keys"`
 	Cursor  string         `json:"cursor"`
 }
+
+type GCPIncident struct {
+	Incident struct {
+		Condition struct {
+			ConditionMatchedLog struct {
+				Filter             string   `json:"filter"`
+				ResourceContainers []string `json:"resourceContainers"`
+			} `json:"conditionMatchedLog"`
+			DisplayName string `json:"displayName"`
+			Name        string `json:"name"`
+		} `json:"condition"`
+		ConditionName string `json:"condition_name"`
+		IncidentID    string `json:"incident_id"`
+		Metadata      struct {
+			SystemLabels struct {
+			} `json:"system_labels"`
+			UserLabels struct {
+			} `json:"user_labels"`
+		} `json:"metadata"`
+		Metric struct {
+			DisplayName string `json:"displayName"`
+			Labels      struct {
+			} `json:"labels"`
+			Type string `json:"type"`
+		} `json:"metric"`
+		PolicyName string `json:"policy_name"`
+		Resource   struct {
+			Labels struct {
+				FunctionName string `json:"function_name"`
+				ProjectID    string `json:"project_id"`
+				Region       string `json:"region"`
+			} `json:"labels"`
+			Type string `json:"type"`
+		} `json:"resource"`
+		ResourceID              string `json:"resource_id"`
+		ResourceName            string `json:"resource_name"`
+		ResourceTypeDisplayName string `json:"resource_type_display_name"`
+		ScopingProjectID        string `json:"scoping_project_id"`
+		ScopingProjectNumber    int64  `json:"scoping_project_number"`
+		StartedAt               int    `json:"started_at"`
+		State                   string `json:"state"`
+		Summary                 string `json:"summary"`
+		URL                     string `json:"url"`
+	} `json:"incident"`
+	Version string `json:"version"`
+}
