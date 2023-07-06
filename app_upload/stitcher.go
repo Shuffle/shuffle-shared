@@ -837,7 +837,7 @@ func main() {
 	//return
 
 	appname := "shuffle-tools"
-	appversion := "1.1.0"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

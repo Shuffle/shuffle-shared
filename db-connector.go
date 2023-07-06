@@ -1287,7 +1287,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return workflowExecution, errors.New("User doesn't exist")
+			return workflowExecution, errors.New("execution doesn't exist")
 		}
 
 		defer res.Body.Close()

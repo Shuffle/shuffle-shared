@@ -1004,6 +1004,7 @@ func MakeGmailSubscription(ctx context.Context, client *http.Client, folderIds [
 	//t := time.Now().Local().Add(time.Minute * time.Duration(4200))
 	//timeFormat := fmt.Sprintf("%d-%02d-%02dT%02d:%02d:%02d.0000000Z", t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
 
+	log.Printf("[INFO] Canceling gmail subscription before remaking it")
 	err := cancelGmailSubscription(ctx, client)
 	if err != nil {
 		log.Printf("[WARNING] Failed to cancel gmail subscription before remaking it: %s", err)
@@ -1057,6 +1058,8 @@ func MakeGmailSubscription(ctx context.Context, client *http.Client, folderIds [
 		log.Printf("[WARNING] Error in JSON unmarshal for gmail client: %s", err)
 		return SubResponse{}, err
 	}
+
+	log.Printf("[INFO] GMAIL Subscription created. Response (%d): %s", res.StatusCode, string(body))
 
 	return newSub, nil
 }
