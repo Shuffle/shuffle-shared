@@ -249,6 +249,31 @@ type Userapi struct {
 	ApiKey   string `datastore:"apikey"`
 }
 
+type AppUsage struct {
+	AppName 	   string `json:"app_name" datastore:"app_name"`
+	AppId 		string `json:"app_id" datastore:"app_id"`
+	Usage 		int64 `json:"usage" datastore:"usage"`
+}
+
+// Should be for a particular day
+// Reset is handled during caching. If the date is not today, then the reset is handled
+type DailyStatistics struct {
+	Date                            time.Time `json:"date" datastore:"date"`
+
+	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
+	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
+	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
+	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
+	WorkflowExecutionsFinished int64 `json:"workflow_executions_finished" datastore:"workflow_executions_finished"`
+	WorkflowExecutionsFailed   int64 `json:"workflow_executions_failed" datastore:"workflow_executions_failed"`
+	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
+	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
+	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
+
+	ApiUsage                   int64 `json:"api_usage" datastore:"api_usage"`
+	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
+}
+
 // Used to be related to users, now related to orgs.
 // Not directly, but being updated by org actions
 type ExecutionInfo struct {
@@ -256,6 +281,8 @@ type ExecutionInfo struct {
 	OrgId       string `json:"org_id" datastore:"org_id"`
 	OrgName     string `json:"org_name" datastore:"org_name"`
 	LastCleared int64  `json:"last_cleared" datastore:"last_cleared"`
+
+	DailyStatistics []DailyStatistics `json:"daily_statistics" datastore:"daily_statistics"`
 
 	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
 	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
@@ -277,15 +304,15 @@ type ExecutionInfo struct {
 	MonthlyCloudExecutions            int64 `json:"monthly_cloud_executions" datastore:"monthly_cloud_executions"`
 	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions" datastore:"monthly_onprem_executions"`
 
-	WeeklyAppExecutions              int64 `json:"weekly_app_executions" datastore:"weekly_app_executions"`
-	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed" datastore:"weekly_app_executions_failed"`
-	WeeklySubflowExecutions          int64 `json:"weekly_subflow_executions" datastore:"weekly_subflow_executions"`
-	WeeklyWorkflowExecutions         int64 `json:"weekly_workflow_executions" datastore:"weekly_workflow_executions"`
-	WeeklyWorkflowExecutionsFinished int64 `json:"weekly_workflow_executions_finished" datastore:"weekly_workflow_executions_finished"`
-	WeeklyWorkflowExecutionsFailed   int64 `json:"weekly_workflow_executions_failed" datastore:"weekly_workflow_executions_failed"`
-	WeeklyOrgSyncActions             int64 `json:"weekly_org_sync_actions" datastore:"weekly_org_sync_actions"`
-	WeeklyCloudExecutions            int64 `json:"weekly_cloud_executions" datastore:"weekly_cloud_executions"`
-	WeeklyOnpremExecutions           int64 `json:"weekly_onprem_executions" datastore:"weekly_onprem_executions"`
+	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
+	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed,omitempty" datastore:"weekly_app_executions_failed"`
+	WeeklySubflowExecutions          int64 `json:"weekly_subflow_executions,omitempty" datastore:"weekly_subflow_executions"`
+	WeeklyWorkflowExecutions         int64 `json:"weekly_workflow_executions,omitempty" datastore:"weekly_workflow_executions"`
+	WeeklyWorkflowExecutionsFinished int64 `json:"weekly_workflow_executions_finished,omitempty" datastore:"weekly_workflow_executions_finished"`
+	WeeklyWorkflowExecutionsFailed   int64 `json:"weekly_workflow_executions_failed,omitempty" datastore:"weekly_workflow_executions_failed"`
+	WeeklyOrgSyncActions             int64 `json:"weekly_org_sync_actions,omitempty" datastore:"weekly_org_sync_actions"`
+	WeeklyCloudExecutions            int64 `json:"weekly_cloud_executions,omitempty" datastore:"weekly_cloud_executions"`
+	WeeklyOnpremExecutions           int64 `json:"weekly_onprem_executions,omitempty" datastore:"weekly_onprem_executions"`
 
 	DailyAppExecutions              int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
 	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
@@ -297,15 +324,15 @@ type ExecutionInfo struct {
 	DailyCloudExecutions            int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
 	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
 
-	HourlyAppExecutions              int64 `json:"hourly_app_executions" datastore:"hourly_app_executions"`
-	HourlyAppExecutionsFailed        int64 `json:"hourly_app_executions_failed" datastore:"hourly_app_executions_failed"`
-	HourlySubflowExecutions          int64 `json:"hourly_subflow_executions" datastore:"hourly_subflow_executions"`
-	HourlyWorkflowExecutions         int64 `json:"hourly_workflow_executions" datastore:"hourly_workflow_executions"`
-	HourlyWorkflowExecutionsFinished int64 `json:"hourly_workflow_executions_finished" datastore:"hourly_workflow_executions_finished"`
-	HourlyWorkflowExecutionsFailed   int64 `json:"hourly_workflow_executions_failed" datastore:"hourly_workflow_executions_failed"`
-	HourlyOrgSyncActions             int64 `json:"hourly_org_sync_actions" datastore:"hourly_org_sync_actions"`
-	HourlyCloudExecutions            int64 `json:"hourly_cloud_executions" datastore:"hourly_cloud_executions"`
-	HourlyOnpremExecutions           int64 `json:"hourly_onprem_executions" datastore:"hourly_onprem_executions"`
+	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
+	HourlyAppExecutionsFailed        int64 `json:"hourly_app_executions_failed,omitempty" datastore:"hourly_app_executions_failed"`	
+	HourlySubflowExecutions          int64 `json:"hourly_subflow_executions,omitempty" datastore:"hourly_subflow_executions"`
+	HourlyWorkflowExecutions         int64 `json:"hourly_workflow_executions,omitempty" datastore:"hourly_workflow_executions"`
+	HourlyWorkflowExecutionsFinished int64 `json:"hourly_workflow_executions_finished,omitempty" datastore:"hourly_workflow_executions_finished"`
+	HourlyWorkflowExecutionsFailed   int64 `json:"hourly_workflow_executions_failed,omitempty" datastore:"hourly_workflow_executions_failed"`
+	HourlyOrgSyncActions             int64 `json:"hourly_org_sync_actions,omitempty" datastore:"hourly_org_sync_actions"`
+	HourlyCloudExecutions            int64 `json:"hourly_cloud_executions,omitempty" datastore:"hourly_cloud_executions"`
+	HourlyOnpremExecutions           int64 `json:"hourly_onprem_executions,omitempty" datastore:"hourly_onprem_executions"`
 
 	// These are just here in case we get use of them
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
@@ -691,6 +718,7 @@ type LeadInfo struct {
 	POV       bool `json:"pov,omitempty" datastore:"pov"`
 	DemoDone  bool `json:"demo_done,omitempty" datastore:"demo_done"`
 	Customer  bool `json:"customer,omitempty" datastore:"customer"`
+	Internal bool `json:"internal,omitempty" datastore:"internal"`
 }
 
 type Org struct {

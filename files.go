@@ -885,7 +885,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[AUDIT] INITIAL Api authentication failed in file upload: %s", err)
 		orgId, err := fileAuthentication(request)
 		if err != nil {
-			log.Printf("Bad file authentication in create file: %s", err)
+			log.Printf("[WARNING] Bad file authentication in create file: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return

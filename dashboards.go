@@ -299,7 +299,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get stats: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -313,21 +313,20 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	admin := false
 	userFound := false
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
 			userFound = true
 
-			if inneruser.Role == "admin" {
-				admin = true
-			}
-
 			break
 		}
 	}
 
-	_ = admin
+	if user.SupportAccess {
+		log.Printf("[AUDIT] User %s (%s) is getting org stats for %s (%s) with support access", user.Username, user.Id, org.Name, orgId)
+		userFound = true
+	} 
+
 	if !userFound {
 		log.Printf("[WARNING] User %s isn't a part of org %s (get)", user.Id, org.Id)
 		resp.WriteHeader(401)
@@ -340,7 +339,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed getting stats for org %s: %s", orgId, err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting stats for your org"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting stats for your org. Maybe not initialized yet?"}`))
 		return
 	}
 

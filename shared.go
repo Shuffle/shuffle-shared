@@ -2540,6 +2540,10 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 				user.ApiKey = newApikey
 				user.SessionLogin = false
+
+				// Increment API usage
+				go IncrementCache(ctx, user.ActiveOrg.Id, "api_usage")
+
 				return *user, nil
 			}
 		} else {
@@ -2595,6 +2599,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
 
+		go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
 		return userdata, nil
 	}
 
@@ -7815,11 +7820,15 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			if lead == "customer" {
 				org.LeadInfo.Customer = true
 			}
+
+			if lead == "internal" {
+				org.LeadInfo.Internal = true
+			}
 		}
 
 	}
 
-	// Built a system around this now, which checks for the actual org. Only works onprem so far.
+	// Built a system around this now, which checks for the actual org. 
 	// if requestdata.Environment == "cloud" && project.Environment != "cloud" {
 	//if project.Environment != "cloud" && len(org.SSOConfig.SSOEntrypoint) > 0 && len(org.ManagerOrgs) == 0 {
 	//	//log.Printf("[INFO] Should set SSO entrypoint to %s", org.SSOConfig.SSOEntrypoint)
@@ -18829,7 +18838,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal usecase data (priorities): %s", err)
 	} else {
-		log.Printf("[DEBUG] Got parsed usecases for %s - should check priority vs mainpriority (%s)", org.Name, org.MainPriority)
+		//log.Printf("[DEBUG] Got parsed usecases for %s - should check priority vs mainpriority (%s)", org.Name, org.MainPriority)
 
 		selectedAppName := ""
 		selectedAppImage := ""
