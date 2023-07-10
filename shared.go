@@ -11901,6 +11901,10 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
+	if fileId == "undefined" {
+		fileId = user.ActiveOrg.Id
+	}
+
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, fileId)
 	if err != nil {

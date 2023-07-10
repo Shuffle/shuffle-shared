@@ -7654,7 +7654,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		id = id[0:127]
 	}
 
-	log.Printf("ID in get cache: %s", id)
+	//log.Printf("[WARNING] ID in get cache: %s", id)
 	id = url.QueryEscape(id)
 
 	// 2e7b6a08-b63b-4fc2-bd70-718091509db1
@@ -7736,7 +7736,6 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 				if err != nil {
 					log.Printf("[ERROR] Failed unescaping cache id %s", newId)
 				}
-				log.Printf("New id: %s", newId)
 
 				// Search for it in datastore with key =
 				cacheKeys := []CacheKeyData{}
