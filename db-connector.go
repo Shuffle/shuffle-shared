@@ -2652,10 +2652,12 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				return &Org{}, err
 			}
 		}
+	}
 
-		if len(curOrg.Id) == 0 {
-			return &Org{}, errors.New(fmt.Sprintf("Couldn't find org with ID %s", curOrg.Id))
-		}
+	// How does this happen?
+	if len(curOrg.Id) == 0 {
+		curOrg.Id = id
+		return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID %s", curOrg.Id))
 	}
 
 	newUsers := []User{}
@@ -2684,8 +2686,8 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 		newPriorities = append(newPriorities, priority)
 	}
-	curOrg.Priorities = newPriorities
 
+	curOrg.Priorities = newPriorities
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
 		if err != nil {
@@ -2871,6 +2873,22 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 func SetOrg(ctx context.Context, data Org, id string) error {
 	if len(id) == 0 {
 		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
+	}
+
+	if id != data.Id && len(data.Id) > 0 {
+		log.Printf("[ERROR] Org ID mismatch: %s != %s. Resetting ID", id, data.Id)
+		id = data.Id
+	}
+
+	data.Id = id
+	if len(data.Name) == 0 {
+		data.Name = "tmp"
+
+		if len(data.Org) > 0 {
+			data.Name = data.Org
+		} else {
+			data.Org = data.Name
+		}
 	}
 
 	nameKey := "Organizations"
@@ -3808,7 +3826,7 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 			org.Users = append(org.Users, innerUser)
 		}
 
-		err = SetOrg(ctx, *org, orgId)
+		err = SetOrg(ctx, *org, org.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting org %s (2)", orgId)
 		}
@@ -7783,6 +7801,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 	return cacheData, nil
 }
 
+var retryCount int
 func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
 	if dbType == "elasticsearch" {
 		dbType = "opensearch"
@@ -7819,7 +7838,24 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 		ret, err := project.Es.Info()
 		if err != nil {
-			log.Printf("[ERROR] Failed setting up Opensearch: %s", err)
+			log.Printf("[WARNING] Failed setting up Opensearch: %s. Typically means the backend can't connect, or that there's a HTTPS vs HTTP problem", err)
+			if strings.Contains(fmt.Sprintf("%s", err), "x509: certificate signed by unknown authority") || strings.Contains(fmt.Sprintf("%s", err), "EOF") {
+				if retryCount == 0 {
+					esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+					if strings.Contains(esUrl, "http://") {
+						esUrl = strings.Replace(esUrl, "http://", "https://", 1)
+					}
+
+					os.Setenv("SHUFFLE_OPENSEARCH_URL", esUrl)
+
+					log.Printf("[ERROR] Automatically skipping SSL verification for Opensearch connection and swapping http/https.") 
+					os.Setenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY", "true")
+
+					retryCount += 1
+					return RunInit(dbclient, storageClient, gceProject, environment, cacheDb, dbType) 
+				}
+			}
+
 			return project, err
 		}
 

@@ -754,6 +754,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
             print(f"[WARNING] Something went wrong when adding extra returns (2). {e}")
 
         if to_file:
+            # If content encoding or transfer encoding is base64, decode it
+            if "content-encoding" in ret.headers.keys() and ret.headers["content-encoding"].lower() == "base64":
+                ret._content = base64.b64decode(ret.content)
             filedata = {
                 "filename": "response",
                 "data": ret.content,

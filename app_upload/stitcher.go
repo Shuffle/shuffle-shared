@@ -41,8 +41,8 @@ var appSearchIndex = "appsearch"
 
 // CONFIGURE APP LOCATIONS TO USE
 // ALSO REQUIRES ACCESS TO UPLOAD TO CLOUD
-var appbasefile = "/home/frikky/git/shuffle/backend/app_sdk/app_base.py"
-var appfolder = "/home/frikky/git/shuffle-apps"
+var appbasefile = "/Users/frikky/git/shuffle/backend/app_sdk/app_base.py"
+var appfolder = "/Users/frikky/git/python-apps"
 var baseUrl = ""
 var apikey = ""
 
@@ -836,8 +836,8 @@ func main() {
 	//deployAll()
 	//return
 
-	appname := "shuffle-tools"
-	appversion := "1.2.0"
+	appname := "shuffle-ai"
+	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

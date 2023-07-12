@@ -1037,6 +1037,7 @@ type Workflow struct {
 	Created              int64      `json:"created" datastore:"created"`
 	Edited               int64      `json:"edited" datastore:"edited"`
 	LastRuntime          int64      `json:"last_runtime" datastore:"last_runtime"`
+	DueDate 						int64      `json:"due_date" datastore:"due_date"`
 	Errors               []string   `json:"errors,omitempty" datastore:"errors"`
 	Tags                 []string   `json:"tags,omitempty" datastore:"tags"`
 	ID                   string     `json:"id" datastore:"id"`
