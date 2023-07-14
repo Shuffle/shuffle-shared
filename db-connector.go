@@ -486,6 +486,7 @@ func DeleteCache(ctx context.Context, name string) error {
 // Cache handlers
 func GetCache(ctx context.Context, name string) (interface{}, error) {
 	if len(name) == 0 {
+		log.Printf("[ERROR] No name provided for cache")
 		return "", nil
 	}
 
@@ -535,7 +536,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		return "", errors.New(fmt.Sprintf("No cache found in SHUFFLE_MEMCACHED for %s", name))
 	}
 
-	if project.Environment == "cloud" {
+	if false {
 
 		if item, err := memcache.Get(ctx, name); err != nil {
 
@@ -594,7 +595,6 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 // FIXME: Add the option to set cache that expires at longer intervals
 func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
 	if len(name) == 0 {
-		log.Printf(string(data))
 		log.Printf("[WARNING] Key '%s' is empty with value length %d and expiration %d. Skipping cache.", name, len(data), expiration)
 		return nil
 	}
@@ -603,8 +603,8 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	name = strings.Replace(name, " ", "_", -1)
 
 	// Splitting into multiple cache items
-	//if len(memcached) > 0 {
-	if project.Environment == "cloud" || len(memcached) > 0 {
+	//if project.Environment == "cloud" || len(memcached) > 0 {
+	if len(memcached) > 0 {
 		comparisonNumber := 50
 		if len(data) > maxCacheSize*comparisonNumber {
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
@@ -707,8 +707,11 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
 		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
 	} else {
-		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
+		log.Printf("SETTING CACHE FOR '%s' with environment %s", name, project.Environment)
 		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
+		//if err != nil {
+		//	log.Printf("[WARNING] Failed setting cache for key '%s' with data size %d (3): %s", name, len(data), err)
+		//}
 		//return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
 
@@ -1504,6 +1507,20 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 	obj := bucket.Object(fullParsedPath)
 	fileReader, err := obj.NewReader(ctx)
 	if err != nil {
+		// Set cache anyway
+		if project.CacheDb {
+			data, err := json.Marshal(workflowApp)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling app: %s", err)
+				return workflowApp, nil
+			}
+
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating app: %s", err)
+			}
+		}
+
 		log.Printf("[ERROR] Failed making App reader for %s: %s", fullParsedPath, err)
 		return workflowApp, err
 	}
@@ -2251,7 +2268,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	// Cache
 
 	var err error
-	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+	cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -4166,7 +4183,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				//log.Printf("[ERROR] DATALEN: %d", len(cacheData))
 			}
 		} else {
-			//log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
+			log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
 		}
 	}
 
@@ -5365,8 +5382,6 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 		}
 	}
 
-	// Set cache for them
-
 	return workflows, nil
 }
 
@@ -5463,6 +5478,51 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
+		}
+
+		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it 
+
+		// Get the cache for the workflows
+		cacheKey = fmt.Sprintf("%s_workflows", workflow.OrgId)
+		cache, err := GetCache(ctx, cacheKey)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting cache for getworkflow '%s': %s", cacheKey, err)
+		} else {
+			var workflows []Workflow
+
+			cacheData := []byte(cache.([]uint8))
+			log.Printf("[INFO] Got cache for getworkflow '%s': %s", cacheKey, cacheData)
+			err = json.Unmarshal(cacheData, &workflows)
+			if err != nil {
+				log.Printf("[WARNING] Failed unmarshalling cache for getworkflow '%s': %s", cacheKey, err)
+			} else {
+				// Find the workflow in the cache
+				found := false
+				for i, w := range workflows {
+					if w.ID == id {
+						// Update the cache
+						workflows[i] = workflow
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					// Add it to the cache
+					workflows = append(workflows, workflow)
+				}
+
+				// Marshal
+				workflowsData, err := json.Marshal(workflows)
+				if err != nil {
+					log.Printf("[WARNING] Failed marshalling cache for getworkflow '%s': %s", cacheKey, err)
+				} else {
+					err = SetCache(ctx, cacheKey, workflowsData, 30)
+					if err != nil {
+						log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
+					}
+				}
+			}
 		}
 	}
 

@@ -46,7 +46,6 @@ import (
 
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
-	"google.golang.org/appengine"
 )
 
 var project ShuffleStorage
@@ -433,8 +432,11 @@ func GetUsecaseData() string {
 var sandboxProject = "shuffle-sandbox-337810"
 
 func GetContext(request *http.Request) context.Context {
+	return context.Background()
+
 	if project.Environment == "cloud" && len(memcached) == 0 {
-		return appengine.NewContext(request)
+		// No longer prevalent due to Appengine update and running pure Go backend
+		//return appengine.NewContext(request)
 	}
 
 	return context.Background()
@@ -926,6 +928,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 			SetUser(ctx, &user, false)
 
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
@@ -1167,6 +1170,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		http.SetCookie(resp, newCookie)
 	}
 
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", userInfo.Id))
 	if runReturn == true {
@@ -3040,7 +3044,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	var workflows []Workflow
 
-	cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+	cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
@@ -3267,9 +3271,9 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 
-				cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+				//cacheKey := fmt.Sprintf("%s_workflows", user.Id)
 
-				DeleteCache(ctx, cacheKey)
+				//DeleteCache(ctx, cacheKey)
 
 				workflowCnt += 1
 			}
@@ -4075,13 +4079,13 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[ERROR] Failed getting workflows during new workflow creation for updating stats: %s", err)
 		}
 
-		for _, loopUser := range org.Users {
-			cacheKey := fmt.Sprintf("%s_workflows", loopUser.Id)
-			DeleteCache(ctx, cacheKey)
-		}
+		//for _, loopUser := range org.Users {
+		//	cacheKey := fmt.Sprintf("%s_workflows", loopUser.Id)
+		//	DeleteCache(ctx, cacheKey)
+		//}
 	} else {
-		cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-		DeleteCache(ctx, cacheKey)
+		//cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+		//DeleteCache(ctx, cacheKey)
 	}
 
 	log.Printf("[INFO] Saved new workflow %s with name %s", workflow.ID, workflow.Name)
@@ -4349,8 +4353,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[WARNING] Failed getting org for cache release for public wf: %s", err)
 				} else {
 					for _, loopUser := range org.Users {
-						DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
-						DeleteCache(ctx, fmt.Sprintf("apps_%s", loopUser.Id))
+						//DeleteCache(ctx, fmt.Sprintf("%s_workflows", org.Id)
+						//DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
+						//DeleteCache(ctx, fmt.Sprintf("apps_%s", loopUser.Id))
+						//DeleteCache(ctx, fmt.Sprintf("apps_%s", org.Id)
 						DeleteCache(ctx, fmt.Sprintf("user_%s", loopUser.Id))
 					}
 
@@ -4369,7 +4375,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						if err != nil {
 							log.Printf("[ERROR] Failed updating active app list for org %s (%s): %s", org.Name, org.Id, err)
 						} else {
-							DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+							//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+							//DeleteCache(ctx, fmt.Sprintf("apps_%s", org.Id))
 							DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 							DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
 							DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
@@ -4437,14 +4444,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.Subflows = []Workflow{}
 	}
 
-	if workflow.Status != "test" && workflow.Status != "production" {
-		workflow.Status = "test"
-		log.Printf("[DEBUG] Defaulted workflow status to %s. Alternative: prod", workflow.Status)
-	}
-
 	if strings.ToLower(workflow.Status) == "prod" {
 		workflow.Status = "production"
 	}
+
+	if workflow.Status != "test" && workflow.Status != "production" {
+		log.Printf("[DEBUG] Defaulted workflow status to test from '%s'. Alternative: prod", workflow.Status)
+		workflow.Status = "test"
+	}
+
 
 	workflow.Subflows = []Workflow{}
 	if len(workflow.DefaultReturnValue) > 0 && len(workflow.DefaultReturnValue) < 200 {
@@ -4495,7 +4503,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 	//}
 
-	//log.Printf("ENVIRONMENTS: %s", environments)
 	defaultEnv := ""
 	for _, env := range environments {
 		if env.Default {
@@ -4514,9 +4521,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	orgUpdated := false
 	startnodeFound := false
-	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	newOrgApps := []string{}
 	org := &Org{}
+
+	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	for _, action := range workflow.Actions {
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
 			continue
@@ -4792,7 +4800,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				//if err != nil {
 				//	log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
 				//} else {
-				DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+				//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+				//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
@@ -5114,8 +5123,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-			DeleteCache(ctx, cacheKey)
+			//cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+			//cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
+			//DeleteCache(ctx, cacheKey)
 		}
 	}
 
@@ -5618,9 +5628,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// FIX: Should only happen for users with this org as the active one
 	// Org-based workflows may also work
 	if org.Id != "" {
-		for _, loopUser := range org.Users {
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
-		}
+		//for _, loopUser := range org.Users {
+		//	DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
+		//	DeleteCache(ctx, fmt.Sprintf("%s_workflows", org.Id))
+		//}
 	}
 
 	if orgUpdated {
@@ -5660,11 +5671,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Really don't know why this was happening
-	//cacheKey := fmt.Sprintf("workflowapps-sorted-100")
-	//requestCache.Delete(cacheKey)
-	//cacheKey = fmt.Sprintf("workflowapps-sorted-500")
-	//requestCache.Delete(cacheKey)
-
 	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s. Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, len(workflow.Actions), len(workflow.Triggers))
 	resp.WriteHeader(200)
 	newBody, err := json.Marshal(returndata)
@@ -6800,6 +6806,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	cacheKey = fmt.Sprintf("workflowapps-sorted-1000")
 	DeleteCache(ctx, cacheKey)
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 
 	log.Printf("[INFO] Changed App configuration for %s (%s)", app.Name, app.ID)
 	resp.WriteHeader(200)
@@ -6889,6 +6896,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				if err == nil {
 					log.Printf("[INFO] App %s was deactivated for org %s", app.ID, user.ActiveOrg.Id)
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
 					DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
@@ -6950,6 +6958,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 	DeleteCache(ctx, "all_apps")
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 
@@ -7213,16 +7222,20 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
@@ -7402,6 +7415,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, inneruser.Session)
 		DeleteCache(ctx, fmt.Sprintf("session_%s", inneruser.Session))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Id))
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", parentOrg.Id))
 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", inneruser.Id))
 		DeleteCache(ctx, fmt.Sprintf("apps_%s", inneruser.Id))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Username))
@@ -8951,6 +8965,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					userdata.ActiveOrg.Id = innerorg.Id
 					userdata.ActiveOrg.Name = innerorg.Name
 
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.ActiveOrg.Id))
 					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.Id))
 					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Username))
@@ -13915,6 +13930,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if project.Environment == "cloud" {
 					user.ActiveOrg.Id = matchingOrgs[0].Id
 
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
