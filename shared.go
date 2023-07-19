@@ -7222,20 +7222,16 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
@@ -7366,12 +7362,13 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Cleanup cache for the user
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-	DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 	DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 	DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
+	DeleteCache(ctx, user.Session)
+
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
@@ -7415,7 +7412,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, inneruser.Session)
 		DeleteCache(ctx, fmt.Sprintf("session_%s", inneruser.Session))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Id))
-		DeleteCache(ctx, fmt.Sprintf("%s_workflows", parentOrg.Id))
 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", inneruser.Id))
 		DeleteCache(ctx, fmt.Sprintf("apps_%s", inneruser.Id))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Username))
@@ -8965,7 +8961,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					userdata.ActiveOrg.Id = innerorg.Id
 					userdata.ActiveOrg.Name = innerorg.Name
 
-					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.ActiveOrg.Id))
 					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.Id))
 					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Username))
@@ -9610,7 +9605,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				sendRequest = true
 			} else {
-				log.Printf("[DEBUG] Found result. Sending result with input data")
+				log.Printf("[DEBUG][%s] Found subflow result. Sending result with input data", foundResult.ExecutionId)
 
 				foundResult.StartedAt = timeNow
 				foundResult.CompletedAt = timeNow
@@ -9850,10 +9845,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	setCache := true
 	if actionResult.Action.AppName == "shuffle-subflow" {
+		//log.Printf("\n\n\n\n\n\n\n\n\n\n\n\n\nSUBFLOW RESULT!!!")
 
 		// Verifying if the userinput should be sent properly or not
 		if actionResult.Action.Name == "run_userinput" {
 			//log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
+			actionResult.Status = "WAITING"
 
 			if strings.Contains(actionResult.Result, "\"success\":") {
 				//log.Printf("Found success in result. Now verifying if the workflow should just continue or not")
@@ -9875,7 +9872,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			foundWaiting := false
 			for resultIndex, result := range workflowExecution.Results {
 				if result.Action.ID == actionResult.Action.ID {
-					log.Printf("\n\n[INFO] Found user input to replace.\n\n")
+					//log.Printf("\n\n[INFO] Found user input to replace.\n\n")
 					workflowExecution.Results[resultIndex].Result = actionResult.Result
 
 					// Updating cache for the result to always use the latest
@@ -9937,7 +9934,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
+		log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	}
 
 	if setCache {
@@ -10861,7 +10858,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				// Result        string `json:"result" datastore:"result,noindex"`
 				// Arbitrary reduction size
 				maxSize := 50000
-				bucketName := "shuffler.appspot.com"
+				bucketName := fmt.Sprintf("%s.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"))
 
 				if len(workflowExecution.ExecutionArgument) > maxSize {
 					itemSize := len(workflowExecution.ExecutionArgument)
@@ -11168,7 +11165,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] Added public app %s (%s) to org %s (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 				}
 			}
 		}
@@ -11181,7 +11177,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, "all_apps")
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
@@ -11530,7 +11525,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("[INFO] Successfully set OpenAPI with ID %s", idstring)
+		log.Printf("[INFO] Successfully set OpenAPI with name %s and ID %s", swagger.Info.Title, idstring)
 		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, idstring)))
 		return
@@ -13930,7 +13925,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if project.Environment == "cloud" {
 					user.ActiveOrg.Id = matchingOrgs[0].Id
 
-					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
 					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
@@ -14468,16 +14462,28 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
+			if len(start) == 0 {
+				log.Printf("[ERROR] No start node found for workflow %s during workflow continuation", workflow.ID)
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
+			}
+
 			//log.Printf("Result len: %d", len(oldExecution.Results))
 			newResults := []ActionResult{}
 			foundresult := ActionResult{}
 			for _, result := range oldExecution.Results {
 				log.Printf("Action: %s - %s", result.Action.ID, start[0])
-				if result.Status != "WAITING" {
-					log.Printf("[WARNING] '%s' has status '%s'", result.Action.Label, result.Status)
-					// Testing
-					if result.Action.Label == "User_Input_1" {
-						result.Status = "WAITING"
+
+				if result.Action.ID == start[0] {
+					if result.Status == "ABORTED" {
+						log.Printf("[INFO] Found aborted result: %s (%s)", result.Action.Label, result.Action.ID)
+						if oldExecution.Status != "ABORTED" {
+							log.Printf("[INFO] Aborting execution %s as it should have already been aborted in the past", oldExecution.ExecutionId)
+							oldExecution.Status = "ABORTED"
+							oldExecution.CompletedAt = time.Now().Unix()
+							SetWorkflowExecution(ctx, *oldExecution, true)
+
+							return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution %s was already aborted", oldExecution.ExecutionId), errors.New("Execution already aborted")
+						}
 					}
 				}
 
@@ -14511,54 +14517,59 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					result.CompletedAt = int64(time.Now().Unix())
 					if answer[0] == "false" {
-						result.Status = "ABORTED"
+						result.Status = "SKIPPED"
 					} else {
 						result.Status = "SUCCESS"
 					}
 
 					// Should send result to self?
-					/*
-						fullMarshal, err := json.Marshal(result)
-						if err == nil {
-							// Should set  cache for it
-							actionCacheId := fmt.Sprintf("%s_%s_result", result.ExecutionId, result.Action.ID)
-							err = SetCache(ctx, actionCacheId, fullMarshal, 35)
-							if err != nil {
-								log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
-							}
-						} else {
-							log.Printf("[ERROR] Failed marshalling user input WAITING result: %s", err)
+					fullMarshal, err := json.Marshal(result)
+					if err == nil {
+						// Should set  cache for it
+						actionCacheId := fmt.Sprintf("%s_%s_result", result.ExecutionId, result.Action.ID)
+						err = SetCache(ctx, actionCacheId, fullMarshal, 35)
+						if err != nil {
+							log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
 						}
-					*/
 
-					/*
-						} else {
-							log.Printf("[ERROR] Failed unmarshalling userinput: %s", err)
+						// Should send result to self?
+						log.Printf("[DEBUG] Sending result to self: %s", string(fullMarshal))
 
-							// FIXME: Add note functionality again
-							//note, noteok := request.URL.Query()["note"]
-							//if noteok {
-							//	result.Result = fmt.Sprintf("User note: %s", note[0])
-							//} else {
-							//	result.Result = fmt.Sprintf("User clicked %s", answer[0])
-							//}
-
-							// Stopping the whole thing
-							if answer[0] == "false" {
-								result.CompletedAt = int64(time.Now().Unix())
-								result.Status = "ABORTED"
-
-								// Abort from here?
-								oldExecution.Status = result.Status
-								oldExecution.Result = result.Result
-								oldExecution.LastNode = result.Action.ID
-							} else {
-								result.CompletedAt = int64(time.Now().Unix())
-								result.Status = "SUCCESS"
-								result.Result = `{"success": true, "reason": "Continuing from user input", "user_input": true}`
-							}
+						backendUrl := os.Getenv("BASE_URL")
+						if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+							backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 						}
-					*/
+
+						if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+							backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+						}
+
+						topClient := &http.Client{
+							Transport: &http.Transport{
+								Proxy: nil,
+							},
+						}
+						streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
+						req, err := http.NewRequest(
+							"POST",
+							streamUrl,
+							bytes.NewBuffer([]byte(fullMarshal)),
+						)
+
+						if err != nil {
+							log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
+							return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
+						}
+
+						newresp, err := topClient.Do(req)
+						if err != nil {
+							log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
+							return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
+						}
+
+						defer newresp.Body.Close()
+						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action skipped", oldExecution.ExecutionId), errors.New("User Input: Execution action skipped!")
+					}
 
 					foundresult = result
 					newResults = append(newResults, result)
@@ -15714,8 +15725,8 @@ func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed making remote request to get the data"}`)))
 		return
 	}
-	defer newresp.Body.Close()
 
+	defer newresp.Body.Close()
 	urlbody, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[ERROR] URLbody error: %s", err)
@@ -17117,6 +17128,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			continueOuter = false
 		} else if len(parents[nextAction]) > 0 {
 			// Wait for parents to finish executing
+			skippedCnt := 0
 			childNodes := FindChildNodes(workflowExecution, nextAction, []string{}, []string{})
 			for _, parent := range parents[nextAction] {
 				// Check if the parent is also a child. This can ensure continueation no matter what
@@ -17126,13 +17138,16 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					continue
 				}
 
+				// Not including ABORTED/FAILED
 				_, parentResult := GetResult(ctx, workflowExecution, parent)
-				if parentResult.Status == "FINISHED" || parentResult.Status == "SUCCESS" || parentResult.Status == "SKIPPED" || parentResult.Status == "FAILURE" {
+				if parentResult.Status == "FINISHED" || parentResult.Status == "SUCCESS" || parentResult.Status == "SKIPPED" {
+					if parentResult.Status == "SKIPPED" {
+						skippedCnt += 1
+					}
 					fixed += 1
 				} else {
 					log.Printf("[WARNING][%s] Parentstatus for node %s is '%s' - NOT success, finished or skipped", workflowExecution.ExecutionId, parent, parentResult.Status)
 					// Should check if it's actually RAN at all?
-
 					parentId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, parent)
 					_, err := GetCache(ctx, parentId)
 					if err != nil {
@@ -17145,6 +17160,11 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 			if fixed == len(parents[nextAction]) {
 				continueOuter = false
+
+				if fixed > 0 && skippedCnt == len(parents[nextAction]) {
+					log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+					continueOuter = true
+				}
 			}
 		} else {
 			//log.Printf("[INFO] No parents for %s", action.Label)
@@ -17152,22 +17172,15 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		}
 
 		if continueOuter {
-			// FIXME: Get the result here from cache in case it exists?
 			log.Printf("[DEBUG][%s] Parents of %s (%s) aren't finished yet (%d/%d). Parents: %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
-			//for _, parent := range parents[nextAction] {
-			//	_, parentResult := GetResult(ctx, workflowExecution, parent)
-			//}
-			// I think this is where we rerun.
 
 			continue
 		} else {
-			//log.Printf("\n\n[DEBUG][%s] ALL Parents of %s (%s) are finished. (%d/%d): %s. But are they succeeded?", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+			if len(parents[nextAction]) > 0 {
+				//log.Printf("[DEBUG][%s] ALL Parents of %s (%s) are finished. (%d/%d): %s. But are they succeeded?", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+			}
 
 		}
-
-		//if action.Label == "Add_to_cache" {
-		//	log.Printf("\n\n\nFOUND ACTION!!\n\n\n")
-		//}
 
 		// get action status
 		workflowExecution, actionResult := GetResult(ctx, workflowExecution, nextAction)
@@ -17185,13 +17198,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			//log.Printf("\n\n[DEBUG] Already found %s - returning\n\n", newExecId)
 			continue
 		}
-
-		//cacheData := []byte("1")
-		//err = SetCache(ctx, newExecId, cacheData, 2)
-		//if err != nil {
-		//	log.Printf("[WARNING] Failed setting cache for action %s: %s", newExecId, err)
-		//} else {
-		//}
 
 		if action.AppName == "Shuffle Workflow" {
 			branchesFound := 0
@@ -17412,21 +17418,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						action.Parameters = append(action.Parameters, parameter)
 					}
 
-					//action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					//	Name:  "source_workflow",
-					//	Value: workflowExecution.Workflow.ID,
-					//})
-
-					//action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					//	Name:  "source_execution",
-					//	Value: workflowExecution.ExecutionId,
-					//})
-
-					//action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					//	Name:  "source_auth",
-					//	Value: workflowExecution.Authorization,
-					//})
-
 					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 						Name:  "startnode",
 						Value: workflowExecution.Start,
@@ -17475,81 +17466,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						Name:  "user_apikey",
 						Value: syncApikey,
 					})
-
-					/*
-						for _, trigger := range trigger.Parameters {
-							if trigger.Name == "email" {
-								itemsplit := strings.Split(trigger.Value, ",")
-								for _, mail := range itemsplit {
-									users = append(users, mail)
-								}
-							} else if trigger.Name == "alertinfo" {
-								mailbody = trigger.Value
-							} else if trigger.Name == "type" {
-								if strings.Contains(trigger.Value, "sms") {
-									smsEnabled = true
-								}
-
-								if strings.Contains(trigger.Value, "email") {
-									emailEnabled = true
-								}
-							} else if trigger.Name == "sms" {
-								smsUser = trigger.Value
-							} else if trigger.Name == "subflow" {
-								log.Printf("[DEBUG] Should handle subflow in user input")
-							}
-						}
-					*/
-
-					// Still having personal to see if it works or not
-					/*
-						users := []string{}
-						smsUser := ""
-						mailbody := ""
-
-						// FIXME: Change the startnode to NEXT one :thinking:
-
-						startnode := workflowExecution.Start
-						if emailEnabled {
-							mailBody := Mailcheck{
-								Targets:            users,
-								Type:               "User input",
-								WorkflowId:         workflowExecution.Workflow.ID,
-								Start:              startnode,
-								Body:               mailbody,
-								ReferenceExecution: workflowExecution.ExecutionId,
-								Subject:            "An alert from Shuffle",
-							}
-							_ = mailBody
-
-							//err = sendAlertMail(ctx, mailBody, workflowExecution.ExecutionOrg)
-							//if err != nil {
-							//	log.Printf("[INFO] Failed sending email about user input: %s", err)
-							//}
-						}
-
-						_ = smsUser
-						_ = startAction
-						if smsEnabled {
-							if len(mailbody) > 140 {
-								mailbody = mailbody[0:139]
-							}
-
-							url := "https://shuffler.io"
-
-							continueUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?authorization=%s&start=%s&reference_execution=%s&answer=true", url, workflowExecution.Workflow.ID, workflowExecution.Authorization, startnode, workflowExecution.ExecutionId)
-							stopUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute?authorization=%s&start=%s&reference_execution=%s&answer=false", url, workflowExecution.Workflow.ID, workflowExecution.Authorization, startnode, workflowExecution.ExecutionId)
-
-							mailbody += fmt.Sprintf("\n\nContinue: %s\n\nStop: %s", continueUrl, stopUrl)
-
-							//err = sendSMS(ctx, mailbody, []string{smsUser}, workflowExecution.Workflow.ExecutingOrg.Id)
-							//if err != nil {
-							//	log.Printf("[INFO] Failed sending sms about user input: %s", err)
-							//}
-						}
-
-						break
-					*/
 				}
 			}
 		} else {

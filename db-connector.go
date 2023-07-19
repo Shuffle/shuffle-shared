@@ -373,6 +373,35 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 		//	return
 		//}
 
+		log.Printf("[DEBUG] Incrementing '%s' failed. Stats not enabled yet", key) 
+		/*
+			cache, err := GetCache(ctx, key)
+			if err != nil {
+				SetCache(ctx, key, []byte(string(1)), 1440)
+			} else {
+				//cacheData := string([]byte(cache.([]uint8)))
+				cacheData := cache.(int)
+				log.Printf("\n\nGot cache value %s\n\n", cacheData)
+
+				//number, err := strconv.Atoi(cacheData)
+				//if err != nil {
+				//	log.Printf("[ERROR] error in cache setting: %s", err)
+				//	return
+				//}
+
+				//log.Printf("NUM: %d", number)
+				//cacheData += 1
+
+				//if cacheData == dbDumpInterVal {
+				//	log.
+				//}
+			}
+
+			//cache, err := GetCache(ctx, cacheKey)
+			//if err == nil {
+		*/
+		return
+
 		//if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
 		if item, err := memcache.Get(ctx, key); err == memcache.ErrCacheMiss {
 			item := &memcache.Item{
@@ -434,32 +463,6 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 		}
 	}
 
-	/*
-		cache, err := GetCache(ctx, key)
-		if err != nil {
-			SetCache(ctx, key, []byte(string(1)), 1440)
-		} else {
-			//cacheData := string([]byte(cache.([]uint8)))
-			cacheData := cache.(int)
-			log.Printf("\n\nGot cache value %s\n\n", cacheData)
-
-			//number, err := strconv.Atoi(cacheData)
-			//if err != nil {
-			//	log.Printf("[ERROR] error in cache setting: %s", err)
-			//	return
-			//}
-
-			//log.Printf("NUM: %d", number)
-			//cacheData += 1
-
-			//if cacheData == dbDumpInterVal {
-			//	log.
-			//}
-		}
-
-		//cache, err := GetCache(ctx, cacheKey)
-		//if err == nil {
-	*/
 }
 
 // Cache handlers
@@ -468,7 +471,8 @@ func DeleteCache(ctx context.Context, name string) error {
 		return mc.Delete(name)
 	}
 
-	if project.Environment == "cloud" {
+	//if project.Environment == "cloud" {
+	if false {
 		return memcache.Delete(ctx, name)
 
 	} else if project.Environment == "onprem" {
@@ -477,7 +481,6 @@ func DeleteCache(ctx context.Context, name string) error {
 	} else {
 		requestCache.Delete(name)
 		return nil
-		return errors.New(fmt.Sprintf("No cache handler for environment %s yet WHILE DELETING", project.Environment))
 	}
 
 	return errors.New(fmt.Sprintf("No cache found for %s when DELETING cache", name))
@@ -695,7 +698,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
 					log.Printf("[WARNING] Failed setting cache for key '%s' with data size %d (2): %s", name, len(data), err)
-					// func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
 				}
@@ -704,15 +706,11 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 		return nil
 	} else if project.Environment == "onprem" {
-		//log.Printf("SETTING CACHE FOR %s ONPREM", name)
+		//log.Printf("SETTING CACHE FOR '%s' ONPREM", name)
 		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
 	} else {
-		log.Printf("SETTING CACHE FOR '%s' with environment %s", name, project.Environment)
+		//log.Printf("SETTING CACHE FOR '%s' with environment %s", name, project.Environment)
 		requestCache.Set(name, data, time.Minute*time.Duration(expiration))
-		//if err != nil {
-		//	log.Printf("[WARNING] Failed setting cache for key '%s' with data size %d (3): %s", name, len(data), err)
-		//}
-		//return errors.New(fmt.Sprintf("No cache handler for environment %s yet", project.Environment))
 	}
 
 	return nil
@@ -1630,6 +1628,10 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 		//log.Printf("\n\n[DEBUG] Actions in %s (%s): %d. Err: %s", workflowApp.Name, strings.ToLower(id), len(workflowApp.Actions), err)
 
 		if err != nil || len(workflowApp.Actions) == 0 {
+			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
+				return workflowApp, errors.New("App doesn't exist")
+			}
+
 			log.Printf("[WARNING] Failed getting app in GetApp with name %s and ID %s. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
 				if app.ID == id {
@@ -3764,6 +3766,9 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		}
 	}
 
+	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("user_%s", parsedKey)
 
@@ -3778,6 +3783,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			log.Printf("[WARNING] Failed updating user cache (username): %s", err)
 		}
 	}
+
 
 	return nil
 }
@@ -4282,7 +4288,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+					log.Printf("[INFO] App %s (%s) doesn't have actions (1) - check filepath", innerApp.Name, innerApp.ID)
 
 					foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
 					if err == nil {
@@ -4362,7 +4368,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					log.Printf("[INFO] App %s (%s) doesn't have actions - check filepath", innerApp.Name, innerApp.ID)
+					log.Printf("[INFO] App %s (%s) doesn't have actions (2) - check filepath", innerApp.Name, innerApp.ID)
 
 					foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
 					if err == nil {
@@ -4413,7 +4419,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		if err != nil {
 			log.Printf("[INFO] Error setting app cache item for %s: %v", publicAppsKey, err)
 		} else {
-			log.Printf("[INFO] Set app cache for %s", publicAppsKey)
+			log.Printf("[INFO] Set app cache for %s. Next are private apps.", publicAppsKey)
 		}
 	}
 
@@ -5491,7 +5497,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 			var workflows []Workflow
 
 			cacheData := []byte(cache.([]uint8))
-			log.Printf("[INFO] Got cache for getworkflow '%s': %s", cacheKey, cacheData)
+			//log.Printf("[INFO] Got cache for getworkflow '%s': %s", cacheKey, cacheData)
 			err = json.Unmarshal(cacheData, &workflows)
 			if err != nil {
 				log.Printf("[WARNING] Failed unmarshalling cache for getworkflow '%s': %s", cacheKey, err)
@@ -5713,7 +5719,8 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil && len(user.Id) > 0 {
-				//log.Printf("Found user in cache for session %s", sessionId)
+				//log.Printf("Found user in cache for session key %s", cacheKey)
+
 				return *user, nil
 			} else {
 				return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
