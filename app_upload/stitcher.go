@@ -35,8 +35,9 @@ import (
 
 var gceProject = "shuffler"
 var bucketName = "shuffler.appspot.com"
-
 var publicBucket = "shuffle_public"
+var gceRegion = "europe-west2"
+
 var appSearchIndex = "appsearch"
 
 // CONFIGURE APP LOCATIONS TO USE
@@ -411,8 +412,8 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 	functionName := fmt.Sprintf("%s/functions/%s", location, appname)
 	serviceAccountEmail := "shuffle-apps@shuffler.iam.gserviceaccount.com"
 
-	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 {
-		serviceAccountEmail = fmt.Sprintf("shuffle-apps@%s.iam.gserviceaccount.com", os.Getenv("SHUFFLE_GCEPROJECT"))
+	if len(gceProject) > 0 {
+		serviceAccountEmail = fmt.Sprintf("shuffle-apps@%s.iam.gserviceaccount.com", gceProject)
 	}
 
 	log.Printf("[INFO] Uploading function %#v for email %#v", functionName, serviceAccountEmail)
@@ -492,7 +493,7 @@ func deployAppCloudFunc(appname string, appversion string) {
 	_ = os.Mkdir("generated_apps", os.ModePerm)
 
 	fullAppname := fmt.Sprintf("%s-%s", strings.Replace(appname, "_", "-", -1), strings.Replace(appversion, ".", "-", -1))
-	locations := []string{"europe-west2"}
+	locations := []string{gceRegion}
 	if len(os.Getenv("SHUFFLE_GCE_LOCATION")) > 0 {
 		locations = []string{os.Getenv("SHUFFLE_GCE_LOCATION")}
 	}
@@ -818,7 +819,7 @@ func deployAll() {
 func main() {
 	//addRequirements("generated_apps/shuffle-tools_1.0.0/requirements.txt")
 	if len(os.Args) < 3 {
-		log.Printf("[WARNING] Missing arguments. Required: go run stitcher.go APIKEY URL")
+		log.Printf("[WARNING] Missing arguments. <> are NOT required. Input: go run stitcher.go APIKEY URL <GCEPROJECT> <GCE_REGION> <BUCKETNAME>\n\n\nSample: go run stitcher.go APIKEY https://ca.shuffler.io shuffle-na-northeast1 northamerica-northeast1 shuffle_org_files_na_northeast1") 
 		return
 	}
 
@@ -830,13 +831,23 @@ func main() {
 		gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
 	}
 
+	if len(os.Getenv("SHUFFLE_GCEPROJECT_REGION")) > 0 {
+		gceRegion = os.Getenv("SHUFFLE_GCEPROJECT_REGION")
+	}
+
 	baseUrl = os.Args[2]
 	apikey = os.Args[1]
 	log.Printf("\n\n============================= \n[INFO] Running with: \nUrl: %s\nApikey: %s\n============================= \n\n", baseUrl, apikey)
 	//deployAll()
 	//return
 
-	appname := "shuffle-ai"
+	if len(os.Args) > 3 {
+		gceProject = os.Args[3]
+		gceRegion = os.Args[4]
+		bucketName = os.Args[5]
+	}
+
+	appname := "shuffle-subflow"
 	appversion := "1.0.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
