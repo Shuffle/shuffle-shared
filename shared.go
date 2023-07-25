@@ -1018,6 +1018,33 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("Envs: %s", len(envs))
 			org.SyncFeatures.MultiEnv.Usage = int64(len(envs))
 		}
+
+		if len(org.Subscriptions) == 0 && project.Environment == "cloud" {
+			if org.LeadInfo.Customer || org.LeadInfo.POV || len(org.ManagerOrgs) > 0 {
+				name := "App execution units - default"
+				if len(org.ManagerOrgs) > 0 {
+					name = "Suborg access - default"
+				}
+
+				org.Subscriptions = append(org.Subscriptions, PaymentSubscription{
+					Active:           true,
+					Startdate:        int64(time.Now().Unix()),
+					CancellationDate: 0,
+					Enddate:          0,
+					Name:             name,
+					Recurrence:       string("monthly"),
+					Amount:           string(rune(100000)),
+					Currency:         string("USD"),
+					Level:            "1",
+					Reference:        "TBD",
+					Limit:            100000,
+					Features:         []string{
+						"Custom Contract features",
+						"Multi-Tenant & Multi-Region",
+					},
+				})
+			}
+		}
 	}
 
 	// Make sure to add all orgs that are childs if you have access
@@ -1068,9 +1095,14 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	}
 
+	if len(org.ManagerOrgs) > 0 {
+		org.LeadInfo.SubOrg = true
+	}
+
 	if !user.SupportAccess {
 		org.LeadInfo = LeadInfo{}
 	}
+
 
 	newjson, err := json.Marshal(org)
 	if err != nil {
@@ -7226,6 +7258,8 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 			log.Printf("[DEBUG] Redirecting ORGCHANGE request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
@@ -7235,6 +7269,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 			DeleteCache(ctx, fmt.Sprintf(user.ApiKey))
+			DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 			return
 		}
@@ -7806,36 +7841,40 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if len(tmpData.LeadInfo) > 0 && user.SupportAccess {
 		log.Printf("[INFO] Updating lead info for %s to %s", org.Id, tmpData.LeadInfo)
 
+		// Make a new one, as to start with all from false
+		newLeadinfo := LeadInfo{}
+
 		for _, lead := range tmpData.LeadInfo {
 			if lead == "contacted" {
-				org.LeadInfo.Contacted = true
-			}
+				newLeadinfo.Contacted = true
+			} 
 
 			if lead == "student" {
-				org.LeadInfo.Student = true
+				newLeadinfo.Student = true
 			}
 
 			if lead == "lead" {
-				org.LeadInfo.Lead = true
+				newLeadinfo.Lead = true
 			}
 
 			if lead == "pov" {
-				org.LeadInfo.POV = true
+				newLeadinfo.POV = true
 			}
 
 			if lead == "demo started" {
-				org.LeadInfo.DemoDone = true
+				newLeadinfo.DemoDone = true
 			}
 
 			if lead == "customer" {
-				org.LeadInfo.Customer = true
+				newLeadinfo.Customer = true
 			}
 
 			if lead == "internal" {
-				org.LeadInfo.Internal = true
+				newLeadinfo.Internal = true
 			}
 		}
 
+		org.LeadInfo = newLeadinfo
 	}
 
 	// Built a system around this now, which checks for the actual org. 
@@ -9912,6 +9951,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			return &workflowExecution, true, nil
 		} else {
+			// Should NOT run with all this if the action is SKIPPED
+			// Cache when SKIPPED!
+
+
 			for _, param := range actionResult.Action.Parameters {
 				if param.Name == "check_result" {
 					//log.Printf("[INFO] RESULT: %s", param)
@@ -15873,7 +15916,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	value.Type = strings.ToLower(value.Type)
-	if value.Type == "email" {
+	if value.Type == "email" || value.Type == "comms" {
 		value.Type = "communication"
 	}
 

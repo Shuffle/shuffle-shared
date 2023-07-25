@@ -719,6 +719,7 @@ type LeadInfo struct {
 	DemoDone  bool `json:"demo_done,omitempty" datastore:"demo_done"`
 	Customer  bool `json:"customer,omitempty" datastore:"customer"`
 	Internal bool `json:"internal,omitempty" datastore:"internal"`
+	SubOrg   bool `json:"sub_org,omitempty" datastore:"sub_org"`
 }
 
 type Org struct {
@@ -799,6 +800,8 @@ type PaymentSubscription struct {
 	Level            string `json:"level" datastore:"level"`
 	Amount           string `json:"amount" datastore:"amount"`
 	Currency         string `json:"currency" datastore:"currency"`
+	Limit 		  	 int64  `json:"limit" datastore:"limit"`
+	Features 	   []string `json:"features" datastore:"features"`
 }
 
 type SyncUsage struct {
@@ -2176,15 +2179,16 @@ type HandleInfo struct {
 	Avatar             string          `json:"avatar"`
 	Orgs               []OrgMini       `json:"orgs"`
 	ActiveOrg          OrgMini         `json:"active_org"`
-	EthInfo            EthInfo         `json:"eth_info"`
+	EthInfo            EthInfo         `json:"eth_info,omitempty"`
 	ChatDisabled       bool            `json:"chat_disabled"`
 	Priorities         []Priority      `json:"priorities"`
 	Cookies            []SessionCookie `json:"cookies"`
 	AppExecutionsLimit int64           `json:"app_execution_limit"`
 	AppExecutionsUsage int64           `json:"app_execution_usage"`
 	RegionUrl          string          `json:"region_url"`
-	Tutorials          []Tutorial      `json:"tutorials"`
 	Support            bool            `json:"support"`
+	Tutorials          []Tutorial      `json:"tutorials"`
+	OrgStatus 		   []string 	   `json:"org_status"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
