@@ -35,6 +35,7 @@ type QueryInput struct {
 	OrgId       string       `json:"org_id,omitempty"`
 	TimeStarted int64        `json:"time_started,omitempty"`
 	TimeEnded   int64        `json:"time_ended,omitempty"`
+	Formatting  string       `json:"formatting,omitempty"`
 }
 
 type ExecutionRequestWrapper struct {
@@ -269,6 +270,7 @@ type DailyStatistics struct {
 	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
 	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
 	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
+	AIUsage               int64 `json:"ai_executions" datastore:"ai_executions"`
 
 	ApiUsage                   int64 `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
@@ -293,7 +295,9 @@ type ExecutionInfo struct {
 	TotalOrgSyncActions             int64 `json:"total_org_sync_actions" datastore:"total_org_sync_actions"`
 	TotalCloudExecutions            int64 `json:"total_cloud_executions" datastore:"total_cloud_executions"`
 	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
+	TotalAIUsage               int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 
+	MonthlyApiUsage                   int64 `json:"monthly_api_usage" datastore:"monthly_api_usage"`
 	MonthlyAppExecutions              int64 `json:"monthly_app_executions" datastore:"monthly_app_executions"`
 	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed" datastore:"monthly_app_executions_failed"`
 	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions" datastore:"monthly_subflow_executions"`
@@ -303,6 +307,7 @@ type ExecutionInfo struct {
 	MonthlyOrgSyncActions             int64 `json:"monthly_org_sync_actions" datastore:"monthly_org_sync_actions"`
 	MonthlyCloudExecutions            int64 `json:"monthly_cloud_executions" datastore:"monthly_cloud_executions"`
 	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions" datastore:"monthly_onprem_executions"`
+	MonthlyAIUsage               int64 `json:"monthly_ai_executions" datastore:"monthly_ai_executions"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed,omitempty" datastore:"weekly_app_executions_failed"`
@@ -313,6 +318,7 @@ type ExecutionInfo struct {
 	WeeklyOrgSyncActions             int64 `json:"weekly_org_sync_actions,omitempty" datastore:"weekly_org_sync_actions"`
 	WeeklyCloudExecutions            int64 `json:"weekly_cloud_executions,omitempty" datastore:"weekly_cloud_executions"`
 	WeeklyOnpremExecutions           int64 `json:"weekly_onprem_executions,omitempty" datastore:"weekly_onprem_executions"`
+	WeeklyAIUsage               int64 `json:"weekly_ai_executions,omitempty" datastore:"weekly_ai_executions"`
 
 	DailyAppExecutions              int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
 	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
@@ -323,6 +329,7 @@ type ExecutionInfo struct {
 	DailyOrgSyncActions             int64 `json:"daily_org_sync_actions" datastore:"daily_org_sync_actions"`
 	DailyCloudExecutions            int64 `json:"daily_cloud_executions" datastore:"daily_cloud_executions"`
 	DailyOnpremExecutions           int64 `json:"daily_onprem_executions" datastore:"daily_onprem_executions"`
+	DailyAIUsage               int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
 	HourlyAppExecutionsFailed        int64 `json:"hourly_app_executions_failed,omitempty" datastore:"hourly_app_executions_failed"`	
@@ -333,6 +340,7 @@ type ExecutionInfo struct {
 	HourlyOrgSyncActions             int64 `json:"hourly_org_sync_actions,omitempty" datastore:"hourly_org_sync_actions"`
 	HourlyCloudExecutions            int64 `json:"hourly_cloud_executions,omitempty" datastore:"hourly_cloud_executions"`
 	HourlyOnpremExecutions           int64 `json:"hourly_onprem_executions,omitempty" datastore:"hourly_onprem_executions"`
+	HourlyAIUsage               int64 `json:"hourly_ai_executions,omitempty" datastore:"hourly_ai_executions"`
 
 	// These are just here in case we get use of them
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
@@ -341,7 +349,7 @@ type ExecutionInfo struct {
 
 type ParsedOpenApi struct {
 	Body    string `datastore:"body,noindex" json:"body"`
-	ID      string `datastore:"id" json:"id"`
+	ID      string `datastore:"id" json:"id,omitempty"`
 	Success bool   `datastore:"success,omitempty" json:"success,omitempty"`
 }
 

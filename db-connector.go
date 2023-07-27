@@ -107,6 +107,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		OrgSyncActions            : executionInfo.DailyOrgSyncActions, 
 		CloudExecutions           : executionInfo.DailyCloudExecutions,
 		OnpremExecutions          : executionInfo.DailyOnpremExecutions,
+		AIUsage              : executionInfo.DailyAIUsage,
 
 		ApiUsage : executionInfo.DailyApiUsage,
 	}
@@ -124,6 +125,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyCloudExecutions = 0
 	executionInfo.DailyOnpremExecutions = 0
 	executionInfo.DailyApiUsage = 0
+	executionInfo.DailyAIUsage = 0
 
 	// Cleaning up old stuff we don't use for now
 	executionInfo.HourlyAppExecutions = 0
@@ -212,7 +214,12 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo) *ExecutionIn
 		orgStatistics.HourlyOnpremExecutions += int64(dumpInterval)
 	} else if dataType == "api_usage" {
 		orgStatistics.TotalApiUsage += int64(dumpInterval)
+		orgStatistics.MonthlyApiUsage += int64(dumpInterval)
 		orgStatistics.DailyApiUsage += int64(dumpInterval)
+	} else if dataType == "ai_executions" {
+		orgStatistics.TotalAIUsage += int64(dumpInterval)
+		orgStatistics.MonthlyAIUsage += int64(dumpInterval)
+		orgStatistics.DailyAIUsage += int64(dumpInterval)
 	}
 
 	return orgStatistics
