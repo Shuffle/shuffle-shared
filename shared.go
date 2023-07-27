@@ -10021,17 +10021,16 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 
 		setExecVar := true
-		//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %s", actionResult.Result)
 
 		// Should just check the first bytes for this, as it should be at the start if it's a failure with the individual action itself
-
+		// This is finicky, but it's the easiest fix for this
 		checkLength := 20
 		firstFifty := actionResult.Result
 		if len(actionResult.Result) > checkLength {
 			firstFifty = actionResult.Result[0:checkLength]
 		}
 
-		if strings.Contains(firstFifty, "\"success\":") && !strings.HasPrefix(actionResult.Result, "[{") {
+		if strings.Contains(firstFifty, "\"success\":") && !(strings.HasPrefix(actionResult.Result, "[{") && strings.HasSuffix(actionResult.Result, "}]")) {
 			type SubflowMapping struct {
 				Success bool `json:"success"`
 			}
