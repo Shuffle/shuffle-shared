@@ -9952,17 +9952,20 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			return &workflowExecution, true, nil
 		} else {
 			// Should NOT run with all this if the action is SKIPPED
-			// Cache when SKIPPED!
+			// Cache when SKIPPED - this is to handle the case where the subflow is skipped (condition) and the result is not set
 
+			if actionResult.Status == "SKIPPED" {
+				setCache = true
+			} else {
+				for _, param := range actionResult.Action.Parameters {
+					if param.Name == "check_result" {
+						//log.Printf("[INFO] RESULT: %s", param)
+						if param.Value == "true" {
+							setCache = false
+						}
 
-			for _, param := range actionResult.Action.Parameters {
-				if param.Name == "check_result" {
-					//log.Printf("[INFO] RESULT: %s", param)
-					if param.Value == "true" {
-						setCache = false
+						break
 					}
-
-					break
 				}
 			}
 
@@ -10019,7 +10022,16 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		setExecVar := true
 		//log.Printf("\n\n[DEBUG] SETTING ExecVar RESULTS: %s", actionResult.Result)
-		if strings.Contains(actionResult.Result, "\"success\":") {
+
+		// Should just check the first bytes for this, as it should be at the start if it's a failure with the individual action itself
+
+		checkLength := 20
+		firstFifty := actionResult.Result
+		if len(actionResult.Result) > checkLength {
+			firstFifty = actionResult.Result[0:checkLength]
+		}
+
+		if strings.Contains(firstFifty, "\"success\":") && !strings.HasPrefix(actionResult.Result, "[{") {
 			type SubflowMapping struct {
 				Success bool `json:"success"`
 			}
@@ -10064,7 +10076,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, actionResult.Action.ExecutionVariable)
 			}
 		} else {
-			log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Checkp revious errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+			log.Printf("[DEBUG] NOT updating exec variable %s with new value of length %d. Check previous errors, or if action was successful (success: true)", actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
 		}
 	}
 
@@ -10802,7 +10814,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				var subflowDataList []SubflowData
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
 				if err != nil || len(subflowDataList) == 0 {
-					log.Printf("\n\nNOT sinkholed: %s", err)
+					log.Printf("\n\nNOT sinkholed from subflow result: %s", err)
 					for resultIndex, result := range workflowExecution.Results {
 						if result.Action.ID == actionResult.Action.ID {
 							workflowExecution.Results[resultIndex] = actionResult
@@ -17205,7 +17217,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				continueOuter = false
 
 				if fixed > 0 && skippedCnt == len(parents[nextAction]) {
-					log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+					//log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
 					continueOuter = true
 				}
 			}
@@ -17215,7 +17227,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		}
 
 		if continueOuter {
-			log.Printf("[DEBUG][%s] Parents of %s (%s) aren't finished yet (%d/%d). Parents: %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+			//log.Printf("[DEBUG][%s] Parents of %s (%s) aren't finished yet (%d/%d). Parents: %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
 
 			continue
 		} else {
