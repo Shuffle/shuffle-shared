@@ -77,7 +77,7 @@ func GetESIndexPrefix(index string) string {
 
 // Dumps data from cache to DB for every 10 action (old was 25)
 //var dumpInterval = 0x19
-var dumpInterval = 0xA
+var dumpInterval = 0x5
 //var dumpInterval = 0x1
 
 // 1. Check list if there is a record for yesterday 
