@@ -5456,6 +5456,16 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		workflow.Created = timeNow
 	}
 
+	for actionIndex, _ := range workflow.Comments {
+		workflow.Comments[actionIndex].Position.X = float64(workflow.Comments[actionIndex].Position.X)
+		workflow.Comments[actionIndex].Position.Y = float64(workflow.Comments[actionIndex].Position.Y)
+	}
+
+	for actionIndex, _ := range workflow.Actions {
+		workflow.Actions[actionIndex].Position.X = float64(workflow.Actions[actionIndex].Position.X)
+		workflow.Actions[actionIndex].Position.Y = float64(workflow.Actions[actionIndex].Position.Y)
+	}
+
 	if len(optionalEditedSecondsOffset) > 0 {
 		workflow.Edited += int64(optionalEditedSecondsOffset[0])
 	}
