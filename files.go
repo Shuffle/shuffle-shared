@@ -254,6 +254,18 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// read query parameter "remove_metadata"
+	removeMetadata := false
+
+	removeMetadataQuery, ok := request.URL.Query()["remove_metadata"]
+	if ok && len(removeMetadataQuery) > 0 {
+		if removeMetadataQuery[0] == "true" {
+			log.Printf("[INFO] Remove metadata is true")
+			removeMetadata = true
+		}
+	}
+
+
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -337,67 +349,68 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 	if file.Status == "deleted" {
 		log.Printf("[INFO] File with ID %s is already deleted.", fileId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		bucket := project.StorageClient.Bucket(orgFileBucket)
-		obj := bucket.Object(file.DownloadPath)
-		err := obj.Delete(ctx)
-		if err != nil {
-			log.Printf("[ERROR] FAILED to delete file %s from Google cloud storage. Removing frontend reference anyway. Err: %s", fileId, err)
-		} else {
-			log.Printf("[DEBUG] Deleted file %s from Google cloud storage", fileId)
-		}
-
-	} else {
-		if fileExists(file.DownloadPath) {
-			err = os.Remove(file.DownloadPath)
-			if err != nil {
-				log.Printf("[ERROR] Failed deleting file locally: %s", err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed deleting filein path %s"}`, file.DownloadPath)))
-				return
-			}
-
-			log.Printf("[INFO] Deleted file %s locally. Next is database.", file.DownloadPath)
-		} else {
-			log.Printf("[ERROR] File doesn't exist. Can't delete. Should maybe delete file anyway?")
-			resp.WriteHeader(200)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "File in location %s doesn't exist"}`, file.DownloadPath)))
+		if !(removeMetadata) {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-	}
-
-	file.Status = "deleted"
-	err = SetFile(ctx, *file)
-	if err != nil {
-		log.Printf("[ERROR] Failed setting file to deleted")
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
-		return
-	}
-
-	outputFiles, err := FindSimilarFile(ctx, file.Md5sum, file.OrgId)
-	log.Printf("[INFO] Found %d similar files", len(outputFiles))
-	if len(outputFiles) > 0 {
-		for _, item := range outputFiles {
-			item.Status = "deleted"
-			err = SetFile(ctx, item)
+	} else {
+		if project.Environment == "cloud" || file.StorageArea == "google_storage" {
+			bucket := project.StorageClient.Bucket(orgFileBucket)
+			obj := bucket.Object(file.DownloadPath)
+			err := obj.Delete(ctx)
 			if err != nil {
-				log.Printf("[ERROR] Failed setting duplicate file %s to deleted", item.Id)
+				log.Printf("[ERROR] FAILED to delete file %s from Google cloud storage. Removing frontend reference anyway. Err: %s", fileId, err)
+			} else {
+				log.Printf("[DEBUG] Deleted file %s from Google cloud storage", fileId)
+			}
+
+		} else {
+			if fileExists(file.DownloadPath) {
+				err = os.Remove(file.DownloadPath)
+				if err != nil {
+					log.Printf("[ERROR] Failed deleting file locally: %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed deleting filein path %s"}`, file.DownloadPath)))
+					return
+				}
+
+				log.Printf("[INFO] Deleted file %s locally. Next is database.", file.DownloadPath)
+			} else {
+				log.Printf("[ERROR] File doesn't exist. Can't delete. Should maybe delete file anyway?")
+				resp.WriteHeader(200)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "File in location %s doesn't exist"}`, file.DownloadPath)))
+				return
 			}
 		}
+		file.Status = "deleted"
+		err = SetFile(ctx, *file)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting file to deleted")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+			return
+		}
+	
+		outputFiles, err := FindSimilarFile(ctx, file.Md5sum, file.OrgId)
+		log.Printf("[INFO] Found %d similar files", len(outputFiles))
+		if len(outputFiles) > 0 {
+			for _, item := range outputFiles {
+				item.Status = "deleted"
+				err = SetFile(ctx, item)
+				if err != nil {
+					log.Printf("[ERROR] Failed setting duplicate file %s to deleted", item.Id)
+				}
+			}
+		}
+	
+		nameKey := "Files"
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", nameKey, file.OrgId, file.Md5sum))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, file.OrgId))
 	}
 
-	nameKey := "Files"
-	DeleteCache(ctx, fmt.Sprintf("%s_%s_%s", nameKey, file.OrgId, file.Md5sum))
-	DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, file.OrgId))
-
-	/*
-		//Actually delete it?
+	if removeMetadata {
+		//Actually delete it
 		err = DeleteKey(ctx, "files", fileId)
 		if err != nil {
 			log.Printf("Failed deleting file with ID %s: %s", fileId, err)
@@ -405,7 +418,8 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-	*/
+		log.Printf("[INFO] Deleted file %s from database", fileId)
+	}
 
 	log.Printf("[INFO] Successfully deleted file %s for org %s", fileId, user.ActiveOrg.Id)
 	resp.WriteHeader(200)
