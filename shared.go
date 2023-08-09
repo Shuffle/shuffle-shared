@@ -5802,22 +5802,23 @@ func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowI
 
 	if updateAuth {
 		//log.Printf("[INFO] Updating auth!")
+
+		// go through auth.Usage and compile unique list of workflow_ids
+		var workflowIds []string
+		for _, usage := range auth.Usage {
+			if !ArrayContains(workflowIds, usage.WorkflowId) {
+				workflowIds = append(workflowIds, usage.WorkflowId)
+			}
+		}
+
+		auth.WorkflowCount = len(workflowIds)
+
 		err := SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed UPDATING app auth %s: %s", auth.Id, err)
 			return err
 		}
 	}
-
-	// go through auth.Usage and compile unique list of workflow_ids
-	var workflowIds []string
-	for _, usage := range auth.Usage {
-		if !ArrayContains(workflowIds, usage.WorkflowId) {
-			workflowIds = append(workflowIds, usage.WorkflowId)
-		}
-	}
-
-	auth.WorkflowCount = len(workflowIds)
 
 	return nil
 }
