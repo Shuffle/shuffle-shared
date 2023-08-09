@@ -5790,7 +5790,7 @@ func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowI
 		}
 
 		auth.Usage = append(auth.Usage, usageItem)
-		auth.WorkflowCount += 1
+		// auth.WorkflowCount += 1
 		auth.NodeCount += 1
 		updateAuth = true
 	} else if !nodeFound && add {
@@ -5808,6 +5808,16 @@ func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowI
 			return err
 		}
 	}
+
+	// go through auth.Usage and compile unique list of workflow_ids
+	var workflowIds []string
+	for _, usage := range auth.Usage {
+		if !ArrayContains(workflowIds, usage.WorkflowId) {
+			workflowIds = append(workflowIds, usage.WorkflowId)
+		}
+	}
+
+	auth.WorkflowCount = len(workflowIds)
 
 	return nil
 }
