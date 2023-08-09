@@ -5811,7 +5811,7 @@ func UpdateAppAuth(ctx context.Context, auth AppAuthenticationStorage, workflowI
 			}
 		}
 
-		auth.WorkflowCount = len(workflowIds)
+		auth.WorkflowCount = int64(len(workflowIds))
 
 		err := SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
 		if err != nil {
