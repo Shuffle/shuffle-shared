@@ -2946,8 +2946,8 @@ func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData 
 func RefreshOutlookClient(ctx context.Context, auth TriggerAuth) (error) {
 	// Manually recreate the oauthtoken
 	conf := &oauth2.Config{
-		ClientID: os.Getenv("OUTLOOK_CLIENT_ID"),
-		ClientSecret: os.Getenv("OUTLOOK_CLIENT_SECRET"),
+		ClientID: os.Getenv("OFFICE365_CLIENT_ID"),
+		ClientSecret: os.Getenv("OFFICE365_CLIENT_SECRET"),
 		Scopes: []string{
 			"Mail.Read",
 		},
