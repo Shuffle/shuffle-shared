@@ -14,6 +14,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+
 	//"net/url"
 	"os"
 	"strings"
@@ -821,6 +822,7 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 		RefreshToken: accessToken.RefreshToken,
 		Expiry:       accessToken.Expiry,
 	}
+
 
 	//log.Printf("%#v", trigger)
 	log.Println(trigger.WorkflowId)
@@ -2944,7 +2946,7 @@ func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData 
 func RefreshOutlookClient(ctx context.Context, auth TriggerAuth) (error) {
 	// Manually recreate the oauthtoken
 	conf := &oauth2.Config{
-		ClientID:     os.Getenv("OUTLOOK_CLIENT_ID"),
+		ClientID: os.Getenv("OUTLOOK_CLIENT_ID"),
 		ClientSecret: os.Getenv("OUTLOOK_CLIENT_SECRET"),
 		Scopes: []string{
 			"Mail.Read",
@@ -2961,28 +2963,28 @@ func RefreshOutlookClient(ctx context.Context, auth TriggerAuth) (error) {
 		return err
 	}
 
-	tokenSource := conf.TokenSource(ctx, &oauth2.Token{
-		AccessToken:  auth.OauthToken.AccessToken,
+	token, err := conf.TokenSource(ctx, &oauth2.Token{
 		RefreshToken: auth.OauthToken.RefreshToken,
-		Expiry:       auth.OauthToken.Expiry,
-		TokenType:    auth.OauthToken.TokenType,
-	})
+	}).Token()
 
-	token, err := tokenSource.Token()
 	if err != nil {
 		log.Printf("[WARNING] Failed getting token for outlook: %s", err)
 		return err
 	}
 
+	log.Printf("[INFO] Token %s refreshed successfully from outlook. Proceeding to save..", auth.Id)
+
 	trigger.OauthToken.AccessToken = token.AccessToken
 	trigger.OauthToken.RefreshToken = token.RefreshToken
 	trigger.OauthToken.Expiry = token.Expiry
 
-	err = SetTriggerAuth(ctx, trigger)
+	err = SetTriggerAuth(ctx, *trigger)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting trigger auth for outlook: %s", err)
 		return err
 	}
+
+	log.Printf("[INFO] Successfully refreshed outlook token for trigger %s and user %s", auth.Id, auth.Owner)
 
 	return nil
 }
