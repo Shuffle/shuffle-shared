@@ -1084,6 +1084,7 @@ type Workflow struct {
 	WorkflowType string     `json:"workflow_type" datastore:"workflow_type"`
 	Generated    bool       `json:"generated" datastore:"generated"`
 	Hidden       bool       `json:"hidden" datastore:"hidden"`
+	UpdatedBy    string     `json:"updated_by" datastore:"updated_by"`
 }
 
 type Category struct {

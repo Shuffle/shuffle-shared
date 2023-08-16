@@ -5639,6 +5639,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	workflow.UpdatedBy = user.Username
 	err = SetWorkflow(ctx, workflow, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed saving workflow to database: %s", err)

@@ -5279,6 +5279,25 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 	var err error
 
 	nameKey := "workflow_revisions"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, originalId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &workflows)
+			if err == nil {
+
+				sort.Slice(workflows, func(i, j int) bool {
+					return workflows[i].Edited > workflows[j].Edited
+				})
+
+				return workflows, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+		}
+	}
+
 	log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -5395,6 +5414,25 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 		}
 	}
 
+	// Sort by edited
+	sort.Slice(workflows, func(i, j int) bool {
+		return workflows[i].Edited > workflows[j].Edited
+	})
+
+	// Set cache
+	if project.CacheDb {
+		cacheData, err := json.Marshal(workflows)
+		if err != nil {
+			return workflows, nil 
+		}
+
+		err = SetCache(ctx, cacheKey, cacheData, 60)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for workflow revisions: %s (not critical)", err)
+		}
+	}
+
+
 	return workflows, nil
 }
 
@@ -5450,6 +5488,8 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for set workflow revision '%s': %s", cacheKey, err)
 		}
+	
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
 	}
 
 	return nil
@@ -5509,6 +5549,10 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 			if err != nil {
 				log.Printf("[WARNING] Failed unmarshalling cache for getworkflow '%s': %s", cacheKey, err)
 			} else {
+				slice.Sort(workflows[:], func(i, j int) bool {
+					return workflows[i].Edited > workflows[j].Edited
+				})
+
 				// Find the workflow in the cache
 				found := false
 				for i, w := range workflows {
@@ -8359,7 +8403,11 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			log.Printf("[WARNING] Body of cachekeys is bad: %s", string(respBody))
+			log.Printf("[WARNING] Body of cachekeys is bad: %s. Status: %d", string(respBody), res.StatusCode)
+
+			if res.StatusCode == 404 {
+				return cacheKeys, "", nil
+			}
 			return cacheKeys, "", errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
