@@ -5419,6 +5419,20 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 		return workflows[i].Edited > workflows[j].Edited
 	})
 
+	// Deduplicate based on edited time
+	filtered := []Workflow{}
+	handled := []string{}
+	for _, workflow := range workflows {
+		if ArrayContains(handled, string(workflow.Edited)) {
+			continue
+		}
+
+		handled = append(handled, string(workflow.Edited))
+		filtered = append(filtered, workflow)
+	}
+		
+
+
 	// Set cache
 	if project.CacheDb {
 		cacheData, err := json.Marshal(workflows)
