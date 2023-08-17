@@ -7408,7 +7408,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully added new suborg. Refresh to see it.", "region_url": "%s"}`, regionUrl)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Changed Organization", "region_url": "%s"}`, regionUrl)))
 
 }
 
@@ -7468,7 +7468,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
 		return
 	}
@@ -7482,14 +7482,14 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
 		log.Printf("Failed unmarshalling test: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if len(tmpData.Name) < 3 {
 		log.Printf("[WARNING] Suborgname too short (min 3) %s", tmpData.Name)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Name must at least be 3 characters."}`))
 		return
 	}
@@ -7629,7 +7629,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s SUCCESSFULLY ADDED child org %s (%s) for parent %s (%s)", user.Username, newOrg.Name, newOrg.Id, parentOrg.Name, parentOrg.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully updated org"}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully created new sub-org"}`)))
 
 }
 
@@ -19082,4 +19082,12 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(body)
+}
+
+func RequestMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		next.ServeHTTP(w, r)
+	})
 }
