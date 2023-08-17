@@ -3440,3 +3440,23 @@ type GCPIncident struct {
 	} `json:"incident"`
 	Version string `json:"version"`
 }
+
+type AppHealth struct {
+	Create bool `json:"create"`
+	Run    bool `json:"run"`
+	Delete bool `json:"delete"`
+}
+
+type WorkflowHealth struct {
+	Create bool `json:"create"`
+	Run   bool `json:"run"`
+	RunFinished bool `json:"run_finished"`
+	Delete bool `json:"delete"`
+}
+
+type HealthCheck struct {
+	Success bool `json:"success"`
+	Updated int64 `json:"updated"`
+	Apps AppHealth `json:"apps"`
+	Workflows WorkflowHealth `json:"workflows"`
+}
