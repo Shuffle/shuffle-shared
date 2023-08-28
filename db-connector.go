@@ -7958,7 +7958,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	bucketName := os.Getenv("SHUFFLE_ORG_BUCKET")
 	if len(bucketName) > 0 {
 		log.Printf("[DEBUG] Using custom project bucketname: %s", bucketName)
-		BucketName = bucketName
+		project.BucketName = bucketName
 	}
 
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
