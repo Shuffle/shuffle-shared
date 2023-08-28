@@ -7939,6 +7939,11 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		dbType = "opensearch"
 	}
 
+	cloudRunUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if cloudRunUrl == "" {
+		cloudRunUrl = "https://shuffler.io"
+	}
+
 	project = ShuffleStorage{
 		Dbclient:      dbclient,
 		StorageClient: storageClient,
@@ -7946,14 +7951,14 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		Environment:   environment,
 		CacheDb:       cacheDb,
 		DbType:        dbType,
-		CloudUrl:      "https://shuffler.io",
+		CloudUrl:      cloudRunUrl,
 		BucketName:    "shuffler.appspot.com",
 	}
 
 	bucketName := os.Getenv("SHUFFLE_ORG_BUCKET")
 	if len(bucketName) > 0 {
 		log.Printf("[DEBUG] Using custom project bucketname: %s", bucketName)
-		project.BucketName = bucketName
+		BucketName = bucketName
 	}
 
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
