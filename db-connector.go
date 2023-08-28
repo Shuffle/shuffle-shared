@@ -7939,6 +7939,11 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		dbType = "opensearch"
 	}
 
+	cloudRunUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if cloudRunUrl == "" {
+		cloudRunUrl = "https://shuffler.io"
+	}
+
 	project = ShuffleStorage{
 		Dbclient:      dbclient,
 		StorageClient: storageClient,
@@ -7946,7 +7951,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		Environment:   environment,
 		CacheDb:       cacheDb,
 		DbType:        dbType,
-		CloudUrl:      "https://shuffler.io",
+		CloudUrl:      cloudRunUrl,
 		BucketName:    "shuffler.appspot.com",
 	}
 
