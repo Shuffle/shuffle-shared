@@ -3451,6 +3451,7 @@ type WorkflowHealth struct {
 	Create bool `json:"create"`
 	Run   bool `json:"run"`
 	RunFinished bool `json:"run_finished"`
+	RunStatus	string `json:"run_status"`
 	Delete bool `json:"delete"`
 }
 
