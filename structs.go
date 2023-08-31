@@ -7,9 +7,11 @@ import (
 
 type AppContext struct {
 	AppName         string `json:"app_name"`
+	AppID 		    string `json:"app_id"`
 	ActionName      string `json:"action_name"`
 	Label           string `json:"label"`
 	ExampleResponse string `json:"example_response,omitempty" datastore:"example_response,noindex"`
+	Example string `json:"example,omitempty" datastore:"example,noindex"`
 }
 
 type QueryInput struct {
@@ -198,6 +200,7 @@ type WorkflowAppAction struct {
 	ExecutionDelay     int64    `json:"execution_delay" datastore:"execution_delay"`
 	RequiredBodyFields []string `json:"required_body_fields" datastore:"required_body_fields"`
 	CategoryLabel      []string `json:"category_label" datastore:"category_label"`
+	ExampleResponse    string   `json:"example_response" datastore:"example_response"`
 }
 
 type Authentication struct {
@@ -959,6 +962,8 @@ type Action struct {
 	RunMagicOutput    bool                         `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
 	RunMagicInput     bool                         `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
 	ExecutionDelay    int64                        `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
+	CategoryLabel      []string `json:"category_label" datastore:"category_label"` // For categorization of the type of node in case it's available
+	Suggestion 	  bool                         `json:"suggestion" datastore:"suggestion"` // Whether it was a suggestion in the workflow or not
 }
 
 // Added environment for location to execute
@@ -3459,4 +3464,22 @@ type HealthCheck struct {
 	Updated int64 `json:"updated"`
 	Apps AppHealth `json:"apps"`
 	Workflows WorkflowHealth `json:"workflows"`
+}
+
+type NodeData struct {
+	Name string `json:"name"`
+	Count int `json:"count"`
+}
+
+type NodeRelation struct {
+	AppCategory string `json:"app_category"`
+	AppNames []string `json:"app_names"`
+	AppIds []string `json:"app_ids"`
+	Synonyms []string `json:"synonyms"`
+	Incoming []NodeData `json:"incoming"`
+	Outgoing []NodeData `json:"outgoing"`
+}
+
+type WorkflowNodeRelations struct {
+	Relations map[string]NodeRelation `json:"node_relations"`
 }

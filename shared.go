@@ -4804,6 +4804,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if !startnodeFound {
 		log.Printf("[WARNING] No startnode found during save of %s!!", workflow.ID)
+
+		// Select the first action as startnode
+		if len(newActions) > 0 {
+			workflow.Start = newActions[0].ID
+			newActions[0].IsStartNode = true
+			startnodeFound = true
+		}
 	}
 
 	// Automatically adding new apps
@@ -4872,7 +4879,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 							workflow.Errors = append(workflow.Errors, parsedError)
 						}
 
-						log.Printf("[ERROR] Couldn't find subflow %s for workflow %s (%s). NOT setting to self as failover for now, and trusting authentication system instead.", param.Value, workflow.Name, workflow.ID)
+						log.Printf("[ERROR] Couldn't find subflow '%s' for workflow %s (%s). NOT setting to self as failover for now, and trusting authentication system instead.", param.Value, workflow.Name, workflow.ID)
 						//trigger.Parameters[paramIndex].Value = workflow.ID
 					}
 				}
@@ -5480,6 +5487,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if !workflow.PreviouslySaved {
 		log.Printf("[WORKFLOW INIT] NOT PREVIOUSLY SAVED - SET ACTION AUTH!")
+		workflow.OrgId = user.ActiveOrg.Id
+		workflow.Org = []OrgMini{user.ActiveOrg}
+		workflow.Owner = user.Id
+
+		for i, trigger := range workflow.Triggers {
+			if trigger.Status == "running" {
+				workflow.Triggers[i].Status = "uninitialized"
+			}
+		}
 
 		if autherr == nil && len(workflowapps) > 0 && apperr == nil {
 			//log.Printf("Setting actions")
@@ -15046,6 +15062,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						newAuth, err := RunOauth2Request(ctx, user, curAuth, true)
 						if err != nil {
 							log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+
+							// Adding so it can be used to fail the auth naturally with Outlook
+							newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
+								Key:  "access_token",
+								Value: "FAILED_REFRESH",
+							})
+
 							// Commented out as we don't want to stop the app, but just continue with the old tokens
 							/*
 								actionRes := ActionResult{
@@ -18444,16 +18467,23 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-
-	_ = user
+	// Get the users' org
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting your org details"}`))
+		return
+	}
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		http.Error(resp, "Error reading request body", http.StatusInternalServerError)
 		return
 	}
-	var workflow Workflow
 
+	var workflow Workflow
 	workflowerr := json.Unmarshal(body, &workflow)
 	if workflowerr != nil {
 		log.Printf("[WARNING] Failed unmarshalling workflow: %s", workflowerr)
@@ -18462,108 +18492,332 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	// Need apps to check against
+	// These are also the only ones we're able to recommend from
+	// Using the app framework + these we can generate recommendations :)
+	apps, err := GetPrioritizedApps(ctx, user) 
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps during node suggestion validation: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to fetch recommendation data"}`))
+		return
+	}
+
+	// Load in node relations 
+	nodeRelations, err := GetNodeRelations(ctx) 
+	if err != nil {
+		log.Printf("[WARNING] Failed getting node relations: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to fetch recommendation data"}`))
+		return
+	}
+
 	var recommendAction ActionRecommendations
-	if len(workflow.Actions) > 0 {
+	if len(workflow.Actions) == 0 {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "No actions in workflow"}`))
+		return
+	}
 
-		for key, _ := range workflow.Actions {
-			var recommendations []Recommendations
-			var action RecommendAction
+	// Because this usually means "formatting"
+	skippable := []string{"repeat_back_to_me"}
 
-			app := workflow.Actions[key].AppName + "_" + workflow.Actions[key].AppVersion
-			if workflow.Actions[key].AppName == "Outlook_Office365" {
-				if workflow.Actions[key].Name == "get_emails" {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
+	// More testing based on node relation output
+	// Goal with this is to test singular node connections
+	// Next step: Use multi-step checks to improve further 
+	for key, inputAction := range workflow.Actions {
+		var recommendations []Recommendations
+		var action RecommendAction
 
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
-					recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list", AppVersion: "1.2.0", AppId: "3e2bdf9d5069fe3f4746c29d68785a6a"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_list_attachments", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_raw_email_as_file", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
+		app := workflow.Actions[key].AppName + "_" + workflow.Actions[key].AppVersion
+		_ = app
 
-					action.Recommendations = recommendations
-					recommendAction.Actions = append(recommendAction.Actions, action)
+		// Check if there is any label for the current action we're using
+		//log.Printf("App: %s", app)
 
-				} else if workflow.Actions[key].Name == "get_raw_email_as_file" {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendations = append(recommendations, Recommendations{AppName: "email", AppAction: "parse_email_file"})
-					action.Recommendations = recommendations
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				} else {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				}
-			} else if workflow.Actions[key].AppName == "outlook-exchange" {
-				if workflow.Actions[key].Name == "get_emails" {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read"})
-					recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "move_email"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "delete_email"})
-					action.Recommendations = recommendations
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				} else {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				}
-			} else if workflow.Actions[key].AppName == "Gmail" {
-				if workflow.Actions[key].Name == "get_gmail_users_messages_list" {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list"})
-					action.Recommendations = recommendations
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				} else {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				}
-			} else if workflow.Actions[key].AppName == "TheHiveOpenAPI" {
-				if workflow.Actions[key].Name == "get_list_alerts" {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_an_alert"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "patch_edit_an_alert"})
-					action.Recommendations = recommendations
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				} else {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendAction.Actions = append(recommendAction.Actions, action)
+		foundApp := WorkflowApp{}
+		if len(inputAction.CategoryLabel) == 0 {
+			for _, app := range apps {
+				if app.Name != inputAction.AppName && app.ID != inputAction.AppID {
+					continue
+				} 
+
+				foundApp = app
+
+				if foundApp.Name == "Shuffle Tools" {
+					inputAction.CategoryLabel = []string{inputAction.Name}
+					break
 				}
 
-			} else if workflow.Actions[key].AppName == "thehive" {
-				if workflow.Actions[key].Name == "search_alert_title" {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "update_alert"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "close_alert"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "add_alert_artifact"})
-					action.Recommendations = recommendations
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				} else if workflow.Actions[key].Name == "create_case" {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "add_case_artifact"})
-					recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "update_case"})
-					action.Recommendations = recommendations
-					recommendAction.Actions = append(recommendAction.Actions, action)
-				} else {
-					action.AppName = app
-					action.ActionId = workflow.Actions[key].ID
-					recommendAction.Actions = append(recommendAction.Actions, action)
+				// Look for the correct action
+				//log.Printf("Found app %s", app.Name)
+				for _, action := range app.Actions {
+					if action.Name == inputAction.Name {
+						//log.Printf("Found action %s", action.Name)
+
+						if len(action.CategoryLabel) > 0 {
+							inputAction.CategoryLabel = action.CategoryLabel
+							break
+						}
+					}
 				}
+
+				break
+			}
+		}
+
+		if len(inputAction.CategoryLabel) ==  0 {
+			//log.Printf("No labels for action %s in app %s", inputAction.Name, inputAction.AppName)
+			continue
+		}
+
+		//log.Printf("Action %s (%s) has %d labels: %#v", inputAction.Name,foundApp.Name,  len(inputAction.CategoryLabel), inputAction.CategoryLabel)
+		parsedCategory := strings.ToLower(strings.Replace(inputAction.CategoryLabel[0], " ", "_", -1))
+		// Check synonyms
+		for key, node := range nodeRelations {
+			if len(node.Synonyms) == 0 {
+				continue
+			}
+
+			for _, synonym := range node.Synonyms {
+				if synonym == parsedCategory {
+					log.Printf("Found synonym %s for %s", synonym, parsedCategory)
+					parsedCategory = key
+					break
+				}
+			}
+
+			if parsedCategory == key {
+				break
+			}
+		}
+
+		// Specific parsing
+		if parsedCategory == "repeat_back_to_me" {
+			continue
+		}
+
+		log.Printf("Looking for category: %s", parsedCategory)
+		for category, categoryValue := range nodeRelations {
+			//log.Printf("Checking category %s vs %s", category, parsedCategory)
+			if category != parsedCategory {
+				continue
+			}
+
+			// Choose first 2 outgoing nodes
+			for cnt, outgoing := range categoryValue.Outgoing {
+				log.Printf("Found outgoing %s:%d", outgoing.Name, outgoing.Count)
+				categoryname := outgoing.Name
+				if ArrayContains(skippable, categoryname) {
+					continue
+				}
+
+				// Check if categoryname in nodeRelations map
+				foundAppType := ""
+				if foundWrapper, ok := nodeRelations[categoryname]; ok {
+					foundAppType = foundWrapper.AppCategory
+				} else {
+					log.Printf("No node relations for %s", categoryname)
+					continue
+				}
+
+				recommendation := Recommendations{}
+				if foundAppType == "tools" {
+					recommendation = Recommendations{
+						AppName: "Shuffle Tools",
+						AppAction: outgoing.Name,
+						AppVersion: "1.2.0",
+						AppId: "bc78f35c6c6351b07a09b7aed5d29652",
+					}
+				} else if categoryname == "subflow" {
+					recommendation = Recommendations{
+						AppName: "Shuffle Subflow",
+						AppVersion: "1.1.0",
+						AppAction: "subflow",
+						AppId: "a891257fcf905c2d256ce5674282864c",
+					}
+				} else {
+					log.Printf("[DEBUG] Found app category %s for category %s", foundAppType, categoryname)
+					foundCategory := Category{}
+
+					if foundAppType == "cases" {
+						foundCategory = org.SecurityFramework.Cases
+					}  else if foundAppType == "communication" {
+						foundCategory = org.SecurityFramework.Communication
+					} else if foundAppType == "assets" {
+						foundCategory = org.SecurityFramework.Assets
+					} else if foundAppType == "network" {
+						foundCategory = org.SecurityFramework.Network
+					} else if foundAppType == "intel" {
+						foundCategory = org.SecurityFramework.Intel
+					} else if foundAppType == "edr" {
+						foundCategory = org.SecurityFramework.EDR
+					} else if foundAppType == "iam" {
+						foundCategory = org.SecurityFramework.IAM
+					} else if foundAppType == "siem" {
+						foundCategory = org.SecurityFramework.SIEM
+					} else {
+						//foundCategory = org.SecurityFramework.Other
+					}
+
+
+					if foundCategory.Name == "" {
+						log.Printf("\n\n\n[ERROR] No app found for category %s\n\n\n", categoryname)
+						continue
+					}
+
+					// TODO: Find the name of the action in the app that has the category label
+					foundAction := WorkflowAppAction{}
+					for _, action := range foundApp.Actions {
+						if len(action.CategoryLabel) == 0 {
+							continue
+						}
+
+						// make all labels lowercase and with underscore
+						newLabels := []string{}
+						for _, label := range action.CategoryLabel {
+							newLabels = append(newLabels, strings.ToLower(strings.Replace(label, " ", "_", -1)))
+						}
+
+						if ArrayContains(newLabels, categoryname) {
+							foundAction = action
+							break
+						}
+					}
+
+					if foundAction.Name == "" {
+						log.Printf("\n\n\n[WARNING] No action found for category %s\n\n\n", categoryname)
+					} else {
+						log.Printf("Found action %s for category %s", foundAction.Name, categoryname)
+					}
+
+					recommendation = Recommendations{
+						AppName: foundCategory.Name,
+						AppId: foundCategory.ID,
+						AppAction: foundAction.Name,
+					}
+				}
+
+				if recommendation.AppName != "" {
+					recommendations = append(recommendations, recommendation)
+				}
+
+				if cnt == 1 {
+					break
+				}
+			}
+
+			break
+		}
+
+		log.Printf("[DEBUG] Found %d recommendations for action %s", len(recommendations), inputAction.Name)
+		action.ActionId = inputAction.ID
+		action.AppName = inputAction.AppName
+		action.Recommendations = recommendations
+		recommendAction.Actions = append(recommendAction.Actions, action)
+	}
+
+
+	// Hardcoded examples how it could work (old)
+	/*
+	for key, _ := range workflow.Actions {
+		var recommendations []Recommendations
+		var action RecommendAction
+
+		app := workflow.Actions[key].AppName + "_" + workflow.Actions[key].AppVersion
+		if workflow.Actions[key].AppName == "Outlook_Office365" {
+			if workflow.Actions[key].Name == "get_emails" {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
+				recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list", AppVersion: "1.2.0", AppId: "3e2bdf9d5069fe3f4746c29d68785a6a"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_list_attachments", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_raw_email_as_file", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
+
+				action.Recommendations = recommendations
+				recommendAction.Actions = append(recommendAction.Actions, action)
+
+			} else if workflow.Actions[key].Name == "get_raw_email_as_file" {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendations = append(recommendations, Recommendations{AppName: "email", AppAction: "parse_email_file"})
+				action.Recommendations = recommendations
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			} else {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			}
+		} else if workflow.Actions[key].AppName == "outlook-exchange" {
+			if workflow.Actions[key].Name == "get_emails" {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read"})
+				recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "move_email"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "delete_email"})
+				action.Recommendations = recommendations
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			} else {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			}
+		} else if workflow.Actions[key].AppName == "Gmail" {
+			if workflow.Actions[key].Name == "get_gmail_users_messages_list" {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list"})
+				action.Recommendations = recommendations
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			} else {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			}
+		} else if workflow.Actions[key].AppName == "TheHiveOpenAPI" {
+			if workflow.Actions[key].Name == "get_list_alerts" {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_an_alert"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "patch_edit_an_alert"})
+				action.Recommendations = recommendations
+				recommendAction.Actions = append(recommendAction.Actions, action)
 			} else {
 				action.AppName = app
 				action.ActionId = workflow.Actions[key].ID
 				recommendAction.Actions = append(recommendAction.Actions, action)
 			}
 
+		} else if workflow.Actions[key].AppName == "thehive" {
+			if workflow.Actions[key].Name == "search_alert_title" {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "update_alert"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "close_alert"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "add_alert_artifact"})
+				action.Recommendations = recommendations
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			} else if workflow.Actions[key].Name == "create_case" {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "add_case_artifact"})
+				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "update_case"})
+				action.Recommendations = recommendations
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			} else {
+				action.AppName = app
+				action.ActionId = workflow.Actions[key].ID
+				recommendAction.Actions = append(recommendAction.Actions, action)
+			}
+		} else {
+			action.AppName = app
+			action.ActionId = workflow.Actions[key].ID
+			recommendAction.Actions = append(recommendAction.Actions, action)
 		}
 	}
+	*/
 
 	recommendAction.Success = true
 	newjson, err := json.Marshal(recommendAction)
@@ -18663,7 +18917,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 		return org, orgUpdated
 	}
 
-	log.Printf("[INFO] Finding workflow suggestions for %s (%s) based on %d workflows", org.Name, org.Id, len(workflows))
+	//log.Printf("[INFO] Finding workflow suggestions for %s (%s) based on %d workflows", org.Name, org.Id, len(workflows))
 	for _, workflow := range workflows {
 		for _, action := range workflow.Actions {
 			if len(action.Category) == 0 {

@@ -78,6 +78,14 @@ func GetCorrectActionName(parsed string) string {
 		parsed = parsed[6:]
 	}
 
+	if strings.HasPrefix(parsed, "\"") {
+		parsed = parsed[1:]
+	} 
+
+	if strings.HasSuffix(parsed, "\"") {
+		parsed = parsed[:len(parsed)-1]
+	}
+
 	return parsed
 }
 

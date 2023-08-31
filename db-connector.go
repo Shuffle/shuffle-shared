@@ -4172,7 +4172,24 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 // 3. Get PUBLIC apps
 func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	if project.Environment != "cloud" {
-		return GetAllWorkflowApps(ctx, 1000, 0)
+		// Make "body" field a required field if it exists
+		allApps, err := GetAllWorkflowApps(ctx, 1000, 0)
+		if err != nil {
+			return allApps, err
+		}
+
+		for appIndex, app := range allApps {
+			for actionIndex, action := range app.Actions {
+				for paramIndex, param := range action.Parameters {
+					if param.Name == "body" {
+						allApps[appIndex].Actions[actionIndex].Parameters[paramIndex].Required = true
+						
+					}
+				}
+			}
+		}
+
+		return allApps, nil
 	}
 
 	log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
@@ -4538,6 +4555,38 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	allApps = dedupedApps
+	for appIndex, app := range allApps {
+		for actionIndex, action := range app.Actions {
+			lastRequiredIndex := -1
+			bodyIndex := -1
+			for paramIndex, param := range action.Parameters {
+				if param.Required {
+					lastRequiredIndex = paramIndex
+				}
+
+				if param.Name == "body" {
+					allApps[appIndex].Actions[actionIndex].Parameters[paramIndex].Required = true
+					bodyIndex = paramIndex
+				}
+			}
+
+			_ = lastRequiredIndex
+
+			// Add bodyIndex parameter in the next index after lastRequiredIndex, but retain all fields
+			if bodyIndex > -1 {
+				//log.Printf("[INFO] Moving body parameter to index %d after %d", lastRequiredIndex+1, bodyIndex)
+
+				// Add parameters[bodyIndex] to lastRequiredIndex+1
+				// Remove parameters[bodyIndex]
+				//log.Printf("[INFO] Before: %s", allApps[appIndex].Actions[actionIndex].Parameters)
+				//allApps[appIndex].Actions[actionIndex].Parameters = append(allApps[appIndex].Actions[actionIndex].Parameters, ActionParameter{})
+				//copy(allApps[appIndex].Actions[actionIndex].Parameters[lastRequiredIndex+2:], allApps[appIndex].Actions[actionIndex].Parameters[lastRequiredIndex+1:])
+				//allApps[appIndex].Actions[actionIndex].Parameters[lastRequiredIndex+1] = allApps[appIndex].Actions[actionIndex].Parameters[bodyIndex]
+				//allApps[appIndex].Actions[actionIndex].Parameters = allApps[appIndex].Actions[actionIndex].Parameters[:len(allApps[appIndex].Actions[actionIndex].Parameters)-1]
+				//log.Printf("[INFO] After: %s", allApps[appIndex].Actions[actionIndex].Parameters)
+			}
+		}
+	}
 
 	// Also prioritize most used ones from app-framework on top?
 	slice.Sort(allApps[:], func(i, j int) bool {
@@ -4560,6 +4609,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
+
 
 	return allApps, nil
 }
@@ -9121,4 +9171,44 @@ func SetenvStats(ctx context.Context, input OrborusStats) error {
 	}
 
 	return nil
+}
+
+func GetNodeRelations(ctx context.Context) (map[string]NodeRelation, error) {
+	// Check if we already have it in cache
+	cacheKey := "workflow_node_relations"
+
+	// Download a file
+	allNodesRelations := make(map[string]NodeRelation)
+
+	url := "https://storage.googleapis.com/shuffle_public/machine_learning/node_recs_2.json"
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("\n\n[WARNING] Failed getting node relations: %s\n\n", err)
+		return allNodesRelations, err
+	}
+
+	defer resp.Body.Close()
+	// Unmarshal
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body: %s", err)
+		return allNodesRelations, err
+	}
+
+	var nodeRelations map[string]NodeRelation
+	err = json.Unmarshal(body, &nodeRelations)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling body: %s", err)
+		return allNodesRelations, err
+	}
+
+	// Set cache for it
+	if project.CacheDb {
+		err = SetCache(ctx, cacheKey, body, 60*60*24*30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for node relations '%s': %s", cacheKey, err)
+		}
+	}
+
+	return nodeRelations, nil
 }
