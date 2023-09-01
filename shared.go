@@ -5487,6 +5487,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if !workflow.PreviouslySaved {
 		log.Printf("[WORKFLOW INIT] NOT PREVIOUSLY SAVED - SET ACTION AUTH!")
+
+		workflow.ID = uuid.NewV4().String()
 		workflow.OrgId = user.ActiveOrg.Id
 		workflow.Org = []OrgMini{user.ActiveOrg}
 		workflow.Owner = user.Id

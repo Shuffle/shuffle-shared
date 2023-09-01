@@ -515,7 +515,7 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
 	}
 
-	log.Printf("[DEBUG] Redirect URI: %s", url)
+	log.Printf("[DEBUG] GMAIL Redirect URI: %s", url)
 	ctx := GetContext(request)
 	_, accessToken, err := GetGmailClient(ctx, code, OauthToken{}, url)
 	if err != nil {
@@ -1657,6 +1657,8 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 	// Usually takes 10 attempts minimum :O
 	// 10 * 5 = 50 seconds. That's waaay too much :(
 	notificationURL := fmt.Sprintf("%s/api/v1/hooks/webhook_%s", project.CloudUrl, trigger.Id)
+
+	//log.Printf("\n\nNOTIFICATION URL: %s\n\n", notificationURL)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed finding org when setting up outlook trigger: %s", err)
@@ -1728,7 +1730,7 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] NOTIFICATION URL OUTLOOK TRIGGER: %s", notificationURL)
+	//log.Printf("[DEBUG] NOTIFICATION URL OUTLOOK TRIGGER: %s", notificationURL)
 	curSubscriptions, err := getOutlookSubscriptions(outlookClient)
 	if err == nil {
 		for _, sub := range curSubscriptions.Value {
@@ -3205,7 +3207,7 @@ func GetOutlookClient(ctx context.Context, code string, accessToken OauthToken, 
 	if len(code) > 0 {
 		access_token, err := conf.Exchange(ctx, code)
 		if err != nil {
-			log.Printf("[WARNING] Access_token issue for gmail: %s", err)
+			log.Printf("[ERROR] Access_token issue for Outlook: %s", err)
 			return &http.Client{}, access_token, err
 		}
 
@@ -3367,7 +3369,7 @@ func HandleGetGmailFolders(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("AUTH: %#v", triggerAuth)
+	//log.Printf("AUTH: %#v", triggerAuth)
 	//gmailClient, _, err := GetGmailClient(ctx, "", triggerAuth.OauthToken, "")
 	gmailClient, err := RefreshGmailClient(ctx, *triggerAuth)
 	if err != nil {
