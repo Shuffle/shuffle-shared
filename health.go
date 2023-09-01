@@ -667,7 +667,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 			}
 		}
 
-		log.Printf("[DEBUG] Execution Result Status: %#v", executionResults.Status)
+		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v", executionResults.Status)
 	}
 
 	// 4. Delete workflow
@@ -770,7 +770,7 @@ func InitOpsWorkflow() error {
 	// Send the HTTP request using the default HTTP client
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Println("[ERROR] sending HTTP request:", err)
+		fmt.Println("[ERROR] sending Ops fetch app HTTP request:", err)
 		return errors.New("Error sending HTTP request: " + err.Error())
 	}
 
@@ -780,14 +780,14 @@ func InitOpsWorkflow() error {
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("[ERROR] reading HTTP response body:", err)
-		return errors.New("Error reading HTTP response body: " + err.Error())
+		return errors.New("Error reading HTTP App response response body: " + err.Error())
 	}
 
 	// Unmarshal the JSON data into a Workflow instance
 	var workflowData Workflow
 	err = json.Unmarshal(body, &workflowData)
 	if err != nil {
-		fmt.Println("[ERROR] unmarshalling JSON data:", err)
+		fmt.Println("[ERROR] unmarshalling Ops workflowData JSON data:", err)
 		return errors.New("Error unmarshalling JSON data: " + err.Error())
 	}
 
