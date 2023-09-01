@@ -13,6 +13,7 @@ import (
 	"time"
 	"encoding/base64"
 	"strings"
+	"github.com/google/uuid"
 )
 
 type appConfig struct {
@@ -469,13 +470,12 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	}
 
 	// 1. Get workflow
-	err := InitOpsWorkflow()
+	opsWorkflowID, err := InitOpsWorkflow()
 	if err != nil {
 		log.Printf("[ERROR] Failed creating Health check workflow: %s", err)
 		return workflowHealth, err
 	}
 
-	opsWorkflowID := "602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
 	workflowPtr, err := GetWorkflow(ctx, opsWorkflowID)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting Health check workflow: %s", err)
@@ -487,7 +487,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 	workflow := *workflowPtr
 
-	log.Printf("[DEBUG] Running health check workflow: %#v", workflow)
+	log.Printf("[DEBUG] Running health check workflow")
 
 	// 2. Run workflow
 	id := workflow.ID
@@ -705,18 +705,18 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	return workflowHealth, nil
 }
 
-func InitOpsWorkflow() error {
+func InitOpsWorkflow() (string, error) {
 	opsDashboardApikey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
 	if len(opsDashboardApikey) == 0 {
 		log.Printf("[WARNING] Ops dashboard api key not set. Not setting up ops workflow")
-		return errors.New("Ops dashboard api key not set")
+		return "", errors.New("Ops dashboard api key not set")
 
 	}
 
 	opsDashboardOrgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
 	if len(opsDashboardOrgId) == 0 {
 		log.Printf("[WARNING] Ops dashboard org not set. Not setting up ops workflow")
-		return errors.New("Ops dashboard org not set")
+		return "", errors.New("Ops dashboard org not set")
 	}
 
 	// verify if org with id opsDashboardOrg exists
@@ -724,54 +724,41 @@ func InitOpsWorkflow() error {
 	opsDashboardOrg, err := GetOrg(ctx, opsDashboardOrgId)
 	if err != nil {
 		log.Printf("[ERROR] Ops dashboard org not found. Not setting up ops workflow")
-		return err
+		return "", err
 	}
 
 	user, err := GetApikey(ctx, opsDashboardApikey)
 	if err != nil {
 		log.Printf("[ERROR] Error in finding user: %s", err)
-		return err
+		return "", err
 	}
 
 	if len(user.Id) == 0 && len(user.Username) == 0 {
 		fmt.Println("[ERROR] Ops dashboard user not found. Not setting up ops workflow")
-		return errors.New("Ops dashboard user not found")
+		return "", errors.New("Ops dashboard user not found")
 	}
 
 	if user.Role != "admin" {
 		log.Printf("[WARNING] Ops dashboard user not admin. Not setting up ops workflow")
-		return errors.New("Ops dashboard user not admin")
+		return "", errors.New("Ops dashboard user not admin")
 	}
 
 	// make a GET request to https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
 	// to get the workflow
-	workflow, err := GetWorkflow(ctx, "602c7cf5-500e-4bd1-8a97-aa5bc8a554e6")
-	if err == nil {
-		log.Printf("[WARNING] Ops workflow exists. Not setting it up.")
-		// JSONify workflow and print it
-		// workflowJson, _ := json.Marshal(workflow)
-		// log.Printf("[DEBUG] Ops workflow: %s", workflowJson)
-		// DeleteKey(ctx, "workflow", workflow.ID)
-		// log.Printf("[INFO] Ops workflow deleted successfully")
-		return nil
-	}
-
-	log.Printf("[INFO] Ops Workflow not found. Moving further.")
-
 	url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
 
 	// Create a new HTTP GET request
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		fmt.Println("[ERROR] creating HTTP request:", err)
-		return errors.New("Error creating HTTP request: " + err.Error())
+		return "", errors.New("Error creating HTTP request: " + err.Error())
 	}
 
 	// Send the HTTP request using the default HTTP client
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Println("[ERROR] sending Ops fetch app HTTP request:", err)
-		return errors.New("Error sending HTTP request: " + err.Error())
+		return "", errors.New("Error sending HTTP request: " + err.Error())
 	}
 
 	defer resp.Body.Close()
@@ -780,7 +767,7 @@ func InitOpsWorkflow() error {
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("[ERROR] reading HTTP response body:", err)
-		return errors.New("Error reading HTTP App response response body: " + err.Error())
+		return "", errors.New("Error reading HTTP App response response body: " + err.Error())
 	}
 
 	// Unmarshal the JSON data into a Workflow instance
@@ -788,10 +775,10 @@ func InitOpsWorkflow() error {
 	err = json.Unmarshal(body, &workflowData)
 	if err != nil {
 		fmt.Println("[ERROR] unmarshalling Ops workflowData JSON data:", err)
-		return errors.New("Error unmarshalling JSON data: " + err.Error())
+		return "", errors.New("Error unmarshalling JSON data: " + err.Error())
 	}
 
-	variables := workflow.WorkflowVariables
+	variables := workflowData.WorkflowVariables
 	for _, variable := range variables {
 		if variable.Name == "apikey" {
 			variable.Value = opsDashboardApikey
@@ -839,13 +826,28 @@ func InitOpsWorkflow() error {
 
 	workflowData.WorkflowVariables = variables
 
-	// Save the workflow
-	err = SetWorkflow(ctx, workflowData, workflowData.ID)
-	if err != nil {
-		fmt.Println("[ERROR] saving ops dashboard workflow:", err)
-		return errors.New("Error saving ops dashboard workflow: " + err.Error())
+	uniqueCheck := false
+	for uniqueCheck == false {
+		// generate a random UUID for the workflow
+		randomUUID := uuid.New().String()
+		log.Printf("[DEBUG] Random UUID generated for Ops dashboard: %s", randomUUID)
+
+		// check if workflow with id randomUUID exists
+		_, err = GetWorkflow(ctx, randomUUID)
+		if err != nil {
+			uniqueCheck = true
+			workflowData.ID = randomUUID
+		}
 	}
 
-	fmt.Println("[INFO] Ops dashboard workflow saved successfully")
-	return nil
+	// Save the workflow
+	err = SetWorkflow(ctx, workflowData, workflowData.ID)
+
+	if err != nil {
+		fmt.Println("[ERROR] saving ops dashboard workflow:", err)
+		return "", errors.New("Error saving ops dashboard workflow: " + err.Error())
+	}
+
+	fmt.Println("[INFO] Ops dashboard workflow saved successfully with ID: workflowData.ID")
+	return workflowData.ID, nil
 }
