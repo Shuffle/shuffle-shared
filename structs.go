@@ -3450,19 +3450,26 @@ type AppHealth struct {
 	Create bool `json:"create"`
 	Run    bool `json:"run"`
 	Delete bool `json:"delete"`
+	Validate bool `json:"validate"`
+	AppId	string `json:"app_id"`
+	Read bool `json:"read"`
+	Result string `json:"result"`
+	ExecutionID string `json:"execution_id"`
 }
 
 type WorkflowHealth struct {
 	Create bool `json:"create"`
 	Run   bool `json:"run"`
 	RunFinished bool `json:"run_finished"`
+	RunStatus	string `json:"run_status"`
 	Delete bool `json:"delete"`
+	ExecutionId string `json:"execution_id"`
 }
 
 type HealthCheck struct {
 	Success bool `json:"success"`
 	Updated int64 `json:"updated"`
-	Apps AppHealth `json:"apps"`
+	// Apps AppHealth `json:"apps"`
 	Workflows WorkflowHealth `json:"workflows"`
 }
 
