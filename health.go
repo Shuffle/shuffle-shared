@@ -389,20 +389,18 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &platformHealth)
 			if err == nil {
-				// FIXME: Check if last updated is less than 5 minutes with platformHealth.Edited in unix time
-				// If yes, return cached result, else run health check
-				if platformHealth.Updated+300 < time.Now().Unix() {
-					log.Printf("Platform health returned: %#v", platformHealth)
-					marshalledData, err := json.Marshal(platformHealth)
-					if err == nil {
-						resp.WriteHeader(200)
-						resp.Write(marshalledData)
-						return
-					} else {
-						log.Printf("[ERROR] Failed marshalling cached platform health data: %s", err)
-					}
+				log.Printf("Platform health returned: %#v", platformHealth)
+				marshalledData, err := json.Marshal(platformHealth)
+				if err == nil {
+					resp.WriteHeader(200)
+					resp.Write(marshalledData)
+					return
+				} else {
+					log.Printf("[ERROR] Failed marshalling cached platform health data: %s", err)
 				}
 			}
+		} else {
+			log.Printf("[WARNING] Failed getting cache ops health on first time: %s", err)
 		}
 	}
 
