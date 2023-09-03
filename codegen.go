@@ -1223,7 +1223,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		Description: "Add or edit headers",
 		Multiline:   true,
 		Required:    false,
-		Example:     "Content-Type=application/json\nAccept=application/json",
+		Example:     "Content-Type=application/json\nAccept=application/json\r\n",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},

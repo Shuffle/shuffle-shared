@@ -10936,8 +10936,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				if len(workflowExecution.ExecutionArgument) > maxSize {
 					itemSize := len(workflowExecution.ExecutionArgument)
 					baseResult := fmt.Sprintf(`{
-								"success": False,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171)."
+								"success": false,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
 								"size": %d,
 								"extra": "",
 								"id": "%s_%s"
@@ -10959,7 +10959,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							workflowExecution.ExecutionArgument = baseResult
 						} else {
 							workflowExecution.ExecutionArgument = fmt.Sprintf(`{
-								"success": False,
+								"success": false,
 								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
 								"size": %d,
 								"extra": "replace",
@@ -10976,8 +10976,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 						itemSize := len(item.Result)
 						baseResult := fmt.Sprintf(`{
-								"success": False,
-								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171)."
+								"success": false,
+								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
 								"size": %d,
 								"extra": "",
 								"id": "%s_%s"
@@ -11012,7 +11012,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						}
 
 						item.Result = fmt.Sprintf(`{
-								"success": False,
+								"success": false,
 								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
 								"size": %d,
 								"extra": "replace",

@@ -1114,7 +1114,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	bucket := project.StorageClient.Bucket("shuffler.appspot.com")
+	bucket := project.StorageClient.Bucket(project.BucketName)
 	obj := bucket.Object(fullParsedPath)
 	fileReader, err := obj.NewReader(ctx)
 	if err != nil {
@@ -1480,7 +1480,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 	if len(workflowApp.Name) == 0 {
 		return workflowApp, nil
 	}
-	//project.BucketName := "shuffler.appspot.com"
+	//project.BucketName := project.BucketName
 
 	if strings.HasSuffix(id, ".") {
 		id = id[:len(id)-1]
@@ -3259,7 +3259,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		err := project.Dbclient.Get(ctx, key, api)
 		//if (err != nil || len(api.Body) == 0) && !strings.Contains(fmt.Sprintf("%s", err), "no such") {
 		if err != nil || len(api.Body) == 0 {
-			//project.BucketName := "shuffler.appspot.com"
+			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
 			//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
 			//log.Printf("[DEBUG] Couldn't find openapi for %s. Checking filepath gs://%s/%s (size too big). Error: %s", id, project.BucketName, fullParsedPath, err)
