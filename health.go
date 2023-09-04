@@ -514,7 +514,6 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	_ = id
 	_ = orgId
 
-	workflowJson, _ := json.Marshal(workflow)
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
 		baseUrl = "https://shuffler.io"
@@ -523,7 +522,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	// prepare the request
 	url := baseUrl + "/api/v1/workflows/" + id + "/execute"
 	log.Printf("[DEBUG] Running health check workflow with URL: %s", url)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(workflowJson))
+	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
 		return workflowHealth, err
@@ -533,18 +532,18 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
 
-	startId := "98713d6a-dd6b-4bd6-a11c-9778b80f2a28"
-	body := map[string]string{"execution_argument": "", "start": startId}
+	// startId := "98713d6a-dd6b-4bd6-a11c-9778b80f2a28"
+	// body := map[string]string{"execution_argument": "", "start": startId}
 
 	// convert the body to JSON
-	bodyJson, err := json.Marshal(body)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling body: %s", err)
-		return workflowHealth, err
-	}
+	// bodyJson, err := json.Marshal(body)
+	// if err != nil {
+	// 	log.Printf("[ERROR] Failed marshalling body: %s", err)
+	// 	return workflowHealth, err
+	// }
 
 	// set the body
-	req.Body = ioutil.NopCloser(bytes.NewBuffer(bodyJson))
+	// req.Body = ioutil.NopCloser(bytes.NewBuffer(bodyJson))
 
 	// send the request
 	client := &http.Client{}
@@ -643,7 +642,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 		updateCache(workflowHealth)
 
-		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v", executionResults.Status)
+		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
 	}
 
 	// 4. Delete workflow
@@ -710,7 +709,7 @@ func InitOpsWorkflow() (string, error) {
 	}
 
 	if len(user.Id) == 0 && len(user.Username) == 0 {
-		fmt.Println("[ERROR] Ops dashboard user not found. Not setting up ops workflow")
+		log.Println("[ERROR] Ops dashboard user not found. Not setting up ops workflow")
 		return "", errors.New("Ops dashboard user not found")
 	}
 
@@ -726,14 +725,14 @@ func InitOpsWorkflow() (string, error) {
 	// Create a new HTTP GET request
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
-		fmt.Println("[ERROR] creating HTTP request:", err)
+		log.Println("[ERROR] creating HTTP request:", err)
 		return "", errors.New("Error creating HTTP request: " + err.Error())
 	}
 
 	// Send the HTTP request using the default HTTP client
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		fmt.Println("[ERROR] sending Ops fetch app HTTP request:", err)
+		log.Println("[ERROR] sending Ops fetch app HTTP request:", err)
 		return "", errors.New("Error sending HTTP request: " + err.Error())
 	}
 
@@ -742,7 +741,7 @@ func InitOpsWorkflow() (string, error) {
 	// Read the response body
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		fmt.Println("[ERROR] reading HTTP response body:", err)
+		log.Println("[ERROR] reading HTTP response body:", err)
 		return "", errors.New("Error reading HTTP App response response body: " + err.Error())
 	}
 
@@ -750,7 +749,7 @@ func InitOpsWorkflow() (string, error) {
 	var workflowData Workflow
 	err = json.Unmarshal(body, &workflowData)
 	if err != nil {
-		fmt.Println("[ERROR] unmarshalling Ops workflowData JSON data:", err)
+		log.Println("[ERROR] unmarshalling Ops workflowData JSON data:", err)
 		return "", errors.New("Error unmarshalling JSON data: " + err.Error())
 	}
 
@@ -820,10 +819,10 @@ func InitOpsWorkflow() (string, error) {
 	err = SetWorkflow(ctx, workflowData, workflowData.ID)
 
 	if err != nil {
-		fmt.Println("[ERROR] saving ops dashboard workflow:", err)
+		log.Println("[ERROR] saving ops dashboard workflow:", err)
 		return "", errors.New("Error saving ops dashboard workflow: " + err.Error())
 	}
 
-	fmt.Println("[INFO] Ops dashboard workflow saved successfully with ID: workflowData.ID")
+	log.Println("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
 	return workflowData.ID, nil
 }
