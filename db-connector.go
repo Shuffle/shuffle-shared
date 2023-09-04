@@ -3259,6 +3259,12 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		err := project.Dbclient.Get(ctx, key, api)
 		//if (err != nil || len(api.Body) == 0) && !strings.Contains(fmt.Sprintf("%s", err), "no such") {
 		if err != nil || len(api.Body) == 0 {
+			log.Printf("Some API issue: %s", err)
+
+			if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+				return *api, nil 
+			}
+
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
 			//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80

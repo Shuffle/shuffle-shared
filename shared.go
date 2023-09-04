@@ -18599,7 +18599,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 			continue
 		}
 
-		log.Printf("Looking for category: %s", parsedCategory)
+		//log.Printf("Looking for category: %s", parsedCategory)
 		for category, categoryValue := range nodeRelations {
 			//log.Printf("Checking category %s vs %s", category, parsedCategory)
 			if category != parsedCategory {
@@ -18608,7 +18608,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 
 			// Choose first 2 outgoing nodes
 			for cnt, outgoing := range categoryValue.Outgoing {
-				log.Printf("Found outgoing %s:%d", outgoing.Name, outgoing.Count)
+				//log.Printf("Found outgoing %s:%d", outgoing.Name, outgoing.Count)
 				categoryname := outgoing.Name
 				if ArrayContains(skippable, categoryname) {
 					continue
