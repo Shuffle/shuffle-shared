@@ -52,6 +52,15 @@ var project ShuffleStorage
 var baseDockerName = "frikky/shuffle"
 var SSOUrl = ""
 
+func RequestMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Should become a proper backend thing LOL
 func GetUsecaseData() string {
 	return (`[
     {
@@ -5487,11 +5496,26 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if !workflow.PreviouslySaved {
 		log.Printf("[WORKFLOW INIT] NOT PREVIOUSLY SAVED - SET ACTION AUTH!")
+		timeNow := int64(time.Now().Unix())
+		
+		//workflow.ID = uuid.NewV4().String()
 
-		workflow.ID = uuid.NewV4().String()
-		workflow.OrgId = user.ActiveOrg.Id
-		workflow.Org = []OrgMini{user.ActiveOrg}
+		// Get the workflow and check if we own it
+		workflow, err := GetWorkflow(ctx, workflow.ID) 
+		if err != nil || len(workflow.Actions) != 1 {
+			log.Printf("[WORKFLOW INIT] ERROR GETTING WORKFLOW: %s - CREATING NEW ID!", err)
+			workflow.ID = uuid.NewV4().String()
+		}
+
+		workflow.Public = false
 		workflow.Owner = user.Id
+		workflow.ExecutingOrg = user.ActiveOrg
+		workflow.OrgId = user.ActiveOrg.Id
+		workflow.Created = timeNow
+		workflow.Edited = timeNow
+		workflow.Org = []OrgMini{
+			user.ActiveOrg,
+		}
 
 		for i, trigger := range workflow.Triggers {
 			if trigger.Status == "running" {
@@ -5658,11 +5682,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	workflow.UpdatedBy = user.Username
-	err = SetWorkflow(ctx, workflow, fileId)
+	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
-		log.Printf("[WARNING] Failed saving workflow to database: %s", err)
+		log.Printf("[ERROR] Failed saving workflow to database: %s", err)
 		if workflow.PreviouslySaved {
-			resp.WriteHeader(401)
+			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
@@ -5703,13 +5727,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Name: user.ActiveOrg.Name,
 	}
 	SetWorkflowRevision(ctx, workflow)
-
-	//totalOldActions := len(tmpworkflow.Actions)
-	//totalNewActions := len(workflow.Actions)
-	//err = increaseStatisticsField(ctx, "total_workflow_actions", workflow.ID, int64(totalNewActions-totalOldActions), workflow.OrgId)
-	//if err != nil {
-	//	log.Printf("Failed to change total actions data: %s", err)
-	//}
 
 	type returnData struct {
 		Success bool     `json:"success"`
@@ -15645,7 +15662,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	}
 
 	if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
-		log.Printf("[AUDIT] Bad org ID in workflowexecution defined.")
+		log.Printf("[AUDIT] Bad org ID in workflowexecution defined. Required: %s vs %s vs %s", workflow.OrgId, workflowExecution.Workflow.OrgId, workflow.ExecutingOrg.Id, workflowExecution.Workflow.ExecutingOrg.Id)
 		return false, ""
 	}
 
@@ -19340,10 +19357,3 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(body)
 }
 
-func RequestMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-
-		next.ServeHTTP(w, r)
-	})
-}

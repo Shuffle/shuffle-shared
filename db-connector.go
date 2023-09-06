@@ -1363,7 +1363,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 						//log.Printf("[DEBUG] Found prefix %s to be replaced (1)", value.Result)
 						newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
 						if err != nil {
-							log.Printf("[DEBUG] Failed to parse in execution file value %s (1)", err)
+							//log.Printf("[DEBUG] Failed to parse result in execution file value %s (1)", err)
 							continue
 						}
 
@@ -1429,7 +1429,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			}
 			newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
 			if err != nil {
-				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (3)", err)
+				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
 			} else {
 				log.Printf("[DEBUG] Found a new value to parse with exec argument")
 				workflowExecution.ExecutionArgument = newValue
@@ -1443,7 +1443,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				//log.Printf("[DEBUG] Found prefix %s to be replaced (2)", value.Result)
 				newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
 				if err != nil {
-					log.Printf("[DEBUG] Failed to parse in execution file value %s (2)", err)
+					log.Printf("[DEBUG] Failed to parse in execution file value %s (5)", err)
 					continue
 				}
 
@@ -2160,7 +2160,17 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
-			if strings.Contains(err.Error(), `cannot load field`) {
+			if strings.Contains(err.Error(), `no such entity`) {
+				query := datastore.NewQuery(nameKey).Filter("id =", strings.ToLower(id)).Limit(1)
+				var workflows []Workflow
+				if _, err := project.Dbclient.GetAll(ctx, query, &workflows); err != nil {
+					return &Workflow{}, err
+				}
+
+				if len(workflows) == 1 {
+					workflow = &workflows[0]
+				}
+			} else if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
 				err = nil
 			} else {
@@ -5566,6 +5576,10 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 }
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
+	// Overwriting to be sure these are matching
+	// No real point in having id + workflow.ID anymore
+	id = workflow.ID
+
 	nameKey := "workflow"
 	timeNow := int64(time.Now().Unix())
 	workflow.Edited = timeNow
@@ -5583,15 +5597,17 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
 		return nil
 	}
+
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
 			return err
 		}
 	} else {
+		//log.Printf("\n\n[INFO] Adding workflow with ID %s\n\n", id)
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflow); err != nil {
-			log.Printf("[WARNING] Error adding workflow: %s", err)
+			log.Printf("[ERROR] Failed adding workflow with ID %s: %s", id, err)
 			return err
 		}
 	}
