@@ -1192,6 +1192,9 @@ func sanitizeString(input string) string {
 }
 
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
+	workflowExecution.Workflow.Image = ""
+
+
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
 	for _, action := range workflowExecution.Workflow.Actions {
@@ -1260,10 +1263,15 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 
 	// Don't forget any!!
 	extra := 0
-	for _, trigger := range workflowExecution.Workflow.Triggers {
+	for triggerIndex, trigger := range workflowExecution.Workflow.Triggers {
 		if trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
 			continue
 		}
+
+		trigger.LargeImage = ""
+		trigger.SmallImage = ""
+
+		workflowExecution.Workflow.Triggers[triggerIndex] = trigger
 
 		extra += 1
 

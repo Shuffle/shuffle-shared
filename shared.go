@@ -3020,6 +3020,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	for index, execution := range workflowExecutions {
 		newResults := []ActionResult{}
 		newActions := []Action{}
+		newTriggers := []Trigger{}
 
 		// Results
 		for _, result := range execution.Results {
@@ -3053,8 +3054,16 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 			newActions = append(newActions, action)
 		}
 
+		for _, trigger := range execution.Workflow.Triggers {
+			trigger.LargeImage = ""
+			trigger.SmallImage = ""
+			newTriggers = append(newTriggers, trigger)
+		}
+
 		workflowExecutions[index].Results = newResults
 		workflowExecutions[index].Workflow.Actions = newActions
+		workflowExecutions[index].Workflow.Image = ""
+		workflowExecutions[index].Workflow.Triggers = newTriggers
 	}
 
 	newjson, err := json.Marshal(workflowExecutions)
