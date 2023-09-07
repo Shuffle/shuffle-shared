@@ -49,6 +49,9 @@ var mc = gomemcache.New(memcached)
 
 var maxCacheSize = 1020000
 
+var phrase = os.Getenv("SHUFFLE_CACHE_ENCRYPTION_PASSPHRASE")
+var encryptionEnabled = len(phrase) > 0
+
 //var maxCacheSize = 2000000
 
 type ShuffleStorage struct {
@@ -500,12 +503,25 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		return "", nil
 	}
 
-	phrase := os.Environ("ENCRYPTION_PASSPHRASE")
-	encryptionEnabled = len(phrase) > 0
 
 	name = strings.Replace(name, " ", "_", -1)
 
-	if len(memcached) > 0 {d
+	if len(memcached) > 0 {
+
+		if (encryptionEnabled) {
+			// since we stored cache key as encrypted, 
+			// we need to encrypt the name string to match
+			nameBytes := []byte(name)
+
+			newNameBytes, err := handleKeyEncryption(nameBytes, phrase)
+			if err != nil {
+				log.Printf("[ERROR] Failed encrypting cache key: %s. Proceeding with original string", err)
+			} else {
+				// convert back newNameBytes to string
+				name = string(newNameBytes)
+			}
+		}
+
 		item, err := mc.Get(name)
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
@@ -610,6 +626,20 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	if len(name) == 0 {
 		log.Printf("[WARNING] Key '%s' is empty with value length %d and expiration %d. Skipping cache.", name, len(data), expiration)
 		return nil
+	}
+
+	if (encryptionEnabled) {
+		// since we need to store cache key as encrypted,
+		// we need to encrypt the name string and store it like that
+		nameBytes := []byte(name)
+
+		newNameBytes, err := handleKeyEncryption(nameBytes, phrase)
+		if err != nil {
+			log.Printf("[ERROR] Failed encrypting cache key: %s. Proceeding with original string", err)
+		} else {
+			// convert back newNameBytes to string
+			name = string(newNameBytes)
+		}
 	}
 
 	// Maxsize ish~
