@@ -500,9 +500,12 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		return "", nil
 	}
 
+	phrase := os.Environ("ENCRYPTION_PASSPHRASE")
+	encryptionEnabled = len(phrase) > 0
+
 	name = strings.Replace(name, " ", "_", -1)
 
-	if len(memcached) > 0 {
+	if len(memcached) > 0 {d
 		item, err := mc.Get(name)
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
