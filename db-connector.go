@@ -50,7 +50,7 @@ var mc = gomemcache.New(memcached)
 var maxCacheSize = 1020000
 
 var phrase = os.Getenv("SHUFFLE_MEMCACHE_ENCRYPTION_PASSPHRASE")
-var encryptionEnabled = len(phrase) > 0
+var encryptionEnabled = len(phrase) > 0 && len(os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")) > 0
 
 //var maxCacheSize = 2000000
 
@@ -507,28 +507,27 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	name = strings.Replace(name, " ", "_", -1)
 
 	if len(memcached) > 0 {
-
-		if (encryptionEnabled) {
-			// since we stored cache key as encrypted, 
-			// we need to encrypt the name string to match
-			nameBytes := []byte(name)
-
-			newNameBytes, err := handleKeyEncryption(nameBytes, phrase)
-			if err != nil {
-				log.Printf("[ERROR] Failed encrypting cache key: %s. Proceeding with original string", err)
-			} else {
-				// convert back newNameBytes to string
-				name = string(newNameBytes)
-			}
-		}
-
 		item, err := mc.Get(name)
+
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
 		} else if err != nil {
 			log.Printf("[DEBUG] Failed to find cache for key %s: %s", name, err)
 		} else {
 			//log.Printf("[INFO] Got new cache: %s", item)
+			if (encryptionEnabled) {
+				// we need to decrypt the value
+				data := item.Value
+				
+				decryptedData, err := HandleKeyDecryption(data, phrase)
+				if err != nil {
+					log.Printf("[ERROR] Failed decrypting cache key: %s. Proceeding with original string", err)
+				} else {
+					// convert back newNameBytes to string
+					log.Printf("[DEBUG] Decrypting cache key %s", name)
+					item.Value = decryptedData
+				}
+			}
 
 			if len(item.Value) == maxCacheSize {
 				totalData := item.Value
@@ -631,26 +630,24 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 	// Maxsize ish~
 	name = strings.Replace(name, " ", "_", -1)
 
-	if (encryptionEnabled) {
-		// since we need to store cache key as encrypted,
-		// we need to encrypt the name string and store it like that
-		nameBytes := []byte(name)
-
-		newNameBytes, err := handleKeyEncryption(nameBytes, phrase)
-		if err != nil {
-			log.Printf("[ERROR] Failed encrypting cache key: %s. Proceeding with original string", err)
-		} else {
-			// convert back newNameBytes to string
-			name = string(newNameBytes)
-		}
-	}
-
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
 	if len(memcached) > 0 {
 		comparisonNumber := 50
 		if len(data) > maxCacheSize*comparisonNumber {
 			return errors.New(fmt.Sprintf("Couldn't set cache for %s - too large: %d > %d", name, len(data), maxCacheSize*comparisonNumber))
+		}
+
+		if encryptionEnabled {
+			// we need to encrypt the value before storing it
+			encryptedData, err := handleKeyEncryption(data, phrase)
+			if err != nil {
+				log.Printf("[ERROR] Failed encrypting cache key: %s. Proceeding with original string", err)
+			} else {
+				// convert back newNameBytes to string
+				log.Printf("[DEBUG] Encrypted cache value for key %s", name)
+				data = encryptedData
+			}
 		}
 
 		loop := false
