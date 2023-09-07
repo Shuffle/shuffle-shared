@@ -628,6 +628,9 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 		return nil
 	}
 
+	// Maxsize ish~
+	name = strings.Replace(name, " ", "_", -1)
+
 	if (encryptionEnabled) {
 		// since we need to store cache key as encrypted,
 		// we need to encrypt the name string and store it like that
@@ -641,9 +644,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 			name = string(newNameBytes)
 		}
 	}
-
-	// Maxsize ish~
-	name = strings.Replace(name, " ", "_", -1)
 
 	// Splitting into multiple cache items
 	//if project.Environment == "cloud" || len(memcached) > 0 {
