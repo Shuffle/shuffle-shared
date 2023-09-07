@@ -49,7 +49,7 @@ var mc = gomemcache.New(memcached)
 
 var maxCacheSize = 1020000
 
-var phrase = os.Getenv("SHUFFLE_CACHE_ENCRYPTION_PASSPHRASE")
+var phrase = os.Getenv("SHUFFLE_MEMCACHE_ENCRYPTION_PASSPHRASE")
 var encryptionEnabled = len(phrase) > 0
 
 //var maxCacheSize = 2000000
