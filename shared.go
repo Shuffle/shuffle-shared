@@ -10025,7 +10025,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
+		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	}
 
 	if setCache {
@@ -14896,6 +14896,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	allAuths := []AppAuthenticationStorage{}
+	previousEnvironment := ""
 	for _, action := range workflowExecution.Workflow.Actions {
 		//action.LargeImage = ""
 		if action.ID == workflowExecution.Start {
@@ -14950,7 +14951,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if action.Environment == "" {
-			return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Environment is not defined for %s", action.Name), errors.New("Environment not defined!")
+			// Fallback automatically to the project environment
+			if len(previousEnvironment) > 0 {
+				action.Environment = previousEnvironment
+			} else if project.Environment == "cloud" {
+				action.Environment = "cloud"
+			}
+
+			if len(action.Environment) == 0 {
+				log.Printf("[ERROR] Environment is not defined for action %s in workflow %s (%s)", action.Name, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
+				action.Environment = "shuffle"
+			}
+
+			//return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Environment is not defined for %s", action.Name), errors.New("Environment not defined!")
+		} else {
+			previousEnvironment = action.Environment
 		}
 
 		if len(action.AuthenticationId) > 0 {
@@ -15478,7 +15493,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			// Backup env :>
 			if len(foundenv) == 0 && len(environments) > 0 {
-				log.Printf("[ERROR] Fallback to environment %s for subflow (default)", environments[0])
+				log.Printf("[ERROR] Fallback to environment %s for subflow (default). Does it still run?", environments[0])
 				foundenv = environments[0]
 			}
 
