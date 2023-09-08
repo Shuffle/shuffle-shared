@@ -4303,7 +4303,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				newTriggers := []Trigger{}
 				changedIds := map[string]string{}
 				for _, trigger := range workflow.Triggers {
-					log.Printf("TriggerID: %s", trigger.ID)
 					newId := uuid.NewV4().String()
 					trigger.Environment = "cloud"
 
@@ -16214,8 +16213,10 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (stream edit workflow)", user.Username, workflow.ID)
+
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (get workflow stream)", user.Username, workflow.ID)
+
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
@@ -16225,6 +16226,8 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
+	// FIXME: If public, it should ONLY allow you to set certain actions
 
 	resp.Header().Set("Connection", "Keep-Alive")
 	resp.Header().Set("X-Content-Type-Options", "nosniff")
@@ -16244,18 +16247,26 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	for {
 		cache, err := GetCache(ctx, sessionKey)
 		if err == nil {
+
 			cacheData := []byte(cache.([]uint8))
 			if string(previousCache) == string(cacheData) {
 				//log.Printf("[DEBUG] Still same cache for %s", user.Id)
 			} else {
+
 				// A way to only check for data from other people
 				if (len(user.Id) > 0 && !strings.Contains(string(cacheData), user.Id)) || len(user.Id) == 0 {
+					//log.Printf("[DEBUG] NEW cache for %s (1) - sending: %s.", user.Id, cacheData)
+
 					//fw.Write(cacheData)
 					//w.Write(cacheData)
 
 					_, err := fmt.Fprintf(resp, string(cacheData))
 					if err != nil {
-						log.Printf("[ERROR] Failed in writing stream to user: %s", err)
+						log.Printf("[ERROR] Failed in writing stream to user '%s' (%s): %s", user.Username, user.Id, err)
+
+						if strings.Contains(err.Error(), "broken pipe") { 
+							break
+						}
 					} else {
 						previousCache = cacheData
 						conn.Flush()
@@ -16272,7 +16283,8 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("[DEBUG] Failed getting cache for %s: %s", user.Id, err)
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		// FIXME: This is a hack to make sure we don't fully utilize the thread 
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
@@ -16321,8 +16333,8 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	}
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (SET workflow stream)", user.Username, workflow.ID)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
@@ -16346,6 +16358,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	// Literally just dumping them in, as they're supposed to be overwritten continuously
 	// PS: This is NOT an ideal process, and broadcasting should be handled differently
 	//log.Printf("Body to update: %s", string(body))
+
 	sessionKey := fmt.Sprintf("%s_stream", workflow.ID)
 	err = SetCache(ctx, sessionKey, body, 30)
 	if err != nil {
@@ -18756,7 +18769,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 			break
 		}
 
-		log.Printf("[DEBUG] Found %d recommendations for action %s", len(recommendations), inputAction.Name)
+		//log.Printf("[DEBUG] Found %d recommendations for action %s", len(recommendations), inputAction.Name)
 		action.ActionId = inputAction.ID
 		action.AppName = inputAction.AppName
 		action.Recommendations = recommendations
