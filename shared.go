@@ -10858,7 +10858,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				var subflowDataList []SubflowData
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
 				if err != nil || len(subflowDataList) == 0 {
-					log.Printf("\n\nNOT sinkholed from subflow result: %s", err)
+					//log.Printf("\n\nNOT sinkholed from subflow result: %s", err)
 					for resultIndex, result := range workflowExecution.Results {
 						if result.Action.ID == actionResult.Action.ID {
 							workflowExecution.Results[resultIndex] = actionResult
@@ -14963,7 +14963,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				action.Environment = "shuffle"
 			}
 
-			//return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Environment is not defined for %s", action.Name), errors.New("Environment not defined!")
+			if len(action.Environment) > 0 {
+				previousEnvironment = action.Environment
+			}
 		} else {
 			previousEnvironment = action.Environment
 		}
@@ -15416,7 +15418,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		if !found {
 			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
-				log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
+				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
 				log.Printf("[WARNING] Couldn't find environment %s. Maybe it's inactive?", action.Environment)
 				return WorkflowExecution{}, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env %s in org %s", action.Environment, workflowExecution.ExecutionOrg))
@@ -16209,14 +16211,15 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
+
 		if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (stream edit workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
-			log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (get workflow stream)", user.Username, workflow.ID)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow stream)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -16325,7 +16328,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow stream)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (SET workflow stream)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -19346,8 +19349,6 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 		if workflow.OrgId == user.ActiveOrg.Id {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
-		} else if workflow.Public {
-			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
