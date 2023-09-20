@@ -507,7 +507,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 		if err == gomemcache.ErrCacheMiss {
 			//log.Printf("[DEBUG] Cache miss for %s: %s", name, err)
 		} else if err != nil {
-			log.Printf("[DEBUG] Failed to find cache for key %s: %s", name, err)
+			//log.Printf("[DEBUG] Failed to find cache for key %s: %s", name, err)
 		} else {
 			//log.Printf("[INFO] Got new cache: %s", item)
 
