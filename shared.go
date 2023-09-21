@@ -19395,3 +19395,171 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(body)
 }
 
+func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Checking if it's a special region. All user-specific requests should
+	// go through shuffler.io and not subdomains
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in DELETING specific org: %s. Continuing because it may be public.", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[WARNING] Not admin: %s (%s).", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
+		return
+	}
+
+	org, err := GetOrg(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+		return
+	}
+
+	foundAdmin := false
+	for _, orgUser := range org.Users {
+		if user.Username == orgUser.Username && orgUser.Role == "admin" {
+			foundAdmin = true
+			break
+		}
+	}
+
+	if !foundAdmin {
+		log.Printf("[WARNING] User %s is not an admin of org %s", user.Username, org.Name)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Not admin of org"}`))
+		return
+	}
+
+	// Check if it's a suborg
+	if len(org.ManagerOrgs) == 0 || len(org.ChildOrgs) > 0 {
+		log.Printf("[WARNING] Org '%s' is NOT a suborg. Not deleting.", fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org is not a suborg"}`))
+		return
+	}
+
+	// Get workflows
+	workflows, err := GetAllWorkflowsByQuery(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting workflows"}`))
+		return
+	}
+
+	// Return if workflows, as they should be deleted beforehand
+	if len(workflows) > 0 {
+		log.Printf("[WARNING] Org '%s' has %d workflow(s). Not deleting.", fileId, len(workflows))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org still has workflows. Delete them first by listing the /api/v1/workflows API."}`))
+		return
+	}
+
+	// Delete the org
+	err = DeleteKey(ctx, "Organizations", fileId)
+	if err != nil {
+		log.Printf("[WARNING] Failed deleting org '%s': %s", fileId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed deleting org"}`))
+		return
+	}
+
+	newOrgString := []string{}
+	for _, orgId := range user.Orgs {
+		if orgId != fileId {
+			newOrgString = append(newOrgString, orgId)
+		}
+	}
+
+	user.Orgs = newOrgString
+	newOrg := ""
+	if len(org.ManagerOrgs) > 0 {
+		if ArrayContains(user.Orgs, org.ManagerOrgs[0].Id) {
+			newOrg = org.ManagerOrgs[0].Id
+		} else {
+			if len(user.Orgs) > 0 {
+				newOrg = user.Orgs[0]
+			} else {
+				log.Printf("[WARNING] User %s has no orgs left. Setting default to empty.", user.Username)
+				newOrg = ""
+			}
+		}
+	} 
+
+	if len(newOrg) > 0 {
+		// Get the org and fill in
+		newOrgDetails, err := GetOrg(ctx, newOrg)
+		if err == nil {
+			user.ActiveOrg.Id = newOrgDetails.Id
+			user.ActiveOrg.Name = newOrgDetails.Name
+		} else {
+			user.ActiveOrg.Id = ""
+			user.ActiveOrg.Name = ""
+		}
+	} else {
+		// Will cause the user to generate a new org as it doesn't have any?
+		user.ActiveOrg.Id = ""
+		user.ActiveOrg.Name = ""
+	}
+
+	//for _, orgUser := range org.Users {
+	//	// Get the user
+	//	orgUserDetails, err := GetUser(ctx, orgUser.Username)
+	//	if err != nil {
+	//		continue
+	//	}
+
+	//	if orgUserDetails.ActiveOrg.Id == fileId {
+	//		orgUserDetails.ActiveOrg.Id = newOrg
+	//	}
+	//}
+
+	err = SetUser(ctx, &user, true)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting user '%s': %s", user.Username, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed setting user"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
