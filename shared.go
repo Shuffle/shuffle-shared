@@ -4440,13 +4440,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				resp.Write([]byte(fmt.Sprintf(`{"success": true, "new_id": "%s"}`, workflow.ID)))
 				return
 			}
-		} else if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role == "admin" {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (save workflow)", user.Username, tmpworkflow.ID)
+		} else if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
+			log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "Wrong user for workflow. Do you have write access?"}`))
 			return
 		}
 	} else {
@@ -12475,7 +12475,11 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Allows for execution auth AND user auth
-	if workflowExecution.Authorization != tmpData.Authorization {
+
+	log.Printf("[INFO] AUTH1: %s, AUTH2: %s", workflowExecution.Authorization, tmpData.Authorization)
+
+
+	if workflowExecution.Authorization != tmpData.Authorization || len(tmpData.Authorization) == 0 || len(workflowExecution.Authorization) == 0 {
 
 		// Get the user?
 		if usererr != nil {
@@ -12893,11 +12897,14 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	sleeptime := 25
 	for {
 		time.Sleep(25 * time.Millisecond)
+
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting single execution data: %s", err)
 			break
 		}
+
+		log.Printf("[INFO] Checking single execution %s. Status: %s", workflowExecution.ExecutionId, newExecution.Status)
 
 		if len(newExecution.Results) > resultAmount-1 {
 			relevantIndex := len(newExecution.Results) - 1

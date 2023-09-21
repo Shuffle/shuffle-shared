@@ -369,7 +369,7 @@ func stitcher(appname string, appversion string) string {
 	remotePath := fmt.Sprintf("apps/%s_%s.zip", appname, appversion)
 	err = createFileFromFile(bucket, remotePath, outputfile)
 	if err != nil {
-		log.Printf("Failed to upload to bucket: %v", err)
+		log.Printf("Failed to upload to bucket %s: %v", bucketName, err)
 		return ""
 	}
 

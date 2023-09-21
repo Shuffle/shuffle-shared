@@ -8455,7 +8455,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 	cursor := ""
 	cacheKeys := []CacheKeyData{}
 	if project.DbType == "opensearch" {
-		log.Printf("GETTING cachekeys for org %s in item %s", orgId, nameKey)
+		log.Printf("[DEBUG] GETTING cachekeys for org %s in item %s", orgId, nameKey)
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": max,
@@ -8502,7 +8502,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			log.Printf("[WARNING] Body of cachekeys is bad: %s. Status: %d", string(respBody), res.StatusCode)
+			log.Printf("[WARNING] Body of cachekeys is bad. Status: %d. This is fixed by adding an item.", res.StatusCode)
 
 			if res.StatusCode == 404 {
 				return cacheKeys, "", nil
