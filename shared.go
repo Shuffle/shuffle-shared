@@ -12160,6 +12160,132 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	//for key, value := range data.Apps {
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	var tmpData CacheKeyData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling in GET value: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if tmpData.OrgId != fileId {
+		log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	org, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
+	if err != nil {
+		log.Printf("[INFO] Failed getting the execution: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
+		return
+	}
+
+	// Allows for execution auth AND user auth
+	if workflowExecution.Authorization != tmpData.Authorization {
+		// Get the user?
+		user, err := HandleApiAuthentication(resp, request)
+		if err != nil {
+			log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+			return
+		} else {
+			if user.ActiveOrg.Id != org.Id {
+				log.Printf("[INFO] Execution auth %s and %s don't match (2)", workflowExecution.Authorization, tmpData.Authorization)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+				return
+			}
+		}
+	}
+
+	if workflowExecution.Status != "EXECUTING" {
+		log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
+		return
+	}
+
+	if workflowExecution.ExecutionOrg != org.Id {
+		log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
+		return
+	}
+
+	tmpData.Key = strings.Trim(tmpData.Key, " ")
+	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+	cacheData, err := GetCacheKey(ctx, cacheId)
+	if err != nil {
+		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete)", tmpData.Key, tmpData.OrgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
+		return
+	}
+
+	entity := "org_cache"
+
+	DeleteKey(ctx, entity, cacheId)
+	if len(cacheData.WorkflowId) > 0 {
+		escapedKey := url.QueryEscape(tmpData.Key)
+
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", org.Id, cacheData.WorkflowId, cacheData.Key))
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", org.Id, cacheData.WorkflowId, escapedKey))
+
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, cacheData.Key))
+
+		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, escapedKey))
+	}
+
+	DeleteCache(ctx, tmpData.Key)
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, tmpData.Key))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, org.Id))
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
