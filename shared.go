@@ -16823,8 +16823,21 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 
 func AddPriority(org Org, priority Priority, updated bool) (*Org, bool) {
 	found := false
+
+	usecasesFound := 0
 	for _, p := range org.Priorities {
-		if p.Name == priority.Name || (p.Type == priority.Type && p.Active) {
+		if p.Type == "usecase" && p.Active {
+			usecasesFound += 1
+		}
+	}
+
+	for _, p := range org.Priorities {
+		if p.Name == priority.Name || (p.Type == priority.Type && p.Active) && p.Type != "usecase" {
+			found = true
+			break
+		}
+
+		if p.Type == priority.Type && p.Type == "usecase" && p.Active && usecasesFound >= 3 {
 			found = true
 			break
 		}
@@ -16931,15 +16944,13 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 		orgUpdated = true
 	}
 
-	org, orgUpdated = GetWorkflowSuggestions(ctx, user, org, orgUpdated)
-
+	org, orgUpdated = GetWorkflowSuggestions(ctx, user, org, orgUpdated, 1)
 	if orgUpdated {
 		log.Printf("[DEBUG] Should update org with %d priorities", len(org.Priorities))
 		SetOrg(ctx, *org, org.Id)
 	}
 
 	return org.Priorities, nil
-	//return []Priority{}, nil
 }
 
 // Sorts an org list in order to make ChildOrgs appear under their parent org
@@ -18592,7 +18603,7 @@ func HandleRecommendationAction(resp http.ResponseWriter, request *http.Request)
 	availableActions := []string{"dismiss"}
 	if !ArrayContains(availableActions, recommendation.Action) {
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Invalid action"}`))
 		return
 	}
 
@@ -19094,10 +19105,14 @@ func HandleGetenvStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }
 
-func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated bool) (*Org, bool) {
+func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated bool, amount int) (*Org, bool) {
 	// Loop workflows
-	// Find "next" workflow to build
-	// Find "untagged" workflows and map them to a usecase
+
+	//if amount > 3 {
+	//	log.Printf("[WARNING] Amount of suggestions is too high: %d", amount)
+	//	return org, orgUpdated
+	//}
+
 
 	// 1. Suggest based on usecases
 	// 2. Suggest public workflows (cloud)
@@ -19270,6 +19285,15 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	}
 
 	// Matching org priority with usecases & previously built workflows
+	usecasesAdded := 0
+	for _, orgPriority := range org.Priorities {
+		if orgPriority.Type != "usecase" || !orgPriority.Active {
+			continue
+		}
+
+		usecasesAdded += 1
+	}
+
 	var usecases UsecaseLinks
 	err = json.Unmarshal([]byte(GetUsecaseData()), &usecases)
 	if err != nil {
@@ -19312,9 +19336,6 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			//log.Printf("[DEBUG] Priorities for %s", usecase.Name)
 			cntAdded := 0
 			for _, subusecase := range usecase.List {
-				// Check if it has a workflow attached to it too?
-				//log.Printf("%s = %d. Matches: %d", subusecase.Name, subusecase.Priority, len(subusecase.Matches))
-
 				// Matches = matching usecases that have workflows attached to them
 				// This means if it exists, don't add it as priority
 				if len(subusecase.Matches) > 0 {
@@ -19429,19 +19450,28 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 				}, updated)
 
 				if innerUpdate {
-					log.Printf("[DEBUG] Org %s (%s) got added priority for %s", org.Name, org.Id, subusecase.Name)
+					log.Printf("[DEBUG] Org %s (%s) got the priority for Usecase '%s' added. Added: %d", org.Name, org.Id, subusecase.Name, usecasesAdded)
 
 					cntAdded += 1
 					orgUpdated = true
-					break
+
+					usecasesAdded += 1
+					if (usecasesAdded >= 3) {
+						break
+					}
 				}
 			}
 
-			if innerUpdate {
+			if innerUpdate && usecasesAdded >= 3{
 				break
 			}
 		}
 	}
+
+	
+	//if usecasesAdded <= 3 {
+	//	return GetWorkflowSuggestions(ctx, user, org, orgUpdated, amount+1) 
+	//}
 
 	return org, orgUpdated
 }
