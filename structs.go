@@ -98,10 +98,6 @@ type WorkflowApp struct {
 		Name string `json:"name" datastore:"name" yaml:"name"`
 		Url  string `json:"url" datastore:"url" yaml:"url"`
 	} `json:"contact_info" datastore:"contact_info" yaml:"contact_info" required:false`
-	ReferenceInfo struct {
-		DocumentationUrl string `json:"documentation_url" datastore:"documentation_url"`
-		GithubUrl        string `json:"github_url" datastore:"github_url"`
-	} `json:"reference_info" datastore:"reference_info"`
 	FolderMount struct {
 		FolderMount       bool   `json:"folder_mount" datastore:"folder_mount"`
 		SourceFolder      string `json:"source_folder" datastore:"source_folder"`
@@ -128,12 +124,20 @@ type WorkflowApp struct {
 	Documentation            string              `json:"documentation" datastore:"documentation,noindex"`
 	Description              string              `json:"description" datastore:"description,noindex"`
 	DocumentationDownloadUrl string              `json:"documentation_download_url" datastore:"documentation_download_url"`
-	Blogpost                 string              `json:"blogpost" yaml:"blogpost" datastore:"blogpost"`
-	Video                    string              `json:"video" yaml:"video" datastore:"video"`
 	PrimaryUsecases          []string            `json:"primary_usecases" yaml:"primary_usecases"  datastore:"primary_usecases"`
-	CompanyURL               string              `json:"company_url" datastore:"company_url" required:false yaml:"company_url"`
+
 	SkippedBuild             bool                `json:"skipped_build" yaml:"skipped_build" required:false datastore:"skipped_build"`
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
+
+	ReferenceInfo struct {
+		IsPartner 	  	bool   `json:"is_partner" datastore:"is_partner"`
+		PartnerContacts string `json:"partner_contacts" datastore:"partner_contacts"`
+		DocumentationUrl string `json:"documentation_url" datastore:"documentation_url"`
+		GithubUrl        string `json:"github_url" datastore:"github_url"`
+	} `json:"reference_info" datastore:"reference_info"`
+	Blogpost                 string              `json:"blogpost" yaml:"blogpost" datastore:"blogpost"`
+	Video                    string              `json:"video" yaml:"video" datastore:"video"`
+	CompanyURL               string              `json:"company_url" datastore:"company_url" required:false yaml:"company_url"`
 }
 
 type AppVersion struct {

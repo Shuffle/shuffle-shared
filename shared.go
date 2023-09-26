@@ -4574,11 +4574,20 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	org := &Org{}
 
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
+	allNames := []string{}
 	for _, action := range workflow.Actions {
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
 			continue
 		}
 
+		if len(action.Label) > 0 && ArrayContains(allNames, action.Label) {
+			parsedError := fmt.Sprintf("Multiple actions with name '%s'", action.Label)
+			if !ArrayContains(workflow.Errors, parsedError) {
+				workflow.Errors = append(workflow.Errors, parsedError)
+			}
+		}
+
+		allNames = append(allNames, action.Label)
 		allNodes = append(allNodes, action.ID)
 		if workflow.Start == action.ID {
 			//log.Printf("[INFO] FOUND STARTNODE %d", workflow.Start)
@@ -5020,9 +5029,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if email == "test@test.com" {
 					log.Printf("Email isn't specified during save.")
 					if workflow.PreviouslySaved {
-						resp.WriteHeader(401)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Email field in user input can't be empty"}`)))
-						return
+						workflow.Errors = append(workflow.Errors, "Email field in user input can't be empty")
+						continue
+						//resp.WriteHeader(401)
+						//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Email field in user input can't be empty"}`)))
 					}
 				}
 
@@ -5033,9 +5043,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if sms == "0000000" {
 					log.Printf("Email isn't specified during save.")
 					if workflow.PreviouslySaved {
-						resp.WriteHeader(401)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SMS field in user input can't be empty"}`)))
-						return
+						workflow.Errors = append(workflow.Errors, "SMS field in user input can't be empty")
+						continue
 					}
 				}
 
@@ -5407,6 +5416,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					action.IsValid = false
+
 					//if workflow.PreviouslySaved {
 					//	resp.WriteHeader(401)
 					//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Action %s in app %s doesn't exist"}`, action.Name, curapp.Name)))
@@ -5414,15 +5424,44 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					//}
 				}
 
-				// FIXME - check all parameters to see if they're valid
-				// Includes checking required fields
-
 				selectedAuth := AppAuthenticationStorage{}
 				if len(action.AuthenticationId) > 0 && autherr == nil {
 					for _, auth := range allAuths {
 						if auth.Id == action.AuthenticationId {
 							selectedAuth = auth
 							break
+						}
+					}
+				}
+
+				// Check if it uses oauth2 and if it's authenticated or not
+				if selectedAuth.Id == "" && len(action.AuthenticationId) == 0 {
+					authRequired := false 
+					fieldsFilled := 0
+					for _, param := range curappaction.Parameters {
+						if param.Configuration {
+							if len(param.Value) > 0 {
+								fieldsFilled += 1
+							}
+
+							authRequired = true
+							break
+						}
+					}
+
+					if authRequired && fieldsFilled > 1 {
+						foundErr := fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
+
+						if !ArrayContains(workflow.Errors, foundErr) {
+							workflow.Errors = append(workflow.Errors, foundErr)
+							continue
+						}
+					} else if authRequired && fieldsFilled == 1 {
+						foundErr := fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
+
+						if !ArrayContains(workflow.Errors, foundErr) {
+							workflow.Errors = append(workflow.Errors, foundErr)
+							continue
 						}
 					}
 				}
@@ -5455,15 +5494,33 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								}
 
 								//log.Printf("[WARNING] Appaction %s with required param '%s' is empty. Can't save.", action.Name, param.Name)
-								thisError := fmt.Sprintf("%s is missing required parameter %s", action.Label, param.Name)
-								if handleOauth {
-									//log.Printf("[WARNING] Handling oauth2 app saving, hence not throwing warnings (1)")
-									//workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (1)", action.Name))
-								} else {
-									action.Errors = append(action.Errors, thisError)
-									workflow.Errors = append(workflow.Errors, thisError)
-									action.IsValid = false
+
+								thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
+								if actionParam.Configuration && len(action.AuthenticationId) == 0 {
+									thisError = fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
 								}
+
+								action.Errors = append(action.Errors, thisError)
+
+								errorFound := false
+								for errIndex, oldErr := range workflow.Errors {
+									if oldErr == thisError {
+										errorFound = true
+										break
+									}
+
+									if strings.Contains(oldErr, action.Label) && strings.Contains(oldErr, "missing required parameter") {
+										workflow.Errors[errIndex] += ", " + param.Name
+										errorFound = true
+										break
+									}
+								}
+
+								if !errorFound {
+									workflow.Errors = append(workflow.Errors, thisError)
+								}
+
+								action.IsValid = false
 							}
 
 							if actionParam.Variant == "" {
@@ -5498,6 +5555,15 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				action.Parameters = newParams
 				newActions = append(newActions, action)
+			}
+		}
+	}
+
+	for _, trigger := range workflow.Triggers {
+		if trigger.Status != "running" && trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+			errorInfo := fmt.Sprintf("Trigger %s needs to be started", trigger.Name)
+			if !ArrayContains(workflow.Errors, errorInfo) {
+				workflow.Errors = append(workflow.Errors, errorInfo)
 			}
 		}
 	}
@@ -7471,7 +7537,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role != "admin" {
 		log.Printf("[WARNING] Can't make suborg without being admin: %s (%s).", user.Username, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Not admin"}`))
 		return
 	}
@@ -15761,7 +15827,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		//log.Printf("[DEBUG] Got source exec %s", sourceExecution)
 		newExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
 		if err != nil {
-			log.Printf("[INFO] Failed getting source_execution in test validation based on %s", sourceExecution[0])
+			log.Printf("[INFO] Failed getting source_execution in test validation based on '%s'", sourceExecution[0])
 			return false, ""
 		} else {
 			workflowExecution = newExec
@@ -19639,7 +19705,10 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+
 	// Get workflows
+	user.ActiveOrg.Id = org.Id
+	user.ActiveOrg.Name = org.Name
 	workflows, err := GetAllWorkflowsByQuery(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
