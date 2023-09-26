@@ -8065,7 +8065,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 				foundUser.PublicProfile.Public = true
 				foundUser.PublicProfile.GithubUsername = org.Name
-				foundUser.PublicProfile.GithubAvatar = org.Image
 				SetUser(ctx, foundUser, false)
 
 			}
