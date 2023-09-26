@@ -8054,8 +8054,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				creatorUser := parsedCreatorUser
 
 				creatorUser.PublicProfile.Public = true
-				creatorUser.PublicProfile.GithubUsername = org.Name
 				creatorUser.PublicProfile.GithubUserid = org.CreatorId
+				creatorUser.PublicProfile.GithubUsername = org.Name
 				creatorUser.PublicProfile.GithubAvatar = org.Image
 					
 				SetUser(ctx, &creatorUser, false)
@@ -8064,6 +8064,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[INFO] Creator user %s already exists. Should set back to public.", creatorId)
 
 				foundUser.PublicProfile.Public = true
+				foundUser.PublicProfile.GithubUsername = org.Name
+				foundUser.PublicProfile.GithubAvatar = org.Image
 				SetUser(ctx, foundUser, false)
 
 			}
