@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	"bytes"
+	"net/url"
 	"context"
 	"encoding/json"
 	"errors"
@@ -214,6 +215,17 @@ func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]Algolia
 }
 
 func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSearchCreator, error) {
+	tmpUsername, err := url.QueryUnescape(username)
+	if err == nil {
+		username = tmpUsername
+	}
+
+	if strings.HasPrefix(username, "@") {
+		username = strings.Replace(username, "@", "", 1)
+	}
+
+	username = strings.ToLower(strings.TrimSpace(username))
+
 	cacheKey := fmt.Sprintf("algolia_creator_%s", username)
 	searchCreator := AlgoliaSearchCreator{}
 	cache, err := GetCache(ctx, cacheKey)
@@ -316,7 +328,7 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 	return foundUser, nil
 }
 
-func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) (string, error) {
+func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool, isOrg bool) (string, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
 	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
@@ -359,6 +371,7 @@ func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) 
 			TimeEdited: timeNow,
 			Image:      user.PublicProfile.GithubAvatar,
 			Username:   user.PublicProfile.GithubUsername,
+			IsOrg:      isOrg,
 		},
 	}
 
@@ -370,6 +383,52 @@ func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool) 
 
 	log.Printf("[INFO] SUCCESSFULLY UPLOADED creator %s with ID %s TO ALGOLIA!", user.Username, user.Id)
 	return user.Id, nil
+}
+
+func HandleAlgoliaCreatorDeletion(ctx context.Context, userId string) (error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("creators")
+	res, err := algoliaIndex.Search(userId)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		return err
+	}
+
+	var newRecords []AlgoliaSearchCreator
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia creators: %s", err)
+		return err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	foundItem := AlgoliaSearchCreator{}
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == userId {
+			foundItem = newRecord
+			break
+		}
+	}
+
+	// Should delete it? 
+	if len(foundItem.ObjectID) > 0 {
+		_, err = algoliaIndex.DeleteObject(foundItem.ObjectID)
+		if err != nil {
+			log.Printf("[WARNING] Algolia Creator delete problem: %s", err)
+			return err
+		} 
+
+		log.Printf("[INFO] Successfully removed creator %s with ID %s FROM ALGOLIA!", foundItem.Username, userId)
+	}
+
+	return nil
 }
 
 // Shitty temorary system
@@ -674,4 +733,46 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	if err == nil {
 		DeleteCache(ctx, fmt.Sprintf("session_%s", c.Value))
 	}
+}
+
+// Checks if a specific user should have "self" access to a creator user
+// A creator user can be both a user and an org, so this got a bit tricky
+func CheckCreatorSelfPermission(ctx context.Context, requestUser, creatorUser User, algoliaUser *AlgoliaSearchCreator) bool {
+	if project.Environment != "cloud" {
+		return false
+	}
+
+	if creatorUser.Id == requestUser.Id {
+		return true
+	} else {
+		for _, user := range algoliaUser.Synonyms {
+			if user == requestUser.Id {
+				return true
+			}
+		}
+
+		if algoliaUser.IsOrg {
+			log.Printf("[AUDIT] User %s (%s) is an org. Checking if the current user should have access.", algoliaUser.Username, algoliaUser.ObjectID)
+			// Get the org and check
+			org, err := GetOrgByCreatorId(ctx, algoliaUser.ObjectID)
+			if err != nil {
+				log.Printf("[WARNING] Couldn't find org for creator %s (%s): %s", algoliaUser.Username, algoliaUser.ObjectID, err)
+				return false
+			}
+
+			log.Printf("[AUDIT] Found org %s (%s) for creator %s (%s)", org.Name, org.Id, algoliaUser.Username, algoliaUser.ObjectID)
+			for _, user := range org.Users {
+				if user.Id == requestUser.Id {
+					if user.Role == "admin" {
+						return true
+					}
+
+					break
+				}
+			}
+
+		}
+	}
+
+	return false 
 }

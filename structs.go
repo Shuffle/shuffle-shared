@@ -419,7 +419,7 @@ type PublicProfile struct {
 	Self                bool                `datastore:"self" json:"self"`
 	GithubUsername      string              `datastore:"github_username" json:"github_username"`
 	GithubUserid        string              `datastore:"github_userid" json:"github_userid"`
-	GithubAvatar        string              `datastore:"github_avatar" json:"github_avatar"`
+	GithubAvatar        string              `datastore:"github_avatar,noindex" json:"github_avatar"`
 	GithubLocation      string              `datastore:"github_location" json:"github_location"`
 	GithubUrl           string              `datastore:"github_url" json:"github_url"`
 	GithubBio           string              `datastore:"github_bio" json:"github_bio"`
@@ -771,6 +771,8 @@ type Org struct {
 	RegionUrl         string                `json:"region_url" datastore:"region_url"`
 	Tutorials         []Tutorial            `json:"tutorials" datastore:"tutorials"`
 	LeadInfo          LeadInfo              `json:"lead_info,omitempty" datastore:"lead_info"`
+
+	CreatorId 	   	  string                `json:"creator_id" datastore:"creator_id"`
 }
 
 type PartnerInfo struct {
@@ -1273,6 +1275,7 @@ type AlgoliaSearchCreator struct {
 	Social          []string        `datastore:"social" json:"social"`
 	WorkStatus      string          `datastore:"work_status" json:"work_status"`
 	Url             string          `datastore:"url" json:"url"`
+	IsOrg 		 	bool            `datastore:"is_org" json:"is_org"`
 }
 
 type AlgoliaSearchWorkflow struct {

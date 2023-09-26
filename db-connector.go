@@ -2606,6 +2606,96 @@ func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
 	return allworkflows, nil
 }
 
+func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
+	nameKey := "Organizations"
+	cacheKey := fmt.Sprintf("creator_%s_%s", nameKey, id)
+
+	curOrg := &Org{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %s", cacheData)
+			err = json.Unmarshal(cacheData, &curOrg)
+			if err == nil {
+				return curOrg, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+		}
+	}
+
+	setOrg := false
+	if project.DbType == "opensearch" {
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("creator_id =", id).Limit(1)
+
+		allOrgs := []Org{}
+		_, err := project.Dbclient.GetAll(ctx, query, &allOrgs)
+		if err != nil {
+			return curOrg, err
+		}
+
+		if len(allOrgs) > 0 {
+			curOrg = &allOrgs[0]
+		}
+	}
+
+	// How does this happen?
+	if len(curOrg.Id) == 0 {
+		curOrg.Id = id
+		return curOrg, errors.New(fmt.Sprintf("Couldn't find creator org with ID %s", curOrg.Id))
+	}
+
+	newUsers := []User{}
+	for _, user := range curOrg.Users {
+		user.Password = ""
+		user.Session = ""
+		user.ResetReference = ""
+		user.PrivateApps = []WorkflowApp{}
+		user.VerificationToken = ""
+		//user.ApiKey = ""
+		user.Executions = ExecutionInfo{}
+		newUsers = append(newUsers, user)
+	}
+
+	curOrg.Users = newUsers
+	if len(curOrg.Tutorials) == 0 {
+		curOrg = GetTutorials(ctx, *curOrg, true)
+	}
+
+	// Making sure to skip old irrelevant priorities
+	newPriorities := []Priority{}
+	for _, priority := range curOrg.Priorities {
+		if priority.Type == "usecases" {
+			continue
+		}
+
+		newPriorities = append(newPriorities, priority)
+	}
+
+	curOrg.Priorities = newPriorities
+	if project.CacheDb {
+		neworg, err := json.Marshal(curOrg)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshalling org for cache: %s", err)
+			return curOrg, nil
+		}
+
+		err = SetCache(ctx, cacheKey, neworg, 1440)
+		if err != nil {
+			log.Printf("[ERROR] Failed updating org cache: %s", err)
+		}
+
+		if setOrg {
+			log.Printf("[INFO] UPDATING ORG %s!!", curOrg.Id)
+			SetOrg(ctx, *curOrg, curOrg.Id)
+		}
+	}
+
+	return curOrg, nil
+}
+
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {

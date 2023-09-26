@@ -3435,12 +3435,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
+		UserId      string   `json:"user_id"`
+
 		Tutorial    string   `json:"tutorial" datastore:"tutorial"`
 		Firstname   string   `json:"firstname"`
 		Lastname    string   `json:"lastname"`
 		Role        string   `json:"role"`
 		Username    string   `json:"username"`
-		UserId      string   `json:"user_id"`
 		EthInfo     EthInfo  `json:"eth_info"`
 		CompanyRole string   `json:"company_role"`
 		Suborgs     []string `json:"suborgs"`
@@ -3491,10 +3492,17 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !orgFound {
-		log.Printf("[AUDIT] User %s is admin, but can't edit users outside their own org.", userInfo.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
-		return
+		isSelf := false
+		if project.Environment == "cloud" && len(foundUser.Id) == 32 {
+			isSelf = CheckCreatorSelfPermission(ctx, userInfo, *foundUser, &AlgoliaSearchCreator{ObjectID: foundUser.Id, IsOrg: true,})
+		}
+
+		if !isSelf || len(foundUser.Id) != 32 {
+			log.Printf("[AUDIT] User %s is admin, but can't edit users outside their own org (%s).", userInfo.Id, foundUser.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+			return
+		}
 	}
 
 	orgUpdater := true
@@ -3598,10 +3606,27 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			foundUser.EthInfo = t.EthInfo
 		}
 
+		// Check if UserID is different?
+		/*
+		if len(t.UserId) > 0 && t.UserId != foundUser.Id {
+			log.Printf("[DEBUG] Should set userid to %s", t.UserId)
+			newUser, err := GetUser(ctx, t.UserId)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting user %s: %s", t.UserId, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+				return
+			}
+
+			log.Printf("[DEBUG] Found the user with username %s", newUser.Username)
+		}
+		*/
+
+		log.Printf("[DEBUG] Found github username %s. ID to look for: %s", foundUser.PublicProfile.GithubUsername, t.UserId)
+
 		username := foundUser.PublicProfile.GithubUsername
 		creator, err := HandleAlgoliaCreatorSearch(ctx, username)
 
-		// FIXME: If any of the parts below are updated, also update
 		// the same field within Algolia itself.
 		if err == nil {
 			// Related to creators
@@ -3703,10 +3728,6 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		t.Suborgs = newSuborgs
-		//log.Printf("[DEBUG] Valid suborgs: %s", t.Suborgs)
-
-		// 244199a7-0009-44af-aefb-55da92334583
-		// 583816e5-40ab-4212-8c7a-e54c8edd6b74
 
 		addedOrgs := []string{}
 		for _, suborg := range t.Suborgs {
@@ -6738,6 +6759,8 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !orgFound {
+
+
 		log.Printf("[AUDIT] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
@@ -7793,6 +7816,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		Defaults    Defaults  `json:"defaults" datastore:"defaults"`
 		SSOConfig   SSOConfig `json:"sso_config" datastore:"sso_config"`
 		LeadInfo    []string  `json:"lead_info" datastore:"lead_info"`
+
+		CreatorConfig string `json:"creator_config" datastore:"creator_config"`
 	}
 
 	var tmpData ReturnData
@@ -7985,6 +8010,85 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		org.LeadInfo = newLeadinfo
+	}
+
+	if len(tmpData.CreatorConfig) > 0 {
+		// Check if they're a creator already
+		if tmpData.CreatorConfig == "join" {
+
+			if org.CreatorId != "" {
+				log.Printf("[WARNING] Org %s is already a creator", org.Id)
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			// Make md5 from current ID (to make it replicable)
+			hasher := md5.New()
+			hasher.Write([]byte(org.Id))
+			creatorId := hex.EncodeToString(hasher.Sum(nil))
+
+			log.Printf("[INFO] Org %s (%s) is joining creators with ID %s", org.Name, org.Id, creatorId)
+
+			org.CreatorId = creatorId
+			parsedCreatorUser := User{
+				Id: creatorId,
+				Username: org.Name,
+			}
+
+			parsedCreatorUser.PublicProfile.GithubAvatar = org.Image
+			parsedCreatorUser.PublicProfile.GithubUsername = org.Name
+
+			HandleAlgoliaCreatorUpload(ctx, parsedCreatorUser, false, true) 
+
+			// Should create a new user with the same ID as the org creatorId
+			// This is to save public information about the org, which is used for verifying access in all other APIs
+			// In short: It's a way to NOT have to make all old Creator API's also support orgs. A hack, but it works
+
+			// Try to get the user
+			foundUser, err := GetUser(ctx, creatorId)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get creator user %s: %s", creatorId, err)
+
+				// Create the user
+				creatorUser := parsedCreatorUser
+
+				creatorUser.PublicProfile.Public = true
+				creatorUser.PublicProfile.GithubUsername = org.Name
+				creatorUser.PublicProfile.GithubUserid = org.CreatorId
+				creatorUser.PublicProfile.GithubAvatar = org.Image
+					
+				SetUser(ctx, &creatorUser, false)
+
+			} else {
+				log.Printf("[INFO] Creator user %s already exists. Should set back to public.", creatorId)
+
+				foundUser.PublicProfile.Public = true
+				SetUser(ctx, foundUser, false)
+
+			}
+
+		} else if tmpData.CreatorConfig == "leave" {
+			log.Printf("[INFO] Org %s is leaving creators", org.Id)
+			if org.CreatorId != "" {
+				// Remove item with the ID from Algolia
+
+				foundUser, err := GetUser(ctx, org.CreatorId)
+				if err == nil {
+					foundUser.PublicProfile.Public = false 
+
+					SetUser(ctx, foundUser, false)
+				}
+			
+				err = HandleAlgoliaCreatorDeletion(ctx, org.CreatorId) 
+				if err != nil {
+					log.Printf("[WARNING] Failed to remove creator %s (%s) from Algolia: %s", org.Name, org.CreatorId, err)
+				} else {
+					org.CreatorId = ""
+				}
+			}
+
+		}
 	}
 
 	// Built a system around this now, which checks for the actual org. 
