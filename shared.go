@@ -16,7 +16,6 @@ import (
 	"gopkg.in/yaml.v3"
 
 	//"os/exec"
-	mathrand "math/rand"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,6 +34,7 @@ import (
 	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha1"
+	mathrand "math/rand"
 
 	"github.com/bradfitz/slice"
 	uuid "github.com/satori/go.uuid"
@@ -5428,15 +5428,19 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					// FIXME: Find the actual active app?
 
 					log.Printf("[ERROR] Action '%s' in app %s doesn't exist. Workflow: %s (%s)", action.Name, curapp.Name, workflow.Name, workflow.ID)
-					thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)
-					workflow.Errors = append(workflow.Errors, thisError)
-					workflow.IsValid = false
+					// Reserved names
+					if action.Name != "router" {
+						thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)
+						workflow.Errors = append(workflow.Errors, thisError)
+						workflow.IsValid = false
 
-					if !ArrayContains(action.Errors, thisError) {
-						action.Errors = append(action.Errors, thisError)
+						if !ArrayContains(action.Errors, thisError) {
+							action.Errors = append(action.Errors, thisError)
+						}
+
+						action.IsValid = false
 					}
 
-					action.IsValid = false
 
 					//if workflow.PreviouslySaved {
 					//	resp.WriteHeader(401)
@@ -5514,34 +5518,37 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 									}
 								}
 
-								//log.Printf("[WARNING] Appaction %s with required param '%s' is empty. Can't save.", action.Name, param.Name)
 
-								thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
-								if actionParam.Configuration && len(action.AuthenticationId) == 0 {
-									thisError = fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
-								}
-
-								action.Errors = append(action.Errors, thisError)
-
-								errorFound := false
-								for errIndex, oldErr := range workflow.Errors {
-									if oldErr == thisError {
-										errorFound = true
-										break
+								// Some internal reserves
+								if (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey" {
+								} else {
+									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
+									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
+										thisError = fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
 									}
 
-									if strings.Contains(oldErr, action.Label) && strings.Contains(oldErr, "missing required parameter") {
-										workflow.Errors[errIndex] += ", " + param.Name
-										errorFound = true
-										break
+									action.Errors = append(action.Errors, thisError)
+
+									errorFound := false
+									for errIndex, oldErr := range workflow.Errors {
+										if oldErr == thisError {
+											errorFound = true
+											break
+										}
+
+										if strings.Contains(oldErr, action.Label) && strings.Contains(oldErr, "missing required parameter") {
+											workflow.Errors[errIndex] += ", " + param.Name
+											errorFound = true
+											break
+										}
 									}
-								}
 
-								if !errorFound {
-									workflow.Errors = append(workflow.Errors, thisError)
-								}
+									if !errorFound {
+										workflow.Errors = append(workflow.Errors, thisError)
+									}
 
-								action.IsValid = false
+									action.IsValid = false
+								}
 							}
 
 							if actionParam.Variant == "" {
@@ -7600,6 +7607,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
+		log.Printf("[WARNING] Failed reading body in create suborg: %s", err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
 		return
@@ -7613,9 +7621,9 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	var tmpData ReturnData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("Failed unmarshalling test: %s", err)
+		log.Printf("[INFO] Failed unmarshalling test: %s", err)
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "The data is badly formatted"}`))
 		return
 	}
 
@@ -7642,7 +7650,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] User can't edit the org \"%s\"", tmpData.OrgId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "No permission to edit this org (1)"}`))
+		resp.Write([]byte(`{"success": false, "No permission to edit this org (1). Org Id has to match in the body and the request."}`))
 		return
 	}
 
@@ -7698,7 +7706,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Region:          parentOrg.Region,
 		RegionUrl:       parentOrg.RegionUrl,
 	}
-	//SyncFeatures:    parentOrg.SyncFeatures,
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
 		Name: tmpData.Name,
@@ -7719,15 +7726,20 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		if loopUser.Id == user.Id {
-			continue
-		}
+		//if loopUser.Id == user.Id {
+		//	continue
+		//}
 
 		foundUser, err := GetUser(ctx, loopUser.Id)
 		if err != nil {
 			log.Printf("[ERROR] User with Identifier %s doesn't exist: %s (update admins - create)", loopUser.Id, err)
 			continue
 		}
+
+		// Random between 50-200ms
+		mathrand.Seed(time.Now().UnixNano())
+		randInt := mathrand.Intn(150) 
+		time.Sleep(time.Duration(randInt+50) * time.Millisecond)
 
 		// Add org to user
 		foundUser.Orgs = append(foundUser.Orgs, newOrg.Id)
@@ -11151,7 +11163,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					} else {
 						// Close, just like writing a file.
 						if err := w.Close(); err != nil {
-							log.Printf("[WARNING] Failed closing new exec file: %s", err)
+							log.Printf("[WARNING] Failed closing new exec file (2): %s", err)
 							workflowExecution.ExecutionArgument = baseResult
 						} else {
 							workflowExecution.ExecutionArgument = fmt.Sprintf(`{
@@ -11200,7 +11212,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 							// Close, just like writing a file.
 							if err := w.Close(); err != nil {
-								log.Printf("[WARNING] Failed closing new exec file: %s", err)
+								log.Printf("[WARNING] Failed closing new exec file (1): %s", err)
 								item.Result = baseResult
 								newResults = append(newResults, item)
 								continue
