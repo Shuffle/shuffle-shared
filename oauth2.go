@@ -3844,17 +3844,19 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 		//log.Printf("[DEBUG] STATE: %s", innerstate)
 		decoded, err := base64.StdEncoding.DecodeString(innerstate)
 		if err != nil {
+			log.Printf("[DEBUG] Failed base64 decode of state (1): %s", err)
+
 			// Random padding problems
 			innerstate += "="
 			decoded, err = base64.StdEncoding.DecodeString(innerstate)
 			if err != nil {
-				log.Printf("[WARNING] Failed base64 decode of state (2): %s", err)
+				log.Printf("[DEBUG] Failed base64 decode of state (2): %s", err)
 
 				// Double padding problem fix lol (this actually works)
 				innerstate += "="
 				decoded, err = base64.StdEncoding.DecodeString(innerstate)
 				if err != nil {
-					log.Printf("[WARNING] Failed base64 decode of state (3): %s", err)
+					log.Printf("[ERROR] Failed base64 decode of state (3): %s", err)
 					continue
 				}
 			}
