@@ -3841,7 +3841,7 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 	// Check org in nonce -> check if ID points back to an org
 	outerSplit := strings.Split(string(idToken), ".")
 	for _, innerstate := range outerSplit {
-		log.Printf("[DEBUG] STATE: %s", innerstate)
+		//log.Printf("[DEBUG] STATE: %s", innerstate)
 		decoded, err := base64.StdEncoding.DecodeString(innerstate)
 		if err != nil {
 			// Random padding problems

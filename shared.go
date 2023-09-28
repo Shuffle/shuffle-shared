@@ -9049,9 +9049,9 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=id_token&scope=openid&redirect_uri=%s&state=%s&response_mode=form_post&nonce=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, state)
 		//baseSSOUrl += fmt.Sprintf("&client_secret=%s", org.SSOConfig.OpenIdClientSecret)
-		log.Printf("[DEBUG] Found OpenID url (client secret). Extra redirect check: %s - %s", request.URL.String(), baseSSOUrl)
+		//log.Printf("[DEBUG] Found OpenID url (client secret). Extra redirect check: %s - %s", request.URL.String(), baseSSOUrl)
 	} else {
-		log.Printf("[DEBUG] Found OpenID url (PKCE!!). Extra redirect check: %s", request.URL.String())
+		//log.Printf("[DEBUG] Found OpenID url (PKCE!!). Extra redirect check: %s", request.URL.String())
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
 	}
 
@@ -13759,7 +13759,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 						return
 					}
 
-					log.Printf("[DEBUG] Validated - token: %s!", token)
+					//log.Printf("[DEBUG] Validated - token: %s!", token)
 					openidUser.Sub = token.Sub
 					org = &token.Org
 					skipValidation = true
