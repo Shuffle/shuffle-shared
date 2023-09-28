@@ -18846,6 +18846,15 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	// Disabled until it gets improved enough to work onprem
+	// Should be automatically built into the dockerfile of the backend onprem
+	// Point with cloud download it to have it regularly updated
+	if project.Environment != "cloud" {
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true, "reason": "Not yet enabled. Contact support@shuffler.io to learn more about progress on this API."}`))
+		return
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in get action recommendations: %s", err)
@@ -18853,6 +18862,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
 	// Get the users' org
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
@@ -19102,108 +19112,6 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 		action.Recommendations = recommendations
 		recommendAction.Actions = append(recommendAction.Actions, action)
 	}
-
-
-	// Hardcoded examples how it could work (old)
-	/*
-	for key, _ := range workflow.Actions {
-		var recommendations []Recommendations
-		var action RecommendAction
-
-		app := workflow.Actions[key].AppName + "_" + workflow.Actions[key].AppVersion
-		if workflow.Actions[key].AppName == "Outlook_Office365" {
-			if workflow.Actions[key].Name == "get_emails" {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
-				recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list", AppVersion: "1.2.0", AppId: "3e2bdf9d5069fe3f4746c29d68785a6a"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_list_attachments", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_raw_email_as_file", AppVersion: "1.1.0", AppId: "accdaaf2eeba6a6ed43b2efc0112032d"})
-
-				action.Recommendations = recommendations
-				recommendAction.Actions = append(recommendAction.Actions, action)
-
-			} else if workflow.Actions[key].Name == "get_raw_email_as_file" {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendations = append(recommendations, Recommendations{AppName: "email", AppAction: "parse_email_file"})
-				action.Recommendations = recommendations
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			} else {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			}
-		} else if workflow.Actions[key].AppName == "outlook-exchange" {
-			if workflow.Actions[key].Name == "get_emails" {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "mark_email_as_read"})
-				recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "move_email"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "delete_email"})
-				action.Recommendations = recommendations
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			} else {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			}
-		} else if workflow.Actions[key].AppName == "Gmail" {
-			if workflow.Actions[key].Name == "get_gmail_users_messages_list" {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendations = append(recommendations, Recommendations{AppName: "Shuffle Tools", AppAction: "filter_list"})
-				action.Recommendations = recommendations
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			} else {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			}
-		} else if workflow.Actions[key].AppName == "TheHiveOpenAPI" {
-			if workflow.Actions[key].Name == "get_list_alerts" {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "get_an_alert"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "patch_edit_an_alert"})
-				action.Recommendations = recommendations
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			} else {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			}
-
-		} else if workflow.Actions[key].AppName == "thehive" {
-			if workflow.Actions[key].Name == "search_alert_title" {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "update_alert"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "close_alert"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "add_alert_artifact"})
-				action.Recommendations = recommendations
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			} else if workflow.Actions[key].Name == "create_case" {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "add_case_artifact"})
-				recommendations = append(recommendations, Recommendations{AppName: workflow.Actions[key].AppName, AppAction: "update_case"})
-				action.Recommendations = recommendations
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			} else {
-				action.AppName = app
-				action.ActionId = workflow.Actions[key].ID
-				recommendAction.Actions = append(recommendAction.Actions, action)
-			}
-		} else {
-			action.AppName = app
-			action.ActionId = workflow.Actions[key].ID
-			recommendAction.Actions = append(recommendAction.Actions, action)
-		}
-	}
-	*/
 
 	recommendAction.Success = true
 	newjson, err := json.Marshal(recommendAction)

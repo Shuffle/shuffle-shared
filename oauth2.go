@@ -3841,16 +3841,22 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 	// Check org in nonce -> check if ID points back to an org
 	outerSplit := strings.Split(string(idToken), ".")
 	for _, innerstate := range outerSplit {
-		log.Printf("%s", innerstate)
+		log.Printf("[DEBUG] STATE: %s", innerstate)
 		decoded, err := base64.StdEncoding.DecodeString(innerstate)
 		if err != nil {
-
 			// Random padding problems
 			innerstate += "="
 			decoded, err = base64.StdEncoding.DecodeString(innerstate)
 			if err != nil {
 				log.Printf("[WARNING] Failed base64 decode of state (2): %s", err)
-				continue
+
+				// Double padding problem fix lol (this actually works)
+				innerstate += "="
+				decoded, err = base64.StdEncoding.DecodeString(innerstate)
+				if err != nil {
+					log.Printf("[WARNING] Failed base64 decode of state (3): %s", err)
+					continue
+				}
 			}
 		}
 
@@ -3864,7 +3870,7 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 		// Aud = client secret
 		// Nonce = contains all the info
 		if len(token.Aud) <= 0 {
-			log.Printf("[WARNING] Couldn't find AUD - continuing to next: %s", string(decoded))
+			log.Printf("[WARNING] Couldn't find AUD in JSON (required) - continuing to next token: %s", string(decoded))
 			continue
 		}
 
