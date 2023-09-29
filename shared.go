@@ -866,6 +866,9 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
+
+	// Commented out because of org distribution working it should
+	/*
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
@@ -874,6 +877,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+	*/
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
@@ -10808,7 +10812,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		resultCheck := ResultChecker{}
 		err = json.Unmarshal([]byte(actionResult.Result), &resultCheck)
 		if err == nil {
-			log.Printf("\n\n[WARNING] Unmarshal success in workflow %s! Trying to check for success. Success: %#v\n\n", workflowExecution.Workflow.Name, resultCheck.Success)
+			//log.Printf("\n\n[WARNING] Unmarshal success in workflow %s! Trying to check for success. Success: %#v\n\n", workflowExecution.Workflow.Name, resultCheck.Success)
 
 			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") && workflowExecution.Workflow.Hidden == false {
 				log.Printf("\n\n[WARNING] Making notification for %s\n\n", workflowExecution.ExecutionOrg)
@@ -13198,15 +13202,18 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 			break
 		}
 
-		log.Printf("[INFO] Checking single execution %s. Status: %s", workflowExecution.ExecutionId, newExecution.Status)
+		//log.Printf("[INFO] Checking single execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
 
 		if len(newExecution.Results) > resultAmount-1 {
 			relevantIndex := len(newExecution.Results) - 1
-			if len(newExecution.Results[relevantIndex].Result) > 0 {
+
+			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
 				returnBody.Result = newExecution.Results[relevantIndex].Result
 
 				// Check for single action errors in liquid and similar
 				// to be used in the frontend
+				log.Printf("[INFO] Checking for errors in single execution %s", workflowExecution.ExecutionId)
+
 				for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
 					//log.Printf("Name: %s", param.Name)
 					if strings.Contains(param.Name, "liquid") && !ArrayContains(returnBody.Errors, param.Value) {

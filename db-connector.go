@@ -4397,12 +4397,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	nameKey := "workflowapp"
 	var err error
-
-	//storageclient, err := storage.NewClient(ctx)
-	//if err != nil {
-	//	log.Printf("[WARNING] Failed to create client (storage - prioritizedapps): %s", err)
-	//}
-
 	if user.ActiveOrg.Id != "" && user.ActiveOrg.Id != "2e7b6a08-b63b-4fc2-bd70-718091509db1" {
 		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
 		//log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
@@ -4420,6 +4414,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 					//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
 					break
+				}
+
+				if innerApp.Name == "Shuffle Subflow" {
+					continue
 				}
 
 				if orgErr == nil && !ArrayContains(org.ActiveApps, innerApp.ID) {
@@ -4467,8 +4465,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	//log.Printf("[INFO] After ref org search\n\n")
-
 	// Find public apps
 	publicApps := []WorkflowApp{}
 	publicAppsKey := fmt.Sprintf("public_apps")
@@ -4504,6 +4500,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						//log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
 						break
 					}
+				}
+
+				if innerApp.Name == "Shuffle Subflow" {
+					continue
 				}
 
 				if len(innerApp.Actions) == 0 {
@@ -4735,9 +4735,13 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 	found := false
 
 	for appIndex, loopedApp := range allApps {
+		// Check if shuffle subflow and skip
+
+
 		if strings.ToLower(loopedApp.Name) == "shuffle tools" {
 			//log.Printf("%s vs %s - %s vs %s", loopedApp.Name, innerApp.Name, loopedApp.AppVersion, innerApp.AppVersion)
 		}
+
 		if loopedApp.Name == innerApp.Name {
 
 			if ArrayContains(loopedApp.LoopVersions, innerApp.AppVersion) || loopedApp.AppVersion == innerApp.AppVersion {
