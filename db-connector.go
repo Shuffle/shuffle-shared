@@ -2254,7 +2254,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
 		if err := project.Dbclient.Get(ctx, key, workflow); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler (3): %s", err)
+				log.Printf("[INFO] Error in org loading (1). Migrating org to new org and user handler (3): %s", err)
 				err = nil
 			} else {
 				return workflow, err
@@ -2749,11 +2749,11 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-			log.Printf("[ERROR] Error in org loading for %s: %s", key, err)
+			log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 			//log.Printf("Users: %s", curOrg.Users)
 			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
-				log.Printf("[INFO] Error in org loading. Migrating org to new org and user handler (2): %s", err)
+				log.Printf("[INFO] Error in org loading (3). Migrating org to new org and user handler (2): %s", err)
 				err = nil
 
 				users := []User{}
@@ -2781,7 +2781,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					setOrg = true
 				}
 			} else if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[WARNING] Error in org loading, but returning without warning: %s", err)
+				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
 				return &Org{}, err

@@ -536,7 +536,22 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting SET 2fa request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+
+			DeleteCache(ctx, fmt.Sprintf("Organizations_%s", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Username)))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Id)))
+			return
+		}
+	}
+
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in get 2fa: %s", err)
 		resp.WriteHeader(401)
@@ -595,7 +610,6 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := GetContext(request)
 	foundUser, err := GetUser(ctx, user.Id)
 	if err != nil {
 		log.Printf("[ERROR] Can't find user %s (set 2fa): %s", user.Id, err)
@@ -699,6 +713,15 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET 2fa request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
 	}
 
 	user, err := HandleApiAuthentication(resp, request)
