@@ -230,14 +230,17 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
-		//backendUrl = "https://729d-84-214-96-67.ngrok.io"
+		// Doesn't work multi-region
 		backendUrl = "https://shuffler.io"
-		//backendUrl = "http://localhost:5002"
 	}
 
 	// Callback to itself
 	if len(backendUrl) == 0 {
 		backendUrl = "http://localhost:5001"
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
 
 	b, err := json.Marshal(notification)
@@ -275,17 +278,17 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 func CreateOrgNotification(ctx context.Context, title, description, referenceUrl, orgId string, adminsOnly bool) error {
 	if project.Environment == "" || project.Environment == "worker" {
-		log.Printf("[INFO] Not generating notification, as worker environment has been detected: %#v", project.Environment)
+		log.Printf("\n\n\n[ERROR] Not generating notification, as worker environment has been detected: %#v", project.Environment)
 		return nil
 	}
 
 	notifications, err := GetOrgNotifications(ctx, orgId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting org notifications for %s: %s", orgId, err)
+		log.Printf("\n\n\n[ERROR] Failed getting org notifications for %s: %s", orgId, err)
 		return err
 	}
 
-	//log.Printf("[DEBUG] Found %d notifications for org %s. Merge?", len(notifications), orgId)
+	log.Printf("[DEBUG] Found %d notifications for org %s. Merge?", len(notifications), orgId)
 	foundNotifications := []Notification{}
 	for _, notification := range notifications {
 		// notification.Title == title &&
@@ -295,17 +298,80 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		}
 	}
 
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Error getting org %s in createOrgNotification: %s", orgId, err)
+		return err
+	}
+
+
+	generatedId := uuid.NewV4().String()
+	mainNotification := Notification{
+		Title:             title,
+		Description:       description,
+		Id:                generatedId,
+		OrgId:             orgId,
+		OrgName:           org.Name,
+		UserId:            "",
+		Tags:              []string{},
+		Amount:            1,
+		ReferenceUrl:      referenceUrl,
+		OrgNotificationId: "",
+		Dismissable:       true,
+		Personal:          false,
+		Read:              false,
+		CreatedAt:         int64(time.Now().Unix()),
+		UpdatedAt:         int64(time.Now().Unix()),
+	}
+
+	selectedApikey := ""
+
+	authOrg := org
+	if org.Defaults.NotificationWorkflow == "parent" && org.CreatorOrg != "" {
+		log.Printf("[DEBUG] Sending notification to parent org %s' notification workflow", org.CreatorOrg)
+
+		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[WARNING] Error getting parent org %s in createOrgNotification: %s", orgId, err)
+			return err
+		}
+
+		// Overwriting to make sure access rights are correct
+		authOrg = parentOrg
+		org.Defaults.NotificationWorkflow = parentOrg.Defaults.NotificationWorkflow
+	}
+
+	for _, user := range authOrg.Users {
+		if user.Role == "admin" && len(user.ApiKey) > 0 && len(selectedApikey) == 0 {
+			// Checking if it's the right active org
+			// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
+			foundUser, err := GetUser(ctx, user.Id)
+			if err == nil {
+				if foundUser.ActiveOrg.Id == orgId {
+					log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
+					selectedApikey = user.ApiKey
+				}
+			}
+		}
+	}
+
 	//log.Printf("[DEBUG] New found length: %d", len(foundNotifications))
 	if len(foundNotifications) > 0 {
 		// FIXME: This may have bugs for old workflows with new users (not being rediscovered)
+		//log.Printf("[DEBUG] Found %d notifications for org %s. Merging...", len(foundNotifications), orgId)
+
 		usersHandled := []string{}
 		// Make sure to only reopen one per user
 		for _, notification := range foundNotifications {
 			if ArrayContains(usersHandled, notification.UserId) {
+				//log.Printf("[DEBUG] Skipping notification %s for user %s as it's already been handled", notification.Title, notification.UserId)
+
 				continue
 			}
 
 			if notification.Read == false {
+				//log.Printf("[DEBUG] Skipping notification %s for user %s as it's already been read", notification.Title, notification.UserId)
+
 				usersHandled = append(usersHandled, notification.UserId)
 				continue
 			}
@@ -321,34 +387,19 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 		}
 
+
+		err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow)
+		if err != nil {
+			log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+		}
+
 		return nil
 	} else {
 		log.Printf("[INFO] Notification with title %#v is being made for users in org %s", title, orgId)
 
-		org, err := GetOrg(ctx, orgId)
-		if err != nil {
-			log.Printf("[WARNING] Error getting org %s in createOrgNotification: %s", orgId, err)
-			return err
-		}
 
-		generatedId := uuid.NewV4().String()
-		mainNotification := Notification{
-			Title:             title,
-			Description:       description,
-			Id:                generatedId,
-			OrgId:             orgId,
-			OrgName:           org.Name,
-			UserId:            "",
-			Tags:              []string{},
-			Amount:            1,
-			ReferenceUrl:      referenceUrl,
-			OrgNotificationId: "",
-			Dismissable:       true,
-			Personal:          false,
-			Read:              false,
-			CreatedAt:         int64(time.Now().Unix()),
-			UpdatedAt:         int64(time.Now().Unix()),
-		}
+
+
 
 		err = SetNotification(ctx, mainNotification)
 		if err != nil {

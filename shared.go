@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	"bytes"
+	"reflect"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -9045,7 +9046,7 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 
 		//baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&client_secret=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, org.SSOConfig.OpenIdClientSecret)
 		state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&redirect=%s&challenge=%s", org.Id, redirectUrl, org.SSOConfig.OpenIdClientSecret)))
-		log.Printf("[INFO] URL: %s", redirectUrl)
+		//log.Printf("[INFO] URL: %s", redirectUrl)
 
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=id_token&scope=openid&redirect_uri=%s&state=%s&response_mode=form_post&nonce=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, state)
 		//baseSSOUrl += fmt.Sprintf("&client_secret=%s", org.SSOConfig.OpenIdClientSecret)
@@ -10086,6 +10087,112 @@ func FixActionResultOutput(actionResult ActionResult) ActionResult {
 	return actionResult
 }
 
+func runTranslation(ctx context.Context, standard string, inputBody string) {
+	// Send HTTP request to localhost:3001
+
+	httpClient := &http.Client{}
+	url := fmt.Sprintf("http://localhost:5003/api/v1/translate_to/%s", standard)
+	req, err := http.NewRequest(
+		"POST",
+		url,
+		bytes.NewBuffer([]byte(inputBody)),
+	)
+
+	if err != nil {
+		log.Printf("[WARNING] Error building translation request to %s: %s", standard, err)
+		return
+	}
+
+	newresp, err := httpClient.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Error running translation to %s: %s", standard, err)
+		return
+	}
+
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error getting body from translation for %s: %s", standard, err)
+		return
+	}
+
+	log.Printf("[DEBUG] Status: %d", newresp.StatusCode)
+	log.Printf("\n\n\nOUTPUT: %s\n\n\n", string(body))
+}
+
+
+func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
+	return
+
+	// Try to unmarshal the data to see if it has a status and if its less than 300
+	var parsedValue map[string]interface{}
+	err := json.Unmarshal([]byte(actionResult.Result), &parsedValue)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling action result for translation: %s", err)
+		return
+	}
+
+	// For now only handling proper returns with standard HTTP messaging
+	if status, ok := parsedValue["status"]; ok {
+		if status == nil {
+			log.Printf("[DEBUG] Found BAD status in action result: %s", status)
+			return
+		}
+
+		parsedStatus := status.(float64)
+		if parsedStatus >= 300 {
+			log.Printf("[DEBUG] Found status in action result: %d", parsedStatus)
+			return
+		}
+	} else {
+		log.Printf("[DEBUG] Did NOT find status in action result: %s", actionResult.Result)
+		return
+	}
+
+
+	log.Printf("\n\n[DEBUG] Running execution translation for app '%s' with action '%s' towards standardized data\n\n", actionResult.Action.AppName, actionResult.Action.Name)
+
+	parsedBody := ""
+	if body, ok := parsedValue["body"]; ok {
+		if body == nil {
+			return
+		}
+
+		// Check if body is a dictionary
+		if reflect.TypeOf(body).Kind() == reflect.Map {
+
+			bodyDict := body.(map[string]interface{})
+			bodyDictBytes, err := json.Marshal(bodyDict)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling body dict: %s", err)
+				return
+			}
+
+			parsedBody = string(bodyDictBytes)
+
+			// Look for a list of items in here?
+			// How does it know to look for a list?
+
+			runTranslation(ctx, "email", parsedBody)
+
+		} else if reflect.TypeOf(body).Kind() == reflect.Slice {
+			// Check if body is a list and marshal it
+
+			bodyList := body.([]interface{})
+			bodyListBytes, err := json.Marshal(bodyList)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling body list: %s", err)
+				return
+			}
+
+			// Should loop the items?
+			//parsedBody = string(bodyListBytes)
+			log.Printf("[WARNING] Found body list in action result of length: %d. Warning: No handler of lists yet", len(bodyListBytes))
+		}
+	}
+
+	//log.Printf("\n\n[DEBUG] Found body in action result of length: %d", len(parsedBody))
+}
+
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
 	var err error
@@ -10211,6 +10318,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	if setCache {
+		go RunExecutionTranslation(ctx, actionResult) 
+
 		actionResultBody, err := json.Marshal(actionResult)
 		if err == nil {
 			err = SetCache(ctx, actionCacheId, actionResultBody, 35)
@@ -10246,12 +10355,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	actionResult.Result = string(newResult)
 
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-
 		setExecVar := true
 
 		// Should just check the first bytes for this, as it should be at the start if it's a failure with the individual action itself
 		// This is finicky, but it's the easiest fix for this
-		checkLength := 20
+		checkLength := 1000 
 		firstFifty := actionResult.Result
 		if len(actionResult.Result) > checkLength {
 			firstFifty = actionResult.Result[0:checkLength]
@@ -10700,12 +10808,15 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		resultCheck := ResultChecker{}
 		err = json.Unmarshal([]byte(actionResult.Result), &resultCheck)
 		if err == nil {
-			//log.Printf("Unmarshal success!")
+			log.Printf("\n\n[WARNING] Unmarshal success in workflow %s! Trying to check for success. Success: %#v\n\n", workflowExecution.Workflow.Name, resultCheck.Success)
+
 			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") && workflowExecution.Workflow.Hidden == false {
+				log.Printf("\n\n[WARNING] Making notification for %s\n\n", workflowExecution.ExecutionOrg)
+
 				err = CreateOrgNotification(
 					ctx,
-					fmt.Sprintf("Potential error in Workflow %s", workflowExecution.Workflow.Name),
-					fmt.Sprintf("Node %s in Workflow %s failed silently. Click to see more. Reason: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason),
+					fmt.Sprintf("Potential error in Workflow '%s'", workflowExecution.Workflow.Name),
+					fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Reason: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason),
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 					workflowExecution.ExecutionOrg,
 					true,

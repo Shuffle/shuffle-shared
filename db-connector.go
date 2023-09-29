@@ -9090,6 +9090,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		if err != nil {
 			log.Printf("[ERROR] Failed to set execution during finalization %s: %s", workflowExecution.ExecutionId, err)
 		} else {
+
 			log.Printf("[INFO] Finalized execution %s for workflow %s with %d results and status %s", workflowExecution.ExecutionId, workflowExecution.Workflow.ID, len(workflowExecution.Results), workflowExecution.Status)
 
 			// Validate text vs previous executions
