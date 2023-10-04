@@ -61,6 +61,7 @@ func base64StringToString(base64String string) (string, error) {
 	return string(decoded), nil
 }
 
+
 func RunOpsAppHealthCheck() (AppHealth, error) {
 	log.Printf("[DEBUG] Running app health check")
 	appHealth := AppHealth{
@@ -394,12 +395,14 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("cacheDb %#v", project.CacheDb)
+	log.Printf("cacheDb: %#v", project.CacheDb)
 	// Check cache if health check was run in last 5 minutes
 	// If yes, return cached result, else run health check
 	ctx := GetContext(request)
 	platformHealth := HealthCheck{}
 	cacheKey := fmt.Sprintf("ops-health-check")
+	cacheHit := false
+
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -411,6 +414,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 				// If yes, return cached result, else run health check
 				log.Printf("Platform health returned: %#v", platformHealth)
 				marshalledData, err := json.Marshal(platformHealth)
+				cacheHit = true
+
+				err_ := SetOpsDashboardCacheHitStat(ctx, cacheHit)
+				if err_ != nil {
+					log.Printf("[WARNING] Failed setting cache hit stat: %s", err_)
+				}
+
 				if err == nil {
 					resp.WriteHeader(200)
 					resp.Write(marshalledData)
@@ -421,6 +431,11 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			}
 		} else {
 			log.Print("[WARNING] Failed getting cache ops health on first try: %s", err)
+		}
+	} else {
+		err := SetOpsDashboardCacheHitStat(ctx, cacheHit)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache hit stat: %s", err)
 		}
 	}
 
@@ -472,6 +487,30 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(platformData)
+}
+
+func OpsDashboardCacheHitStat(resp http.ResponseWriter, request *http.Request) {
+	ctx := GetContext(request)
+
+	stats, err := GetOpsDashboardCacheHitStat(ctx, 30)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting cache hit stats: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting cache hit stats. Contact support@shuffler.io"}`))
+		return
+	}
+	
+	log.Printf("Stats are: %#v", stats)
+
+	statsBody, err := json.Marshal(stats)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling cache hit stats: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing cache hit stats. Contact support@shuffler.io"}`))
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(statsBody)
 }
 
 func RunOpsWorkflow() (WorkflowHealth, error) {
