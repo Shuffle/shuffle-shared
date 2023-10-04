@@ -3844,6 +3844,114 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	return curUser, nil
 }
 
+func GetOpsDashboardCacheHitStat(ctx context.Context, limit int) ([]OpsDashboardStats, error) {
+	// get last 30 runs
+	nameKey := "opsdashboardstats"
+	var stats []OpsDashboardStats
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": limit,
+			"sort": map[string]interface{}{
+				"timestamp": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find app query: %s", err)
+			return stats, err
+		}
+		
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (find app by name): %s", err)
+			return stats, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return stats, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return stats, err
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return stats, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+
+		var wrapped OpsDashboardStatSearchWrapper
+
+		// put into struct
+		err = json.Unmarshal(respBody, &wrapped)
+
+		stats = []OpsDashboardStats{}
+		for _, hit := range wrapped.Hits.Hits {
+			stats = append(stats, hit.Source)
+		}
+
+		if err != nil {
+			log.Printf("RespBody is: %s", respBody)
+			return stats, err
+		}
+		
+		log.Printf("[INFO] Successfully got ops dashboard stats")
+
+	} else {
+		q := datastore.NewQuery(nameKey).Order("-Timestamp").Limit(limit)
+		_, err := project.Dbclient.GetAll(ctx, q, &stats)
+		if err != nil { 
+			log.Printf("[WARNING] Failed getting stats for ops dashboard: %s", err)
+			return stats, err
+		}
+	}
+
+	return stats, nil
+}
+
+func SetOpsDashboardCacheHitStat(ctx context.Context, cacheHit bool) error {
+	nameKey := "opsdashboardstats"
+	stat := OpsDashboardStats{}
+	stat.Timestamp = time.Now().Unix()
+	stat.CacheHit = cacheHit
+
+	data, err := json.Marshal(stat)
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, fmt.Sprintf("%d", stat.Timestamp), data)
+		if err != nil {
+			return err
+		} else {
+			log.Printf("[INFO] Successfully updated ops dashboard stats")
+		}
+	} else {
+		k := datastore.NameKey(nameKey, fmt.Sprintf("%d", stat.Timestamp), nil)
+		if _, err := project.Dbclient.Put(ctx, k, &stat); err != nil {
+			log.Printf("[WARNING] Error updating ops dashboard stats: %s", err)
+			return err
+		}
+	}
+
+	return nil
+
+}
+
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
