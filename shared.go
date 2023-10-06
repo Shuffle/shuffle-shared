@@ -9584,7 +9584,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		log.Printf("[DEBUG][%s] Sending request for shuffle-subflow result to %s. Should this be a specific worker? Specific worker is better if cache is NOT memcached", subflowExecutionId, backendUrl)
 	}
 
-	//log.Printf("[INFO] PARENTEXEC: %s, AUTH: %s, parentNode: %s, BackendURL: %s, VALUE: %s. ", executionParent, parentAuth, parentNode, backendUrl, returnValue)
+	// Waiting due to speed problems in certain circumstances
+	time.Sleep(350 * time.Millisecond)
 
 	// Callback to itself
 	if len(backendUrl) == 0 {
@@ -9641,7 +9642,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		log.Printf("[ERROR] Failed reading parent body: %s", err)
 		return err
 	}
-	//log.Printf("BODY (%d): %s", newresp.StatusCode, string(body))
+	//log.Printf("\n\nBODY FROM STREAM OF PARENT FROM %s (%d): %s", resultUrl, newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
 		log.Printf("[ERROR] Bad statuscode setting subresult (1) with URL %s: %d, %s. Input data: %s", resultUrl, newresp.StatusCode, string(body), string(data))
@@ -9653,6 +9654,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		log.Printf("[ERROR] Failed newexecutuion parent unmarshal: %s", err)
 		return err
 	}
+
+	log.Printf("[DEBUG] Parent execution results length: %d", len(newExecution.Results))
 
 	foundResult := ActionResult{}
 	for _, result := range newExecution.Results {
@@ -9738,6 +9741,8 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			}
 		}
 
+		//log.Printf("\n\nPARENTNODEFOUND: %t\n\n", parentNodeFound)
+
 		// If found, loop through and make sure to check the result for ALL of them. If they're not in there, add them as values.
 		if parentNodeFound {
 			log.Printf("[DEBUG] Found result for subflow (parentNodeFound). Got %d parentSubflowResults", len(parentSubflowResult))
@@ -9786,7 +9791,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			}
 
 			if finishedSubflows == len(newResults) {
-				log.Printf("[DEBUG] Finished workflow because status of all should be set to finished now")
+				log.Printf("[DEBUG][%s] Finished workflow because status of all should be set to finished now", subflowExecutionId)
 
 				// Status is used to determine if the current subflow is finished
 				//foundResult.Status = "SUCCESS"
@@ -9799,7 +9804,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				sendRequest = true
 				baseResultData, err := json.Marshal(newResults)
 				if err != nil {
-					log.Printf("[ERROR] Failed marshalling subflow loop request data (1): %s", err)
+					log.Printf("[ERROR][%s] Failed marshalling subflow loop request data (1): %s", subflowExecutionId, err)
 					return err
 				}
 
@@ -9808,15 +9813,12 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				foundResult.Authorization = parentAuth
 				resultData, err = json.Marshal(foundResult)
 				if err != nil {
-					log.Printf("[ERROR] Failed marshalling FULL subflow loop request data (2): %s", err)
+					log.Printf("[ERROR][%s] Failed marshalling FULL subflow loop request data (2): %s", subflowExecutionId, err)
 					return err
 				}
-
-				//log.Printf("[DEBUG] Should update with multiple results for the subflow. Fullres: %s!", string(foundResult.Result))
-
 			}
 		} else {
-			log.Printf("[DEBUG] Did not enter parentNodeFound in subflow loop")
+			log.Printf("[DEBUG][%s] Did not enter parentNodeFound in subflow loop", subflowExecutionId)
 
 		}
 
@@ -9839,7 +9841,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		if err == nil {
 			for subflowIndex, subflowData := range subflowDataLoop {
 				if subflowData.ExecutionId == executionParent {
-					log.Printf("[DEBUG] Updating execution Id %s with subflow info", subflowData.ExecutionId)
+					log.Printf("[DEBUG][%s] Updating execution Id %s with subflow info", subflowExecutionId, subflowData.ExecutionId)
 					subflowDataLoop[subflowIndex].Result = returnValue
 				}
 			}
@@ -9913,7 +9915,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				resultData, err = json.Marshal(foundResult)
 				if err != nil {
-					log.Printf("[ERROR] Failed updating resultData (3): %s", err)
+					log.Printf("[ERROR][%s] Failed updating resultData (3): %s", subflowExecutionId, err)
 					return err
 				}
 
@@ -9927,10 +9929,10 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		cacheId := fmt.Sprintf("%s_%s_result", foundResult.ExecutionId, foundResult.Action.ID)
 		err = SetCache(ctx, cacheId, resultData, 35)
 		if err != nil {
-			log.Printf("[WARNING] Couldn't set cache for subflow action result %s (4): %s", cacheId, err)
+			log.Printf("[WARNING][%s] Couldn't set cache for subflow action result %s (4): %s", subflowExecutionId, cacheId, err)
 		}
 
-		log.Printf("[DEBUG] Set cache for subflow action result loop %s (4) with 250 ms delay before request", cacheId)
+		log.Printf("[DEBUG][%s] Set cache for subflow action result loop %s (4) with 250 ms delay before request", subflowExecutionId, cacheId)
 		//time.Sleep(250 * time.Millisecond)
 	}
 
@@ -9945,13 +9947,13 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		)
 
 		if err != nil {
-			log.Printf("Error building subflow request: %s", err)
+			log.Printf("[ERROR] Error building subflow request: %s", subflowExecutionId, err)
 			return err
 		}
 
 		newresp, err := topClient.Do(req)
 		if err != nil {
-			log.Printf("Error running subflow request: %s", err)
+			log.Printf("[ERROR] Error running subflow request: %s", subflowExecutionId, err)
 			return err
 		}
 
@@ -9959,15 +9961,15 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		if newresp.StatusCode != 200 {
 			body, err := ioutil.ReadAll(newresp.Body)
 			if err != nil {
-				log.Printf("[INFO] Failed reading body after subflow request: %s", err)
+				log.Printf("[INFO][%s] Failed reading body after subflow request: %s", subflowExecutionId, err)
 				return err
 			} else {
-				log.Printf("[ERROR] Failed forwarding subflow request of length %d\n: %s", len(resultData), string(body))
-				//log.Printf("[ERROR] Failed forwarding subflow request %s\n: %s", string(resultData), string(body))
+				log.Printf("[ERROR][%s] Failed forwarding subflow request of length %d\n: %s", subflowExecutionId, len(resultData), string(body))
 			}
 		}
 	} else {
-		log.Printf("[INFO] NOT sending request because data len is %d and request is %s", len(resultData), sendRequest)
+		log.Printf("[INFO][%s] NOT sending request to parent %s because data len is %d and sendRequest is %t", subflowExecutionId, executionParent, len(resultData), sendRequest)
+ 
 	}
 
 	return nil
@@ -10905,7 +10907,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[INFO][%s] Updating %s in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
+			log.Printf("[INFO][%s] Updating %s (%s) in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.Name, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
+
+			if (workflowExecution.Results[outerindex].Status != actionResult.Status) {
+				dbSave = true
+			}
 
 			actionResultBody, err := json.Marshal(actionResult)
 			if err == nil {
@@ -10970,8 +10976,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	//log.Printf("EXTRA: %d", extraInputs)
-	//log.Printf("LENGTH: %d - %d", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
 	updateParentRan := false
 	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
 		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
@@ -10991,7 +10995,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		//log.Printf("[debug] Finished? %s", finished)
 		if finished {
 			dbSave = true
 			if len(workflowExecution.ExecutionParent) == 0 {
@@ -11156,9 +11159,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			log.Printf("[WARNING][%s] Sinkholing request of %s IF the subflow-result DOESNT have result.", workflowExecution.ExecutionId, actionResult.Action.Label)
+
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
-				//func updateExecutionParent(executionParent, returnValue, parentAuth, parentNode string) error {
-				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem\n\n", workflowExecution.ExecutionId, len(workflowExecution.Results))
+				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
 
 				// Finding the result, and removing it if it exists. "Sinkholing"
 				workflowExecution.Status = "EXECUTING"
@@ -11173,7 +11176,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				workflowExecution.Results = newResults
 
-				//for _, result := range
+				// Returning as we are waiting for the subflow to finish
+				return &workflowExecution, dbSave, nil
+
 			} else {
 				var subflowDataList []SubflowData
 				err = json.Unmarshal([]byte(actionResult.Result), &subflowDataList)
@@ -11187,15 +11192,19 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 
 				} else {
-					log.Printf("[WARNING] LIST sinkholed (%d) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.", len(subflowDataList))
+					log.Printf("[WARNING] LIST sinkholed (%d) for action %s (%s) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.", len(subflowDataList), actionResult.Action.Label, actionResult.Action.ID)
 
 					// Set to executing, as the point is for the subflows themselves to update this part. This does NOT happen in the subflow, but in the parent workflow, which is waiting for results to be ingested, hence it's set to EXECUTING
-					workflowExecution.Status = "EXECUTING"
 
-					// Setting to waiting, as it should be updated by child executions
+					// Setting to waiting, as it should be updated by child executions' fill-ins from their result when they finish
+					workflowExecution.Status = "EXECUTING"
 					actionResult.Status = "WAITING"
+
+					foundSubflow := false
 					for resultIndex, result := range workflowExecution.Results {
 						if result.Action.ID == actionResult.Action.ID {
+							foundSubflow = true 
+
 							workflowExecution.Results[resultIndex] = actionResult
 
 							actionResultBody, err := json.Marshal(actionResult)
@@ -11207,26 +11216,17 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								} else {
 									//log.Printf("[DEBUG] Set cache for SUBFLOW action result %s", cacheId)
 								}
+							} else {
+								log.Printf("[ERROR] Failed marshalling action result for SUBFLOW to WAITING: %s", err)
 							}
 
 							break
 						}
 					}
 
-					/*
-						for _, subflowItem := range subflowDataList {
-							log.Printf("%s == %s", subflowItem.ExecutionId, workflowExecution.ExecutionId)
-
-							if len(subflowItem.Result) == 0 {
-								subflowItem.Result = workflowExecution.Result
-
-								//if subflowItem.ExecutionId == workflowExecution.ExecutionId {
-								//	log.Printf("FOUND EXECUTION ID IN SUBFLOW: %s", subflowItem.ExecutionId)
-								//tmpJson, err := json.Marshal(workflowExecution)
-								//if strings.Contains(
-							}
-						}
-					*/
+					if !foundSubflow {
+						log.Printf("\n\n[ERROR] Failed finding subflow in results for %s (%s). Setting it in cache so that it can be loaded.\n\n", actionResult.Action.Label, actionResult.Action.ID)
+					}
 				}
 
 				dbSave = true

@@ -1195,12 +1195,15 @@ func sanitizeString(input string) string {
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
 	workflowExecution.Workflow.Image = ""
 
-
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
-	for _, action := range workflowExecution.Workflow.Actions {
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
 		found := false
 		result := ActionResult{}
+
+
+		workflowExecution.Workflow.Actions[actionIndex].LargeImage = ""
+		workflowExecution.Workflow.Actions[actionIndex].SmallImage = ""
 
 		for _, innerresult := range workflowExecution.Results {
 			if innerresult.Action.ID == action.ID && innerresult.Status != "WAITING" {
@@ -1269,8 +1272,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			continue
 		}
 
-		trigger.LargeImage = ""
-		trigger.SmallImage = ""
+		workflowExecution.Workflow.Triggers[triggerIndex].LargeImage = ""
+		workflowExecution.Workflow.Triggers[triggerIndex].SmallImage = ""
 
 		workflowExecution.Workflow.Triggers[triggerIndex] = trigger
 
@@ -1333,6 +1336,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	}
 
 	// Check if finished too?
+	//log.Printf("\n\n\n[DEBUG] Got %d results for %s\n\n\n", len(workflowExecution.Results), workflowExecution.ExecutionId)
 
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
 
