@@ -61,7 +61,6 @@ func base64StringToString(base64String string) (string, error) {
 	return string(decoded), nil
 }
 
-
 func RunOpsAppHealthCheck() (AppHealth, error) {
 	log.Printf("[DEBUG] Running app health check")
 	appHealth := AppHealth{
@@ -394,8 +393,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
-
-	log.Printf("cacheDb: %#v", project.CacheDb)
 	// Check cache if health check was run in last 5 minutes
 	// If yes, return cached result, else run health check
 	ctx := GetContext(request)
@@ -403,7 +400,9 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	cacheKey := fmt.Sprintf("ops-health-check")
 	cacheHit := false
 
-	if project.CacheDb {
+	memcacheUrl := os.Getenv("SHUFFLE_MEMCACHED")
+
+	if len(memcacheUrl) != 0 {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -433,10 +432,9 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			log.Print("[WARNING] Failed getting cache ops health on first try: %s", err)
 		}
 	} else {
-		err := SetOpsDashboardCacheHitStat(ctx, cacheHit)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache hit stat: %s", err)
-		}
+		log.Print("[WARNING] Memcache URL not set! Exiting..")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_MEMCACHED not set. Please set memcached to use this feature!"}`))
 	}
 
 	// Use channel for getting RunOpsWorkflow function results
@@ -468,6 +466,14 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	platformHealth.Success = true
 	platformHealth.Updated = time.Now().Unix()
+
+	var HealthCheck HealthCheckDB
+	HealthCheck.Success = platformHealth.Success
+	HealthCheck.Updated = platformHealth.Updated
+	HealthCheck.Workflows = platformHealth.Workflows
+
+	// Add to database
+	err := SetPlatformHealth(ctx, HealthCheck)
 
 	platformData, err := json.Marshal(platformHealth)
 	if err != nil {
@@ -556,6 +562,10 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
 		baseUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
 	}
 
 	// prepare the request
@@ -814,9 +824,8 @@ func InitOpsWorkflow() (string, error) {
 	for actionIndex, _ := range workflowData.Actions {
 		action := workflowData.Actions[actionIndex]
 
-		// capitalise the first letter of the environment
-		if action.Environment != "Cloud" {
-			action.Environment = "Cloud"
+		if action.Environment != "Shuffle" {
+			action.Environment = "Shuffle"
 		}
 
 		workflowData.Actions[actionIndex] = action

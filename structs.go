@@ -3510,6 +3510,13 @@ type HealthCheck struct {
 	Workflows WorkflowHealth `json:"workflows"`
 }
 
+type HealthCheckDB struct {
+	Success bool `json:"success"`
+	Updated int64 `json:"updated"`
+	Workflows WorkflowHealth `json:"workflows"`
+	ID string `json:"id"`
+}
+
 type NodeData struct {
 	Name string `json:"name"`
 	Count int `json:"count"`
