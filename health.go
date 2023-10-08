@@ -819,7 +819,7 @@ func InitOpsWorkflow() (string, error) {
 	workflowData.Name = "Ops Dashboard Workflow"
 
 	var actions []Action
-	var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}
+	// var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}
 
 	for actionIndex, _ := range workflowData.Actions {
 		action := workflowData.Actions[actionIndex]
@@ -829,12 +829,12 @@ func InitOpsWorkflow() (string, error) {
 		}
 
 		workflowData.Actions[actionIndex] = action
-		if ArrayContains(blacklisted, action.Label) {
-			// dates keep failing in opensearch
-			// this is a grander issue, but for now, we'll just skip these actions
-			log.Printf("[WARNING] Skipping action %s", action.Label)
-			continue
-		}
+		// if ArrayContains(blacklisted, action.Label) {
+		// 	// dates keep failing in opensearch
+		// 	// this is a grander issue, but for now, we'll just skip these actions
+		// 	log.Printf("[WARNING] Skipping action %s", action.Label)
+		// 	continue
+		// }
 
 		actions = append(actions, action)
 	}
