@@ -402,6 +402,16 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	memcacheUrl := os.Getenv("SHUFFLE_MEMCACHED")
 
+	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
+	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
+	if len(apiKey) == 0 || len(orgId) == 0 {
+		log.Printf("[WARNING] Ops dashboard api key or org not set. Not setting up ops workflow")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_OPS_DASHBOARD_APIKEY or SHUFFLE_OPS_DASHBOARD_ORG not set. Please set these to use this feature!"}`))
+		return
+	}
+
 	if len(memcacheUrl) != 0 {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -429,12 +439,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 		} else {
-			log.Print("[WARNING] Failed getting cache ops health on first try: %s", err)
+			log.Printf("[WARNING] Failed getting cache ops health on first try: %s", err)
 		}
 	} else {
-		log.Print("[WARNING] Memcache URL not set! Exiting..")
+		log.Println("[WARNING] Memcache URL not set! Exiting..")
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_MEMCACHED not set. Please set memcached to use this feature!"}`))
+		return
 	}
 
 	// Use channel for getting RunOpsWorkflow function results
@@ -692,6 +703,8 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 		updateCache(workflowHealth)
 
 		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
+		log.Printf("[DEBUG] Waiting 2 seconds before retrying")
+		time.Sleep(2 * time.Second)
 	}
 
 	// 4. Delete workflow
@@ -871,6 +884,6 @@ func InitOpsWorkflow() (string, error) {
 		return "", errors.New("Error saving ops dashboard workflow: " + err.Error())
 	}
 
-	log.Println("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
+	log.Printf("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
 	return workflowData.ID, nil
 }
