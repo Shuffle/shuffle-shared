@@ -61,7 +61,6 @@ func base64StringToString(base64String string) (string, error) {
 	return string(decoded), nil
 }
 
-
 func RunOpsAppHealthCheck() (AppHealth, error) {
 	log.Printf("[DEBUG] Running app health check")
 	appHealth := AppHealth{
@@ -394,8 +393,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
-
-	log.Printf("cacheDb: %#v", project.CacheDb)
 	// Check cache if health check was run in last 5 minutes
 	// If yes, return cached result, else run health check
 	ctx := GetContext(request)
@@ -403,7 +400,19 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	cacheKey := fmt.Sprintf("ops-health-check")
 	cacheHit := false
 
-	if project.CacheDb {
+	memcacheUrl := os.Getenv("SHUFFLE_MEMCACHED")
+
+	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
+	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
+	if len(apiKey) == 0 || len(orgId) == 0 {
+		log.Printf("[WARNING] Ops dashboard api key or org not set. Not setting up ops workflow")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_OPS_DASHBOARD_APIKEY or SHUFFLE_OPS_DASHBOARD_ORG not set. Please set these to use this feature!"}`))
+		return
+	}
+
+	if len(memcacheUrl) != 0 {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -430,13 +439,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 		} else {
-			log.Print("[WARNING] Failed getting cache ops health on first try: %s", err)
+			log.Printf("[WARNING] Failed getting cache ops health on first try: %s", err)
 		}
 	} else {
-		err := SetOpsDashboardCacheHitStat(ctx, cacheHit)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache hit stat: %s", err)
-		}
+		log.Println("[WARNING] Memcache URL not set! Exiting..")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_MEMCACHED not set. Please set memcached to use this feature!"}`))
+		return
 	}
 
 	// Use channel for getting RunOpsWorkflow function results
@@ -468,6 +477,14 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	platformHealth.Success = true
 	platformHealth.Updated = time.Now().Unix()
+
+	var HealthCheck HealthCheckDB
+	HealthCheck.Success = platformHealth.Success
+	HealthCheck.Updated = platformHealth.Updated
+	HealthCheck.Workflows = platformHealth.Workflows
+
+	// Add to database
+	err := SetPlatformHealth(ctx, HealthCheck)
 
 	platformData, err := json.Marshal(platformHealth)
 	if err != nil {
@@ -556,6 +573,10 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
 		baseUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
 	}
 
 	// prepare the request
@@ -682,6 +703,8 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 		updateCache(workflowHealth)
 
 		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
+		log.Printf("[DEBUG] Waiting 2 seconds before retrying")
+		time.Sleep(2 * time.Second)
 	}
 
 	// 4. Delete workflow
@@ -809,23 +832,22 @@ func InitOpsWorkflow() (string, error) {
 	workflowData.Name = "Ops Dashboard Workflow"
 
 	var actions []Action
-	var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}
+	// var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}
 
 	for actionIndex, _ := range workflowData.Actions {
 		action := workflowData.Actions[actionIndex]
 
-		// capitalise the first letter of the environment
-		if action.Environment != "Cloud" {
-			action.Environment = "Cloud"
+		if action.Environment != "Shuffle" {
+			action.Environment = "Shuffle"
 		}
 
 		workflowData.Actions[actionIndex] = action
-		if ArrayContains(blacklisted, action.Label) {
-			// dates keep failing in opensearch
-			// this is a grander issue, but for now, we'll just skip these actions
-			log.Printf("[WARNING] Skipping action %s", action.Label)
-			continue
-		}
+		// if ArrayContains(blacklisted, action.Label) {
+		// 	// dates keep failing in opensearch
+		// 	// this is a grander issue, but for now, we'll just skip these actions
+		// 	log.Printf("[WARNING] Skipping action %s", action.Label)
+		// 	continue
+		// }
 
 		actions = append(actions, action)
 	}
@@ -862,6 +884,6 @@ func InitOpsWorkflow() (string, error) {
 		return "", errors.New("Error saving ops dashboard workflow: " + err.Error())
 	}
 
-	log.Println("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
+	log.Printf("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
 	return workflowData.ID, nil
 }

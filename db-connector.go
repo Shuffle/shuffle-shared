@@ -18,6 +18,7 @@ import (
 	//"strconv"
 	//"encoding/binary"
 	"math/rand"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -5340,6 +5341,34 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 	return nil
 }
 
+func SetPlatformHealth(ctx context.Context, health HealthCheckDB) error {
+	nameKey := "platform_health"
+
+	// generate random ID
+	health.ID = uuid.NewV4().String()
+
+	data, err := json.Marshal(health)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set platform health: %s", err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, health.ID, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, health.ID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &health); err != nil {
+			log.Printf("[WARNING] Error adding platform health: %s", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
 func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 	nameKey := "openseacollection"
 
@@ -5790,6 +5819,20 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	return nil
 }
 
+func fixPosition(position float64) float64 {
+		intValue := int(math.Round(position)) // Convert the float to the nearest integer
+	
+		difference := position - float64(intValue)
+		difference = math.Abs(difference)
+	
+		if difference == 0 {
+			log.Printf("[DEBUG] Position fixed from %s to %s", position, position + 0.001)
+			return position + 0.001
+		}
+
+		return position
+}
+
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 	// Overwriting to be sure these are matching
 	// No real point in having id + workflow.ID anymore
@@ -5804,6 +5847,16 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	if len(optionalEditedSecondsOffset) > 0 {
 		workflow.Edited += int64(optionalEditedSecondsOffset[0])
+	}
+
+	for index, action := range workflow.Actions {
+		workflow.Actions[index].Position.X = fixPosition(float64(action.Position.X))
+		workflow.Actions[index].Position.Y = fixPosition(float64(action.Position.Y))
+	}
+
+	for index, comments := range workflow.Comments {
+		workflow.Comments[index].Position.X = fixPosition(float64(comments.Position.X))
+		workflow.Comments[index].Position.Y = fixPosition(float64(comments.Position.Y))
 	}
 
 	// New struct, to not add body, author etc
