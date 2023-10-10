@@ -5341,6 +5341,91 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 	return nil
 }
 
+func GetLatestPlatformHealth(ctx context.Context) (HealthCheckDB, error) {
+	nameKey := "platform_health"
+
+	// sort by "updated", and get the first one
+	health := HealthCheckDB{}
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1,
+			"sort": map[string]interface{}{
+				"updated": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return health, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get latest platform health): %s", err)
+			return health, err
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return health, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return health, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return health, err
+		}
+
+		wrapped := HealthCheckSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return health, err
+		}
+
+		if len(wrapped.Hits.Hits) == 0 {
+			return health, errors.New("No healthchecks found")
+		}
+
+		health = wrapped.Hits.Hits[0].Source
+	} else {
+		q := datastore.NewQuery(nameKey).Order("-updated").Limit(1)
+		_, err := project.Dbclient.GetAll(ctx, q, &health)
+		if err != nil {
+			log.Printf("[WARNING] Error getting latest platform health: %s", err)
+			return health, err
+		}
+		
+		if len(health) == 0 {
+			return health, errors.New("No healthchecks found")
+		}
+	}
+
+	return health, nil		
+}
+
 func SetPlatformHealth(ctx context.Context, health HealthCheckDB) error {
 	nameKey := "platform_health"
 

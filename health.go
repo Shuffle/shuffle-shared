@@ -393,12 +393,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
-	// Check cache if health check was run in last 5 minutes
-	// If yes, return cached result, else run health check
+
+	// check if there is a force parameter
+	force := request.URL.Query().Get("force")
+
 	ctx := GetContext(request)
 	platformHealth := HealthCheck{}
 	cacheKey := fmt.Sprintf("ops-health-check")
-	cacheHit := false
 
 	memcacheUrl := os.Getenv("SHUFFLE_MEMCACHED")
 
@@ -419,16 +420,8 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &platformHealth)
 			if err == nil {
-				// FIXME: Check if last updated is less than 5 minutes with platformHealth.Edited in unix time
-				// If yes, return cached result, else run health check
 				log.Printf("Platform health returned: %#v", platformHealth)
 				marshalledData, err := json.Marshal(platformHealth)
-				cacheHit = true
-
-				err_ := SetOpsDashboardCacheHitStat(ctx, cacheHit)
-				if err_ != nil {
-					log.Printf("[WARNING] Failed setting cache hit stat: %s", err_)
-				}
 
 				if err == nil {
 					resp.WriteHeader(200)
@@ -446,6 +439,47 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_MEMCACHED not set. Please set memcached to use this feature!"}`))
 		return
+	}
+
+	if force == "true" && project.Environment == "onprem" {
+		log.Printf("[DEBUG] Force is true. Running health check")
+
+		userInfo, err := shuffle.HandleApiAuthentication(resp, request)
+		if err != nil {
+			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
+	
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if userInfo.Role != "admin" {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
+			return
+		}
+	} else if force != "true" {
+		// get last health check from database
+		health, err := GetPlatformHealth(ctx)
+		if err == nil {
+			log.Printf("[DEBUG] Last health check was: %#v", health)
+			platformData, err := json.Marshal(health)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health."}`))
+				return
+			}
+
+			resp.WriteHeader(200)
+			resp.Write(platformData)
+			return
+		} else {
+			log.Printf("[WARNING] Failed getting platform health from database: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting platform health from database."}`))
+			return
+		}
 	}
 
 	// Use channel for getting RunOpsWorkflow function results
