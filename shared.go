@@ -70,9 +70,9 @@ func GetUsecaseData() string {
         "list": [
             {
                 "name": "Email management",
-								"priority": 100,
-								"type": "communication",
-								"last": "cases", 
+				"priority": 100,
+				"type": "communication",
+				"last": "cases", 
                 "items": {
                     "name": "Release a quarantined message",
                     "items": {}
@@ -80,9 +80,9 @@ func GetUsecaseData() string {
             },
             {
                 "name": "EDR to ticket",
-								"priority": 100,
-								"type": "edr",
-								"last": "cases",
+				"priority": 100,
+				"type": "edr",
+				"last": "cases",
                 "items": {
                     "name": "Get host information",
                     "items": {}
@@ -90,20 +90,20 @@ func GetUsecaseData() string {
             },
             {
                 "name": "SIEM to ticket",
-								"priority": 100,
-								"type": "siem",
-								"last": "cases",
-								"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
-								"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
-								"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
-								"reference_image": "/images/detectionframework.png",
+				"priority": 100,
+				"type": "siem",
+				"last": "cases",
+				"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
+				"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
+				"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
+				"reference_image": "/images/detectionframework.png",
                 "items": {}
             },
             {
-								"type": "cases",
-								"last": "cases",
+				"type": "cases",
+				"last": "cases",
                 "name": "2-way Ticket synchronization",
-								"priority": 60,
+				"priority": 60,
                 "items": {}
             },
             {
@@ -122,15 +122,15 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Assign tickets",
-								"type": "cases",
-								"priority": 60,
+				"type": "cases",
+				"priority": 30,
                 "items": {}
             },
             {
                 "name": "Firewall alerts",
-								"priority": 90,
-								"type": "network",
-								"last": "cases",
+				"priority": 90,
+				"type": "network",
+				"last": "cases",
                 "items": {
                     "name": "URL filtering",
                     "items": {}
@@ -138,9 +138,9 @@ func GetUsecaseData() string {
             },
             {
                 "name": "IDS/IPS alerts",
-								"type": "network",
-								"last": "cases",
-								"priority": 90,
+				"type": "network",
+				"last": "cases",
+				"priority": 30,
                 "items": {
                     "name": "Manage policies",
                     "items": {}
@@ -196,8 +196,9 @@ func GetUsecaseData() string {
         "list": [
             {
                 "name": "Search SIEM (Sigma)",
-								"priority": 90,
-								"type": "siem",
+				"priority": 90,
+				"type": "siem",
+				"last": "cases",
                 "items": {
                     "name": "Endpoint",
                     "items": {}
@@ -207,12 +208,14 @@ func GetUsecaseData() string {
                 "name": "Search EDR (OSQuery)",
 								"type": "edr",
 								"priority": 90,
+				"last": "cases",
                 "items": {}
             },
             {
                 "name": "Search emails (Sublime)",
 								"priority": 90,
 								"type": "communication",
+				"last": "cases",
                 "items": {
                     "name": "Check headers and IOCs",
                     "items": {}
@@ -222,12 +225,14 @@ func GetUsecaseData() string {
                 "name": "Search IOCs (ioc-finder)",
 								"priority": 50,
 								"type": "intel",
+				"last": "cases",
                 "items": {}
             },
             {
                 "name": "Search files (Yara)",
 								"priority": 50,
 								"type": "intel",
+				"last": "cases",
                 "items": {}
             },
             {
@@ -240,12 +245,14 @@ func GetUsecaseData() string {
                 "name": "IDS & IPS (Snort/Surricata)",
 								"priority": 50,
 								"type": "network",
+				"last": "cases",
                 "items": {}
             },
             {
                 "name": "Honeypot access",
-								"priority": 50,
-								"type": "network",
+				"priority": 50,
+				"type": "network",
+				"last": "cases",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -4163,7 +4170,8 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 					if len(workflows) > 0 {
 						org.Tutorials[tutorialIndex].Done = true
 						//org.Tutorials[tutorialIndex].Link = "/search?tab=workflows"
-						org.Tutorials[tutorialIndex].Link = "/usecases"
+						//org.Tutorials[tutorialIndex].Link = "/usecases"
+						org.Tutorials[tutorialIndex].Link = "/welcome?tab=3"
 					}
 
 					updated = true
@@ -19526,6 +19534,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 		usecasesAdded += 1
 	}
 
+
 	var usecases UsecaseLinks
 	err = json.Unmarshal([]byte(GetUsecaseData()), &usecases)
 	if err != nil {
@@ -19670,6 +19679,8 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 					}
 				}
 
+				usecaseDescription += "&" + subusecase.Description
+
 				// Should find info about the usecase
 				// No description as this has custom rendering
 				org, innerUpdate = AddPriority(*org, Priority{
@@ -19696,6 +19707,45 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 
 			if innerUpdate && usecasesAdded >= 3{
 				break
+			}
+		}
+	}
+
+	log.Printf("[DEBUG] Inside workflow suggestions. Usecases: %d", usecasesAdded)
+	if usecasesAdded < 3 {
+		log.Printf("[DEBUG] Should check if workflows still are the same amount or not to change priorities")
+
+		// Check all existing priorities if they should still be closed, or reopened
+		for prioIndex, priority := range org.Priorities {
+			if priority.Type != "usecase" {
+				continue
+			}
+
+			// Check if the usecase is still in the workflow list
+			usecaseName := strings.ReplaceAll(priority.Name, "Suggested Usecase: ", "")
+
+			found := false
+			for _, workflow := range workflows {
+				//usecaseIds = append(usecaseIds, workflow.UsecaseIds...)
+				for _, usecase := range workflow.UsecaseIds {
+					if usecase == usecaseName {
+						found = true
+						break
+					}
+				}
+
+				if found {
+					break
+				}
+			}
+
+			if !found {
+				if usecasesAdded < 3 {
+					orgUpdated = true
+					org.Priorities[prioIndex].Active = true 
+				} else {
+					break
+				}
 			}
 		}
 	}
