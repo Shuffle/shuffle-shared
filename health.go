@@ -664,10 +664,12 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
+		log.Printf("[DEBUG] Base url not set. Setting to default")
 		baseUrl = "https://shuffler.io"
 	}
 
 	if project.Environment == "onprem" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
 		baseUrl = "http://localhost:5001"
 	}
 
@@ -928,8 +930,14 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	for actionIndex, _ := range workflowData.Actions {
 		action := workflowData.Actions[actionIndex]
 
-		if action.Environment != "Shuffle" {
-			action.Environment = "Shuffle"
+		if project.Environment == "onprem" {
+			if action.Environment != "Shuffle" {
+				action.Environment = "Shuffle"
+			}
+		} else {
+			if action.Environment != "Cloud" {
+				action.Environment = "Cloud"
+			}
 		}
 
 		workflowData.Actions[actionIndex] = action
