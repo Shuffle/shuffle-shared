@@ -455,7 +455,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if force == "true" && project.Environment == "onprem" {
+	if force == "true" {
 		log.Printf("[DEBUG] Force is true. Running health check")
 
 		userInfo, err := HandleApiAuthentication(resp, request)
@@ -467,7 +467,11 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if userInfo.Role != "admin" {
+		if project.Environment == "onprem" && userInfo.Role != "admin" {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
+			return
+		} else if project.Environment == "Cloud" && userInfo.ApiKey != os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
 			return
