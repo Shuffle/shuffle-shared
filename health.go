@@ -480,6 +480,12 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		// get last health check from database
 		healths, err := GetPlatformHealth(ctx, 1)
 
+		if len(healths) == 0 {
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Health check has never been run before! Nothing to display!"}`))
+			return
+		}
+
 		health := healths[0]
 
 		if err == nil {
@@ -507,6 +513,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowHealthChannel := make(chan WorkflowHealth)
 	// appHealthChannel := make(chan AppHealth)
 	go func() {
+		log.Printf("[DEBUG] Running workflowHealthChannel goroutine") 
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed workflow health check: %s", err)
@@ -946,13 +953,15 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	uniqueCheck := false
 	for uniqueCheck == false {
+		log.Printf("[DEBUG] In unique check loop")
 		// generate a random UUID for the workflow
 		randomUUID := uuid.New().String()
 		log.Printf("[DEBUG] Random UUID generated for Ops dashboard: %s", randomUUID)
 
 		// check if workflow with id randomUUID exists
 		_, err = GetWorkflow(ctx, randomUUID)
-		if err != nil {
+		if err == nil {
+			log.Printf("[DEBUG] Workflow with id %s doesn't exist. Using it for Ops dashboard. The error: %s", randomUUID, err)
 			uniqueCheck = true
 			workflowData.ID = randomUUID
 		}
