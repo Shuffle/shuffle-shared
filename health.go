@@ -509,18 +509,17 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	go func() {
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
 		if err != nil {
-			log.Printf("[ERROR] Failed running workflow health check: %s", err)
-
-			if workflowHealth.Create == true {
-				log.Printf("[DEBUG] Deleting created ops workflow")
-				err = deleteWorkflow(workflowHealth, apiKey)
-				if err != nil {
-					log.Printf("[ERROR] Failed deleting workflow: %s", err)
-				} else {
-					log.Printf("[DEBUG] Deleted ops workflow successfully!")
-					workflowHealth.Delete = true
-					updateCache(workflowHealth)
-				}
+			log.Printf("[ERROR] Failed workflow health check: %s", err)
+		}
+		if workflowHealth.Create == true {
+			log.Printf("[DEBUG] Deleting created ops workflow")
+			err = deleteWorkflow(workflowHealth, apiKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting workflow: %s", err)
+			} else {
+				log.Printf("[DEBUG] Deleted ops workflow successfully!")
+				workflowHealth.Delete = true
+				updateCache(workflowHealth)
 			}
 		}
 		workflowHealthChannel <- workflowHealth
