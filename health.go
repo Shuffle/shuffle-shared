@@ -506,8 +506,14 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed running workflow health check: %s", err)
-			workflowHealthChannel <- workflowHealth
-			return
+
+			if workflowHealth.Create == true {
+				log.Printf("[DEBUG] Deleting created ops workflow")
+				workflowHealth, err = deleteWorkflow(workflowHealth, apiKey)
+				if err != nil {
+					log.Printf("[ERROR] Failed deleting workflow: %s", err)
+				}
+			}
 		}
 		workflowHealthChannel <- workflowHealth
 	}()
@@ -581,6 +587,53 @@ func OpsDashboardCacheHitStat(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(statsBody)
 }
 
+func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (WorkflowHealth, error) {
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		baseUrl = "https://shuffler.io"
+	}
+	
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
+	}
+
+	id := workflowHealth.ExecutionId
+
+		// 4. Delete workflow
+	// make a DELETE request to https://shuffler.io/api/v1/workflows/<workflow_id>
+	url := baseUrl + "/api/v1/workflows/" + id
+	log.Printf("[DEBUG] Deleting workflow with id: %s", id)
+
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+		return workflowHealth, err
+	}
+
+	// set the headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed deleting the health check workflow with HTTP request: %s", err)
+		return workflowHealth, err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting the health check workflow: %s. The status code was: %d", err, resp.StatusCode)
+		return workflowHealth, err
+	}
+
+	defer resp.Body.Close()
+
+	workflowHealth.Delete = true
+
+	return workflowHealth, nil
+}
+
 func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// run workflow with id 602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
 	ctx := context.Background()
@@ -592,6 +645,15 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		Delete:      false,
 		RunStatus:   "",
 		ExecutionId: "",
+	}
+
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		baseUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
 	}
 
 	// 1. Get workflow
@@ -619,15 +681,6 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	id := workflow.ID
 	_ = id
 	_ = orgId
-
-	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	if len(baseUrl) == 0 {
-		baseUrl = "https://shuffler.io"
-	}
-
-	if project.Environment == "onprem" {
-		baseUrl = "http://localhost:5001"
-	}
 
 	// prepare the request
 	url := baseUrl + "/api/v1/workflows/" + id + "/execute"
@@ -756,38 +809,6 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		log.Printf("[DEBUG] Waiting 2 seconds before retrying")
 		time.Sleep(2 * time.Second)
 	}
-
-	// 4. Delete workflow
-	// make a DELETE request to https://shuffler.io/api/v1/workflows/<workflow_id>
-	url = baseUrl + "/api/v1/workflows/" + id
-	log.Printf("[DEBUG] Deleting workflow with id: %s", id)
-
-	req, err = http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
-		return workflowHealth, err
-	}
-
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	// send the request
-	client = &http.Client{}
-	resp, err = client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Failed deleting the health check workflow with HTTP request: %s", err)
-		return workflowHealth, err
-	}
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting the health check workflow: %s. The status code was: %d", err, resp.StatusCode)
-		return workflowHealth, err
-	}
-
-	defer resp.Body.Close()
-
-	workflowHealth.Delete = true
 
 	return workflowHealth, nil
 }
