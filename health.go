@@ -61,7 +61,7 @@ func base64StringToString(base64String string) (string, error) {
 	return string(decoded), nil
 }
 
-func RunOpsAppHealthCheck() (AppHealth, error) {
+func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	log.Printf("[DEBUG] Running app health check")
 	appHealth := AppHealth{
 		Create:      false,
@@ -145,7 +145,7 @@ func RunOpsAppHealthCheck() (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer " + apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -414,6 +414,8 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		log.Printf("[DEBUG] Setting api key to that of user %s and org id to %s ", org.Users[0].ApiKey, org.Id)
+
 		orgId = org.Id
 		apiKey = org.Users[0].ApiKey
 	}
@@ -425,7 +427,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.CacheDb {
+	if project.CacheDb && force != "true" {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -446,7 +448,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			log.Printf("[WARNING] Failed getting cache ops health on first try: %s", err)
 		}
-	} else {
+	} else if !(project.CacheDb) {
 		log.Println("[WARNING] Cache not enabled. Not using cache for ops health isn't recommended!")
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Cache not enabled. Not using cache for ops health isn't recommended!"}`))
@@ -501,7 +503,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowHealthChannel := make(chan WorkflowHealth)
 	// appHealthChannel := make(chan AppHealth)
 	go func() {
-		workflowHealth, err := RunOpsWorkflow()
+		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed running workflow health check: %s", err)
 			workflowHealthChannel <- workflowHealth
@@ -579,7 +581,7 @@ func OpsDashboardCacheHitStat(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(statsBody)
 }
 
-func RunOpsWorkflow() (WorkflowHealth, error) {
+func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// run workflow with id 602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
 	ctx := context.Background()
 
@@ -593,7 +595,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	}
 
 	// 1. Get workflow
-	opsWorkflowID, err := InitOpsWorkflow()
+	opsWorkflowID, err := InitOpsWorkflow(apiKey, orgId)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating Health check workflow: %s", err)
 		return workflowHealth, err
@@ -615,7 +617,6 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 	// 2. Run workflow
 	id := workflow.ID
-	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
 	_ = id
 	_ = orgId
 
@@ -639,7 +640,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// startId := "98713d6a-dd6b-4bd6-a11c-9778b80f2a28"
 	// body := map[string]string{"execution_argument": "", "start": startId}
@@ -705,7 +706,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 		// set the headers
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+		req.Header.Set("Authorization", "Bearer " + apiKey)
 
 		// convert the body to JSON
 		reqBody := map[string]string{"execution_id": execution.ExecutionId, "authorization": os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")}
@@ -769,7 +770,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -791,15 +792,17 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 	return workflowHealth, nil
 }
 
-func InitOpsWorkflow() (string, error) {
-	opsDashboardApikey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
+func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
+	opsDashboardApikey := apiKey
+	opsDashboardOrgId := OrgId
+
 	if len(opsDashboardApikey) == 0 {
 		log.Printf("[WARNING] Ops dashboard api key not set. Not setting up ops workflow")
 		return "", errors.New("Ops dashboard api key not set")
 
 	}
 
-	opsDashboardOrgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
 	if len(opsDashboardOrgId) == 0 {
 		log.Printf("[WARNING] Ops dashboard org not set. Not setting up ops workflow")
 		return "", errors.New("Ops dashboard org not set")
