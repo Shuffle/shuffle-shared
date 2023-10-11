@@ -1469,9 +1469,20 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[AUDIT] Setting new app authentication for app %s with user %s (%s) in org %s (%s)", appAuth.App.Name, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
+
 	ctx := GetContext(request)
 	if len(appAuth.Id) == 0 {
-		appAuth.Id = uuid.NewV4().String()
+
+		// To not override, we should use an md5 based on the input fields + org to create the ID
+		fielddata := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, appAuth.Label)
+		for _, field := range appAuth.Fields {
+			fielddata += field.Key
+		}
+
+		// Happens in very rare circumstances
+		hasher := md5.New()
+		hasher.Write([]byte(fielddata))
+		appAuth.Id = hex.EncodeToString(hasher.Sum(nil))
 	} else {
 		auth, err := GetWorkflowAppAuthDatastore(ctx, appAuth.Id)
 		if err == nil {
@@ -1649,7 +1660,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !found {
-			log.Printf("[WARNING] Failed finding field %s in appauth fields for %s", field.Key, appAuth.App.Name)
+			log.Printf("[WARNING] Failed finding field '%s' in appauth fields for %s", field.Key, appAuth.App.Name)
 			resp.WriteHeader(409)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
 			return
@@ -1681,6 +1692,19 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		return
+	}
+
+	if appAuth.AutoDistribute {
+		log.Printf("[DEBUG] Auto distributing auth %s for app %s (%s) in org %s (%s) to all workflows.", appAuth.Id, appAuth.App.Name, appAuth.App.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		err := AssignAuthEverywhere(ctx, &appAuth, user)
+		if err != nil {
+			log.Printf("[ERROR] Failed assigning auth everywhere (2): %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting workflows to update"}`))
+		} else {
+			log.Printf("[INFO] Assigned auth everywhere")
+		}
 	}
 
 	log.Printf("[INFO] Set new workflow auth for %s (%s) with ID %s", app.Name, app.ID, appAuth.Id)
@@ -3165,6 +3189,10 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		if workflow.Hidden {
+			continue
+		}
+
 		newActions := []Action{}
 		for _, action := range workflow.Actions {
 			// Removed because of exports. These are needed there.
@@ -3306,81 +3334,16 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if config.Action == "assign_everywhere" {
-		log.Printf("[INFO] Should set authentication config")
-		baseWorkflows, err := GetAllWorkflowsByQuery(ctx, user)
-		if err != nil && len(baseWorkflows) == 0 {
-			log.Printf("Getall error in auth update: %s", err)
+
+		err := AssignAuthEverywhere(ctx, auth, user)
+		if err != nil {
+			log.Printf("[ERROR] Failed assigning auth everywhere: %s", err)
+
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Failed getting workflows to update"}`))
-			return
-		}
+		} else {
+			log.Printf("[INFO] Assigned auth everywhere")
 
-		workflows := []Workflow{}
-		for _, workflow := range baseWorkflows {
-			if workflow.OrgId == user.ActiveOrg.Id {
-				workflows = append(workflows, workflow)
-			}
-		}
-
-		// FIXME: Add function to remove auth from other auth's
-		actionCnt := 0
-		workflowCnt := 0
-		authenticationUsage := []AuthenticationUsage{}
-		for _, workflow := range workflows {
-			newActions := []Action{}
-			edited := false
-			usage := AuthenticationUsage{
-				WorkflowId: workflow.ID,
-				Nodes:      []string{},
-			}
-
-			for _, action := range workflow.Actions {
-				if action.AppName == auth.App.Name {
-					action.AuthenticationId = auth.Id
-
-					edited = true
-					actionCnt += 1
-					usage.Nodes = append(usage.Nodes, action.ID)
-				}
-
-				newActions = append(newActions, action)
-			}
-
-			workflow.Actions = newActions
-			if edited {
-				//auth.Usage = usage
-				authenticationUsage = append(authenticationUsage, usage)
-				err = SetWorkflow(ctx, workflow, workflow.ID)
-				if err != nil {
-					log.Printf("Failed setting (authupdate) workflow: %s", err)
-					continue
-				}
-
-				//cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-
-				//DeleteCache(ctx, cacheKey)
-
-				workflowCnt += 1
-			}
-		}
-
-		//Usage         []AuthenticationUsage `json:"usage" datastore:"usage"`
-		log.Printf("[INFO] Found %d workflows, %d actions", workflowCnt, actionCnt)
-		if actionCnt > 0 && workflowCnt > 0 {
-			auth.WorkflowCount = int64(workflowCnt)
-			auth.NodeCount = int64(actionCnt)
-			auth.Usage = authenticationUsage
-			auth.Defined = true
-
-			err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
-			if err != nil {
-				log.Printf("Failed setting appauth: %s", err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "Failed setting app auth for all workflows"}`))
-				return
-			} else {
-				// FIXME: Remove ALL workflows from other auths using the same
-			}
 		}
 	}
 
@@ -5734,7 +5697,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								}
 							}
 
-							// FIXME: Add app auth
+							_ = found
+
+							/*
 							if !found {
 								timeNow := int64(time.Now().Unix())
 								authFields := []AuthenticationStore{}
@@ -5766,6 +5731,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 									appsAdded = append(appsAdded, outerapp.ID)
 								}
 							}
+							*/
+
+							log.Printf("[DEBUG] NOT adding authentication for workflow %s (%s) in org %s (%s) automatically as this should be done from within the workflow/during setup.", workflow.Name, workflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 							action.Errors = append(action.Errors, "Requires authentication")
 							action.IsValid = false
@@ -19741,6 +19709,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 
 			if !found {
 				if usecasesAdded < 3 {
+					usecasesAdded += 1
 					orgUpdated = true
 					org.Priorities[prioIndex].Active = true 
 				} else {
@@ -20010,4 +19979,81 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
+}
+
+func AssignAuthEverywhere(ctx context.Context, auth *AppAuthenticationStorage, user User) error {
+	log.Printf("[INFO] Should set authentication config")
+	baseWorkflows, err := GetAllWorkflowsByQuery(ctx, user)
+	if err != nil && len(baseWorkflows) == 0 {
+		log.Printf("Getall error in auth update: %s", err)
+		return err
+	}
+
+	workflows := []Workflow{}
+	for _, workflow := range baseWorkflows {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			workflows = append(workflows, workflow)
+		}
+	}
+
+	// FIXME: Add function to remove auth from other auth's
+	actionCnt := 0
+	workflowCnt := 0
+	authenticationUsage := []AuthenticationUsage{}
+	for _, workflow := range workflows {
+		newActions := []Action{}
+		edited := false
+		usage := AuthenticationUsage{
+			WorkflowId: workflow.ID,
+			Nodes:      []string{},
+		}
+
+		for _, action := range workflow.Actions {
+			if action.AppName == auth.App.Name {
+				action.AuthenticationId = auth.Id
+
+				edited = true
+				actionCnt += 1
+				usage.Nodes = append(usage.Nodes, action.ID)
+			}
+
+			newActions = append(newActions, action)
+		}
+
+		workflow.Actions = newActions
+		if edited {
+			//auth.Usage = usage
+			authenticationUsage = append(authenticationUsage, usage)
+			err = SetWorkflow(ctx, workflow, workflow.ID)
+			if err != nil {
+				log.Printf("Failed setting (authupdate) workflow: %s", err)
+				continue
+			}
+
+			//cacheKey := fmt.Sprintf("%s_workflows", user.Id)
+
+			//DeleteCache(ctx, cacheKey)
+
+			workflowCnt += 1
+		}
+	}
+
+	//Usage         []AuthenticationUsage `json:"usage" datastore:"usage"`
+	log.Printf("[INFO] Found %d workflows, %d actions", workflowCnt, actionCnt)
+	if actionCnt > 0 && workflowCnt > 0 {
+		auth.WorkflowCount = int64(workflowCnt)
+		auth.NodeCount = int64(actionCnt)
+		auth.Usage = authenticationUsage
+		auth.Defined = true
+
+		err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
+		if err != nil {
+			log.Printf("Failed setting appauth: %s", err)
+			return err
+		} else {
+			// FIXME: Remove ALL workflows from other auths using the same
+		}
+	}
+
+	return nil
 }

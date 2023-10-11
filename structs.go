@@ -1217,6 +1217,7 @@ type AppAuthenticationStorage struct {
 	Type              string                `json:"type" datastore:"type"`
 	Encrypted         bool                  `json:"encrypted" datastore:"encrypted"`
 	ReferenceWorkflow string                `json:"reference_workflow" datastore:"reference_workflow"`
+	AutoDistribute bool `json:"auto_distribute" datastore:"auto_distribute"`
 }
 
 type PasswordChange struct {
