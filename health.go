@@ -61,8 +61,7 @@ func base64StringToString(base64String string) (string, error) {
 	return string(decoded), nil
 }
 
-
-func RunOpsAppHealthCheck() (AppHealth, error) {
+func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	log.Printf("[DEBUG] Running app health check")
 	appHealth := AppHealth{
 		Create:      false,
@@ -146,7 +145,7 @@ func RunOpsAppHealthCheck() (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer " + apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -204,7 +203,7 @@ func RunOpsAppHealthCheck() (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -250,7 +249,7 @@ func RunOpsAppHealthCheck() (AppHealth, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -285,7 +284,7 @@ func RunOpsAppHealthCheck() (AppHealth, error) {
 	executeBody.Parameters = []WorkflowAppActionParameter{
 		{
 			Name:  "apikey",
-			Value: os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"),
+			Value: apiKey,
 		},
 		{
 			Name:          "url",
@@ -308,7 +307,7 @@ func RunOpsAppHealthCheck() (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -366,7 +365,7 @@ func RunOpsAppHealthCheck() (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer " + apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -395,31 +394,48 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("cacheDb: %#v", project.CacheDb)
-	// Check cache if health check was run in last 5 minutes
-	// If yes, return cached result, else run health check
+	// check if there is a force parameter
+	force := request.URL.Query().Get("force")
+
 	ctx := GetContext(request)
 	platformHealth := HealthCheck{}
 	cacheKey := fmt.Sprintf("ops-health-check")
-	cacheHit := false
 
-	if project.CacheDb {
+	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
+	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
+	if project.Environment == "onprem" && (len(apiKey) == 0 || len(orgId) == 0) {
+		log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user")
+		org, err := GetFirstOrg(ctx)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting first org: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Set up a user and org first!")}`))
+			return
+		}
+
+		log.Printf("[DEBUG] Setting api key to that of user %s and org id to %s ", org.Users[0].ApiKey, org.Id)
+
+		orgId = org.Id
+		apiKey = org.Users[0].ApiKey
+	}
+
+	if len(apiKey) == 0 || len(orgId) == 0 {
+		log.Printf("[WARNING] Ops dashboard api key or org not set. Not setting up ops workflow")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_OPS_DASHBOARD_APIKEY or SHUFFLE_OPS_DASHBOARD_ORG not set. Please set these to use this feature!"}`))
+		return
+	}
+
+	if project.CacheDb && force != "true" {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &platformHealth)
 			if err == nil {
-				// FIXME: Check if last updated is less than 5 minutes with platformHealth.Edited in unix time
-				// If yes, return cached result, else run health check
 				log.Printf("Platform health returned: %#v", platformHealth)
 				marshalledData, err := json.Marshal(platformHealth)
-				cacheHit = true
-
-				err_ := SetOpsDashboardCacheHitStat(ctx, cacheHit)
-				if err_ != nil {
-					log.Printf("[WARNING] Failed setting cache hit stat: %s", err_)
-				}
 
 				if err == nil {
 					resp.WriteHeader(200)
@@ -430,12 +446,60 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 		} else {
-			log.Print("[WARNING] Failed getting cache ops health on first try: %s", err)
+			log.Printf("[WARNING] Failed getting cache ops health on first try: %s", err)
 		}
-	} else {
-		err := SetOpsDashboardCacheHitStat(ctx, cacheHit)
+	} else if !(project.CacheDb) {
+		log.Println("[WARNING] Cache not enabled. Not using cache for ops health isn't recommended!")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Cache not enabled. Not using cache for ops health isn't recommended!"}`))
+		return
+	}
+
+	if force == "true" {
+		log.Printf("[DEBUG] Force is true. Running health check")
+
+		userInfo, err := HandleApiAuthentication(resp, request)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache hit stat: %s", err)
+			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
+	
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if project.Environment == "onprem" && userInfo.Role != "admin" {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
+			return
+		} else if project.Environment == "Cloud" && userInfo.ApiKey != os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
+			return
+		}
+	} else if force != "true" {
+		// get last health check from database
+		healths, err := GetPlatformHealth(ctx, 1)
+
+		health := healths[0]
+
+		if err == nil {
+			log.Printf("[DEBUG] Last health check was: %#v", health)
+			platformData, err := json.Marshal(health)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health."}`))
+				return
+			}
+
+			resp.WriteHeader(200)
+			resp.Write(platformData)
+			return
+		} else {
+			log.Printf("[WARNING] Failed getting platform health from database: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting platform health from database."}`))
+			return
 		}
 	}
 
@@ -443,11 +507,20 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowHealthChannel := make(chan WorkflowHealth)
 	// appHealthChannel := make(chan AppHealth)
 	go func() {
-		workflowHealth, err := RunOpsWorkflow()
+		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
 		if err != nil {
-			log.Printf("[ERROR] Failed running workflow health check: %s", err)
-			workflowHealthChannel <- workflowHealth
-			return
+			log.Printf("[ERROR] Failed workflow health check: %s", err)
+		}
+		if workflowHealth.Create == true {
+			log.Printf("[DEBUG] Deleting created ops workflow")
+			err = deleteWorkflow(workflowHealth, apiKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting workflow: %s", err)
+			} else {
+				log.Printf("[DEBUG] Deleted ops workflow successfully!")
+				workflowHealth.Delete = true
+				updateCache(workflowHealth)
+			}
 		}
 		workflowHealthChannel <- workflowHealth
 	}()
@@ -469,6 +542,14 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	platformHealth.Success = true
 	platformHealth.Updated = time.Now().Unix()
 
+	var HealthCheck HealthCheckDB
+	HealthCheck.Success = platformHealth.Success
+	HealthCheck.Updated = platformHealth.Updated
+	HealthCheck.Workflows = platformHealth.Workflows
+
+	// Add to database
+	err := SetPlatformHealth(ctx, HealthCheck)
+
 	platformData, err := json.Marshal(platformHealth)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
@@ -489,31 +570,79 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(platformData)
 }
 
-func OpsDashboardCacheHitStat(resp http.ResponseWriter, request *http.Request) {
+func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
+	// for now, the limit is last 100 runs
+	limit := 100
+
+	healthChecks := []HealthCheckDB{}
 	ctx := GetContext(request)
 
-	stats, err := GetOpsDashboardCacheHitStat(ctx, 30)
+	healthChecks, err := GetPlatformHealth(ctx, limit)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting cache hit stats: %s", err)
+		log.Printf("[ERROR] Failed getting platform health from database: %s", err)
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting cache hit stats. Contact support@shuffler.io"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting platform health from database."}`))
 		return
-	}
-	
-	log.Printf("Stats are: %#v", stats)
+	}	
 
-	statsBody, err := json.Marshal(stats)
+	healthChecksData, err := json.Marshal(healthChecks)
 	if err != nil {
-		log.Printf("[ERROR] Failed marshalling cache hit stats: %s", err)
+		log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing cache hit stats. Contact support@shuffler.io"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health."}`))
+		return
 	}
 
 	resp.WriteHeader(200)
-	resp.Write(statsBody)
+	resp.Write(healthChecksData)
 }
 
-func RunOpsWorkflow() (WorkflowHealth, error) {
+func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (error) {
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		baseUrl = "https://shuffler.io"
+	}
+	
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
+	}
+
+	id := workflowHealth.ExecutionId
+
+		// 4. Delete workflow
+	// make a DELETE request to https://shuffler.io/api/v1/workflows/<workflow_id>
+	url := baseUrl + "/api/v1/workflows/" + id
+	log.Printf("[DEBUG] Deleting workflow with id: %s", id)
+
+	req, err := http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+		return err
+	}
+
+	// set the headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed deleting the health check workflow with HTTP request: %s", err)
+		return err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting the health check workflow: %s. The status code was: %d", err, resp.StatusCode)
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	return nil
+}
+
+func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// run workflow with id 602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
 	ctx := context.Background()
 
@@ -526,8 +655,17 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 		ExecutionId: "",
 	}
 
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		baseUrl = "https://shuffler.io"
+	}
+
+	if project.Environment == "onprem" {
+		baseUrl = "http://localhost:5001"
+	}
+
 	// 1. Get workflow
-	opsWorkflowID, err := InitOpsWorkflow()
+	opsWorkflowID, err := InitOpsWorkflow(apiKey, orgId)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating Health check workflow: %s", err)
 		return workflowHealth, err
@@ -549,14 +687,8 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 	// 2. Run workflow
 	id := workflow.ID
-	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
 	_ = id
 	_ = orgId
-
-	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	if len(baseUrl) == 0 {
-		baseUrl = "https://shuffler.io"
-	}
 
 	// prepare the request
 	url := baseUrl + "/api/v1/workflows/" + id + "/execute"
@@ -569,7 +701,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// startId := "98713d6a-dd6b-4bd6-a11c-9778b80f2a28"
 	// body := map[string]string{"execution_argument": "", "start": startId}
@@ -635,7 +767,7 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 
 		// set the headers
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+		req.Header.Set("Authorization", "Bearer " + apiKey)
 
 		// convert the body to JSON
 		reqBody := map[string]string{"execution_id": execution.ExecutionId, "authorization": os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")}
@@ -682,52 +814,24 @@ func RunOpsWorkflow() (WorkflowHealth, error) {
 		updateCache(workflowHealth)
 
 		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
+		log.Printf("[DEBUG] Waiting 2 seconds before retrying")
+		time.Sleep(2 * time.Second)
 	}
-
-	// 4. Delete workflow
-	// make a DELETE request to https://shuffler.io/api/v1/workflows/<workflow_id>
-	url = baseUrl + "/api/v1/workflows/" + id
-	log.Printf("[DEBUG] Deleting workflow with id: %s", id)
-
-	req, err = http.NewRequest("DELETE", url, nil)
-	if err != nil {
-		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
-		return workflowHealth, err
-	}
-
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
-
-	// send the request
-	client = &http.Client{}
-	resp, err = client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Failed deleting the health check workflow with HTTP request: %s", err)
-		return workflowHealth, err
-	}
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting the health check workflow: %s. The status code was: %d", err, resp.StatusCode)
-		return workflowHealth, err
-	}
-
-	defer resp.Body.Close()
-
-	workflowHealth.Delete = true
 
 	return workflowHealth, nil
 }
 
-func InitOpsWorkflow() (string, error) {
-	opsDashboardApikey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
+func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
+	opsDashboardApikey := apiKey
+	opsDashboardOrgId := OrgId
+
 	if len(opsDashboardApikey) == 0 {
 		log.Printf("[WARNING] Ops dashboard api key not set. Not setting up ops workflow")
 		return "", errors.New("Ops dashboard api key not set")
 
 	}
 
-	opsDashboardOrgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
 	if len(opsDashboardOrgId) == 0 {
 		log.Printf("[WARNING] Ops dashboard org not set. Not setting up ops workflow")
 		return "", errors.New("Ops dashboard org not set")
@@ -807,25 +911,25 @@ func InitOpsWorkflow() (string, error) {
 	workflowData.Public = false
 	workflowData.Status = ""
 	workflowData.Name = "Ops Dashboard Workflow"
+	workflowData.Hidden = true
 
 	var actions []Action
-	var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}
+	// var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}
 
 	for actionIndex, _ := range workflowData.Actions {
 		action := workflowData.Actions[actionIndex]
 
-		// capitalise the first letter of the environment
-		if action.Environment != "Cloud" {
-			action.Environment = "Cloud"
+		if action.Environment != "Shuffle" {
+			action.Environment = "Shuffle"
 		}
 
 		workflowData.Actions[actionIndex] = action
-		if ArrayContains(blacklisted, action.Label) {
-			// dates keep failing in opensearch
-			// this is a grander issue, but for now, we'll just skip these actions
-			log.Printf("[WARNING] Skipping action %s", action.Label)
-			continue
-		}
+		// if ArrayContains(blacklisted, action.Label) {
+		// 	// dates keep failing in opensearch
+		// 	// this is a grander issue, but for now, we'll just skip these actions
+		// 	log.Printf("[WARNING] Skipping action %s", action.Label)
+		// 	continue
+		// }
 
 		actions = append(actions, action)
 	}
@@ -862,6 +966,6 @@ func InitOpsWorkflow() (string, error) {
 		return "", errors.New("Error saving ops dashboard workflow: " + err.Error())
 	}
 
-	log.Println("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
+	log.Printf("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
 	return workflowData.ID, nil
 }

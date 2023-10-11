@@ -18,6 +18,7 @@ import (
 	//"strconv"
 	//"encoding/binary"
 	"math/rand"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -2848,6 +2849,61 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	return curOrg, nil
 }
 
+func GetFirstOrg(ctx context.Context) (*Org, error) {
+	nameKey := "Organizations"
+
+	curOrg := &Org{}
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get first org): %s", err)
+			return curOrg, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return curOrg, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return curOrg, err
+		}
+
+		wrapped := OrgSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return curOrg, err
+		}
+
+		if len(wrapped.Hits.Hits) > 0 {
+			curOrg = &wrapped.Hits.Hits[0].Source
+		} else {
+			return curOrg, errors.New("No orgs found")
+		}
+
+	} else {
+		query := datastore.NewQuery(nameKey).Limit(1)
+		allOrgs := []Org{}
+		_, err := project.Dbclient.GetAll(ctx, query, &allOrgs)
+		if err != nil {
+			return curOrg, err
+		}
+
+		if len(allOrgs) > 0 {
+			curOrg = &allOrgs[0]
+		} else {
+			return curOrg, errors.New("No orgs found")
+		}
+	}
+
+	return curOrg, nil
+}
+
 func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	//req := esapi.IndexRequest{
 	req := opensearchapi.IndexRequest{
@@ -3846,114 +3902,6 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 	}
 
 	return curUser, nil
-}
-
-func GetOpsDashboardCacheHitStat(ctx context.Context, limit int) ([]OpsDashboardStats, error) {
-	// get last 30 runs
-	nameKey := "opsdashboardstats"
-	var stats []OpsDashboardStats
-
-	if project.DbType == "opensearch" {
-		var buf bytes.Buffer
-		query := map[string]interface{}{
-			"size": limit,
-			"sort": map[string]interface{}{
-				"timestamp": map[string]interface{}{
-					"order": "desc",
-				},
-			},
-		}
-
-		if err := json.NewEncoder(&buf).Encode(query); err != nil {
-			log.Printf("[WARNING] Error encoding find app query: %s", err)
-			return stats, err
-		}
-		
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
-		if err != nil {
-			log.Printf("[ERROR] Error getting response from Opensearch (find app by name): %s", err)
-			return stats, err
-		}
-
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return stats, nil
-		}
-
-		defer res.Body.Close()
-		if res.IsError() {
-			var e map[string]interface{}
-			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
-				log.Printf("[WARNING] Error parsing the response body: %s", err)
-				return stats, err
-			}
-		}
-
-		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return stats, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
-		}
-
-		respBody, err := ioutil.ReadAll(res.Body)
-
-		var wrapped OpsDashboardStatSearchWrapper
-
-		// put into struct
-		err = json.Unmarshal(respBody, &wrapped)
-
-		stats = []OpsDashboardStats{}
-		for _, hit := range wrapped.Hits.Hits {
-			stats = append(stats, hit.Source)
-		}
-
-		if err != nil {
-			log.Printf("RespBody is: %s", respBody)
-			return stats, err
-		}
-		
-		log.Printf("[INFO] Successfully got ops dashboard stats")
-
-	} else {
-		q := datastore.NewQuery(nameKey).Order("-Timestamp").Limit(limit)
-		_, err := project.Dbclient.GetAll(ctx, q, &stats)
-		if err != nil { 
-			log.Printf("[WARNING] Failed getting stats for ops dashboard: %s", err)
-			return stats, err
-		}
-	}
-
-	return stats, nil
-}
-
-func SetOpsDashboardCacheHitStat(ctx context.Context, cacheHit bool) error {
-	nameKey := "opsdashboardstats"
-	stat := OpsDashboardStats{}
-	stat.Timestamp = time.Now().Unix()
-	stat.CacheHit = cacheHit
-
-	data, err := json.Marshal(stat)
-
-	if project.DbType == "opensearch" {
-		err = indexEs(ctx, nameKey, fmt.Sprintf("%d", stat.Timestamp), data)
-		if err != nil {
-			return err
-		} else {
-			log.Printf("[INFO] Successfully updated ops dashboard stats")
-		}
-	} else {
-		k := datastore.NameKey(nameKey, fmt.Sprintf("%d", stat.Timestamp), nil)
-		if _, err := project.Dbclient.Put(ctx, k, &stat); err != nil {
-			log.Printf("[WARNING] Error updating ops dashboard stats: %s", err)
-			return err
-		}
-	}
-
-	return nil
-
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
@@ -5340,6 +5288,119 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 	return nil
 }
 
+func GetPlatformHealth(ctx context.Context, limit int) ([]HealthCheckDB, error) {
+	nameKey := "platform_health"
+
+	// sort by "updated", and get the first one
+	health := []HealthCheckDB{}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"sort": map[string]interface{}{
+				"updated": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"size": limit,
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return health, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get latest platform health): %s", err)
+			return health, err
+		}
+		defer res.Body.Close()
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return health, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return health, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return health, err
+		}
+
+		wrapped := HealthCheckSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return health, err
+		}
+
+		if len(wrapped.Hits.Hits) == 0 {
+			return health, errors.New("No healthchecks found")
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			health = append(health, hit.Source)
+		}
+
+	} else {
+		q := datastore.NewQuery(nameKey).Order("-updated").Limit(limit)
+
+		_, err := project.Dbclient.GetAll(ctx, q, &health)
+		if err != nil {
+			log.Printf("[WARNING] Error getting latest platform health: %s", err)
+			return health, err
+		}
+	}
+
+	return health, nil		
+}
+
+func SetPlatformHealth(ctx context.Context, health HealthCheckDB) error {
+	nameKey := "platform_health"
+
+	// generate random ID
+	health.ID = uuid.NewV4().String()
+
+	data, err := json.Marshal(health)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set platform health: %s", err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, health.ID, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, health.ID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &health); err != nil {
+			log.Printf("[WARNING] Error adding platform health: %s", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
 func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 	nameKey := "openseacollection"
 
@@ -5790,6 +5851,20 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	return nil
 }
 
+func fixPosition(position float64) float64 {
+		intValue := int(math.Round(position)) // Convert the float to the nearest integer
+	
+		difference := position - float64(intValue)
+		difference = math.Abs(difference)
+	
+		if difference == 0 {
+			log.Printf("[DEBUG] Position fixed from %s to %s", position, position + 0.001)
+			return position + 0.001
+		}
+
+		return position
+}
+
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 	// Overwriting to be sure these are matching
 	// No real point in having id + workflow.ID anymore
@@ -5804,6 +5879,16 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	if len(optionalEditedSecondsOffset) > 0 {
 		workflow.Edited += int64(optionalEditedSecondsOffset[0])
+	}
+
+	for index, action := range workflow.Actions {
+		workflow.Actions[index].Position.X = fixPosition(float64(action.Position.X))
+		workflow.Actions[index].Position.Y = fixPosition(float64(action.Position.Y))
+	}
+
+	for index, comments := range workflow.Comments {
+		workflow.Comments[index].Position.X = fixPosition(float64(comments.Position.X))
+		workflow.Comments[index].Position.Y = fixPosition(float64(comments.Position.Y))
 	}
 
 	// New struct, to not add body, author etc

@@ -1044,11 +1044,6 @@ type Comment struct {
 	} `json:"position"`
 }
 
-type OpsDashboardStats struct {
-	Timestamp int64 `json:"timestamp" datastore:"timestamp"`
-	CacheHit     bool `json:"cachehit" datastore:"cachehit"`
-}
-
 type Workflow struct {
 	Actions        []Action   `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch   `json:"branches" datastore:"branches,noindex"`
@@ -1577,6 +1572,31 @@ type StatisticsItem struct {
 	OrgId     string           `json:"org_id" datastore:"org_id"`
 }
 
+type HealthCheckSearchWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`	
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string       `json:"_index"`
+			Type   string       `json:"_type"`
+			ID     string       `json:"_id"`
+			Score  float64      `json:"_score"`
+			Source HealthCheckDB `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type NewValueSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -1873,31 +1893,6 @@ type ExecRequestSearchWrapper struct {
 			ID     string           `json:"_id"`
 			Score  float64          `json:"_score"`
 			Source ExecutionRequest `json:"_source"`
-		} `json:"hits"`
-	} `json:"hits"`
-}
-
-type OpsDashboardStatSearchWrapper struct {
-	Took     int  `json:"took"`
-	TimedOut bool `json:"timed_out"`
-	Shards   struct {
-		Total 	int    `json:"total"`
-		Successful int `json:"successful"`
-		Skipped    int `json:"skipped"`
-		Failed 	int    `json:"failed"`
-	} `json:"_shards"`
-	Hits struct {
-		Total struct {
-			Value 	int    `json:"value"`
-			Relation string `json:"relation"`
-		} `json:"total"`
-		MaxScore 	float64 `json:"max_score"`
-		Hits     	[]struct {
-			Index 	string           `json:"_index"`
-			Type  	string           `json:"_type"`
-			ID    	string           `json:"_id"`
-			Score 	float64          `json:"_score"`
-			Source 	OpsDashboardStats `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
 }
@@ -3509,6 +3504,13 @@ type HealthCheck struct {
 	Updated int64 `json:"updated"`
 	// Apps AppHealth `json:"apps"`
 	Workflows WorkflowHealth `json:"workflows"`
+}
+
+type HealthCheckDB struct {
+	Success bool `json:"success"`
+	Updated int64 `json:"updated"`
+	Workflows WorkflowHealth `json:"workflows"`
+	ID string `json:"id"`
 }
 
 type NodeData struct {
