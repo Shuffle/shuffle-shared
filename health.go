@@ -570,30 +570,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(platformData)
 }
 
-func OpsDashboardCacheHitStat(resp http.ResponseWriter, request *http.Request) {
-	ctx := GetContext(request)
-
-	stats, err := GetOpsDashboardCacheHitStat(ctx, 30)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting cache hit stats: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting cache hit stats. Contact support@shuffler.io"}`))
-		return
-	}
-	
-	log.Printf("Stats are: %#v", stats)
-
-	statsBody, err := json.Marshal(stats)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling cache hit stats: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing cache hit stats. Contact support@shuffler.io"}`))
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(statsBody)
-}
-
 func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (error) {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
