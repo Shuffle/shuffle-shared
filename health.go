@@ -640,8 +640,8 @@ func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (error) {
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting the health check workflow: %s. The status code was: %d", err, resp.StatusCode)
-		return err
+		log.Printf("[ERROR] Failed deleting the health check workflow. The status code was: %d", resp.StatusCode)
+		return errors.New("Failed deleting the health check workflow")
 	}
 
 	defer resp.Body.Close()
@@ -742,6 +742,8 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		} else {
 			log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
 		}
+
+		workflowHealth.Create = false
 
 		return workflowHealth, err
 	}
@@ -961,7 +963,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		// check if workflow with id randomUUID exists
 		_, err = GetWorkflow(ctx, randomUUID)
 		if err == nil {
-			log.Printf("[DEBUG] Workflow with id %s doesn't exist. Using it for Ops dashboard. The error: %s", randomUUID, err)
+			log.Printf("[DEBUG] Workflow with id %s doesn't exist. Using it for Ops dashboard.", randomUUID)
 			uniqueCheck = true
 			workflowData.ID = randomUUID
 		}
