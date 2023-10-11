@@ -5472,10 +5472,6 @@ func GetLatestPlatformHealth(ctx context.Context) (HealthCheckDB, error) {
 			log.Printf("[WARNING] Error getting latest platform health: %s", err)
 			return health, err
 		}
-		
-		if len(health) == 0 {
-			return health, errors.New("No healthchecks found")
-		}
 	}
 
 	return health, nil		
