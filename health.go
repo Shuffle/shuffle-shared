@@ -478,7 +478,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else if force != "true" {
 		// get last health check from database
-		healths, err := GetPlatformHealth(ctx, true)
+		healths, err := GetPlatformHealth(ctx, 1)
 
 		health := healths[0]
 
@@ -568,6 +568,33 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(platformData)
+}
+
+func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
+	// for now, the limit is last 100 runs
+	limit := 100
+
+	healthChecks := []HealthCheckDB{}
+	ctx := GetContext(request)
+
+	healthChecks, err := GetPlatformHealth(ctx, limit)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting platform health from database: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting platform health from database."}`))
+		return
+	}	
+
+	healthChecksData, err := json.Marshal(healthChecks)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health."}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(healthChecksData)
 }
 
 func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (error) {
