@@ -401,10 +401,22 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	platformHealth := HealthCheck{}
 	cacheKey := fmt.Sprintf("ops-health-check")
 
-	memcacheUrl := os.Getenv("SHUFFLE_MEMCACHED")
-
 	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
 	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
+	if project.Environment == "onprem" && (len(apiKey) == 0 || len(orgId) == 0) {
+		log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user")
+		org, err := GetFirstOrg(ctx)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting first org: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Set up a user and org first!")}`))
+			return
+		}
+
+		orgId = org.Id
+		apiKey = org.Users[0].ApiKey
+	}
 
 	if len(apiKey) == 0 || len(orgId) == 0 {
 		log.Printf("[WARNING] Ops dashboard api key or org not set. Not setting up ops workflow")
@@ -413,7 +425,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(memcacheUrl) != 0 {
+	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
@@ -435,16 +447,16 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed getting cache ops health on first try: %s", err)
 		}
 	} else {
-		log.Println("[WARNING] Memcache URL not set! Exiting..")
+		log.Println("[WARNING] Cache not enabled. Not using cache for ops health isn't recommended!")
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_MEMCACHED not set. Please set memcached to use this feature!"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Cache not enabled. Not using cache for ops health isn't recommended!"}`))
 		return
 	}
 
 	if force == "true" && project.Environment == "onprem" {
 		log.Printf("[DEBUG] Force is true. Running health check")
 
-		userInfo, err := shuffle.HandleApiAuthentication(resp, request)
+		userInfo, err := HandleApiAuthentication(resp, request)
 		if err != nil {
 			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
 	
@@ -460,7 +472,10 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else if force != "true" {
 		// get last health check from database
-		health, err := GetPlatformHealth(ctx)
+		healths, err := GetPlatformHealth(ctx, true)
+
+		health := healths[0]
+
 		if err == nil {
 			log.Printf("[DEBUG] Last health check was: %#v", health)
 			platformData, err := json.Marshal(health)
@@ -864,6 +879,7 @@ func InitOpsWorkflow() (string, error) {
 	workflowData.Public = false
 	workflowData.Status = ""
 	workflowData.Name = "Ops Dashboard Workflow"
+	workflowData.Hidden = true
 
 	var actions []Action
 	// var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}

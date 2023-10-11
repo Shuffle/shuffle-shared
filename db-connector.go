@@ -5396,21 +5396,23 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 	return nil
 }
 
-func GetLatestPlatformHealth(ctx context.Context) (HealthCheckDB, error) {
+func GetPlatformHealth(ctx context.Context, getLatest bool) ([]HealthCheckDB, error) {
 	nameKey := "platform_health"
 
 	// sort by "updated", and get the first one
-	health := HealthCheckDB{}
+	health := []HealthCheckDB{}
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"from": 0,
-			"size": 1,
 			"sort": map[string]interface{}{
 				"updated": map[string]interface{}{
 					"order": "desc",
 				},
 			},
+		}
+
+		if getLatest {
+			query["size"] = 1
 		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -5464,9 +5466,17 @@ func GetLatestPlatformHealth(ctx context.Context) (HealthCheckDB, error) {
 			return health, errors.New("No healthchecks found")
 		}
 
-		health = wrapped.Hits.Hits[0].Source
+		for _, hit := range wrapped.Hits.Hits {
+			health = append(health, hit.Source)
+		}
+
 	} else {
-		q := datastore.NewQuery(nameKey).Order("-updated").Limit(1)
+		q := datastore.NewQuery(nameKey).Order("-updated")
+		
+		if getLatest {
+			q = q.Limit(1)
+		}
+
 		_, err := project.Dbclient.GetAll(ctx, q, &health)
 		if err != nil {
 			log.Printf("[WARNING] Error getting latest platform health: %s", err)
