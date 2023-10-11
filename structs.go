@@ -1596,7 +1596,7 @@ type HealthCheckSearchWrapper struct {
 			Type   string       `json:"_type"`
 			ID     string       `json:"_id"`
 			Score  float64      `json:"_score"`
-			Source HealthCheck `json:"_source"`
+			Source HealthCheckDB `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
 }
