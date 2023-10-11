@@ -1,4 +1,4 @@
-module github.com/shuffle/shuffle-shared
+module github.com/0x0elliot/shuffle-shared
 
 // Keep on 1.11 until AppEngine supports 1.17 or higher
 
