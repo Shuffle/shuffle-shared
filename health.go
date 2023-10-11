@@ -509,9 +509,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 			if workflowHealth.Create == true {
 				log.Printf("[DEBUG] Deleting created ops workflow")
-				workflowHealth, err = deleteWorkflow(workflowHealth, apiKey)
+				err = deleteWorkflow(workflowHealth, apiKey)
 				if err != nil {
 					log.Printf("[ERROR] Failed deleting workflow: %s", err)
+				} else {
+					log.Printf("[DEBUG] Deleted ops workflow successfully!")
+					workflowHealth.Delete = true
+					updateCache(workflowHealth)
 				}
 			}
 		}
@@ -587,7 +591,7 @@ func OpsDashboardCacheHitStat(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(statsBody)
 }
 
-func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (WorkflowHealth, error) {
+func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (error) {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
 		baseUrl = "https://shuffler.io"
@@ -607,7 +611,7 @@ func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (WorkflowHeal
 	req, err := http.NewRequest("DELETE", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
-		return workflowHealth, err
+		return err
 	}
 
 	// set the headers
@@ -619,19 +623,17 @@ func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (WorkflowHeal
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed deleting the health check workflow with HTTP request: %s", err)
-		return workflowHealth, err
+		return err
 	}
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed deleting the health check workflow: %s. The status code was: %d", err, resp.StatusCode)
-		return workflowHealth, err
+		return err
 	}
 
 	defer resp.Body.Close()
 
-	workflowHealth.Delete = true
-
-	return workflowHealth, nil
+	return nil
 }
 
 func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
