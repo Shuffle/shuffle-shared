@@ -203,7 +203,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -249,7 +249,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -284,7 +284,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	executeBody.Parameters = []WorkflowAppActionParameter{
 		{
 			Name:  "apikey",
-			Value: os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"),
+			Value: apiKey,
 		},
 		{
 			Name:          "url",
@@ -307,7 +307,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer "+ apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -365,7 +365,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+	req.Header.Set("Authorization", "Bearer " + apiKey)
 
 	// send the request
 	client = &http.Client{}
