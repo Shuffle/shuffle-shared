@@ -2849,6 +2849,61 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	return curOrg, nil
 }
 
+func GetFirstOrg(ctx context.Context) (*Org, error) {
+	nameKey := "Organizations"
+
+	curOrg := &Org{}
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get first org): %s", err)
+			return curOrg, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return curOrg, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return curOrg, err
+		}
+
+		wrapped := OrgSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return curOrg, err
+		}
+
+		if len(wrapped.Hits.Hits) > 0 {
+			curOrg = &wrapped.Hits.Hits[0].Source
+		} else {
+			return curOrg, errors.New("No orgs found")
+		}
+
+	} else {
+		query := datastore.NewQuery(nameKey).Limit(1)
+		allOrgs := []Org{}
+		_, err := project.Dbclient.GetAll(ctx, query, &allOrgs)
+		if err != nil {
+			return curOrg, err
+		}
+
+		if len(allOrgs) > 0 {
+			curOrg = &allOrgs[0]
+		} else {
+			return curOrg, errors.New("No orgs found")
+		}
+	}
+
+	return curOrg, nil
+}
+
 func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	//req := esapi.IndexRequest{
 	req := opensearchapi.IndexRequest{
