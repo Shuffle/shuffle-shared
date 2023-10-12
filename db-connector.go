@@ -5301,7 +5301,44 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 					"order": "desc",
 				},
 			},
-			"size": limit,
+		}
+
+		if limit != 0 {
+			query["size"] = limit
+		}
+
+		if beforeTimestamp > 0 || afterTimestamp > 0 {
+			query["query"] = map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{},
+				},
+			}
+		}
+
+		if beforeTimestamp > 0 {
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+				map[string]interface{}{
+					"range": map[string]interface{}{
+						"updated": map[string]interface{}{
+							"gt": beforeTimestamp,
+						},
+					},
+				},
+			)
+		}
+
+		if afterTimestamp > 0 {
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+				map[string]interface{}{
+					"range": map[string]interface{}{
+						"updated": map[string]interface{}{
+							"lt": afterTimestamp,
+						},
+					},
+				},
+			)
 		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -5349,10 +5386,6 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
 			return health, err
-		}
-
-		if len(wrapped.Hits.Hits) == 0 {
-			return health, errors.New("No healthchecks found")
 		}
 
 		for _, hit := range wrapped.Hits.Hits {

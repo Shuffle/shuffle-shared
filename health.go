@@ -11,9 +11,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
-	"strconv"
 )
 
 type appConfig struct {
@@ -37,7 +37,7 @@ func updateCache(workflowHealth WorkflowHealth) {
 	cacheKey := fmt.Sprintf("ops-health-check")
 	ctx := context.Background()
 
- 	if project.CacheDb {
+	if project.CacheDb {
 		platformHealthCheck := HealthCheck{}
 		platformHealthCheck.Updated = time.Now().Unix()
 		platformHealthCheck.Workflows = workflowHealth
@@ -48,7 +48,7 @@ func updateCache(workflowHealth WorkflowHealth) {
 		err = SetCache(ctx, cacheKey, platformData, 15)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache ops health: %s", err)
-		}		
+		}
 	}
 }
 
@@ -144,7 +144,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer " + apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -202,7 +202,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+ apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -248,7 +248,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+ apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -306,7 +306,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+ apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -364,7 +364,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer " + apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// send the request
 	client = &http.Client{}
@@ -460,7 +460,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		userInfo, err := HandleApiAuthentication(resp, request)
 		if err != nil {
 			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
-	
+
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -512,7 +512,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowHealthChannel := make(chan WorkflowHealth)
 	// appHealthChannel := make(chan AppHealth)
 	go func() {
-		log.Printf("[DEBUG] Running workflowHealthChannel goroutine") 
+		log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed workflow health check: %s", err)
@@ -629,13 +629,13 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(healthChecksData)
 }
 
-func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string) (error) {
+func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string) error {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
 		log.Printf("[DEBUG] Base url not set. Setting to default: for delete")
 		baseUrl = "https://shuffler.io"
 	}
-	
+
 	if project.Environment == "onprem" {
 		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
 		baseUrl = "http://localhost:5001"
@@ -698,7 +698,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		Delete:      false,
 		RunStatus:   "",
 		ExecutionId: "",
-		WorkflowId: "",
+		WorkflowId:  "",
 	}
 
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -755,7 +755,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+ apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// startId := "98713d6a-dd6b-4bd6-a11c-9778b80f2a28"
 	// body := map[string]string{"execution_argument": "", "start": startId}
@@ -824,7 +824,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 		// set the headers
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Authorization", "Bearer " + apiKey)
+		req.Header.Set("Authorization", "Bearer "+apiKey)
 
 		// convert the body to JSON
 		reqBody := map[string]string{"execution_id": execution.ExecutionId, "authorization": os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")}
@@ -887,7 +887,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		return "", errors.New("Ops dashboard api key not set")
 
 	}
-
 
 	if len(opsDashboardOrgId) == 0 {
 		log.Printf("[WARNING] Ops dashboard org not set. Not setting up ops workflow")
@@ -1034,7 +1033,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	jsonData := `{"name":"demo","description":"demo","blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}`
 
 	// res, err := http.Post(url, "application/json", bytes.NewBuffer([]byte(jsonData)))
-	req, err = http.NewRequest("POST", baseUrl + "/api/v1/workflows", bytes.NewBuffer([]byte(jsonData)))
+	req, err = http.NewRequest("POST", baseUrl+"/api/v1/workflows", bytes.NewBuffer([]byte(jsonData)))
 	log.Printf("[SANITY CHECK] req method is: %s", req.Method)
 
 	if err != nil {
@@ -1101,7 +1100,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	// Save the workflow: PUT http://localhost:5002/api/v1/workflows/{id}?skip_save=true
 
-	req, err = http.NewRequest("PUT", baseUrl + "/api/v1/workflows/" + workflowData.ID + "?skip_save=true", nil)
+	req, err = http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflowData.ID+"?skip_save=true", nil)
 	if err != nil {
 		log.Println("[ERROR] creating HTTP request:", err)
 		return "", errors.New("Error creating HTTP request: " + err.Error())
@@ -1132,7 +1131,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	}
 
 	defer resp.Body.Close()
-
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed saving ops dashboard workflow: %s. The status code was: %d", err, resp.StatusCode)
