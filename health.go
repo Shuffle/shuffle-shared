@@ -752,6 +752,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 			log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
 		}
 
+		log.Printf("[DEBUG] Setting workflowHealth.Create = false")
 		workflowHealth.Create = false
 
 		return workflowHealth, err
