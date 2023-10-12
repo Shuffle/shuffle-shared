@@ -290,8 +290,9 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Update indicators (FW, EDR, SIEM...)",
-								"priority": 50,
-								"type": "intel",
+				"priority": 50,
+				"type": "intel",
+				"last": "siem",
                 "items": {}
             },
             {

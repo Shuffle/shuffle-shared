@@ -847,7 +847,7 @@ func main() {
 		bucketName = os.Args[5]
 	}
 
-	appname := "email"
+	appname := "http"
 	appversion := "1.3.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
