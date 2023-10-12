@@ -3497,6 +3497,7 @@ type WorkflowHealth struct {
 	RunStatus	string `json:"run_status"`
 	Delete bool `json:"delete"`
 	ExecutionId string `json:"execution_id"`
+	WorkflowId string `json:"workflow_id"`
 }
 
 type HealthCheck struct {
