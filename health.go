@@ -459,19 +459,15 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 		userInfo, err := HandleApiAuthentication(resp, request)
 		if err != nil {
-			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
-
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			log.Printf("[WARNING] Api authentication failed in handleInfo: %s. Continuing anyways here..", err)
 		}
 
 		if project.Environment == "onprem" && userInfo.Role != "admin" {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
 			return
-		} else if project.Environment == "Cloud" && userInfo.ApiKey != os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") {
-			resp.WriteHeader(401)
+		} else if project.Environment == "Cloud" && !(userInfo.ApiKey == os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") || userInfo.SupportAccess) {
+			resp.WriteHeader(401)	
 			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
 			return
 		}
@@ -811,6 +807,8 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 	updateCache(workflowHealth)
 
+	timeout := time.After(5 * time.Minute)
+
 	// 3. Check if workflow ran successfully
 	// ping /api/v1/streams/results/<execution_id> while workflowHealth.RunFinished is false
 	// if workflowHealth.RunFinished is true, return workflowHealth
@@ -871,6 +869,17 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		updateCache(workflowHealth)
 
 		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
+
+		// check if timeout
+		select {
+		case <-timeout:
+			log.Printf("[ERROR] Timeout reached for workflow health check. Returning")
+			workflowHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
+			return workflowHealth, errors.New("Timeout reached for workflow health check")
+		default:
+			// do nothing
+		}
+
 		log.Printf("[DEBUG] Waiting 2 seconds before retrying")
 		time.Sleep(2 * time.Second)
 	}
