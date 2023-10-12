@@ -607,16 +607,18 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (error) {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
+		log.Printf("[DEBUG] Base url not set. Setting to default: for delete")
 		baseUrl = "https://shuffler.io"
 	}
 	
 	if project.Environment == "onprem" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
 		baseUrl = "http://localhost:5001"
 	}
 
 	id := workflowHealth.ExecutionId
 
-		// 4. Delete workflow
+	// 4. Delete workflow
 	// make a DELETE request to https://shuffler.io/api/v1/workflows/<workflow_id>
 	url := baseUrl + "/api/v1/workflows/" + id
 	log.Printf("[DEBUG] Deleting workflow with id: %s", id)
@@ -640,7 +642,12 @@ func deleteWorkflow(workflowHealth WorkflowHealth , apiKey string) (error) {
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed deleting the health check workflow. The status code was: %d", resp.StatusCode)
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		} else {
+			log.Printf("[ERROR] Failed deleting the health check workflow. The status code was: %d and body was: %s", resp.StatusCode, body)
+		}
 		return errors.New("Failed deleting the health check workflow")
 	}
 
@@ -923,6 +930,15 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	workflowData.Status = ""
 	workflowData.Name = "Ops Dashboard Workflow"
 	workflowData.Hidden = true
+
+	miniOrg := OrgMini{
+		Id:    opsDashboardOrg.Id,
+		Name:  opsDashboardOrg.Name,
+		Users: []UserMini{},
+	}
+
+	workflowData.Org = []OrgMini{}
+	workflowData.Org = append(workflowData.Org, miniOrg)
 
 	var actions []Action
 	// var blacklisted = []string{"Date_to_epoch", "input_data", "Compare_timestamps", "Get_current_timestamp"}
