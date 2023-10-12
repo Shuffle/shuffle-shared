@@ -5361,7 +5361,7 @@ func GetPlatformHealth(ctx context.Context, limit int) ([]HealthCheckDB, error) 
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Order("-updated").Limit(limit)
+		q := datastore.NewQuery(nameKey).Order("-Updated").Limit(limit)
 
 		_, err := project.Dbclient.GetAll(ctx, q, &health)
 		if err != nil {
