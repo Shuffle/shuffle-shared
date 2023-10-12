@@ -5288,9 +5288,8 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 	return nil
 }
 
-func GetPlatformHealth(ctx context.Context, limit int) ([]HealthCheckDB, error) {
+func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int) ([]HealthCheckDB, error) {
 	nameKey := "platform_health"
-
 	// sort by "updated", and get the first one
 	health := []HealthCheckDB{}
 
@@ -5302,7 +5301,44 @@ func GetPlatformHealth(ctx context.Context, limit int) ([]HealthCheckDB, error) 
 					"order": "desc",
 				},
 			},
-			"size": limit,
+		}
+
+		if limit != 0 {
+			query["size"] = limit
+		}
+
+		if beforeTimestamp > 0 || afterTimestamp > 0 {
+			query["query"] = map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{},
+				},
+			}
+		}
+
+		if beforeTimestamp > 0 {
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+				map[string]interface{}{
+					"range": map[string]interface{}{
+						"updated": map[string]interface{}{
+							"gt": beforeTimestamp,
+						},
+					},
+				},
+			)
+		}
+
+		if afterTimestamp > 0 {
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+				map[string]interface{}{
+					"range": map[string]interface{}{
+						"updated": map[string]interface{}{
+							"lt": afterTimestamp,
+						},
+					},
+				},
+			)
 		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -5352,16 +5388,31 @@ func GetPlatformHealth(ctx context.Context, limit int) ([]HealthCheckDB, error) 
 			return health, err
 		}
 
-		if len(wrapped.Hits.Hits) == 0 {
-			return health, errors.New("No healthchecks found")
-		}
-
 		for _, hit := range wrapped.Hits.Hits {
 			health = append(health, hit.Source)
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Order("-Updated").Limit(limit)
+		q := datastore.NewQuery(nameKey)
+
+
+		if beforeTimestamp != 0 {
+			// Modify the query to filter for "before" timestamp.
+			q = q.Filter("Updated >", beforeTimestamp)
+		}
+	
+		if afterTimestamp != 0 {
+			// Modify the query to filter for "after" timestamp.
+			q = q.Filter("Updated <", afterTimestamp)
+		}
+
+		if limit != 0 {
+			log.Printf("Limiting platform health to %d", limit)
+			q = q.Limit(limit)
+		}
+
+		q = q.Order("-Updated")
+	
 
 		_, err := project.Dbclient.GetAll(ctx, q, &health)
 		if err != nil {
