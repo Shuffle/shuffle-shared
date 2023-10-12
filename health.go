@@ -13,6 +13,7 @@ import (
 	"os"
 	"strings"
 	"time"
+	"strconv"
 )
 
 type appConfig struct {
@@ -476,7 +477,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else if force != "true" {
 		// get last health check from database
-		healths, err := GetPlatformHealth(ctx, 1)
+		healths, err := GetPlatformHealth(ctx, 0, 0, 1)
 
 		if len(healths) == 0 {
 			resp.WriteHeader(500)
@@ -581,11 +582,32 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
-	// for now, the limit is last 100 runs
-	limit := 100
 	ctx := GetContext(request)
 
-	healthChecks, err := GetPlatformHealth(ctx, limit)
+	limit := request.URL.Query().Get("limit")
+	before := request.URL.Query().Get("before")
+	after := request.URL.Query().Get("after")
+
+	// convert all to int64
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting limit to int64: %s", err)
+		limitInt = 0
+	}
+
+	beforeInt, err := strconv.Atoi(before)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting before to int64: %s", err)
+		beforeInt = 0
+	}
+
+	afterInt, err := strconv.Atoi(after)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting after to int64: %s", err)
+		afterInt = 0
+	}
+
+	healthChecks, err := GetPlatformHealth(ctx, afterInt, beforeInt, limitInt)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting platform health from database: %s", err)
 		resp.WriteHeader(500)

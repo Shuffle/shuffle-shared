@@ -5288,9 +5288,8 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 	return nil
 }
 
-func GetPlatformHealth(ctx context.Context, limit int) ([]HealthCheckDB, error) {
+func GetPlatformHealth(ctx context.Context, limit int, beforeTimestamp int, afterTimestamp int) ([]HealthCheckDB, error) {
 	nameKey := "platform_health"
-
 	// sort by "updated", and get the first one
 	health := []HealthCheckDB{}
 
@@ -5361,7 +5360,23 @@ func GetPlatformHealth(ctx context.Context, limit int) ([]HealthCheckDB, error) 
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Order("-Updated").Limit(limit)
+		q := datastore.NewQuery(nameKey).Order("-Updated")
+
+
+		if beforeTimestamp != 0 {
+			// Modify the query to filter for "before" timestamp.
+			q = q.Filter("Updated <", beforeTimestamp)
+		}
+	
+		if afterTimestamp != 0 {
+			// Modify the query to filter for "after" timestamp.
+			q = q.Filter("Updated >", afterTimestamp)
+		}
+
+		if limit != 0 {
+			q.Limit(limit)
+		}
+	
 
 		_, err := project.Dbclient.GetAll(ctx, q, &health)
 		if err != nil {
