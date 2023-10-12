@@ -584,6 +584,8 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 
+	log.Printf("[DEBUG] request URL query:", request.URL.Query())
+
 	limit := request.URL.Query().Get("limit")
 	before := request.URL.Query().Get("before")
 	after := request.URL.Query().Get("after")
