@@ -459,18 +459,25 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 		userInfo, err := HandleApiAuthentication(resp, request)
 		if err != nil {
-			log.Printf("[WARNING] Api authentication failed in handleInfo: %s. Continuing anyways here..", err)
+			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Api authentication failed!"}`))
+			return
 		}
 
 		if project.Environment == "onprem" && userInfo.Role != "admin" {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
 			return
-		} else if project.Environment == "Cloud" && !(userInfo.ApiKey == os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") || userInfo.SupportAccess) {
-			resp.WriteHeader(401)	
+		} else if project.Environment == "Cloud" && (userInfo.ApiKey != os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") || userInfo.SupportAccess) {
+			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
 			return
 		}
+
+		log.Printf("[DEBUG] does user who is running health check have support access? %t", userInfo.SupportAccess)
+		log.Printf("[DEBUG] Is user api key same as ops dashboard api key? %t", userInfo.ApiKey == os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
+
 	} else if force != "true" {
 		// get last health check from database
 		healths, err := GetPlatformHealth(ctx, 0, 0, 1)
