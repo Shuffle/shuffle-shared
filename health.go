@@ -702,32 +702,49 @@ func fixOpensearch() error {
 	// Define the index mapping
 	mapping := `{
 		"properties": {
-			"workflow": {
+		  "workflow": {
+			"properties": {
+			  "actions": {
 				"properties": {
-					"actions": {
-						"properties": {
-							"parameters": {
-								"properties": {
-									"value": {
-										"type": "text"
-									},
-									"example": {
-										"type": "text"
-									},
-								}
-							}
-						}
+				  "parameters": {
+					"properties": {
+					  "value": {
+						"type": "text"
+					  },
+					  "example": {
+						  "type": "text"
+					  }
 					}
+				  }
 				}
+			  }
 			}
+		  }
 		}
-	}`
+	  }`
 
 	// Get the username and password from environment variables
-	username := os.Getenv("OPENSEARCH_USERNAME")
-	password := os.Getenv("OPENSEARCH_PASSWORD")
-	opensearchUrl := os.Getenv("OPENSEARCH_URL")
+	username := os.Getenv("SHUFFLE_OPENSEARCH_USERNAME")
+	if len(username) == 0 {
+		log.Printf("[DEBUG] Opensearch username not set. Setting to default")
+		username = "admin"
+	}
+
+	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
+	if len(password) == 0 {
+		log.Printf("[DEBUG] Opensearch password not set. Setting to default")
+		password = "admin"
+	}
+
+	opensearchUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+	if len(opensearchUrl) == 0 {
+		log.Printf("[DEBUG] Opensearch url not set. Setting to default")
+		opensearchUrl = "http://localhost:9200"
+	}
+
 	apiUrl := opensearchUrl + "/workflowexecution/_mapping"
+
+	log.Printf("[DEBUG] apiurl for fixing opensearch: %s", apiUrl)
 
 	// Create a new request
 	req, err := http.NewRequest("PUT", apiUrl, bytes.NewBufferString(mapping))
