@@ -718,9 +718,11 @@ func fixOpensearch() error {
 	// Get the username and password from environment variables
 	username := os.Getenv("OPENSEARCH_USERNAME")
 	password := os.Getenv("OPENSEARCH_PASSWORD")
+	opensearchUrl := os.Getenv("OPENSEARCH_URL")
+	apiUrl := opensearchUrl + "/workflowexecution/_mapping"
 
 	// Create a new request
-	req, err := http.NewRequest("PUT", "http://shuffle-opensearch:9200/workflowexecution/_mapping", bytes.NewBufferString(mapping))
+	req, err := http.NewRequest("PUT", apiUrl, bytes.NewBufferString(mapping))
 	if err != nil {
 		log.Fatalf("Error creating the request: %s", err)
 	}
