@@ -690,6 +690,74 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string) error {
 	return nil
 }
 
+func fixOpensearch() error {
+	// Define the index mapping
+	mapping := `{
+		"properties": {
+			"workflow": {
+				"properties": {
+					"actions": {
+						"properties": {
+							"parameters": {
+								"properties": {
+									"value": {
+										"type": "text"
+									},
+									"example": {
+										"type": "text"
+									},
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`
+
+	// Get the username and password from environment variables
+	username := os.Getenv("OPENSEARCH_USERNAME")
+	password := os.Getenv("OPENSEARCH_PASSWORD")
+
+	// Create a new request
+	req, err := http.NewRequest("PUT", "http://shuffle-opensearch:9200/workflowexecution/_mapping", bytes.NewBufferString(mapping))
+	if err != nil {
+		log.Fatalf("Error creating the request: %s", err)
+	}
+
+	// Set the request headers
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(username, password)
+
+	// Create a new HTTP client
+	client := &http.Client{}
+
+// Send the request in a loop until a 200 status code is received
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("Error sending the request while fixing execution body: %s", err)
+		return err
+	}
+
+	// Read the response body
+	body, err := ioutil.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("Error reading the response body while fixing execution body: %s", err)
+		return err
+	}
+	res.Body.Close()
+
+	if res.StatusCode == 200 {
+		log.Printf("Index created successfully: %s. Opensearch mappings should be fixed.", body)
+		return nil
+	} else {
+		log.Printf("Failed to create index, retrying: %s", body)
+		return errors.New("Failed index mapping")
+	}
+
+	return nil
+}
+
 func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// run workflow with id 602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
 	ctx := context.Background()
@@ -740,7 +808,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 	workflow := *workflowPtr
 
-	log.Printf("[DEBUG] Running health check workflow")
+	log.Printf("[DEBUG] Running health check workflow. workflowHealth till now: %#v", workflowHealth)
 
 	// 2. Run workflow
 	id := workflow.ID
@@ -784,7 +852,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is: %d", err, resp.StatusCode)
+		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is: %d", id, resp.StatusCode)
 		// print the response body
 		respBodyErr, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
@@ -792,9 +860,15 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		} else {
 			log.Printf("[ERROR] Health check running Workflow Response: %s", respBodyErr)
 		}
-
-		log.Printf("[DEBUG] Setting workflowHealth.Create = false")
-		workflowHealth.Create = false
+		if project.Environment == "onprem" {
+			log.Printf("Trying to fix opensearch mappings")
+			err = fixOpensearch()
+			if err != nil {
+				log.Printf("[ERROR] Failed fixing opensearch mappings: %s", err)
+			} else {
+				log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
+			}
+		}
 
 		return workflowHealth, err
 	}
@@ -1012,12 +1086,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		}
 
 		workflowData.Actions[actionIndex] = action
-		// if ArrayContains(blacklisted, action.Label) {
-		// 	// dates keep failing in opensearch
-		// 	// this is a grander issue, but for now, we'll just skip these actions
-		// 	log.Printf("[WARNING] Skipping action %s", action.Label)
-		// 	continue
-		// }
 
 		actions = append(actions, action)
 	}
@@ -1096,8 +1164,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		return "", errors.New("Error reading HTTP response response body: " + err.Error())
 	}
 
-	log.Printf("[DEBUG] body is: %s", body)
-
 	var tmpworkflow Workflow
 
 	// Unmarshal the JSON data into a Workflow instance
@@ -1132,8 +1198,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		log.Printf("[ERROR] Failed marshalling workflow data: %s", err)
 		return "", err
 	}
-
-	log.Printf("[DEBUG] Sending workflow JSON data: %s", workflowDataJSON)
 
 	// set the body
 	req.Body = ioutil.NopCloser(bytes.NewBuffer(workflowDataJSON))
