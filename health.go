@@ -596,19 +596,19 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	// convert all to int64
 	limitInt, err := strconv.Atoi(limit)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting limit to int64: %s", err)
+		log.Printf("[ERROR] Failed converting limit to int: %s", err)
 		limitInt = 0
 	}
 
 	beforeInt, err := strconv.Atoi(before)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting before to int64: %s", err)
+		log.Printf("[ERROR] Failed converting before to int: %s", err)
 		beforeInt = 0
 	}
 
 	afterInt, err := strconv.Atoi(after)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting after to int64: %s", err)
+		log.Printf("[ERROR] Failed converting after to int: %s", err)
 		afterInt = 0
 	}
 
