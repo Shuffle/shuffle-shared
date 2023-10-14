@@ -488,7 +488,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if err.error() == "Bad statuscode: 404" && project.Environment == "onprem" {
+		if err.Error() == "Bad statuscode: 404" && project.Environment == "onprem" {
 			log.Printf("[WARNING] Failed getting platform health from database: %s. Probably because no workflowexecutions have been done",err)
 			resp.WriteHeader(200)
 			resp.Write([]byte(`[]`))
