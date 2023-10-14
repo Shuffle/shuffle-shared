@@ -488,13 +488,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if err.Error() == "Bad statuscode: 404" && project.Environment == "onprem" {
-			log.Printf("[WARNING] Failed getting platform health from database: %s. Probably because no workflowexecutions have been done",err)
-			resp.WriteHeader(200)
-			resp.Write([]byte(`[]`))
-			return	
-		}
-
 		health := healths[0]
 
 		if err == nil {
@@ -620,6 +613,14 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	healthChecks, err := GetPlatformHealth(ctx, afterInt, beforeInt, limitInt)
+
+	if strings.Contains(err.Error(), "Bad statuscode: 404") && project.Environment == "onprem" {
+		log.Printf("[WARNING] Failed getting platform health from database: %s. Probably because no workflowexecutions have been done",err)
+		resp.WriteHeader(200)
+		resp.Write([]byte(`[]`))
+		return
+	}
+
 	if err != nil {
 		log.Printf("[ERROR] Failed getting platform health from database: %s", err)
 		resp.WriteHeader(500)
