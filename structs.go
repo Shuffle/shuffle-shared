@@ -917,7 +917,7 @@ type WorkflowExecution struct {
 	Result              string         `json:"result" datastore:"result,noindex"`
 	ProjectId           string         `json:"project_id" datastore:"project_id"`
 	Locations           []string       `json:"locations" datastore:"locations"`
-	Workflow            Workflow       `json:"workflow" datastore:"workflow,noindex"`
+	Workflow            Workflow       `json:"workflow,omitempty" datastore:"workflow,noindex"`
 	Results             []ActionResult `json:"results" datastore:"results,noindex"`
 	ExecutionVariables  []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
 	OrgId               string         `json:"org_id" datastore:"org_id"`
@@ -3424,6 +3424,13 @@ type OrborusStats struct {
 	AppContainers    int `json:"app_containers"`
 	WorkerContainers int `json:"worker_containers"`
 	TotalContainers  int `json:"total_containers"`
+}
+
+// Create struct
+type ExecutionReturn struct {
+	Success bool           `json:"success"`
+	Executions []WorkflowExecution `json:"executions"`
+	Cursor  string         `json:"cursor"`
 }
 
 // Create struct

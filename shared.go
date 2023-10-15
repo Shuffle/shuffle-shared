@@ -3069,6 +3069,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+
 	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
@@ -3127,6 +3128,169 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newjson, err := json.Marshal(workflowExecutions)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflow executions"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+}
+
+func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in getting workflow executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow executions is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow execs)", user.Username, workflow.ID)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	// Query for the specifci workflowId
+	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
+	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId)
+	maxAmount := 100
+	top, topOk := request.URL.Query()["top"]
+	if topOk && len(top) > 0 {
+		val, err := strconv.Atoi(top[0])
+		if err == nil {
+			maxAmount = val
+		}
+	}
+
+	if maxAmount > 1000 {
+		maxAmount = 1000
+	}
+
+	cursor := ""
+	cursorList, cursorOk := request.URL.Query()["cursor"]
+	if cursorOk && len(cursorList) > 0 {
+		cursor = cursorList[0]
+	}
+
+	log.Printf("[DEBUG] Getting %d executions for workflow %s.", maxAmount, fileId)
+
+	workflowExecutions, newCursor, err := GetAllWorkflowExecutionsV2(ctx, fileId, maxAmount, cursor)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting executions for %s", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(workflowExecutions) == 0 {
+		resp.WriteHeader(200)
+		resp.Write([]byte("[]"))
+		return
+	}
+
+	for index, execution := range workflowExecutions {
+		newResults := []ActionResult{}
+		newActions := []Action{}
+		newTriggers := []Trigger{}
+
+		// Results
+		for _, result := range execution.Results {
+			newParams := []WorkflowAppActionParameter{}
+			for _, param := range result.Action.Parameters {
+				if param.Configuration || strings.Contains(strings.ToLower(param.Name), "user") || strings.Contains(strings.ToLower(param.Name), "key") || strings.Contains(strings.ToLower(param.Name), "pass") {
+					param.Value = ""
+					//log.Printf("FOUND CONFIG: %s!!", param.Name)
+				}
+
+				newParams = append(newParams, param)
+			}
+
+			result.Action.Parameters = newParams
+			newResults = append(newResults, result)
+		}
+
+		// Actions
+		for _, action := range execution.Workflow.Actions {
+			newParams := []WorkflowAppActionParameter{}
+			for _, param := range action.Parameters {
+				if param.Configuration || strings.Contains(strings.ToLower(param.Name), "user") || strings.Contains(strings.ToLower(param.Name), "key") || strings.Contains(strings.ToLower(param.Name), "pass") {
+					param.Value = ""
+					//log.Printf("FOUND CONFIG: %s!!", param.Name)
+				}
+
+				newParams = append(newParams, param)
+			}
+
+			action.Parameters = newParams
+			newActions = append(newActions, action)
+		}
+
+		for _, trigger := range execution.Workflow.Triggers {
+			trigger.LargeImage = ""
+			trigger.SmallImage = ""
+			newTriggers = append(newTriggers, trigger)
+		}
+
+		workflowExecutions[index].Results = newResults
+
+		workflowExecutions[index].Workflow.Actions = newActions
+		workflowExecutions[index].Workflow.Image = ""
+		workflowExecutions[index].Workflow.Triggers = newTriggers
+
+		// Would like to omit the whole thing :thinking:
+		//workflowExecutions[index].Workflow = Workflow{}
+	}
+
+	newReturn := ExecutionReturn{
+		Success: true,
+		Cursor: newCursor,
+		Executions: workflowExecutions,
+	}
+
+	newjson, err := json.Marshal(newReturn)
 	if err != nil {
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflow executions"}`)))
@@ -12857,13 +13021,6 @@ func CheckHookAuth(request *http.Request, auth string) error {
 		return nil
 	}
 
-	log.Printf("[INFO] Checking hook auth: %s", auth)
-	// Print headers
-	for name, headers := range request.Header {
-		name = strings.ToLower(name)
-		log.Printf("[INFO] %s = %s", name, headers)
-	}
-
 	authSplit := strings.Split(auth, "\n")
 	for _, line := range authSplit {
 		lineSplit := strings.Split(line, "=")
@@ -19680,7 +19837,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 		}
 	}
 
-	log.Printf("[DEBUG] Inside workflow suggestions. Usecases: %d", usecasesAdded)
+	//log.Printf("[DEBUG] Inside workflow suggestions. Usecases: %d", usecasesAdded)
 	if usecasesAdded < 3 {
 		log.Printf("[DEBUG] Should check if workflows still are the same amount or not to change priorities")
 
