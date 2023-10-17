@@ -292,6 +292,7 @@ type ExecutionInfo struct {
 	LastCleared int64  `json:"last_cleared" datastore:"last_cleared"`
 
 	DailyStatistics []DailyStatistics `json:"daily_statistics" datastore:"daily_statistics"`
+	OnpremStats []DailyStatistics `json:"onprem_stats" datastore:"onprem_stats"`
 
 	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
 	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
@@ -804,6 +805,9 @@ type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
 	Source   string `json:"source" datastore:"source"`
+
+	WorkflowBackup bool `json:"workflow_backup" datastore:"workflow_backup"`
+	AppBackup      bool `json:"app_backup" datastore:"app_backup"`
 }
 
 type PaymentSubscription struct {
@@ -1620,6 +1624,17 @@ type NewValueSearchWrapper struct {
 			Source NewValue `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
+}
+
+type ExecutionInfoWrapper struct {
+	Index       string                `json:"_index"`
+	Type        string                `json:"_type"`
+	ID          string                `json:"_id"`
+	Version     int                   `json:"_version"`
+	SeqNo       int                   `json:"_seq_no"`
+	PrimaryTerm int                   `json:"_primary_term"`
+	Found       bool                  `json:"found"`
+	Source      ExecutionInfo `json:"_source"`
 }
 
 type EnvironentSearchWrapper struct {
@@ -3057,6 +3072,7 @@ type Usecase struct {
 	ExtraButtons    []ExtraButton `json:"extra_buttons"`
 }
 
+
 type CacheKeySearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -3537,4 +3553,12 @@ type NodeRelation struct {
 
 type WorkflowNodeRelations struct {
 	Relations map[string]NodeRelation `json:"node_relations"`
+}
+
+// Anonymized data that is sent to the cloud
+// as backup. Saved in your organization and region
+type BackupJob struct {
+	Stats ExecutionInfo `json:"stats"`
+	Workflows []Workflow `json:"workflows"`
+	Apps []WorkflowApp `json:"apps"`
 }

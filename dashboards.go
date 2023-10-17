@@ -347,7 +347,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	// Should remove the FIRST day as it's very scewed
 	// Do this based on the Timestamp (date)
 
-	if len(info.DailyStatistics) > 0 {
+	if len(info.DailyStatistics) > 1 {
 		skipIndex := 0
 		lowestTimestamp := info.DailyStatistics[0].Date
 		for _, timestamp := range info.DailyStatistics{
