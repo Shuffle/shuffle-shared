@@ -99,7 +99,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		}
 	}
 
-	log.Printf("[DEBUG] Daily stats not updated for %s in org %s", timeYesterday, executionInfo.OrgId)
+	log.Printf("[DEBUG] Daily stats not updated for %s in org %s. Only have %d stats so far", timeYesterday, executionInfo.OrgId, len(executionInfo.DailyStatistics))
 	// If we get here, we need to update the daily stats
 	newDay := DailyStatistics{
 		Date: timeYesterday,
@@ -239,13 +239,18 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	// dedup based on date 
 	allDates := []string{}
 
+
 	newDaily := []DailyStatistics{}
 	for _, stat := range stats.OnpremStats {
-		statdate := stat.Date.Format("2006-01-02")
+		statdate := stat.Date.Format("2006-12-30")
 		if !ArrayContains(allDates, statdate) {
 			newDaily = append(newDaily, stat)
 			allDates = append(allDates, statdate)
 		}
+	}
+
+	if len(newDaily) < len(stats.OnpremStats) {
+		log.Printf("\n\n[INFO] Deduped %d stats for org %s\n\n", len(stats.OnpremStats) - len(newDaily), id)
 	}
 
 	stats.OnpremStats = newDaily
@@ -350,7 +355,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 		orgStatistics = HandleIncrement(dataType, orgStatistics) 
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
-		//log.Printf("Daily stats: %d", len(orgStatistics.DailyStatistics))
+		//log.Printf("\n\nDaily stats: %d\n\n", len(orgStatistics.DailyStatistics))
 
 		// Set the data back in the database
 		marshalledData, err := json.Marshal(orgStatistics)
@@ -427,6 +432,8 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while
 func IncrementCache(ctx context.Context, orgId, dataType string) {
+
+	log.Printf("[DEBUG] Incrementing cache '%s' for org '%s'", dataType, orgId)
 
 	// Dump to disk every 0x19
 	// 1. Get the existing value
@@ -912,7 +919,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
-		log.Printf("[INFO] Not saving execution to DB, since we are running in swarm mode.")
+		//log.Printf("[INFO] Not saving execution to DB, since we are running in swarm mode.")
 		return nil
 	}
 
@@ -7575,6 +7582,22 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 		})
 	}
 
+	// Gets the correct one from cache to make it appear to be correct everywhere
+	for execIndex, execution := range executions {
+		if execution.Status == "EXECUTING" {
+			// Get the right one from cache
+			newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+			if err == nil {
+				// Set the execution as well in the database
+				if newexec.Status != execution.Status { 
+					go SetWorkflowExecution(ctx, *newexec, true)
+				}
+
+				executions[execIndex] = *newexec
+			}
+		}
+	}
+
 	return executions, nil
 }
 
@@ -7791,6 +7814,24 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 
 				cursorStr = nextStr
 				query = query.Start(nextCursor)
+			}
+		}
+	}
+
+	// func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
+	// Find difference between what's in the list and what is in cache
+	// This is in order for rerun systems and the like to not screw it up
+	for execIndex, execution := range executions {
+		if execution.Status == "EXECUTING" {
+			// Get the right one from cache
+			newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+			if err == nil {
+				// Set the execution as well in the database
+				if newexec.Status != execution.Status { 
+					go SetWorkflowExecution(ctx, *newexec, true)
+				}
+
+				executions[execIndex] = *newexec
 			}
 		}
 	}
@@ -9660,18 +9701,49 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 	}
 
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
+		validResults := 0
+		invalidResults := 0
+		subflows := 0
 		for _, result := range workflowExecution.Results {
 			if result.Status == "EXECUTING" || result.Status == "WAITING" {
 				log.Printf("[WARNING][%s] Waiting for action %s to finish", workflowExecution.ExecutionId, result.Action.ID)
 				return false
 			}
+		
+			if result.Status == "SUCCESS" {
+				validResults += 1
+			}
+
+			if result.Status == "ABORTED" || result.Status == "FAILED" {
+				invalidResults += 1
+			}
+
+			if result.Action.AppName == "User Input" || result.Action.AppName == "Shuffle Workflow" {
+				subflows += 1
+			}
 		}
+
 
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
 			log.Printf("[INFO] Already finished (validate)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
 			return false
+		}
+
+		// Updating stats for the workflow
+		if project.Environment != "cloud" {
+			for i := 0; i < validResults; i++ {
+				IncrementCache(ctx, workflowExecution.OrgId, "app_executions")
+			}
+
+			for i := 0; i < invalidResults; i++ {
+				IncrementCache(ctx, workflowExecution.OrgId, "app_executions_failed")
+			}
+
+			for i := 0; i < subflows; i++ {
+				IncrementCache(ctx, workflowExecution.OrgId, "subflow_executions")
+			}
 		}
 
 		//log.Printf("\n\nFINISHED!\n\n")

@@ -292,7 +292,7 @@ type ExecutionInfo struct {
 	LastCleared int64  `json:"last_cleared" datastore:"last_cleared"`
 
 	DailyStatistics []DailyStatistics `json:"daily_statistics" datastore:"daily_statistics"`
-	OnpremStats []DailyStatistics `json:"onprem_stats" datastore:"onprem_stats"`
+	OnpremStats []DailyStatistics `json:"onprem_stats,omitempty" datastore:"onprem_stats"`
 
 	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
 	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
@@ -305,17 +305,17 @@ type ExecutionInfo struct {
 	TotalOnpremExecutions           int64 `json:"total_onprem_executions" datastore:"total_onprem_executions"`
 	TotalAIUsage               int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 
-	MonthlyApiUsage                   int64 `json:"monthly_api_usage" datastore:"monthly_api_usage"`
-	MonthlyAppExecutions              int64 `json:"monthly_app_executions" datastore:"monthly_app_executions"`
-	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed" datastore:"monthly_app_executions_failed"`
-	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions" datastore:"monthly_subflow_executions"`
-	MonthlyWorkflowExecutions         int64 `json:"monthly_workflow_executions" datastore:"monthly_workflow_executions"`
-	MonthlyWorkflowExecutionsFinished int64 `json:"monthly_workflow_executions_finished" datastore:"monthly_workflow_executions_finished"`
-	MonthlyWorkflowExecutionsFailed   int64 `json:"monthly_workflow_executions_failed" datastore:"monthly_workflow_executions_failed"`
-	MonthlyOrgSyncActions             int64 `json:"monthly_org_sync_actions" datastore:"monthly_org_sync_actions"`
-	MonthlyCloudExecutions            int64 `json:"monthly_cloud_executions" datastore:"monthly_cloud_executions"`
-	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions" datastore:"monthly_onprem_executions"`
-	MonthlyAIUsage               int64 `json:"monthly_ai_executions" datastore:"monthly_ai_executions"`
+	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
+	MonthlyAppExecutions              int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
+	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
+	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
+	MonthlyWorkflowExecutions         int64 `json:"monthly_workflow_executions,omitempty" datastore:"monthly_workflow_executions"`
+	MonthlyWorkflowExecutionsFinished int64 `json:"monthly_workflow_executions_finished,omitempty" datastore:"monthly_workflow_executions_finished"`
+	MonthlyWorkflowExecutionsFailed   int64 `json:"monthly_workflow_executions_failed,omitempty" datastore:"monthly_workflow_executions_failed"`
+	MonthlyOrgSyncActions             int64 `json:"monthly_org_sync_actions,omitempty" datastore:"monthly_org_sync_actions"`
+	MonthlyCloudExecutions            int64 `json:"monthly_cloud_executions,omitempty" datastore:"monthly_cloud_executions"`
+	MonthlyOnpremExecutions           int64 `json:"monthly_onprem_executions,omitempty" datastore:"monthly_onprem_executions"`
+	MonthlyAIUsage               int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
 	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed,omitempty" datastore:"weekly_app_executions_failed"`
@@ -1119,6 +1119,8 @@ type Categories struct {
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
 	IAM           Category `json:"iam" datastore:"IAM"`
+
+	Email 		  Category `json:"email" datastore:"email"`
 	Other         Category `json:"other" datastore:"other"`
 }
 

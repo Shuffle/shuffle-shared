@@ -122,7 +122,8 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Assign tickets",
-				"type": "cases",
+				"type": "iam",
+				"last": "cases",
 				"priority": 30,
                 "items": {}
             },
@@ -154,8 +155,8 @@ func GetUsecaseData() string {
         "list": [
             {
                 "name": "Internal Enrichment",
-								"priority": 100,
-								"type": "intel",
+				"priority": 100,
+				"type": "intel",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -163,8 +164,8 @@ func GetUsecaseData() string {
             },
             {
                 "name": "External historical Enrichment",
-								"priority": 90,
-								"type": "intel",
+				"priority": 90,
+				"type": "intel",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -3215,7 +3216,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
-	log.Printf("[DEBUG] Getting %d executions for workflow %s.", maxAmount, fileId)
+	log.Printf("[DEBUG] Getting %d executions for workflow %s. Org %s (%s).", maxAmount, fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	workflowExecutions, newCursor, err := GetAllWorkflowExecutionsV2(ctx, fileId, maxAmount, cursor)
 	if err != nil {
@@ -13778,8 +13779,33 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 	err = SetWorkflowExecution(ctx, execution, true)
 	executionSet := true
 	if err == nil {
-		log.Printf("[INFO][%s] Set workflowexecution based on new worker (>0.8.53) for workflow %s. Actions: %d, Triggers: %d, Results: %d, Status: %s", execution.ExecutionId, execution.WorkflowId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status) //, execution.Result)
+		log.Printf("[INFO][%s] Set workflowexecution based on new worker (>0.8.53) for workflow %s. Actions: %d, Triggers: %d, Results: %d, Status: %s", execution.ExecutionId, execution.WorkflowId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status) 
 		executionSet = true
+
+
+		if execution.Status == "FINISHED" || execution.Status == "ABORTED" {
+			log.Printf("[INFO][%s] Execution is finished or aborted. Incrementing cache", execution.ExecutionId)
+
+			for _, result := range execution.Results {
+				if result.Status == "SUCCESS" {
+					IncrementCache(ctx, execution.ExecutionOrg, "app_executions")
+				} else if result.Status == "FAILED" || result.Status == "ABORTED" {
+					IncrementCache(ctx, execution.ExecutionOrg, "app_executions")
+					IncrementCache(ctx, execution.ExecutionOrg, "app_executions_failed")
+				} 
+
+				if result.Action.AppName == "Shuffle Workflow" && result.Status == "SUCCESS" {
+					IncrementCache(ctx, execution.ExecutionOrg, "subflow_executions")
+				}
+			}
+
+			if execution.Status == "ABORTED" {
+				IncrementCache(ctx, execution.ExecutionOrg, "workflow_executions_failed")
+			} else if execution.Status == "FINISHED" {
+				IncrementCache(ctx, execution.ExecutionOrg, "workflow_executions_finished")
+			}
+		}
+
 	} else {
 		log.Printf("[WARNING] Failed setting the execution for new worker (>0.8.53) - retrying once: %s. ExecutionId: %s, Actions: %d, Triggers: %d, Results: %d, Status: %s", err, execution.ExecutionId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status)
 		// Retrying
@@ -13793,7 +13819,6 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 	}
 
 	// Long convoluted way of validating and setting the value of a subflow that is also a loop
-	// FIXME: May cause errors in worker that runs it all instantly due to
 	// timing issues / non-queues
 	if executionSet {
 		RunFixParentWorkflowResult(ctx, execution)
