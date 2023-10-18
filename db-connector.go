@@ -433,7 +433,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 // It's only good for the user in cloud, hence wont bother for a while
 func IncrementCache(ctx context.Context, orgId, dataType string) {
 
-	log.Printf("[DEBUG] Incrementing cache '%s' for org '%s'", dataType, orgId)
+	//log.Printf("[DEBUG] Incrementing cache '%s' for org '%s'", dataType, orgId)
 
 	// Dump to disk every 0x19
 	// 1. Get the existing value

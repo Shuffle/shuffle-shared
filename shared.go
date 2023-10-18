@@ -17095,7 +17095,8 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 	usecase, err := GetUsecase(ctx, name)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting usecase %s: %s", name, err)
-		usecase.Success = true
+
+		usecase.Success = false 
 		usecase.Name = name
 		//resp.WriteHeader(400)
 		//resp.Write([]byte(`{"success": false}`))
@@ -19906,6 +19907,38 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	//if usecasesAdded <= 3 {
 	//	return GetWorkflowSuggestions(ctx, user, org, orgUpdated, amount+1) 
 	//}
+
+	if orgUpdated == false && usecasesAdded == 0 {
+		log.Printf("[DEBUG] Should generate priorities for org %s (%s) based on purely numbers", org.Name, org.Id)
+
+		org.Priorities = append(org.Priorities, Priority{
+			Name:        "Suggested Usecase: SIEM to ticket",
+			Description: "siem:default&&cases:default&&SIEM to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
+			Type:        "usecase",
+			Active:      true,
+			URL:         "/usecases?selected_object=email management",
+			Severity:    3,
+		})
+
+		org.Priorities = append(org.Priorities, Priority{
+			Name:        "Suggested Usecase: Email management",
+			Description: "edr:default&&cases:default&&Email management is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
+			Type:        "usecase",
+			Active:      true,
+			URL:         "/usecases?selected_object=Email management",
+			Severity:    3,
+		})
+
+		org.Priorities = append(org.Priorities, Priority{
+			Name:        "Suggested Usecase: EDR to ticket",
+			Description: "communication:default&&cases:default&&EDR to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
+			Type:        "usecase",
+			Active:      true,
+			URL:         "/usecases?selected_object=SIEM to ticket",
+			Severity:    3,
+		})
+
+	}
 
 	return org, orgUpdated
 }
