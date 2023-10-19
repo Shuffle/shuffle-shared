@@ -393,16 +393,17 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// check if there is a force parameter
-	force := request.URL.Query().Get("force")
-
 	ctx := GetContext(request)
-	platformHealth := HealthCheck{}
-	cacheKey := fmt.Sprintf("ops-health-check")
 
+	if os.Getenv("SHUFFLE_HEALTHCHECK_DISABLED") == "true" {
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": false, "reason": "Healthcheck disabled (not default). Set SHUFFLE_HEALTHCHECK_DISABLED=false to re-enable it."}`))
+		return
+	}
+
+	// Allows overwrites if they exist
 	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
 	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
-
 	if project.Environment == "onprem" && (len(apiKey) == 0 || len(orgId) == 0) {
 		log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user")
 		org, err := GetFirstOrg(ctx)
@@ -426,6 +427,9 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	platformHealth := HealthCheck{}
+	force := request.URL.Query().Get("force")
+	cacheKey := fmt.Sprintf("ops-health-check")
 	if project.CacheDb && force != "true" {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -447,44 +451,19 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			log.Printf("[WARNING] Failed getting cache ops health on first try: %s", err)
 		}
-	} else if !(project.CacheDb) {
+	} else if !project.CacheDb {
 		log.Println("[WARNING] Cache not enabled. Not using cache for ops health isn't recommended!")
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Cache not enabled. Not using cache for ops health isn't recommended!"}`))
 		return
 	}
 
-	if force == "true" {
-		log.Printf("[DEBUG] Force is true. Running health check")
-
-		userInfo, err := HandleApiAuthentication(resp, request)
-		if err != nil {
-			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Api authentication failed!"}`))
-			return
-		}
-
-		if project.Environment == "onprem" && userInfo.Role != "admin" {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
-			return
-		} else if project.Environment == "Cloud" && (userInfo.ApiKey != os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") || userInfo.SupportAccess) {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
-			return
-		}
-
-		log.Printf("[DEBUG] does user who is running health check have support access? %t", userInfo.SupportAccess)
-		log.Printf("[DEBUG] Is user api key same as ops dashboard api key? %t", userInfo.ApiKey == os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
-
-	} else if force != "true" {
+	if force != "true" {
 		// get last health check from database
 		healths, err := GetPlatformHealth(ctx, 0, 0, 1)
-
 		if len(healths) == 0 {
 			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Health check has never been run before! Nothing to display!"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Health check has never been run before! If you are an admin user, run with ?force=true to force a health check."}`))
 			return
 		}
 
@@ -503,13 +482,35 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(200)
 			resp.Write(platformData)
 			return
-		} else {
-			log.Printf("[WARNING] Failed getting platform health from database: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed getting platform health from database."}`))
-			return
-		}
+		} 
+
+		log.Printf("[WARNING] Failed getting platform health from database: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting platform health from database."}`))
+		return
 	}
+
+	log.Printf("[DEBUG] Force is true. Running health check")
+	userInfo, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Api authentication failed!"}`))
+		return
+	}
+
+	if project.Environment == "onprem" && userInfo.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
+		return
+	} else if project.Environment == "Cloud" && (userInfo.ApiKey != os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY") || userInfo.SupportAccess) {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Only admins can run health check!"}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Does user who is running health check have support access? %t", userInfo.SupportAccess)
+	log.Printf("[DEBUG] Is user api key same as ops dashboard api key? %t", userInfo.ApiKey == os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY"))
 
 	// Use channel for getting RunOpsWorkflow function results
 	workflowHealthChannel := make(chan WorkflowHealth)
@@ -562,7 +563,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	HealthCheck.Workflows = platformHealth.Workflows
 
 	// Add to database
-	err := SetPlatformHealth(ctx, HealthCheck)
+	err = SetPlatformHealth(ctx, HealthCheck)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting platform health in database: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed setting platform health in database."}`))
+		return
+	}
 
 	platformData, err := json.Marshal(platformHealth)
 	if err != nil {
