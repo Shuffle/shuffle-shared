@@ -19808,7 +19808,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 				}
 
 				usecaseDescription := "A priority usecase for your organization has been found. Click explore to learn more."
-				if len(selectedAppName) > 0 && len(selectedAppImage) > 0 {
+				if len(selectedAppName) > 0 && len(selectedAppImage) > 0 && subusecase.Type != subusecase.Last {
 					usecaseDescription = fmt.Sprintf("%s&%s", strings.Replace(selectedAppName, "_", " ", -1), selectedAppImage)
 
 					// Adding "last" node as well
@@ -19829,6 +19829,8 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 					} else if strings.ToLower(subusecase.Last) == "intel" && org.SecurityFramework.Intel.Name != "" && org.SecurityFramework.Intel.LargeImage != "" {
 						usecaseDescription = fmt.Sprintf("%s&%s&%s", usecaseDescription, strings.Replace(org.SecurityFramework.Intel.Name, "_", " ", -1), org.SecurityFramework.Intel.LargeImage)
 					}
+				} else if len(subusecase.Last) > 0 && subusecase.Type == subusecase.Last {
+					usecaseDescription = fmt.Sprintf("%s&%s&%s:default&", strings.Replace(selectedAppName, "_", " ", -1), selectedAppImage, subusecase.Last)
 				}
 
 				usecaseDescription += "&" + subusecase.Description
@@ -19863,13 +19865,12 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 		}
 	}
 
-	//log.Printf("[DEBUG] Inside workflow suggestions. Usecases: %d", usecasesAdded)
 	if usecasesAdded < 3 {
 		log.Printf("[DEBUG] Should check if workflows still are the same amount or not to change priorities")
 
 		// Check all existing priorities if they should still be closed, or reopened
 		for prioIndex, priority := range org.Priorities {
-			if priority.Type != "usecase" {
+			if priority.Type != "usecase" || priority.Active == true {
 				continue
 			}
 
@@ -19908,36 +19909,59 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	//	return GetWorkflowSuggestions(ctx, user, org, orgUpdated, amount+1) 
 	//}
 
-	if orgUpdated == false && usecasesAdded == 0 {
-		log.Printf("[DEBUG] Should generate priorities for org %s (%s) based on purely numbers", org.Name, org.Id)
+	if usecasesAdded < 3{
+		log.Printf("\n\n[DEBUG] Should generate priorities for org %s (%s) based on purely numbers\n\n", org.Name, org.Id)
 
-		org.Priorities = append(org.Priorities, Priority{
-			Name:        "Suggested Usecase: SIEM to ticket",
-			Description: "siem:default&&cases:default&&SIEM to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
-			Type:        "usecase",
-			Active:      true,
-			URL:         "/usecases?selected_object=email management",
-			Severity:    3,
-		})
+		newPrios := []Priority{
+			Priority{
+				Name:        "Suggested Usecase: SIEM to ticket",
+				Description: "siem:default&&cases:default&&SIEM to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
+				Type:        "usecase",
+				Active:      true,
+				URL:         "/usecases?selected_object=SIEM to management",
+				Severity:    3,
+			}, Priority{
+				Name:        "Suggested Usecase: Email management",
+				Description: "edr:default&&cases:default&&Email management is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
+				Type:        "usecase",
+				Active:      true,
+				URL:         "/usecases?selected_object=Email management",
+				Severity:    3,
+			}, Priority{
+				Name:        "Suggested Usecase: EDR to ticket",
+				Description: "communication:default&&cases:default&&EDR to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
+				Type:        "usecase",
+				Active:      true,
+				URL:         "/usecases?selected_object=EDR to ticket",
+				Severity:    3,
+			},
+		}
 
-		org.Priorities = append(org.Priorities, Priority{
-			Name:        "Suggested Usecase: Email management",
-			Description: "edr:default&&cases:default&&Email management is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
-			Type:        "usecase",
-			Active:      true,
-			URL:         "/usecases?selected_object=Email management",
-			Severity:    3,
-		})
+		for _, prio := range newPrios {
+			prioName := strings.ToLower(strings.ReplaceAll(prio.Name, "Suggested Usecase: ", ""))
+			found := false
+			for _, existingPrio := range org.Priorities {
+				if strings.Contains(existingPrio.Name, prioName) {
+					log.Printf("[DEBUG] Org %s (%s) already has the priority for Usecase '%s' added. Added: %d", org.Name, org.Id, prio.Name, usecasesAdded)
+					found = true
+					break
+				}
+			}
 
-		org.Priorities = append(org.Priorities, Priority{
-			Name:        "Suggested Usecase: EDR to ticket",
-			Description: "communication:default&&cases:default&&EDR to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
-			Type:        "usecase",
-			Active:      true,
-			URL:         "/usecases?selected_object=SIEM to ticket",
-			Severity:    3,
-		})
+			if !found {
+				org.Priorities = append(org.Priorities, prio)
+		
+				usecasesAdded += 1
 
+				// Force not org update due to this being temporary
+				orgUpdated = false
+				if usecasesAdded >= 3 {
+					break
+				}
+			}
+		}
+	} else {
+		log.Printf("[DEBUG] Org %s (%s) already has the priorities added. Added: %d", org.Name, org.Id, usecasesAdded)
 	}
 
 	return org, orgUpdated
