@@ -490,13 +490,24 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("[DEBUG] Running health check")
-	userInfo, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Api authentication failed!"}`))
-		return
+	// Making a fake user to pass to the api authentication
+	// This is mainly because nothing in here allows you to control it
+	var err error
+	userInfo := User{
+		ApiKey: apiKey,
+		Role: "admin",
+	}
+
+	if project.Environment != "onprem" {
+		userInfo, err = HandleApiAuthentication(resp, request)
+		if err != nil {
+			log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Api authentication failed!"}`))
+			return
+		}
+	} else {
+		// FIXME: Add a check for if it's been <interval> length at least between runs. This is 15 minutes by default.
 	}
 
 	if project.Environment == "onprem" && userInfo.Role != "admin" {
@@ -582,7 +593,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 
-	log.Printf("[DEBUG] request URL query:", request.URL.Query())
+	//log.Printf("[DEBUG] request URL query:", request.URL.Query())
 
 	limit := request.URL.Query().Get("limit")
 	before := request.URL.Query().Get("before")
@@ -591,19 +602,19 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	// convert all to int64
 	limitInt, err := strconv.Atoi(limit)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting limit to int: %s", err)
+		//log.Printf("[ERROR] Failed converting limit to int: %s", err)
 		limitInt = 0
 	}
 
 	beforeInt, err := strconv.Atoi(before)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting before to int: %s", err)
+		//log.Printf("[ERROR] Failed converting before to int: %s", err)
 		beforeInt = 0
 	}
 
 	afterInt, err := strconv.Atoi(after)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting after to int: %s", err)
+		//log.Printf("[ERROR] Failed converting after to int: %s", err)
 		afterInt = 0
 	}
 
@@ -656,7 +667,6 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string) error {
 	id := workflowHealth.WorkflowId
 
 	// 4. Delete workflow
-	// make a DELETE request to https://shuffler.io/api/v1/workflows/<workflow_id>
 	url := baseUrl + "/api/v1/workflows/" + id
 	log.Printf("[DEBUG] Deleting workflow with id: %s", id)
 
@@ -964,7 +974,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 		updateOpsCache(workflowHealth)
 
-		log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
+		//log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
 
 		// check if timeout
 		select {
@@ -976,7 +986,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 			// do nothing
 		}
 
-		log.Printf("[DEBUG] Waiting 2 seconds before retrying")
+		//log.Printf("[DEBUG] Waiting 2 seconds before retrying")
 		time.Sleep(2 * time.Second)
 	}
 
@@ -1024,31 +1034,34 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	// Should be local
 	// Create a new HTTP GET request
-	url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		log.Println("[ERROR] creating HTTP request:", err)
-		return "", errors.New("Error creating HTTP request: " + err.Error())
-	}
-
-	// send the request
 	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Println("[ERROR] sending Ops fetch app HTTP request:", err)
-		return "", errors.New("Error sending HTTP request: " + err.Error())
+	body := GetWorkflowTest()
+	if project.Environment == "cloud" {
+		url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Println("[ERROR] creating HTTP request:", err)
+			return "", errors.New("Error creating HTTP request: " + err.Error())
+		}
+
+		// send the request
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Println("[ERROR] sending Ops fetch app HTTP request:", err)
+			return "", errors.New("Error sending HTTP request: " + err.Error())
+		}
+
+		defer resp.Body.Close()
+
+		// Read the response body
+		body, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("[ERROR] reading HTTP response body:", err)
+			return "", errors.New("Error reading HTTP App response response body: " + err.Error())
+		}
+
+		log.Printf("[DEBUG] Successfully fetched workflow! Now creating a copy workflow for ops dashboard")
 	}
-
-	defer resp.Body.Close()
-
-	// Read the response body
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		log.Println("[ERROR] reading HTTP response body:", err)
-		return "", errors.New("Error reading HTTP App response response body: " + err.Error())
-	}
-
-	log.Printf("[DEBUG] Successfully fetched workflow! Now creating a copy workflow for ops dashboard")
 
 	// Unmarshal the JSON data into a Workflow instance
 	var workflowData Workflow
@@ -1130,7 +1143,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	jsonData := `{"name":"demo","description":"demo","blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}`
 
 	// res, err := http.Post(url, "application/json", bytes.NewBuffer([]byte(jsonData)))
-	req, err = http.NewRequest("POST", baseUrl+"/api/v1/workflows", bytes.NewBuffer([]byte(jsonData)))
+	req, err := http.NewRequest("POST", baseUrl+"/api/v1/workflows", bytes.NewBuffer([]byte(jsonData)))
 	log.Printf("[SANITY CHECK] req method is: %s", req.Method)
 
 	if err != nil {
@@ -1144,8 +1157,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	req.Header.Set("Org-Id", opsDashboardOrgId)
 
 	// send the request
-	client = &http.Client{}
-	resp, err = client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Println("[ERROR] sending Ops create workflow HTTP request:", err)
 		return "", errors.New("Error sending HTTP request: " + err.Error())
@@ -1196,7 +1208,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	workflowData.Public = false
 
 	// Save the workflow: PUT http://localhost:5002/api/v1/workflows/{id}?skip_save=true
-
 	req, err = http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflowData.ID+"?skip_save=true", nil)
 	if err != nil {
 		log.Println("[ERROR] creating HTTP request:", err)
