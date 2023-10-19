@@ -5955,7 +5955,7 @@ func fixPosition(position float64) float64 {
 		difference = math.Abs(difference)
 	
 		if difference == 0 {
-			log.Printf("[DEBUG] Position fixed from %s to %s", position, position + 0.001)
+			//log.Printf("[DEBUG] Position fixed from %s to %s", position, position + 0.001)
 			return position + 0.001
 		}
 
