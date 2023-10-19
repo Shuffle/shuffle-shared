@@ -5685,7 +5685,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 
 								// Some internal reserves
-								if (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey" {
+								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") {
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
@@ -15080,8 +15080,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		var execution ExecutionRequest
 		err = json.Unmarshal(body, &execution)
 		if err != nil {
-			//log.Printf("[WARNING] Failed execution POST unmarshaling - continuing anyway: %s", err)
-			//return WorkflowExecution{}, "", err
+			if len(string(body)) < 100 {
+				log.Printf("[WARNING] Failed execution POST unmarshaling - continuing anyway: '%s'. Err: %s", string(body), err)
+			} else {
+				log.Printf("[WARNING] Failed execution POST unmarshaling - continuing anyway: %s", err)
+			}
 		}
 
 		// Ensuring it works even if startpoint isn't defined
