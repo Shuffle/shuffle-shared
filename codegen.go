@@ -2256,37 +2256,6 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 	//firstQuery := true
 	optionalQueries := []string{}
 	parameters := []string{}
-	fileField := ""
-	if path.Delete.RequestBody != nil {
-		value := path.Delete.RequestBody.Value
-		if val, ok := value.Content["multipart/form-data"]; ok {
-			if val.Schema.Value != nil {
-				if innerval, ok := val.Schema.Value.Properties["fieldname"]; ok {
-					if extensionvalue, ok := innerval.Value.ExtensionProps.Extensions["value"]; ok {
-						fieldname := extensionvalue.(json.RawMessage)
-						newName := string(fmt.Sprintf("%s", string(fieldname)))
-						if newName[0] == 0x22 && newName[len(newName)-1] == 0x22 {
-							parsedName := newName[1 : len(newName)-1]
-							//log.Printf("Parse name: %s", parsedName)
-							fileField = parsedName
-
-							curParam := WorkflowAppActionParameter{
-								Name:        "file_id",
-								Description: "Files to be uploaded",
-								Multiline:   false,
-								Required:    true,
-								Schema: SchemaDefinition{
-									Type: "string",
-								},
-							}
-
-							action.Parameters = append(action.Parameters, curParam)
-						}
-					}
-				}
-			}
-		}
-	}
 
 	headersFound := []string{}
 	if len(path.Delete.Parameters) > 0 {
