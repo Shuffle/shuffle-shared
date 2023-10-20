@@ -437,7 +437,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &platformHealth)
 			if err == nil {
-				log.Printf("Platform health returned: %#v", platformHealth)
+				//log.Printf("[DEBUG] Platform health returned: %#v", platformHealth)
 				marshalledData, err := json.Marshal(platformHealth)
 
 				if err == nil {
