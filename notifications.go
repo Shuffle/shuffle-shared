@@ -221,13 +221,15 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 }
 
 func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string) error {
-	log.Printf("[DEBUG] Should send notifications to workflow %s", workflowId)
+	if len(workflowId) < 10 {
+		return nil
+	}
 
 	if strings.Contains(strings.ToLower(notification.ReferenceUrl), strings.ToLower(workflowId)) {
-		log.Printf("[WARNING] Notification NOT being sent to workflow as it's the same Workflow ID as failed!")
 		return errors.New("Same workflow ID as notification ID. Stopped for infinite loop")
 	}
 
+	log.Printf("[DEBUG] Should send notifications to workflow %s", workflowId)
 	backendUrl := os.Getenv("BASE_URL")
 	if project.Environment == "cloud" {
 		// Doesn't work multi-region
