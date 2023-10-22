@@ -19913,7 +19913,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	//}
 
 	if usecasesAdded < 3{
-		log.Printf("\n\n[DEBUG] Should generate priorities for org %s (%s) based on purely numbers\n\n", org.Name, org.Id)
+		//log.Printf("\n\n[DEBUG] Should generate priorities for org %s (%s) based on purely numbers\n\n", org.Name, org.Id)
 
 		newPrios := []Priority{
 			Priority{

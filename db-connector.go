@@ -883,11 +883,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("ExecutionId can't be empty.")
 	}
 
-	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-	if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-		log.Printf("[INFO] Already finished (set workflow)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
-		return nil
-	}
 
 	if len(workflowExecution.WorkflowId) == 0 {
 		log.Printf("[WARNING] Workflowexecution workflowId can't be empty.")
@@ -920,6 +915,13 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
 		//log.Printf("[INFO] Not saving execution to DB, since we are running in swarm mode.")
+		return nil
+	}
+
+	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
+	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
+		log.Printf("[INFO] Already finished (set workflow)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
 		return nil
 	}
 
@@ -972,8 +974,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	} else {
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
 
-		// Print 1 out of X times
-		if rand.Intn(8) == 1 {
+		// Print 1 out of X times as a debug mode 
+		if rand.Intn(20) == 1 {
 			log.Printf("[INFO][%s] Saving execution with status %s and %d/%d results (not including subflows) - 2", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 		}
 
@@ -8756,7 +8758,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
-	if strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch" {
+	if project.Environment != "worker" && strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch" {
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
