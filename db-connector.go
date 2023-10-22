@@ -8750,7 +8750,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
-	log.Printf("[DEBUG] Starting with memcached address '%s' (SHUFFLE_MEMCACHED). If this is empty, fallback to default (appengine / local)", memcached)
+	log.Printf("[DEBUG] Starting with memcached address '%s' (SHUFFLE_MEMCACHED). If this is empty, fallback to default (appengine / local). Name: '%s'", memcached, environment)
 
 	// In case of downtime / large requests
 	if len(memcached) > 0 {
