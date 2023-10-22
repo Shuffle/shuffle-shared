@@ -3441,6 +3441,7 @@ type OrborusStats struct {
 	// Docker
 	AppContainers    int `json:"app_containers"`
 	WorkerContainers int `json:"worker_containers"`
+	StoppedContainers  int `json:"stopped_containers"`
 	TotalContainers  int `json:"total_containers"`
 }
 
