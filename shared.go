@@ -17680,7 +17680,9 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	workflowExecution.Results = newResults
 	relevantActions := []Action{}
 
-	log.Printf("[INFO][%s] Inside Decide execution with %d / %d results (extra: %d)", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, extra)
+	log.Printf("[INFO][%s] Inside Decide execution with %d / %d results (extra: %d). Status: %s", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, extra, workflowExecution.Status)
+	// Check if status is aborted/failed
+
 
 	if len(startAction) == 0 {
 		startAction = workflowExecution.Start
@@ -17923,6 +17925,8 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					} else {
 						//log.Printf("Parent ID already ran. How long ago?")
 					}
+
+					//FIXME: Look for ABORT/FAILED
 				}
 			}
 
