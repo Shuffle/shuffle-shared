@@ -45,7 +45,6 @@ import (
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )
 
-//var requestCache *cache.Cache
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
@@ -1104,17 +1103,7 @@ func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowEx
 		}
 	}
 
-	/*
-		log.Printf("\n\nEnvironments: %s", environments)
-		log.Printf("Startnode: %s", startAction)
-		log.Printf("Parents: %s", parents)
-		log.Printf("NextActions: %s", nextActions)
-		log.Printf("Extra: %d", extra)
-		log.Printf("Children: %s", children)
-	*/
-
 	UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, startAction, children, parents, []string{startAction}, []string{startAction}, nextActions, environments, extra)
-
 }
 
 func UpdateExecutionVariables(ctx context.Context, executionId, startnode string, children, parents map[string][]string, visited, executed, nextActions, environments []string, extra int) error {
@@ -1990,12 +1979,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 					files = append(files, hit.Source)
 				}
 
-				//environments = append(environments, hit.Source)
 			}
-
-			//if len(environments) != 1 {
-			//	return env, errors.New(fmt.Sprintf("Found %d environments. Want 1 only.", len(environments)))
-			//}
 		}
 	} else {
 		query := datastore.NewQuery(nameKey).Filter("md5_sum =", md5).Limit(25)
@@ -10003,4 +9987,12 @@ func GetNodeRelations(ctx context.Context) (map[string]NodeRelation, error) {
 	}
 
 	return nodeRelations, nil
+}
+
+func GetDatastore() *datastore.Client {
+	return &project.Dbclient
+}
+
+func GetStorage() *storage.Client {
+	return &project.StorageClient
 }

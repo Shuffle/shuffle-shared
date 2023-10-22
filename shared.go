@@ -11249,7 +11249,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 
-		//if runCheck && project.Environment != "" && project.Environment != "worker" {
 		if runCheck {
 			// err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
 
@@ -11261,10 +11260,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				if project.Environment != "cloud" {
 
 					//Check cache for whether the execution actually finished or not
-					// FIXMe: May need to get this from backend
-
 					cacheKey := fmt.Sprintf("workflowexecution_%s", subflowData.ExecutionId)
-					if value, found := requestCache.Get(cacheKey); found {
+					value, err := GetCache(ctx, cacheKey)
+					if err == nil {
 						parsedValue := WorkflowExecution{}
 						cacheData := []byte(value.([]uint8))
 						err = json.Unmarshal(cacheData, &parsedValue)
