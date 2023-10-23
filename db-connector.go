@@ -7819,6 +7819,12 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 
 				executions[execIndex] = *newexec
 			}
+		} else {
+			// Delete cache to clear up memory
+			if project.Environment != "cloud" && execution.Status == "ABORTED" || execution.Status == "FAILURE" || execution.Status == "FINISHED" {
+				// Delete cache for it 
+				RunCacheCleanup(ctx, workflowExecution)
+			}
 		}
 	}
 
@@ -7877,6 +7883,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		}
 	}
 
+	/*
 	if project.CacheDb {
 		data, err := json.Marshal(executions)
 		if err != nil {
@@ -7890,6 +7897,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			return executions, cursor, nil
 		}
 	}
+	*/
 
 	return executions, cursor, nil
 }
@@ -9673,6 +9681,9 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
 		DeleteCache(ctx, cacheId)
 	}
+
+	cacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+	DeleteCache(ctx, cacheKEy) 
 
 	// This caused problems somehow
 	//cacheKey := fmt.Sprintf("%s-actions", workflowExecution.ExecutionId)
