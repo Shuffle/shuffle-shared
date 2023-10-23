@@ -7590,7 +7590,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount int, inputcursor string) ([]WorkflowExecution, string, error) {
 	index := "workflowexecution"
 
-	cacheKey := fmt.Sprintf("%s_%s_%s", index, inputcursor, workflowId)
+	//cacheKey := fmt.Sprintf("%s_%s_%s", index, inputcursor, workflowId)
 	var executions []WorkflowExecution
 	var err error
 	totalMaxSize := 11184810
@@ -7823,7 +7823,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			// Delete cache to clear up memory
 			if project.Environment != "cloud" && execution.Status == "ABORTED" || execution.Status == "FAILURE" || execution.Status == "FINISHED" {
 				// Delete cache for it 
-				RunCacheCleanup(ctx, workflowExecution)
+				RunCacheCleanup(ctx, execution)
 			}
 		}
 	}
@@ -9682,8 +9682,8 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 		DeleteCache(ctx, cacheId)
 	}
 
-	cacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
-	DeleteCache(ctx, cacheKEy) 
+	
+	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId))
 
 	// This caused problems somehow
 	//cacheKey := fmt.Sprintf("%s-actions", workflowExecution.ExecutionId)
