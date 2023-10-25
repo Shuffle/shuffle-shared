@@ -5464,7 +5464,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if !authFound {
 				log.Printf("[WARNING] App auth %s doesn't exist. Setting error", action.AuthenticationId)
 
-				errorMsg := fmt.Sprintf("App authentication %s for app %s doesn't exist!", action.AuthenticationId, action.AppName)
+				errorMsg := fmt.Sprintf("Selected app Authentication for app %s doesn't exist!", strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
 				if !ArrayContains(workflow.Errors, errorMsg) {
 					workflow.Errors = append(workflow.Errors, errorMsg)
 				}
@@ -5473,9 +5473,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				action.Errors = append(action.Errors, "App authentication doesn't exist")
 				action.IsValid = false
 				action.AuthenticationId = ""
-				//resp.WriteHeader(401)
-				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App auth %s doesn't exist"}`, action.AuthenticationId)))
-				//return
 			}
 		}
 
@@ -5494,7 +5491,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if curapp.ID == "" {
-				//log.Printf("[WARNING] Didn't find the App ID for %s", action.AppID)
+				log.Printf("[WARNING] Didn't find the App ID for %s", action.AppID)
 				for _, app := range workflowapps {
 					if app.ID == action.AppID {
 						curapp = app
@@ -5531,10 +5528,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				//log.Printf("[DEBUG] Found correct App ID for %s", action.AppID)
 			}
 
-			//log.Printf("CURAPP: %s:%s", curapp.Name, curapp.AppVersion)
+			if curapp.ID != action.AppID && curapp.Name != action.AppName {
+				errorMsg := fmt.Sprintf("App %s version %s doesn't exist", action.AppName, action.AppVersion)
 
-			if curapp.Name != action.AppName {
-				errorMsg := fmt.Sprintf("App %s:%s doesn't exist", action.AppName, action.AppVersion)
 				action.Errors = append(action.Errors, "This app doesn't exist.")
 
 				if !ArrayContains(workflow.Errors, errorMsg) {
@@ -5640,14 +5636,14 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if authRequired && fieldsFilled > 1 {
-						foundErr := fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
+						foundErr := fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							workflow.Errors = append(workflow.Errors, foundErr)
 							continue
 						}
 					} else if authRequired && fieldsFilled == 1 {
-						foundErr := fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
+						foundErr := fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							workflow.Errors = append(workflow.Errors, foundErr)
@@ -5689,7 +5685,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
-										thisError = fmt.Sprintf("%s requires authentication", strings.Replace(action.AppName, "_", " ", -1))
+										thisError = fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 									}
 
 									action.Errors = append(action.Errors, thisError)
