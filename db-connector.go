@@ -1209,10 +1209,13 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 	}
 
 	if project.Environment == "cloud" || sanitizeLiquid != "true" {
-		//log.Printf("[INFO] Skipping sanitizing for liquid execution since we are in cloud")
-
+		if sanitizeLiquid != "true" {
+			log.Printf("[WARNING] Liquid sanitization is disabled. Skipping sanitization.")
+		}
 		return workflowExecution
 	}
+
+	log.Printf("[INFO] Sanitizing execution %s from liquid syntax", workflowExecution.ExecutionId)
 
 	workflowExecution.ExecutionArgument = sanitizeString(workflowExecution.ExecutionArgument)
 	for i := range workflowExecution.Results {
