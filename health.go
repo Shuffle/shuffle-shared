@@ -405,12 +405,36 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
 	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
 	if project.Environment == "onprem" && (len(apiKey) == 0 || len(orgId) == 0) {
-		log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user")
+		log.Printf("[DEBUG] Ops dashboard api key or org not set. Getting first org and user that is valid")
 		org, err := GetFirstOrg(ctx)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting first org: %s", err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "Set up a user and org first!")}`))
+			return
+		}
+
+		validIndex := -1
+
+		// Check which user exists and is admin
+		for index, user := range org.Users {
+			_user, err := GetApikey(ctx, user.ApiKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting api key for user: %s", err)
+				continue
+			}
+
+			if user.Role == "admin" {
+				log.Printf("[DEBUG] Found admin user with api key: %s", user.Id)
+				validIndex = index
+				break
+			}
+		}
+
+		if validIndex == -1 {
+			log.Printf("[ERROR] Failed getting valid apikey for admin user in org: %s which exists!", org.Id)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Set up an admin user first!"}`))
 			return
 		}
 
