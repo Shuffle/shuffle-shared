@@ -438,10 +438,10 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("[DEBUG] Setting api key to that of user %s and org id to %s ", org.Users[0].ApiKey, org.Id)
+		log.Printf("[DEBUG] Setting api key to that of user %s and org id to %s ", org.Users[validIndex].ApiKey, org.Id)
 
 		orgId = org.Id
-		apiKey = org.Users[0].ApiKey
+		apiKey = org.Users[validIndex].ApiKey
 	}
 
 	if len(apiKey) == 0 || len(orgId) == 0 {
