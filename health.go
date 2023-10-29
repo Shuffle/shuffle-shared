@@ -418,7 +418,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 		// Check which user exists and is admin
 		for index, user := range org.Users {
-			_user, err := GetApikey(ctx, user.ApiKey)
+			_, err := GetApikey(ctx, user.ApiKey)
 			if err != nil {
 				log.Printf("[ERROR] Failed getting api key for user: %s", err)
 				continue
