@@ -3865,7 +3865,6 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 	return newUsers, nil
 }
 
-// ListBooks returns a list of books, ordered by title.
 func GetUser(ctx context.Context, username string) (*User, error) {
 	curUser := &User{}
 
