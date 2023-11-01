@@ -18280,20 +18280,22 @@ func GetExternalClient(baseUrl string) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport)
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 60
+	transport.IdleConnTimeout = time.Second * 60
 	transport.Proxy = nil
 
 	skipSSLVerify := false
-	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
+	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" || strings.ToLower(os.Getenv("SHUFFLE_SKIPSSL_VERIFY")) == "true" || 
 		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
 		skipSSLVerify = true
+
+		os.Setenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY", "true")
+		os.Setenv("SHUFFLE_SKIPSSL_VERIFY", "true")
 	}
 
 	transport.TLSClientConfig = &tls.Config{
 		MinVersion:         tls.VersionTLS11,
 		InsecureSkipVerify: skipSSLVerify,
 	}
-
-	//getStats()
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
@@ -19486,7 +19488,7 @@ func HandleGetenvStats(resp http.ResponseWriter, request *http.Request) {
 		if len(fileId) != 36 {
 			log.Printf("[WARNING] Failed getting environments to validate. New FileId: %s", fileId)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed updating environment"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting environment for ID %s"}`, fileId))
 			return
 		}
 	}
