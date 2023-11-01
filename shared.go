@@ -18284,7 +18284,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 	transport.Proxy = nil
 
 	skipSSLVerify := false
-	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" || strings.ToLower(os.Getenv("SHUFFLE_SKIPSSL_VERIFY")) == "true" || 
+	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" || strings.ToLower(os.Getenv("SHUFFLE_SKIPSSL_VERIFY")) == "true" { 
 		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
 		skipSSLVerify = true
 
@@ -19488,7 +19488,7 @@ func HandleGetenvStats(resp http.ResponseWriter, request *http.Request) {
 		if len(fileId) != 36 {
 			log.Printf("[WARNING] Failed getting environments to validate. New FileId: %s", fileId)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed getting environment for ID %s"}`, fileId))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting environment for ID %s"}`, fileId)))
 			return
 		}
 	}
