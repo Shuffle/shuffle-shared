@@ -1173,7 +1173,7 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 		} else if file.StorageArea == "s3" {
 			log.Printf("SHOULD UPLOAD TO S3!")
 		} else {
-			f, err := os.OpenFile(file.DownloadPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, os.ModePerm)
+			f, err := os.OpenFile(file.DownloadPath, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.ModePerm)
 
 			if err != nil {
 				// Rolling back file
