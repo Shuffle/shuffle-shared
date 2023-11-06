@@ -3196,7 +3196,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
-	log.Printf("[DEBUG] Getting %d executions for workflow %s. Org %s (%s).", maxAmount, fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	log.Printf("[DEBUG] Getting %d executions for workflow %s (V2). Org %s (%s).", maxAmount, fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	workflowExecutions, newCursor, err := GetAllWorkflowExecutionsV2(ctx, fileId, maxAmount, cursor)
 	if err != nil {
@@ -3205,6 +3205,8 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	log.Printf("[DEBUG] Got %d executions for workflow %s (V2). Org %s (%s).", len(workflowExecutions), fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)

@@ -1390,8 +1390,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	}
 
 	workflowExecution.Results = newResults
-
-	//log.Printf("\n\n[INFO] Found %d execution variables. Needed: %d\n\n", len(lastexecVar), len(workflowExecution.Workflow.ExecutionVariables))
 	for varKey, variable := range workflowExecution.Workflow.ExecutionVariables {
 
 		for key, value := range lastexecVar {
@@ -1403,9 +1401,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	}
 
 	// Check if finished too?
-	//log.Printf("\n\n\n[DEBUG] Got %d results for %s\n\n\n", len(workflowExecution.Results), workflowExecution.ExecutionId)
-
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
+	if workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
+		log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode", workflowExecution.ExecutionId)
+
+		finalWorkflowExecution.Status = "FINISHED"
+	}
 
 	return finalWorkflowExecution
 }
@@ -7813,16 +7814,18 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		}
 	}
 
-	// func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 	// Find difference between what's in the list and what is in cache
-	// This is in order for rerun systems and the like to not screw it up
+	//log.Printf("\n\n[DEBUG] Checking local cache for executions. Got %d executions\n\n", len(executions))
 	for execIndex, execution := range executions {
 		if execution.Status == "EXECUTING" {
+			//log.Printf("\n\n[DEBUG] Execution %s is executing, skipping cache\n\n", execution.ExecutionId)
+
 			// Get the right one from cache
 			newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
 			if err == nil {
+				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
 				// Set the execution as well in the database
-				if newexec.Status != execution.Status { 
+				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
 					go SetWorkflowExecution(ctx, *newexec, true)
 				}
 
@@ -7830,7 +7833,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			}
 		} else {
 			// Delete cache to clear up memory
-			if project.Environment != "cloud" && execution.Status == "ABORTED" || execution.Status == "FAILURE" || execution.Status == "FINISHED" {
+			if project.Environment != "cloud" && (execution.Status == "ABORTED" || execution.Status == "FAILURE" || execution.Status == "FINISHED") {
 				// Delete cache for it 
 				RunCacheCleanup(ctx, execution)
 			}
