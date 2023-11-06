@@ -1070,6 +1070,31 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			if len(gotSig.Eula) > 0 { 
 				org.Subscriptions = append(org.Subscriptions, gotSig)
 			}
+		} else {
+			for i, sub := range org.Subscriptions {
+				if !sub.EulaSigned {
+					continue
+				}
+
+				alertFound := false
+				for featIndex, feature := range sub.Features {
+					if strings.Contains(feature, "alert@shuffler.io") {
+						alertFound = true
+					}
+
+					if strings.Contains(strings.ToLower(feature), "nightly worker") {
+						org.Subscriptions[i].Features[featIndex] = strings.Replace(feature, "Sign EULA first", os.Getenv("NIGHTLY_WORKER_URL"), -1)
+					}
+
+					if strings.Contains(strings.ToLower(feature), "stable worker") {
+						org.Subscriptions[i].Features[featIndex] = strings.Replace(feature, "Sign EULA first", os.Getenv("LICENSED_WORKER_URL"), -1)
+					}
+				}
+
+				if !alertFound {
+					org.Subscriptions[i].Features = append(org.Subscriptions[i].Features, "Critical events: alert@shuffler.io")
+				}
+			}
 		}
 	}
 
@@ -6304,7 +6329,6 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("[WARNING] Failed getting user in get users: %s", err)
 		} else {
-			log.Printf("[DEBUG] Found user %s", foundUser.Username)
 			item = *foundUser
 		}
 
@@ -7971,6 +7995,12 @@ func getSignatureSample(org Org) PaymentSubscription {
 		name := "Open Source Scale Units"
 		licensedWorkerUrl := os.Getenv("LICENSED_WORKER_URL")
 		nightlyWorkerUrl := os.Getenv("NIGHTLY_WORKER_URL")
+
+		if !org.EulaSigned {
+			licensedWorkerUrl = "Sign EULA first"
+			nightlyWorkerUrl = "Sign EULA first"
+		}
+
 		features := []string{
 			"Priority Support",
 			fmt.Sprintf("App and Workflow development support"),
@@ -8354,7 +8384,15 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		// Compare cloud vs onprem
 		sigSample := getSignatureSample(*org)
 		if len(sigSample.Eula) > 0 && sigSample.Eula == tmpData.Subscription.Eula && sigSample.Name == tmpData.Subscription.Name && sigSample.Active {
+			for subIndex, sub := range org.Subscriptions {
+				if len(sub.EulaSignedBy) == 0 {
+					org.Subscriptions[subIndex].EulaSignedBy = user.Username
+				}
+			}
+
 			org.Subscriptions = append(org.Subscriptions, tmpData.Subscription)
+
+			org.EulaSignedBy = user.Username
 			org.EulaSigned = true
 		}
 	}
@@ -10501,7 +10539,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			foundWaiting := false
 			for resultIndex, result := range workflowExecution.Results {
 				if result.Action.ID == actionResult.Action.ID {
-					//log.Printf("\n\n[INFO] Found user input to replace.\n\n")
 					workflowExecution.Results[resultIndex].Result = actionResult.Result
 
 					// Updating cache for the result to always use the latest

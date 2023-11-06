@@ -6249,7 +6249,6 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil && len(user.Id) > 0 {
-				//log.Printf("Found user in cache for session key %s", cacheKey)
 
 				return *user, nil
 			} else {

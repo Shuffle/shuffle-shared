@@ -6,8 +6,10 @@ func GetWorkflowTest() []byte {
 
 func GetOnpremPaidEula() string {
 	return (
-`
-Below is an outline of each service. Any quotation is for each month of service, and does not reflect any applicable sales tax unless otherwise specified. If you want this contract in PDF form, please contact support@shuffler.io
+`Shuffle AS - EULA
+The Shuffle End User License Agreement is a legally binding contract between Shuffle and the user of Shuffle's services. By accepting this, you agree to the terms and conditions of this agreement. The Agreement is meant for those intending to buy Shuffle's services, and not when using the Free Open Source or Freemium versions of Shuffle. If you do not agree to these terms, please reach out to support@shuffler.io so we can discuss and create a custom contract.
+
+Any quotation is monthly, and does not reflect any applicable sales tax unless otherwise specified. If you want this contract in PDF form, please contact support@shuffler.io
 
 Shuffle Services
 This section describes each part of the previously mentioned services in detail.
@@ -77,7 +79,8 @@ The General Tier I Helpdesk Support role will serve as the helpdesk Point of Con
 
 The ATAM may be working as a partner of Shuffle to be able to cover business hours in certain geographical areas. Introduction and building will be discussed with the customer and partner, and be a part of the onboarding phase.
 Support priorities
-Shuffle’s support team will provide support via remote assistance. All requests will be performed via email or our support portal (as it becomes available). Critical events can be performed by phone.
+
+Shuffle’s support team will provide support via remote assistance. All requests will be performed via email or our support portal. Critical events can be performed by phone, and we will provide you with an alert email to reach us at any time after you have accepted this EULA and paid for Shuffle's services.
 
 Priority
 Business Impact
@@ -118,5 +121,32 @@ Once GCP and Shuffle come back online, Shuffle will work with the customer to en
 If Shuffle on GCP is completely offline for an extended period of time (2+ days), Shuffle will work with the customer to figure out a contingency plan to ensure the environment works as expected.
 
 In the case of circumstances outside of Shuffle’s control such as sickness or deaths, preventing the contract to be fulfilled by Shuffle directly, Shuffle’s partner Infopercept will take over all operations for the customer. Infopercept has certain access rights, allowing them to take over and host the Shuffle cloud platform by themselves under these circumstances, and have certain extra access due to support fulfillment.
-`)
+
+
+
+Non-disclosure 
+Shuffle will not disclose any information about the customer to any third party, unless the customer has given explicit permission to do so. This includes, but is not limited to, the customer’s name, address, contact information, and any other information that may be considered sensitive.
+
+When information is shared between our entities, the receiving Party acknowledges that the disclosing Party retains proprietary rights and intellectual property rights in the Confidential Information disclosed to the receiving Party, and that the disclosure of such Confidential Information shall not be deemed to confer upon the receiving Party any rights or intellectual property rights whatsoever in respect of any part thereof.
+
+
+
+Payment options
+The default payment option is by paying through the Shuffle website https://shuffler.io/pricing. We further accept bank transfer if necessary.
+
+
+Trial or Proof of Value (POV) 
+If you have started a Proof-of-Value or Trial with Shuffle, and you want to end the trial, you can do so at any time. When the Trial or POV ends, the customer needs to decide whether to continue by paying Shuffle, or stop the Trial, losing access to any software and support, previously supplied by Shuffle. POV can be extended if needed, but will be discussed with the customer and Shuffle. The maximum length of a Trial or POV is 3 months.
+
+Any payments made will not be refunded. If your license includes special software, the customer will lose access to this software, and has a maximum 30 day limit to remove the software from the time of contract end. The customer will still have access to their organization, users, workflows, apps etc. Shuffle will further want to have a conversation with the customer to ensure Shuffle’s services will improve in all steps.
+
+
+End of Contract
+If the customer wants to end the contract, the customer can do so at any time. The customer will still have access to their data, but will lose access to the extra resources provided by the chosen subscription. Any payments made will not be refunded. If your license includes special software, the customer will lose access to this software, and has a maximum 30 day limit to remove the software from the time of contract end. The customer will still have access to their organization, users, workflows, apps etc. Shuffle will further want to have a conversation with the customer to ensure Shuffle’s services will improve in all steps.
+
+
+License Auditing
+Shuffle may at any time, without warning, audit whether your are overutilizing your license in Shuffle. There are no hard limits when a license is bought, and any overutilization will be discussed with the customer. If the customer is overutilizing their license, the customer will be given a warning and a chance to fix the issue. If the issue is not fixed, Shuffle reserves the right to terminate the contract with the customer.
+
+If you want this contract in PDF format to sign instead of as a digital End User License Agreement, please contact us at support@shuffler.io`)
 }

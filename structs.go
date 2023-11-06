@@ -781,6 +781,7 @@ type Org struct {
 	Disabled          bool                  `json:"disabled" datastore:"disabled"`
 
 	EulaSigned        bool                  `json:"eula_signed" datastore:"eula_signed"`
+	EulaSignedBy	  string                `json:"eula_signed_by" datastore:"eula_signed_by"`
 }
 
 type PartnerInfo struct {
@@ -832,8 +833,9 @@ type PaymentSubscription struct {
 	Limit 		  	 int64  `json:"limit" datastore:"limit"`
 	Features 	   []string `json:"features" datastore:"features"`
 
-	Eula string `json:"eula" datastore:"eula"`
+	Eula string `json:"eula" datastore:"eula,noindex"`
 	EulaSigned bool `json:"eula_signed" datastore:"eula_signed"`
+	EulaSignedBy string `json:"eula_signed_by" datastore:"eula_signed_by"`
 }
 
 type SyncUsage struct {
