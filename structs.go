@@ -734,8 +734,13 @@ type LeadInfo struct {
 	POV       bool `json:"pov,omitempty" datastore:"pov"`
 	DemoDone  bool `json:"demo_done,omitempty" datastore:"demo_done"`
 	Customer  bool `json:"customer,omitempty" datastore:"customer"`
+	OpenSource bool `json:"opensource,omitempty" datastore:"opensource"`
 	Internal bool `json:"internal,omitempty" datastore:"internal"`
 	SubOrg   bool `json:"sub_org,omitempty" datastore:"sub_org"`
+
+	OldCustomer  bool `json:"old_customer,omitempty" datastore:"old_customer"`
+	TechPartner  bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
+	Creator bool `json:"creator,omitempty" datastore:"creator"`
 }
 
 type Org struct {
@@ -762,7 +767,6 @@ type Org struct {
 	ChildOrgs         []OrgMini             `json:"child_orgs" datastore:"child_orgs"`
 	ManagerOrgs       []OrgMini             `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
 	CreatorOrg        string                `json:"creator_org" datastore:"creator_org"`
-	Disabled          bool                  `json:"disabled" datastore:"disabled"`
 	PartnerInfo       PartnerInfo           `json:"partner_info" datastore:"partner_info"`
 	SSOConfig         SSOConfig             `json:"sso_config" datastore:"sso_config"`
 	SecurityFramework Categories            `json:"security_framework" datastore:"security_framework,noindex"`
@@ -774,11 +778,15 @@ type Org struct {
 	LeadInfo          LeadInfo              `json:"lead_info,omitempty" datastore:"lead_info"`
 
 	CreatorId 	   	  string                `json:"creator_id" datastore:"creator_id"`
+	Disabled          bool                  `json:"disabled" datastore:"disabled"`
+
+	EulaSigned        bool                  `json:"eula_signed" datastore:"eula_signed"`
 }
 
 type PartnerInfo struct {
 	Reseller      bool   `json:"reseller" datastore:"reseller"`
 	ResellerLevel string `json:"reseller_level" datastore:"reseller_level"`
+
 }
 
 type Defaults struct {
@@ -823,6 +831,9 @@ type PaymentSubscription struct {
 	Currency         string `json:"currency" datastore:"currency"`
 	Limit 		  	 int64  `json:"limit" datastore:"limit"`
 	Features 	   []string `json:"features" datastore:"features"`
+
+	Eula string `json:"eula" datastore:"eula"`
+	EulaSigned bool `json:"eula_signed" datastore:"eula_signed"`
 }
 
 type SyncUsage struct {

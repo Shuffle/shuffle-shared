@@ -1066,29 +1066,9 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(org.Subscriptions) == 0 && project.Environment == "cloud" {
-			if org.LeadInfo.Customer || org.LeadInfo.POV || len(org.ManagerOrgs) > 0 {
-				name := "App execution units - default"
-				if len(org.ManagerOrgs) > 0 {
-					name = "Suborg access - default"
-				}
-
-				org.Subscriptions = append(org.Subscriptions, PaymentSubscription{
-					Active:           true,
-					Startdate:        int64(time.Now().Unix()),
-					CancellationDate: 0,
-					Enddate:          0,
-					Name:             name,
-					Recurrence:       string("monthly"),
-					Amount:           string(rune(100000)),
-					Currency:         string("USD"),
-					Level:            "1",
-					Reference:        "TBD",
-					Limit:            100000,
-					Features:         []string{
-						"Custom Contract features",
-						"Multi-Tenant & Multi-Region",
-					},
-				})
+			gotSig := getSignatureSample(*org)
+			if len(gotSig.Eula) > 0 { 
+				org.Subscriptions = append(org.Subscriptions, gotSig)
 			}
 		}
 	}
@@ -6317,12 +6297,16 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		//for _, tmpUser := range newUsers {
-		//	if tmpUser.Name
-		//}
+		// Get the actual user
+		foundUser, err := GetUser(ctx, item.Id)	
+		if err != nil {
+			log.Printf("[WARNING] Failed getting user in get users: %s", err)
+		} else {
+			log.Printf("[DEBUG] Found user %s", foundUser.Username)
+			item = foundUser
+		}
 
 		if item.Username != user.Username && (len(item.Orgs) > 1 || item.Role == "admin") {
-			//log.Printf("[DEBUG] Orgs for the user: %s", item.Orgs)
 			item.ApiKey = ""
 		}
 
@@ -7943,6 +7927,78 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 }
 
+func getSignatureSample(org Org) PaymentSubscription {
+	if len(org.Subscriptions) > 0 {
+		for _, sub := range org.Subscriptions {
+			if !sub.EulaSigned {
+				return sub
+			}
+		}
+	}
+
+	log.Printf("[DEBUG] No signature sample found for org %s", org.Id)
+
+	parsedEula := GetOnpremPaidEula() 
+	if (org.LeadInfo.Customer || org.LeadInfo.POV || len(org.ManagerOrgs) > 0) && !org.LeadInfo.OpenSource {
+		name := "App execution units - default"
+		if len(org.ManagerOrgs) > 0 {
+			name = "Suborg access - default"
+		}
+
+		return PaymentSubscription{
+			Active:           true,
+			Startdate:        int64(time.Now().Unix()),
+			CancellationDate: 0,
+			Enddate:          0,
+			Name:             name,
+			Recurrence:       string("monthly"),
+			Amount:           string(rune(100000)),
+			Currency:         string("USD"),
+			Level:            "1",
+			Reference:        "TBD",
+			Limit:            100000,
+			Features:         []string{
+				"Custom Contract features",
+				"Multi-Tenant & Multi-Region",
+			},
+
+			EulaSigned:       true,
+			Eula:             parsedEula,
+		}
+	} else if (org.LeadInfo.Customer || org.LeadInfo.POV) && org.LeadInfo.OpenSource {
+		name := "Open Source Scale Units"
+		licensedWorkerUrl := os.Getenv("LICENSED_WORKER_URL")
+		nightlyWorkerUrl := os.Getenv("NIGHTLY_WORKER_URL")
+		features := []string{
+			"Priority Support",
+			fmt.Sprintf("App and Workflow development support"),
+			"Documentation: https://shuffler.io/docs/configuration#scaling_shuffle_with_swarm",
+			fmt.Sprintf("Stable Worker License:  %s", licensedWorkerUrl), 
+			fmt.Sprintf("Nightly Worker License: %s", nightlyWorkerUrl),
+		}
+
+		return PaymentSubscription{
+			Name:             name,
+			Active:           true,
+			CancellationDate: 0,
+			Enddate:          0,
+			Startdate:        int64(time.Now().Unix()),
+			Recurrence:       string("monthly"),
+			Amount:           string(rune(600)),
+			Currency:         string("USD"),
+			Level:            "1",
+			Reference:        "TBD",
+			Limit:            1,
+			Features:         features,
+
+			EulaSigned:       org.EulaSigned,
+			Eula:             parsedEula,
+		}
+	} 
+
+	return PaymentSubscription{}
+}
+
 func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -7996,6 +8052,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		LeadInfo    []string  `json:"lead_info" datastore:"lead_info"`
 
 		CreatorConfig string `json:"creator_config" datastore:"creator_config"`
+		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
 	}
 
 	var tmpData ReturnData
@@ -8182,8 +8239,24 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.Customer = true
 			}
 
+			if lead == "old customer" {
+				newLeadinfo.OldCustomer = true
+			}
+
+			if lead == "opensource" || lead == "open source" {
+				newLeadinfo.OpenSource = true
+			}
+
 			if lead == "internal" {
 				newLeadinfo.Internal = true
+			}
+
+			if lead == "creator" {
+				newLeadinfo.Creator = true
+			}
+
+			if lead == "tech_partner" {
+				newLeadinfo.TechPartner = true
 			}
 		}
 
@@ -8247,6 +8320,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 			}
 
+			org.LeadInfo.Creator = true
+
 		} else if tmpData.CreatorConfig == "leave" {
 			log.Printf("[INFO] Org %s is leaving creators", org.Id)
 			if org.CreatorId != "" {
@@ -8266,7 +8341,19 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 					org.CreatorId = ""
 				}
 			}
+			
+			org.LeadInfo.Creator = false 
+		}
+	}
 
+	if tmpData.Subscription.EulaSigned == true {
+		log.Printf("[DEBUG] EULA signed for %s", org.Id)
+
+		// Compare cloud vs onprem
+		sigSample := getSignatureSample(*org)
+		if len(sigSample.Eula) > 0 && sigSample.Eula == tmpData.Subscription.Eula && sigSample.Name == tmpData.Subscription.Name && sigSample.Active {
+			org.Subscriptions = append(org.Subscriptions, tmpData.Subscription)
+			org.EulaSigned = true
 		}
 	}
 
@@ -16504,7 +16591,6 @@ func GetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	//log.Printf("Framework: %s", org.SecurityFramework)
 	newjson, err := json.Marshal(org.SecurityFramework)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get security framework: %s", err)
@@ -16586,7 +16672,7 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		if err != nil {
 
 			if project.Environment == "cloud" {
-				log.Printf("[ERROR] Error getting app %s in set framework: %s", value.ID, err)
+				log.Printf("[ERROR] Error getting app '%s' in set framework: %s", value.ID, err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
@@ -16735,6 +16821,24 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 				org.Tutorials[tutorialIndex].Done = true
 			}
 		}
+	}
+
+	// Reset priorities as framework has changed
+	newPrios := []Priority{}
+	for _, priority := range org.Priorities {
+		if priority.Type == "usecase" {
+			continue
+		}
+
+		newPrios = append(newPrios, priority)
+	}
+
+	org.Priorities = newPrios
+	foundPrios, err := GetPriorities(ctx, user, org)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting priorities for org %s: %s", org.Name, err)
+	} else {
+		org.Priorities = foundPrios 
 	}
 
 	err = SetOrg(ctx, *org, org.Id)
@@ -19530,7 +19634,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.Communication.Name == "" && (action.Category == "Communication" || action.Category == "email") {
 				orgUpdated = true
 				org.SecurityFramework.Communication = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19541,7 +19645,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.Intel.Name == "" && action.Category == "Intel" {
 				orgUpdated = true
 				org.SecurityFramework.Intel = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19552,7 +19656,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.Network.Name == "" && action.Category == "Network" {
 				orgUpdated = true
 				org.SecurityFramework.Network = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19563,7 +19667,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.Assets.Name == "" && action.Category == "Assets" {
 				orgUpdated = true
 				org.SecurityFramework.Assets = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19574,7 +19678,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.Cases.Name == "" && action.Category == "Cases" {
 				orgUpdated = true
 				org.SecurityFramework.Cases = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19585,7 +19689,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.SIEM.Name == "" && action.Category == "SIEM" {
 				orgUpdated = true
 				org.SecurityFramework.SIEM = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19596,7 +19700,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.EDR.Name == "" && action.Category == "EDR" {
 				orgUpdated = true
 				org.SecurityFramework.EDR = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19607,7 +19711,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			if org.SecurityFramework.IAM.Name == "" && action.Category == "IAM" {
 				orgUpdated = true
 				org.SecurityFramework.IAM = Category{
-					Name:        action.Name,
+					Name:        action.AppName,
 					Count:       1,
 					Description: "",
 					LargeImage:  action.LargeImage,
@@ -19850,7 +19954,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 				}, updated)
 
 				if innerUpdate {
-					log.Printf("[DEBUG] Org %s (%s) got the priority for Usecase '%s' added. Added: %d", org.Name, org.Id, subusecase.Name, usecasesAdded)
+					//log.Printf("[DEBUG] Org %s (%s) got the priority for Usecase '%s' added. Added: %d", org.Name, org.Id, subusecase.Name, usecasesAdded)
 
 					cntAdded += 1
 					orgUpdated = true
@@ -19869,7 +19973,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	}
 
 	if usecasesAdded < 3 {
-		log.Printf("[DEBUG] Should check if workflows still are the same amount or not to change priorities")
+		//log.Printf("[DEBUG] Should check if workflows still are the same amount or not to change priorities")
 
 		// Check all existing priorities if they should still be closed, or reopened
 		for prioIndex, priority := range org.Priorities {
@@ -19882,7 +19986,6 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 
 			found := false
 			for _, workflow := range workflows {
-				//usecaseIds = append(usecaseIds, workflow.UsecaseIds...)
 				for _, usecase := range workflow.UsecaseIds {
 					if usecase == usecaseName {
 						found = true
@@ -19944,7 +20047,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			prioName := strings.ToLower(strings.ReplaceAll(prio.Name, "Suggested Usecase: ", ""))
 			found := false
 			for _, existingPrio := range org.Priorities {
-				if strings.Contains(existingPrio.Name, prioName) {
+				if strings.Contains(strings.ToLower(strings.ReplaceAll(existingPrio.Name, "Suggested Usecase: ", "")), prioName) {
 					log.Printf("[DEBUG] Org %s (%s) already has the priority for Usecase '%s' added. Added: %d", org.Name, org.Id, prio.Name, usecasesAdded)
 					found = true
 					break

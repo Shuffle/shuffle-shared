@@ -2876,6 +2876,13 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		newPriorities = append(newPriorities, priority)
 	}
 
+	// Check if Subscription is from BEFORE November 4th 2023
+	for orgIndex, sub := range curOrg.Subscriptions {
+		if sub.Startdate == 0 || sub.Startdate < 1699053459 {  
+			curOrg.Subscriptions[orgIndex].EulaSigned = true
+		}
+	}
+
 	curOrg.Priorities = newPriorities
 	if project.CacheDb {
 		neworg, err := json.Marshal(curOrg)
