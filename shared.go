@@ -6303,7 +6303,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed getting user in get users: %s", err)
 		} else {
 			log.Printf("[DEBUG] Found user %s", foundUser.Username)
-			item = foundUser
+			item = *foundUser
 		}
 
 		if item.Username != user.Username && (len(item.Orgs) > 1 || item.Role == "admin") {
