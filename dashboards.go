@@ -344,28 +344,30 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Should remove the FIRST day as it's very scewed
-	// Do this based on the Timestamp (date)
-	skipIndex := 0
-	lowestTimestamp := info.DailyStatistics[0].Date
-	for _, timestamp := range info.DailyStatistics{
-		if timestamp.Date.Before(lowestTimestamp) {
-			lowestTimestamp = timestamp.Date
+	if len(info.DailyStatistics) > 0 {
+		// Should remove the FIRST day as it's very scewed
+		// Do this based on the Timestamp (date)
+		skipIndex := 0
+		lowestTimestamp := info.DailyStatistics[0].Date
+		for _, timestamp := range info.DailyStatistics{
+			if timestamp.Date.Before(lowestTimestamp) {
+				lowestTimestamp = timestamp.Date
+			}
 		}
-	}
 
-	if skipIndex >= 0 {
-		info.DailyStatistics = append(info.DailyStatistics[:skipIndex], info.DailyStatistics[skipIndex+1:]...)
-	}
+		if skipIndex >= 0 {
+			info.DailyStatistics = append(info.DailyStatistics[:skipIndex], info.DailyStatistics[skipIndex+1:]...)
+		}
 
-	// Sort the array
-	sort.Slice(info.DailyStatistics, func(i, j int) bool {
-		return info.DailyStatistics[i].Date.Before(info.DailyStatistics[j].Date)
-	})
+		// Sort the array
+		sort.Slice(info.DailyStatistics, func(i, j int) bool {
+			return info.DailyStatistics[i].Date.Before(info.DailyStatistics[j].Date)
+		})
 
-	// Get a max of the last 60 days
-	if len(info.DailyStatistics) > 60 {
-		info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-60:]
+		// Get a max of the last 60 days
+		if len(info.DailyStatistics) > 60 {
+			info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-60:]
+		}
 	}
 
 	newjson, err := json.Marshal(info)
