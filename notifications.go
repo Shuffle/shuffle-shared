@@ -263,6 +263,21 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	log.Printf("Using cacheKey: %s for notification bucketing for notification id: %s", cacheKey, notification.Id)
 
+	bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
+	if len(bucketingMinutes) == 0 {
+		bucketingMinutes = "10"
+	}
+
+	// convert to int
+	bucketingMinutesInt, err := strconv.ParseInt(bucketingMinutes, 10, 32)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting bucketing minutes to int: %s. Defaulting to 10 minutes!", err)
+		bucketingMinutesInt = 10
+	}
+
+	// converting to int32
+	bucketingTime := int32(bucketingMinutesInt)
+
 	if len(cacheData) > 0 {
 		// unmarshal cached data
 		err := json.Unmarshal(cacheData, &cachedNotifications)
@@ -279,11 +294,9 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			workflowId,
 		)
 
-		// check if notification exists in cachedNotifications
-		notificationsMade = append(notificationsMade, notification.Id)
+		cachedNotifications.LastNotificationAttempted = notification.Id
 
-		// save cachedNotifications
-		cachedNotifications.NotificationsAttempted = notificationsMade
+		cachedNotifications.Amount += 1
 		cachedNotifications.LastUpdated = int64(time.Now().Unix())
 
 		// marshal cachedNotifications
@@ -293,24 +306,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			return err
 		}
 
-		bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
-		if len(bucketingMinutes) == 0 {
-			bucketingMinutes = "10"
-		}
-
-		// convert to int
-		bucketingMinutesInt, err := strconv.ParseInt(bucketingMinutes, 10, 32)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed converting bucketing minutes to int: %s. Defaulting to 10 minutes!", err)
-			bucketingMinutesInt = 10
-		}
-
-		// converting to int32
-		bucketingTime := int32(bucketingMinutesInt)
+		newExpiration := bucketingTime - int32(time.Now().Unix() - cachedNotifications.LastUpdated)
 
 		// save cachedNotifications
-		err = SetCache(ctx, cacheKey, cacheData, bucketingTime)
+		err = SetCache(ctx, cacheKey, cacheData, newExpiration)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
 				cacheKey, 
@@ -326,10 +325,12 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		// create new cachedNotifications
 		cachedNotifications = NotificationCached{
 			NotificationId: notification.Id,
-			NotificationsAttempted: []string{notification.Id},
+			FirstNotificationAttempted: notification.Id,
+			LastNotificationAttempted: notification.Id,
 			WorkflowId: workflowId,
 			LastUpdated: timeNow,
 			FirstUpdated: timeNow,
+			Amount: 1,
 		}
 
 		// marshal cachedNotifications
@@ -340,7 +341,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		}
 
 		// save cachedNotifications
-		err = SetCache(ctx, cacheKey, cachedData, 10)
+		err = SetCache(ctx, cacheKey, cachedData, bucketingMinutesInt)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (2)",
 				cacheKey,
