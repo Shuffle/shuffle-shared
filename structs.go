@@ -1185,8 +1185,8 @@ type NotificationCached struct {
 	WorkflowId     string `json:"workflow_id" datastore:"workflow_id"`
 	LastUpdated    int64  `json:"last_updated" datastore:"last_updated"`
 	FirstUpdated   int64  `json:"first_updated" datastore:"first_updated"`
-	LastNotificationAttempted []string `json:"last_notification_attempted" datastore:"last_notification_attempted"`
-	FirstNotificationAttempted []string `json:"first_notification_attempted" datastore:"first_notification_attempted"`
+	LastNotificationAttempted string `json:"last_notification_attempted" datastore:"last_notification_attempted"`
+	FirstNotificationAttempted string `json:"first_notification_attempted" datastore:"first_notification_attempted"`
 	Amount		   int64  `json:"amount" datastore:"amount"`
 }
 

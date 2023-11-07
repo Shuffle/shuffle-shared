@@ -287,17 +287,15 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		}
 
 		// check cachedNotifications.cachedNotifications 
-		notificationsMade := cachedNotifications.NotificationsAttempted
 		log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
-			len(notificationsMade),
+			cachedNotifications.Amount,
 			cachedNotifications.NotificationId,
 			workflowId,
 		)
 
-		cachedNotifications.LastNotificationAttempted = notification.Id
-
 		cachedNotifications.Amount += 1
 		cachedNotifications.LastUpdated = int64(time.Now().Unix())
+		cachedNotifications.LastNotificationAttempted = notification.Id
 
 		// marshal cachedNotifications
 		cacheData, err := json.Marshal(cachedNotifications)
@@ -341,7 +339,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		}
 
 		// save cachedNotifications
-		err = SetCache(ctx, cacheKey, cachedData, bucketingMinutesInt)
+		err = SetCache(ctx, cacheKey, cachedData, bucketingTime)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (2)",
 				cacheKey,
