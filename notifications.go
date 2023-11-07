@@ -245,6 +245,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
     // Convert the hash to a hexadecimal string
     cacheKey := hex.EncodeToString(hashBytes)
 
+	cacheData := []byte{}
+
 	// check if cache exists
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
@@ -253,9 +255,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			notification.Id, 
 			err,
 		)
+		cacheData = []byte{}
+	} else {
+		cacheData = []byte(cache.([]uint8))
 	}
-
-	cacheData := []byte(cache.([]uint8))
 
 	if len(cacheData) > 0 {
 		// unmarshal cached data
