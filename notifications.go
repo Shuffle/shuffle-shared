@@ -248,8 +248,11 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	// check if cache exists
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s", cacheKey, notification.Id, err)
-		return err
+		log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s. Assuming no notifications are found!", 
+			cacheKey, 
+			notification.Id, 
+			err,
+		)
 	}
 
 	cacheData := []byte(cache.([]uint8))
