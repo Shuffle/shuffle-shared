@@ -229,13 +229,13 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	// smart solution
 	// cache notifications for 10 minutes: 
-	// to: notification_title+workflow_id_hash
+	// to: notification_Description+workflow_id_hash
 	// notifications_id, 
 	// list_of_same_notifications_id_repeated, 
 	// workflow_id
 	cachedNotifications := NotificationCached{}
 	// caclulate hash of notification title + workflow id
-	unHashed := fmt.Sprintf("%s_%s", notification.Title, workflowId)
+	unHashed := fmt.Sprintf("%s_%s", notification.Description, workflowId)
 
 	// Calculate SHA-256 hash
     hasher := sha256.New()
@@ -289,8 +289,19 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			return err
 		}
 
+		bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
+		if len(bucketingMinutes) == 0 {
+			bucketingMinutes = "10"
+		}
+
+		bucketingMinutesInt, err := strconv.Atoi(bucketingMinutes)
+		if err != nil {
+			log.Printf("[ERROR] Failed converting bucketing minutes to int: %s. Defaulting to 10 minutes!", err)
+			bucketingMinutesInt = 10
+		}
+
 		// save cachedNotifications
-		err = SetCache(ctx, cacheKey, cacheData, 10)
+		err = SetCache(ctx, cacheKey, cacheData, bucketingMinutesInt)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
 				cacheKey, 
