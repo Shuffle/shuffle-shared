@@ -278,6 +278,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	// converting to int32
 	bucketingTime := int32(bucketingMinutesInt)
 
+	log.Printf("[DEBUG] Bucketing time for cache is: %d", bucketingTime)
+
 	if len(cacheData) > 0 {
 		// unmarshal cached data
 		err := json.Unmarshal(cacheData, &cachedNotifications)
@@ -305,6 +307,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		}
 
 		totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
+
+		log.Printf("Time elasped since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
 
 		if totalTimeElapsed > int64(bucketingMinutesInt) {
 			log.Printf("[DEBUG] Total time elapsed %d is more than bucketing time %d. Deleting cache!",
