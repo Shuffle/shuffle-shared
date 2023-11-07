@@ -304,19 +304,37 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			return err
 		}
 
-		newExpiration := bucketingTime - int32(time.Now().Unix() - cachedNotifications.LastUpdated)
+		totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
 
-		// save cachedNotifications
-		err = SetCache(ctx, cacheKey, cacheData, newExpiration)
-		if err != nil {
-			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
-				cacheKey, 
-				notification.Id, 
-				err,
+		if totalTimeElapsed > int64(bucketingMinutesInt) {
+			log.Printf("[DEBUG] Total time elapsed %d is more than bucketing time %d. Sending notifications to workflow %s",
+				totalTimeElapsed,
+				bucketingMinutesInt,
+				workflowId,
 			)
-			return err
+
+			// deleting cache
+			err = DeleteCache(ctx, cacheKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
+					cacheKey,
+					notification.Id,
+					err,
+				)
+			}
+		} else {
+			// save cachedNotifications
+			err = SetCache(ctx, cacheKey, cacheData, bucketingTime)
+			if err != nil {
+				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
+					cacheKey, 
+					notification.Id, 
+					err,
+				)
+				return err
+			}
+			return errors.New("Notification already sent with cacheKey: " + cacheKey)
 		}
-		return errors.New("Notification already sent with cacheKey: " + cacheKey)
 	} else {
 		timeNow := int64(time.Now().Unix())
 
