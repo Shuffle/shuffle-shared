@@ -7,7 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"github.com/satori/go.uuid"
+	"crypto/sha256"
+    "encoding/hex"
 	"io/ioutil"
+	"strconv"
 	"log"
 	"net/http"
 	"os"
@@ -224,6 +227,156 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	if len(workflowId) < 10 {
 		return nil
 	}
+
+	// smart solution
+	// cache notifications for 10 minutes: 
+	// to: notification_Description+workflow_id_hash
+	// notifications_id, 
+	// list_of_same_notifications_id_repeated, 
+	// workflow_id
+	cachedNotifications := NotificationCached{}
+	// caclulate hash of notification title + workflow id
+	unHashed := fmt.Sprintf("%s_%s", notification.Description, workflowId)
+
+	// Calculate SHA-256 hash
+    hasher := sha256.New()
+    hasher.Write([]byte(unHashed))
+    hashBytes := hasher.Sum(nil)
+
+    // Convert the hash to a hexadecimal string
+    cacheKey := hex.EncodeToString(hashBytes)
+
+	cacheData := []byte{}
+
+	// check if cache exists
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s. Assuming no notifications are found!", 
+			cacheKey, 
+			notification.Id, 
+			err,
+		)
+		cacheData = []byte{}
+	} else {
+		cacheData = []byte(cache.([]uint8))
+	}
+
+	log.Printf("Using cacheKey: %s for notification bucketing for notification id: %s", cacheKey, notification.Id)
+
+	bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
+	if len(bucketingMinutes) == 0 {
+		bucketingMinutes = "10"
+	}
+
+	// convert to int
+	bucketingMinutesInt, err := strconv.ParseInt(bucketingMinutes, 10, 32)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting bucketing minutes to int: %s. Defaulting to 10 minutes!", err)
+		bucketingMinutesInt = 10
+	}
+
+	// converting to int32
+	bucketingTime := int32(bucketingMinutesInt)
+
+	log.Printf("[DEBUG] Bucketing time for cache is: %d", bucketingTime)
+
+	if len(cacheData) > 0 {
+		// unmarshal cached data
+		err := json.Unmarshal(cacheData, &cachedNotifications)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshaling cached notifications: %s", err)
+			return err
+		}
+
+		// check cachedNotifications.cachedNotifications 
+		log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
+			cachedNotifications.Amount,
+			cachedNotifications.NotificationId,
+			workflowId,
+		)
+
+		cachedNotifications.Amount += 1
+		cachedNotifications.LastUpdated = int64(time.Now().Unix())
+		cachedNotifications.LastNotificationAttempted = notification.Id
+
+		// marshal cachedNotifications
+		cacheData, err := json.Marshal(cachedNotifications)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
+			return err
+		}
+
+		totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
+
+		log.Printf("Time elasped since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
+
+		if totalTimeElapsed > int64(bucketingMinutesInt) {
+			log.Printf("[DEBUG] Total time elapsed %d is more than bucketing time %d. Deleting cache!",
+				totalTimeElapsed,
+				bucketingMinutesInt,
+			)
+
+			// deleting cache
+			err = DeleteCache(ctx, cacheKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
+					cacheKey,
+					notification.Id,
+					err,
+				)
+			}
+		} else {
+			// save cachedNotifications
+			err = SetCache(ctx, cacheKey, cacheData, bucketingTime)
+			if err != nil {
+				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
+					cacheKey, 
+					notification.Id, 
+					err,
+				)
+				return err
+			}
+			return errors.New("Notification already sent with cacheKey: " + cacheKey)
+		}
+	} else {
+		timeNow := int64(time.Now().Unix())
+
+		// create new cachedNotifications
+		cachedNotifications = NotificationCached{
+			NotificationId: notification.Id,
+			FirstNotificationAttempted: notification.Id,
+			LastNotificationAttempted: notification.Id,
+			WorkflowId: workflowId,
+			LastUpdated: timeNow,
+			FirstUpdated: timeNow,
+			Amount: 1,
+		}
+
+		// marshal cachedNotifications
+		cachedData, err := json.Marshal(cachedNotifications)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
+			return err
+		}
+
+		// save cachedNotifications
+		err = SetCache(ctx, cacheKey, cachedData, bucketingTime)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (2)",
+				cacheKey,
+				notification.Id,
+				err,
+			)
+			return err
+		}
+
+		log.Printf("[DEBUG] Created new cached notifications for %s workflow %s with cacheKey: %s",
+			cachedNotifications.NotificationId,
+			workflowId,
+			cacheKey,
+		)
+	}
+
 
 	if strings.Contains(strings.ToLower(notification.ReferenceUrl), strings.ToLower(workflowId)) {
 		return errors.New("Same workflow ID as notification ID. Stopped for infinite loop")
