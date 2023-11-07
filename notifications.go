@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"github.com/satori/go.uuid"
+	"crypto/sha256"
+    "encoding/hex"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -224,6 +226,106 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	if len(workflowId) < 10 {
 		return nil
 	}
+
+	// smart solution
+	// cache notifications for 10 minutes: 
+	// to: notification_title+workflow_id_hash
+	// notifications_id, 
+	// list_of_same_notifications_id_repeated, 
+	// workflow_id
+	cachedNotifications := []NotificationCached{}
+	// caclulate hash of notification title + workflow id
+	unHashed := fmt.Sprintf("%s_%s", notification.Title, workflowId)
+
+	// Calculate SHA-256 hash
+    hasher := sha256.New()
+    hasher.Write([]byte(unHashed))
+    hashBytes := hasher.Sum(nil)
+
+    // Convert the hash to a hexadecimal string
+    cacheKey := hex.EncodeToString(hashBytes)
+
+	// check if cache exists
+	cachedData := GetCache(ctx, cacheKey)
+
+	if len(cachedData) > 0 {
+		// unmarshal cached data
+		err := json.Unmarshal(cachedData, &cachedNotifications)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshaling cached notifications: %s", err)
+			return err
+		}
+
+		// check cachedNotifications.cachedNotifications 
+		notificationsMade := cachedNotifications.NotificationsAttempted
+		log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
+			len(notificationsMade),
+			cachedNotifications.NotificationId,
+			workflowId,
+		)
+
+		// check if notification exists in cachedNotifications
+		notificationsMade = append(notificationsMade, notification.Id)
+
+		// save cachedNotifications
+		cachedNotifications.NotificationsAttempted = notificationsMade
+
+		// marshal cachedNotifications
+		cachedData, err := json.Marshal(cachedNotifications)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
+			return err
+		}
+
+		// save cachedNotifications
+		err = SetCache(ctx, cacheKey, cachedData, 10)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
+				cacheKey, 
+				notification.Id, 
+				err,
+			)
+			return err
+		}
+	} else {
+		// create new cachedNotifications
+		cachedNotifications = NotificationCached{
+			NotificationId: notification.Id,
+			NotificationsAttempted: []string{notification.Id},
+			WorkflowId: workflowId,
+			LastUpdated: int64(time.Now().Unix()),
+			FirstUpdated: int64(time.Now().Unix()),
+		}
+
+		// marshal cachedNotifications
+		cachedData, err := json.Marshal(cachedNotifications)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
+			return err
+		}
+
+		// save cachedNotifications
+		err = SetCache(ctx, cacheKey, cachedData, 10)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (2)",
+				cacheKey,
+				notification.Id,
+				err,
+			)
+			return err
+		}
+
+		log.Printf("[DEBUG] Created new cached notifications for %s workflow %s",
+			cachedNotifications.NotificationId,
+			workflowId,
+		)
+	}
+
+
+
+
+
+
 
 	if strings.Contains(strings.ToLower(notification.ReferenceUrl), strings.ToLower(workflowId)) {
 		return errors.New("Same workflow ID as notification ID. Stopped for infinite loop")

@@ -1180,6 +1180,15 @@ type Notification struct {
 	Read              bool     `json:"read" datastore:"read"`
 }
 
+type NotificationCached struct {
+	NotificationId string `json:"notification_id" datastore:"notification_id"`
+	WorkflowId     string `json:"workflow_id" datastore:"workflow_id"`
+	LastUpdated    int64  `json:"last_updated" datastore:"last_updated"`
+	FirstUpdated   int64  `json:"first_updated" datastore:"first_updated"`
+	NotificationsAttempted []string `json:"notifications_attempted" datastore:"notifications_attempted"`
+}
+
+
 type File struct {
 	Id              string   `json:"id" datastore:"id"`
 	ReferenceFileId string   `json:"reference_file_id" datastore:"reference_file_id"`
