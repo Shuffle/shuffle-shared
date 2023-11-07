@@ -307,10 +307,9 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
 
 		if totalTimeElapsed > int64(bucketingMinutesInt) {
-			log.Printf("[DEBUG] Total time elapsed %d is more than bucketing time %d. Sending notifications to workflow %s",
+			log.Printf("[DEBUG] Total time elapsed %d is more than bucketing time %d. Deleting cache!",
 				totalTimeElapsed,
 				bucketingMinutesInt,
-				workflowId,
 			)
 
 			// deleting cache
