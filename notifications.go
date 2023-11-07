@@ -233,7 +233,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	// notifications_id, 
 	// list_of_same_notifications_id_repeated, 
 	// workflow_id
-	cachedNotifications := []NotificationCached{}
+	cachedNotifications := NotificationCached{}
 	// caclulate hash of notification title + workflow id
 	unHashed := fmt.Sprintf("%s_%s", notification.Title, workflowId)
 
@@ -246,11 +246,17 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
     cacheKey := hex.EncodeToString(hashBytes)
 
 	// check if cache exists
-	cachedData := GetCache(ctx, cacheKey)
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s", cacheKey, notification.Id, err)
+		return err
+	}
 
-	if len(cachedData) > 0 {
+	cacheData := []byte(cache.([]uint8))
+
+	if len(cacheData) > 0 {
 		// unmarshal cached data
-		err := json.Unmarshal(cachedData, &cachedNotifications)
+		err := json.Unmarshal(cacheData, &cachedNotifications)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshaling cached notifications: %s", err)
 			return err
@@ -271,14 +277,14 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		cachedNotifications.NotificationsAttempted = notificationsMade
 
 		// marshal cachedNotifications
-		cachedData, err := json.Marshal(cachedNotifications)
+		cacheData, err := json.Marshal(cachedNotifications)
 		if err != nil {
 			log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
 			return err
 		}
 
 		// save cachedNotifications
-		err = SetCache(ctx, cacheKey, cachedData, 10)
+		err = SetCache(ctx, cacheKey, cacheData, 10)
 		if err != nil {
 			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
 				cacheKey, 
@@ -287,6 +293,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			)
 			return err
 		}
+		return errors.New("Notification already sent")
 	} else {
 		// create new cachedNotifications
 		cachedNotifications = NotificationCached{
@@ -320,11 +327,6 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			workflowId,
 		)
 	}
-
-
-
-
-
 
 
 	if strings.Contains(strings.ToLower(notification.ReferenceUrl), strings.ToLower(workflowId)) {
