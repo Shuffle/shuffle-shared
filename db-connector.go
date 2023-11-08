@@ -2601,6 +2601,11 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 			continue
 		}
 
+		if len(workflow.OrgId) == 0 && len(workflow.Owner) == 0 {
+			log.Printf("[WARNING] Workflow %s has no org or owner", workflow.ID)
+			continue
+		}
+
 		fixedWorkflows = append(fixedWorkflows, workflow)
 	}
 
@@ -4666,7 +4671,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		if err != nil {
 			log.Printf("[INFO] Error setting app cache item for %s: %v", publicAppsKey, err)
 		} else {
-			log.Printf("[INFO] Set app cache for %s. Next are private apps.", publicAppsKey)
+			//log.Printf("[INFO] Set app cache for %s. Next are private apps.", publicAppsKey)
 		}
 	}
 
@@ -4829,7 +4834,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		if err != nil {
 			log.Printf("[INFO] Error setting app cache item for %s: %v", cacheKey, err)
 		} else {
-			log.Printf("[INFO] Set app cache for %s", cacheKey)
+			//log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
 
@@ -6684,6 +6689,8 @@ func SetNotification(ctx context.Context, notification Notification) error {
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
+	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
 	DeleteCache(ctx, cacheKey)
 
 	return nil

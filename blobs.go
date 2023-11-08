@@ -148,5 +148,9 @@ If the customer wants to end the contract, the customer can do so at any time. T
 License Auditing
 Shuffle may at any time, without warning, audit whether your are overutilizing your license in Shuffle. There are no hard limits when a license is bought, and any overutilization will be discussed with the customer. If the customer is overutilizing their license, the customer will be given a warning and a chance to fix the issue. If the issue is not fixed, Shuffle reserves the right to terminate the contract with the customer.
 
+
+Misuse
+Shuffle may temporarily suspend or limit access to the Platform if usage: (i) exceeds the scope of the license specified in this Agreement, (ii) unduly burdens the Platform, or, (iii) is otherwise inconsistent with normal usage. In any such event, Shuffle will get in contact to review and attempt to resolve the matter. Shuffle may charge, and the Customer will pay any costs associated with any such misuse if Customer fails to respond to and address the matter in a timely manner, not to exceed three (3) business day after Shuffle’s initial contact.
+
 If you want this contract in PDF format to sign instead of as a digital End User License Agreement, please contact us at support@shuffler.io`)
 }

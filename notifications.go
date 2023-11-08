@@ -124,7 +124,8 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	*/
 
 	ctx := GetContext(request)
-	notifications, err := GetUserNotifications(ctx, user.Id)
+	//notifications, err := GetUserNotifications(ctx, user.Id)
+	notifications, err := GetOrgNotifications(ctx, user.ActiveOrg.Id)
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications (clear): %s", err)
 		resp.WriteHeader(500)
@@ -133,18 +134,22 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	for _, notification := range notifications {
+		// Not including this as we want to mark as read for all users in the org
+		//if user.Id != notification.UserId {
+		//	continue
+		//}
+
 		err = markNotificationRead(ctx, &notification)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification %s (%s) to read (clear): %s", notification.Title, notification.Id, err)
 			continue
-			//resp.WriteHeader(500)
-			//resp.Write([]byte(`{"success": false, "reason": "Failed to mark it as read"}`))
-			//return
 		}
 	}
 
 	log.Printf("[AUDIT] Cleared all notifications for user %s (%s)", user.Username, user.Id)
 	cacheKey := fmt.Sprintf("notifications_%s", user.ActiveOrg.Id)
+	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("notifications_%s", user.Id)
 	DeleteCache(ctx, cacheKey)
 
 	resp.WriteHeader(200)
@@ -178,7 +183,9 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 
 	// Should be made org-wide instead? Right now, it's cross org
 	ctx := GetContext(request)
-	notifications, err := GetUserNotifications(ctx, user.Id)
+
+	//notifications, err := GetUserNotifications(ctx, user.Id)
+	notifications, err := GetOrgNotifications(ctx, user.ActiveOrg.Id)
 	if err != nil && len(notifications) == 0 {
 		log.Printf("[ERROR] Failed to get notifications: %s", err)
 		resp.WriteHeader(500)
@@ -192,7 +199,10 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 	for _, notification := range notifications {
 		// Check how long ago?
 		if notification.Read {
-			//log.Printf("[DEBUG] Skipping read notification %s", notification.Title)
+			continue
+		}
+
+		if notification.UserId != user.Id {
 			continue
 		}
 
@@ -437,19 +447,41 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return nil
 	}
 
+	// Check if the referenceUrl is already in cache or not
+	if len(referenceUrl) > 0 {
+		// Have a 0-0.5 sec timeout here?
+
+		cacheKey := fmt.Sprintf("notification-%s", referenceUrl)
+		_, err := GetCache(ctx, cacheKey) 
+		if err == nil {
+			// Avoiding duplicates for the same workflow
+			log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
+			return nil
+
+		} else {
+			log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
+			err := SetCache(ctx, cacheKey, []byte("1"), 31)
+			if err != nil {
+				log.Printf("[ERROR] Failed saving cached notification %s: %s", cacheKey, err)
+			}
+		}
+	}
+
+	log.Printf("\n\n[DEBUG] Creating notification for org %s\n\n", orgId)
+
 	notifications, err := GetOrgNotifications(ctx, orgId)
 	if err != nil {
 		log.Printf("\n\n\n[ERROR] Failed getting org notifications for %s: %s", orgId, err)
 		return err
 	}
 
-	log.Printf("[DEBUG] Found %d notifications for org %s. Merge?", len(notifications), orgId)
-	foundNotifications := []Notification{}
+	log.Printf("[DEBUG] Found %d existing notifications for org %s. Merge?", len(notifications), orgId)
+	matchingNotifications := []Notification{}
 	for _, notification := range notifications {
 		// notification.Title == title &&
 		//log.Printf("%s vs %s", notification.ReferenceUrl, referenceUrl)
 		if notification.Title == title && notification.Description == description {
-			foundNotifications = append(foundNotifications, notification)
+			matchingNotifications = append(matchingNotifications, notification)
 		}
 	}
 
@@ -510,38 +542,38 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		}
 	}
 
-	//log.Printf("[DEBUG] New found length: %d", len(foundNotifications))
-	if len(foundNotifications) > 0 {
+	if len(matchingNotifications) > 0 {
 		// FIXME: This may have bugs for old workflows with new users (not being rediscovered)
-		//log.Printf("[DEBUG] Found %d notifications for org %s. Merging...", len(foundNotifications), orgId)
+		log.Printf("[DEBUG] Found %d matching notifications for org %s. Merging...", len(matchingNotifications), orgId)
 
 		usersHandled := []string{}
 		// Make sure to only reopen one per user
-		for _, notification := range foundNotifications {
+		for _, notification := range matchingNotifications {
 			if ArrayContains(usersHandled, notification.UserId) {
 				//log.Printf("[DEBUG] Skipping notification %s for user %s as it's already been handled", notification.Title, notification.UserId)
 
 				continue
 			}
 
-			if notification.Read == false {
-				//log.Printf("[DEBUG] Skipping notification %s for user %s as it's already been read", notification.Title, notification.UserId)
-
-				usersHandled = append(usersHandled, notification.UserId)
-				continue
-			}
+			//if notification.Read == false {
+			//	log.Printf("[DEBUG] Incrementing notification %s for user %s as it's NOT been read", notification.Title, notification.UserId)
+			//	notification.Amount += 1
+			//	usersHandled = append(usersHandled, notification.UserId)
+			//	continue
+			//}
 
 			notification.Read = false
 			notification.Amount += 1
+			notification.ReferenceUrl = referenceUrl
+
 			err = SetNotification(ctx, notification)
 			if err != nil {
 				log.Printf("[WARNING] Failed to reopen notification %s for user %s", notification.Title, notification.UserId)
 			} else {
-				log.Printf("[INFO] Reopened notification %s for %s", notification.Title, notification.UserId)
+				//log.Printf("[INFO] Reopened and incremented notification %s for %s", notification.Title, notification.UserId)
 				usersHandled = append(usersHandled, notification.UserId)
 			}
 		}
-
 
 		err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow)
 		if err != nil {
@@ -550,10 +582,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		return nil
 	} else {
-		log.Printf("[INFO] Notification with title %#v is being made for users in org %s", title, orgId)
-
-
-
+		log.Printf("[INFO] New notification with title %#v is being made for users in org %s", title, orgId)
 
 
 		err = SetNotification(ctx, mainNotification)

@@ -10707,6 +10707,49 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
+	if workflowExecution.Workflow.Configuration.SkipNotifications == false && actionResult.Status == "SUCCESS" && strings.Contains(actionResult.Result, "\"success\":") && strings.Contains(actionResult.Result, "\"status\":") {
+		type resultMapping struct {
+			Success bool `json:"success"`
+			Status  int `json:"status"`
+		}
+
+		var mapping resultMapping 
+		err := json.Unmarshal([]byte(actionResult.Result), &mapping)
+		if err == nil && mapping.Success == true && mapping.Status >= 300{
+			//log.Printf("\n\n[DEBUG] Setting status to failure as it's a success with status code %d\n\n", mapping.Status)
+
+			parsedDescription := fmt.Sprintf("Bad status code in action %s: %d. This shows up if status is >= 300", actionResult.Action.Name, mapping.Status)
+			if mapping.Status == 404 {
+				parsedDescription = fmt.Sprintf("404 not found for action %s. Check if the URL is correct, and that the data it is trying to retrieve exists.", actionResult.Action.Name)
+			} 
+
+			if mapping.Status == 401 {
+				parsedDescription = fmt.Sprintf("401 unauthorized for action %s. Make sure your credentials are correct.", actionResult.Action.Name)
+			}
+
+			if mapping.Status == 403 {
+				parsedDescription = fmt.Sprintf("403 forbidden for action %s. Make sure the account you are using has access to the resource.", actionResult.Action.Name)
+			}
+
+			// Send notification for it
+			err := CreateOrgNotification(
+				ctx,
+				fmt.Sprintf("Bad Status code in Workflow %s: %d", workflowExecution.Workflow.Name, mapping.Status),
+				parsedDescription,
+				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
+				workflowExecution.ExecutionOrg,
+				true,
+			)
+				
+			//fmt.Sprintf("Node %s in Workflow %s was found to have an error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
+
+			if err != nil {
+				log.Printf("[WARNING] Failed making org notification: %s", err)
+			}
+			
+		}
+	}
+
 	actionResult.Action = Action{
 		AppName:           actionResult.Action.AppName,
 		AppVersion:        actionResult.Action.AppVersion,
