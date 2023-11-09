@@ -272,27 +272,22 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	}
 
 	log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s", len(cacheData), notification.Id, workflowId)
-
-	log.Printf("Using cacheKey: %s for notification bucketing for notification id: %s", cacheKey, notification.Id)
+	log.Printf("[DEBUG] Using cacheKey: %s for notification bucketing for notification id: %s", cacheKey, notification.Id)
 
 	bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
 	if len(bucketingMinutes) == 0 {
-		bucketingMinutes = "10"
+		bucketingMinutes = "2"
 	}
 
 	// convert to int
 	bucketingMinutesInt, err := strconv.ParseInt(bucketingMinutes, 10, 32)
 	if err != nil {
 		log.Printf("[ERROR] Failed converting bucketing minutes to int: %s. Defaulting to 10 minutes!", err)
-		bucketingMinutesInt = 10
+		bucketingMinutesInt = 2
 	}
 
 	// converting to int32
 	bucketingTime := int32(bucketingMinutesInt)
-
-	log.Printf("[DEBUG] Bucketing time for cache is: %d", bucketingTime)
-	log.Printf("[DEBUG] Relieve notifications is: %t for notification %s", relieveNotifications, notification.Id)
-
 	if !relieveNotifications {
 		// worry about the 1440 minutes as timeout later
 		if len(cacheData) == 0 {
@@ -325,9 +320,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				return err
 			}
 
-			notification.BucketDescription = fmt.Sprintf("First notification for %s workflow %s. If more notifications are sent within %d minutes, they will be bucketed",
+			notification.BucketDescription = fmt.Sprintf("First notification for %s workflow %s. If more notifications are sent within %d minutes, they will be added to the next notification in %d minutes",
 				notification.Id,
 				workflowId,
+				bucketingMinutesInt,
 				bucketingMinutesInt,
 			)
 		} else {
@@ -369,8 +365,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				)
 				return err
 			}
+
+			// Literally only starts on the 2nd, not otherwise
 			if cachedNotifications.Amount == 2 {
-				log.Printf("[DEBUG] starting timer for %d minutes for relieving notificaions through %s notification",
+				log.Printf("[DEBUG] Starting timer for %d minutes for relieving notificaions through %s notification",
 						bucketingTime, 
 						notification.Id,
 					)
@@ -412,7 +410,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 					}
 				})
 				return errors.New(
-					"Notification with id"+ notification.Id + " was the second bucketed notification. " + 
+					"Notification with id "+ notification.Id + " was the second bucketed notification. " + 
 					"It is responsible for relieving the bucket. " + 
 					"We have it's cache stored at: " + cacheKey,
 				)

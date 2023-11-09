@@ -5336,8 +5336,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("\n\n[DEBUG] INPUT actions: %d", len(workflow.Actions))
-
 	// Check every app action and param to see whether they exist
 	allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	newActions = []Action{}
@@ -5823,8 +5821,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			workflow.PreviouslySaved = true
 		}
 	}
-
-	log.Printf("[DEBUG] Outputactions: %d", len(newActions))
 
 	workflow.Actions = newActions
 	workflow.IsValid = true
