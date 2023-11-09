@@ -377,6 +377,12 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 					)
 				timeAfter := time.Duration(bucketingTime) * time.Minute
 				time.AfterFunc(timeAfter, func() {
+					notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
+							cachedNotifications.Amount, 
+							totalTimeElapsed, 
+							bucketingMinutesInt,
+					)
+					go sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true)
 					err = DeleteCache(ctx, cacheKey)
 					if err != nil {
 						log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
@@ -385,12 +391,6 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 							err,
 						)
 					}
-					notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
-							cachedNotifications.Amount, 
-							totalTimeElapsed, 
-							bucketingMinutesInt,
-					)
-					go sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true)
 				})
 				return errors.New(
 					"Notification with id"+ notification.Id + " was the second bucketed notification. " + 
