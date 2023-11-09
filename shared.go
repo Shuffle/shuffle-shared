@@ -4656,21 +4656,21 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if fileId != workflow.ID {
 		log.Printf("[WARNING] Path and request ID are not matching in workflow save: %s != %s.", fileId, workflow.ID)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
 		return
 	}
 
 	if len(workflow.Name) == 0 {
 		log.Printf("[WARNING] Can't save workflow without a name.")
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow needs a name"}`))
 		return
 	}
 
 	if len(workflow.Actions) == 0 {
-		log.Printf("[WARNING] Can't save workflow without a single action.")
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Can't save a workflow without a single action.")
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow needs at least one action"}`))
 		return
 	}
@@ -4932,14 +4932,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		if !action.IsValid && len(action.Errors) > 0 {
 			log.Printf("[INFO] Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
-
-			//if workflow.PreviouslySaved {
-			//	resp.WriteHeader(401)
-			//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Node %s is invalid and needs to be remade."}`, action.Label)))
-			//	return
-			//}
-			//action.IsValid = true
-			//action.Errors = []string{}
 		}
 
 		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
@@ -5120,7 +5112,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								log.Printf("[DEBUG] No type specified for subflow node")
 
 								if workflow.PreviouslySaved {
-									resp.WriteHeader(401)
+									resp.WriteHeader(400)
 									resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
 									return
 								}
@@ -5135,19 +5127,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						}
 					}
 				*/
-				//} else {
-
-				//	workflow.IsValid = false
-				//	workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
-
-				//	log.Printf("[WARNING] No type specified for user input node")
-				//	if workflow.PreviouslySaved {
-				//		resp.WriteHeader(401)
-				//		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
-				//		return
-				//	}
-				//}
-				//}
 			}
 		} else if trigger.TriggerType == "WEBHOOK" {
 			if trigger.Status != "uninitialized" && trigger.Status != "stopped" {
@@ -5224,8 +5203,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					if workflow.PreviouslySaved {
 						workflow.Errors = append(workflow.Errors, "Email field in user input can't be empty")
 						continue
-						//resp.WriteHeader(401)
-						//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Email field in user input can't be empty"}`)))
 					}
 				}
 
@@ -5242,25 +5219,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				log.Printf("[DEBUG] Should send SMS to %s during execution.", sms)
-			}
-
-			// Removed all checks as this is handled in the shuffle-subflow app
-			if strings.Contains(triggerType, "subflow") {
-				//if strings.Contains(subflow, "/") {
-				//	subflowSplit := strings.Split(subflow, "/")
-				//	subflow = subflowSplit[len(subflowSplit)-1]
-				//}
-
-				//if len(subflow) != 36 {
-				//	log.Printf("[WARNING] Subflow isn't specified!")
-				//	if workflow.PreviouslySaved {
-				//		resp.WriteHeader(401)
-				//		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Subflow in User Input Trigger isn't specified"}`)))
-				//		return
-				//	}
-				//}
-
-				//log.Printf("[DEBUG] Should run subflow with workflow %s during execution.", subflow)
 			}
 		}
 
@@ -5316,11 +5274,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if len(variable.Value) == 0 {
 			log.Printf("[WARNING] Variable %s is empty!", variable.Name)
 			workflow.Errors = append(workflow.Errors, fmt.Sprintf("Variable %s is empty!", variable.Name))
-			//resp.WriteHeader(401)
-			//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Variable %s can't be empty"}`, variable.Name)))
-			//return
-			//} else {
-			//	log.Printf("VALUE OF VAR IS %s", variable.Value)
 		}
 	}
 
@@ -5364,7 +5317,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[WARNING] Workflow %s doesn't exist - oldworkflow.", fileId)
 				if workflow.PreviouslySaved {
-					resp.WriteHeader(401)
+					resp.WriteHeader(400)
 					resp.Write([]byte(`{"success": false, "reason": "Item already exists."}`))
 					return
 				}
@@ -5375,68 +5328,23 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[WARNING] Failed saving workflow to database: %s", err)
 				if workflow.PreviouslySaved {
-					resp.WriteHeader(401)
+					resp.WriteHeader(500)
 					resp.Write([]byte(`{"success": false}`))
 					return
 				}
 			}
-
-			//cacheKey := fmt.Sprintf("%s_workflows", user.Id)
-			//cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
-			//DeleteCache(ctx, cacheKey)
 		}
 	}
 
-	// FIXME - might be a sploit to run someone elses app if getAllWorkflowApps
-	// doesn't check sharing=true
-	// Have to do it like this to add the user's apps
-	//log.Printf("EXIT ON ERROR: %s", workflow.Configuration.ExitOnError)
-
-	// Started getting the single apps, but if it's weird, this is faster
-	// 1. Check workflow.Start
-	// 2. Check if any node has "isStartnode"
-	//if len(workflow.Actions) > 0 {
-	//	index := -1
-	//	for indexFound, action := range workflow.Actions {
-	//		if workflow.Start == action.ID {
-	//			index = indexFound
-	//		}
-	//	}
-
-	//	if index >= 0 {
-	//		workflow.Actions[0].IsStartNode = true
-	//	} else {
-	//		log.Printf("[WARNING] Couldn't find startnode %s!", workflow.Start)
-	//		if workflow.PreviouslySaved {
-	//			resp.WriteHeader(401)
-	//			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to set a startnode."}`)))
-	//			return
-	//		}
-	//	}
-	//}
-
-	/*
-		allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
-		if userErr != nil {
-			log.Printf("Api authentication failed in get all apps: %s", userErr)
-			if workflow.PreviouslySaved {
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-		}
-	*/
+	log.Printf("\n\n[DEBUG] INPUT actions: %d", len(workflow.Actions))
 
 	// Check every app action and param to see whether they exist
-	//log.Printf("PRE ACTIONS 2")
 	allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	newActions = []Action{}
 	for _, action := range workflow.Actions {
 		reservedApps := []string{
 			"0ca8887e-b4af-4e3e-887c-87e9d3bc3d3e",
 		}
-
-		//log.Printf("%s Action execution var: %s", action.Label, action.ExecutionVariable.Name)
 
 		builtin := false
 		for _, id := range reservedApps {
@@ -5452,7 +5360,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// 3. Get the values in the auth and add them to the action values
 		handleOauth := false
 		if len(action.AuthenticationId) > 0 {
-			//log.Printf("\n\nLen: %d", len(allAuths))
 			authFound := false
 			for _, auth := range allAuths {
 				if auth.Id == action.AuthenticationId {
@@ -5475,8 +5382,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if !ArrayContains(workflow.Errors, errorMsg) {
 					workflow.Errors = append(workflow.Errors, errorMsg)
 				}
-				workflow.IsValid = false
 
+				workflow.IsValid = false
 				action.Errors = append(action.Errors, "App authentication doesn't exist")
 				action.IsValid = false
 				action.AuthenticationId = ""
@@ -5548,11 +5455,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				action.IsValid = false
 				workflow.IsValid = false
 
-				// Append with errors
 				newActions = append(newActions, action)
-				//resp.WriteHeader(401)
-				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "App %s doesn't exist"}`, action.AppName)))
-				//return
 			} else {
 				// Check to see if the appaction is valid
 				curappaction := WorkflowAppAction{}
@@ -5564,9 +5467,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if curappaction.Name != action.Name {
-					// FIXME: Check if another app with the same name has the action here
-					// Then update the ID? May be related to updated apps etc.
-					//log.Printf("Couldn't find action - checking similar apps")
 					for _, app := range workflowapps {
 						if app.ID == curapp.ID {
 							continue
@@ -5593,8 +5493,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				// Check to see if the action is valid
 				if curappaction.Name != action.Name {
-					// FIXME: Find the actual active app?
-
 					log.Printf("[ERROR] Action '%s' in app %s doesn't exist. Workflow: %s (%s)", action.Name, curapp.Name, workflow.Name, workflow.ID)
 					// Reserved names
 					if action.Name != "router" {
@@ -5608,13 +5506,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						action.IsValid = false
 					}
-
-
-					//if workflow.PreviouslySaved {
-					//	resp.WriteHeader(401)
-					//	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Action %s in app %s doesn't exist"}`, action.Name, curapp.Name)))
-					//	return
-					//}
 				}
 
 				selectedAuth := AppAuthenticationStorage{}
@@ -5646,15 +5537,17 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						foundErr := fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
+							log.Printf("\n\n[DEBUG] Adding auth error 1: %s\n\n", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
-							continue
+							//continue
 						}
 					} else if authRequired && fieldsFilled == 1 {
 						foundErr := fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
+							log.Printf("\n\n[DEBUG] Adding auth error 2: %s\n\n", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
-							continue
+							//continue
 						}
 					}
 				}
@@ -5930,7 +5823,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			workflow.PreviouslySaved = true
 		}
 	}
-	//log.Printf("SAVED: %s", workflow.PreviouslySaved)
+
+	log.Printf("[DEBUG] Outputactions: %d", len(newActions))
 
 	workflow.Actions = newActions
 	workflow.IsValid = true

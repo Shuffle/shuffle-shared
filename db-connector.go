@@ -4733,11 +4733,76 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					log.Printf("[WARNING] Failed to find app while parsing app %s: %s", app.Name, err)
 					continue
 				} else {
-					//log.Printf("[DEBUG] Found action %s (%s) directly with %d actions", app.Name, app.ID, len(newApp.Actions))
+					// Check if they should have access?
 					newApps[appIndex] = *newApp
 				}
 
 			}
+		}
+
+		// Authentication system to ensure the user actually has access to all the apps it says it wants 
+
+		// FIXME: Enable this and fix suborg <-> parentorg access
+		// Problem: If you're in a suborg, you can't access parentorg apps and vice versa
+		// This stage doesn't have org information either, so it needs to be grabbed first.
+
+		parentOrg := &Org{}
+		if len(org.ManagerOrgs) > 0 {
+			parentOrg, err = GetOrg(ctx, org.ManagerOrgs[0].Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting parent org %s during app load verification: %s", org.ManagerOrgs[0], err)
+			}
+		} 
+
+		if len(parentOrg.Id) == 0 && len(org.ChildOrgs) > 0 {
+			parentOrg = org
+		}
+
+
+		notAppendedApps := []string{}
+		parsedNewapps := []WorkflowApp{}
+		for _, newApp := range newApps {
+			if len(newApp.ID) == 0 || len(newApp.Name) == 0 {
+				continue
+			}
+
+			//if user.SupportAccess { 
+			//	parsedNewapps = append(parsedNewapps, newApp)
+			if newApp.Sharing || newApp.Public || newApp.SharingConfig == "everyone" || newApp.SharingConfig == "public" {
+				parsedNewapps = append(parsedNewapps, newApp)
+			} else if newApp.Owner == user.ActiveOrg.Id || newApp.Owner == user.Id {
+				parsedNewapps = append(parsedNewapps, newApp)
+			} else if newApp.ReferenceOrg == user.ActiveOrg.Id {
+				parsedNewapps = append(parsedNewapps, newApp)
+
+
+			} else {
+				// FIXME: Parentorg <-> suborg access
+				if len(newApp.ReferenceOrg) > 0 {
+					orgFound := false
+					for _, childOrg := range parentOrg.ChildOrgs {
+						if childOrg.Id != newApp.ReferenceOrg {
+							continue
+						} 
+
+						orgFound = true 
+						log.Printf("[DEBUG] Found matching org %s in parent org %s", newApp.ReferenceOrg, parentOrg.Id)
+						break
+					}
+
+					if orgFound {
+						parsedNewapps = append(parsedNewapps, newApp)
+						continue
+					}
+				}
+
+				notAppendedApps = append(notAppendedApps, fmt.Sprintf("%s - %s", newApp.Name, newApp.ID))
+			}
+		}
+
+		if len(notAppendedApps) > 0 {
+			//log.Printf("[INFO] Not appended apps (%d) for org %s (%s): %s", len(notAppendedApps), user.ActiveOrg.Name, user.ActiveOrg.Id, strings.Join(notAppendedApps, ", "))
+			log.Printf("[WARNING] %d non-allowed, but activated apps for org %s (%s). Removed.", len(notAppendedApps), user.ActiveOrg.Name, user.ActiveOrg.Id)
 		}
 
 		allApps = append(allApps, newApps...)
@@ -4803,15 +4868,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			// Add bodyIndex parameter in the next index after lastRequiredIndex, but retain all fields
 			if bodyIndex > -1 {
 				//log.Printf("[INFO] Moving body parameter to index %d after %d", lastRequiredIndex+1, bodyIndex)
-
-				// Add parameters[bodyIndex] to lastRequiredIndex+1
-				// Remove parameters[bodyIndex]
-				//log.Printf("[INFO] Before: %s", allApps[appIndex].Actions[actionIndex].Parameters)
-				//allApps[appIndex].Actions[actionIndex].Parameters = append(allApps[appIndex].Actions[actionIndex].Parameters, ActionParameter{})
-				//copy(allApps[appIndex].Actions[actionIndex].Parameters[lastRequiredIndex+2:], allApps[appIndex].Actions[actionIndex].Parameters[lastRequiredIndex+1:])
-				//allApps[appIndex].Actions[actionIndex].Parameters[lastRequiredIndex+1] = allApps[appIndex].Actions[actionIndex].Parameters[bodyIndex]
-				//allApps[appIndex].Actions[actionIndex].Parameters = allApps[appIndex].Actions[actionIndex].Parameters[:len(allApps[appIndex].Actions[actionIndex].Parameters)-1]
-				//log.Printf("[INFO] After: %s", allApps[appIndex].Actions[actionIndex].Parameters)
 			}
 		}
 	}
