@@ -1172,6 +1172,7 @@ type Notification struct {
 	UserId            string   `json:"user_id" datastore:"user_id"`
 	Tags              []string `json:"tags" datastore:"tags"`
 	Amount            int      `json:"amount" datastore:"amount"`
+	BucketDescription string   `json:"bucket_description" datastore:"bucket_description"`
 	Id                string   `json:"id" datastore:"id"`
 	ReferenceUrl      string   `json:"reference_url" datastore:"reference_url"`
 	OrgNotificationId string   `json:"org_notification_id" datastore:"org_notification_id"`
@@ -1186,7 +1187,7 @@ type NotificationCached struct {
 	LastUpdated    int64  `json:"last_updated" datastore:"last_updated"`
 	FirstUpdated   int64  `json:"first_updated" datastore:"first_updated"`
 	LastNotificationAttempted string `json:"last_notification_attempted" datastore:"last_notification_attempted"`
-	FirstNotificationAttempted string `json:"first_notification_attempted" datastore:"first_notification_attempted"`
+	OriginalNotification string `json:"original_notification" datastore:"original_notification"`
 	Amount		   int64  `json:"amount" datastore:"amount"`
 }
 
