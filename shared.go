@@ -1221,6 +1221,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 			Value:   c.Value,
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
+			Path: "/",
 		}
 		if project.Environment == "cloud" {
 			newCookie.Domain = ".shuffler.io"
@@ -1239,6 +1240,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 			Value:   "",
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
+			Path: "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -2739,6 +2741,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			Value:   sessionToken,
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
+			Path: "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -2792,6 +2795,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				Value:   sessionToken,
 				Expires: time.Now().Add(-100 * time.Hour),
 				MaxAge:  -1,
+				Path: "/",
 			}
 
 			if project.Environment == "cloud" {
@@ -7588,6 +7592,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		Name:    "session_token",
 		Value:   user.Session,
 		Expires: expiration,
+		Path: "/",
 	}
 
 	if project.Environment == "cloud" {
@@ -9550,6 +9555,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Name:    "session_token",
 			Value:   userdata.Session,
 			Expires: expiration,
+			Path: "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -9609,6 +9615,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Name:    "session_token",
 			Value:   sessionToken,
 			Expires: expiration,
+			Path: "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -14302,6 +14309,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
+					Path: "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -14356,6 +14364,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
+					Path: "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -14446,6 +14455,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		Name:    "session_token",
 		Value:   sessionToken,
 		Expires: expiration,
+		Path: "/",
 	}
 
 	if project.Environment == "cloud" {
@@ -14709,6 +14719,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
+					Path: "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -14766,6 +14777,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
+					Path: "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -14857,6 +14869,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		Name:    "session_token",
 		Value:   sessionToken,
 		Expires: expiration,
+		Path: "/",
 	}
 
 	if project.Environment == "cloud" {
