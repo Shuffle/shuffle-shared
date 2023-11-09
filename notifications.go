@@ -377,12 +377,33 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 					)
 				timeAfter := time.Duration(bucketingTime) * time.Minute
 				time.AfterFunc(timeAfter, func() {
+					// Read from cache again
+					cache, err := GetCache(ctx, cacheKey)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s. Assuming no notifications are found. that shouldn't happen.",
+							cacheKey,
+							notification.Id,
+							err,
+						)
+						return err
+					}
+
+					cacheData = []byte(cache.([]uint8))
+
+					var newCachedNotifications NotificationCached
+					
+					// unmarshal cached data
+					err = json.Unmarshal(cacheData, &newCachedNotifications)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshaling cached notifications: %s", err)
+						return err
+					}
 					notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
-							cachedNotifications.Amount, 
+							newCachedNotifications.Amount - 1, 
 							totalTimeElapsed, 
 							bucketingMinutesInt,
 					)
-					go sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true)
+					_ = sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true)
 					err = DeleteCache(ctx, cacheKey)
 					if err != nil {
 						log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
