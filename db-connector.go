@@ -894,7 +894,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
-		err = SetCache(ctx, cacheKey, executionData, 30)
+		err = SetCache(ctx, cacheKey, executionData, 31)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
 			dbSave = true
@@ -902,7 +902,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		}
 	} else {
-		log.Printf("[WARNING] Failed marshalling execution for cache: %s", err)
+		log.Printf("[ERROR] Failed marshalling execution for cache: %s", err)
 		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
 	}
 
@@ -1215,7 +1215,7 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 		return workflowExecution
 	}
 
-	log.Printf("[INFO] Sanitizing execution %s from liquid syntax", workflowExecution.ExecutionId)
+	//log.Printf("[INFO] Sanitizing execution %s from liquid syntax", workflowExecution.ExecutionId)
 
 	workflowExecution.ExecutionArgument = sanitizeString(workflowExecution.ExecutionArgument)
 	for i := range workflowExecution.Results {
@@ -9683,8 +9683,6 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 
 func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 	// Keeping cache for 30-60 min due to rerun management
-	// FIXME: Add cleanup of workflowexecution & subflow data
-	// fmt.Sprintf("%s_%s_subflowresult", res.ExecutionId, parentNode)
 	if project.Environment == "cloud" {
 		return
 	}
@@ -9694,18 +9692,15 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 		return
 	}
 
-	log.Printf("[INFO][%s] Cleaning up cache for all %d results.", workflowExecution.ExecutionId, len(workflowExecution.Results))
-	for _, result := range workflowExecution.Results {
-		cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
-		DeleteCache(ctx, cacheId)
-	}
 
-	
-	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId))
+	// Stopped clearing them out as the result from it is used in subsequent workflows as well (subflows). This means the 31 min timeout is default.
 
-	// This caused problems somehow
-	//cacheKey := fmt.Sprintf("%s-actions", workflowExecution.ExecutionId)
-	//DeleteCache(ctx, cacheKey)
+	//log.Printf("[INFO][%s] Cleaning up cache for all %d results.", workflowExecution.ExecutionId, len(workflowExecution.Results))
+	//for _, result := range workflowExecution.Results {
+	//	cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, result.Action.ID)
+	//	DeleteCache(ctx, cacheId)
+	//}
+	//DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId))
 }
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {

@@ -394,7 +394,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	if os.Getenv("SHUFFLE_HEALTHCHECK_DISABLED") == "true" {
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": false, "reason": "Healthcheck disabled (not default). Set SHUFFLE_HEALTHCHECK_DISABLED=false to re-enable it."}`))
