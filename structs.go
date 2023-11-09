@@ -1187,7 +1187,7 @@ type NotificationCached struct {
 	LastUpdated    int64  `json:"last_updated" datastore:"last_updated"`
 	FirstUpdated   int64  `json:"first_updated" datastore:"first_updated"`
 	LastNotificationAttempted string `json:"last_notification_attempted" datastore:"last_notification_attempted"`
-	FirstNotificationAttempted string `json:"first_notification_attempted" datastore:"first_notification_attempted"`
+	OriginalNotification string `json:"original_notification" datastore:"original_notification"`
 	Amount		   int64  `json:"amount" datastore:"amount"`
 }
 
