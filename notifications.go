@@ -324,6 +324,12 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			)
 			return err
 		}
+
+		notification.BucketDescription = fmt.Sprintf("First notification for %s workflow %s. If more notifications are sent within %d minutes, they will be bucketed",
+			notification.Id,
+			workflowId,
+			bucketingMinutesInt,
+		)
 	} else {
 		// unmarshal cached data
 		err := json.Unmarshal(cacheData, &cachedNotifications)
@@ -387,7 +393,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				)
 				return err
 			}
-			return errors.New("Notification with id"+ notification.Id + " won't be sent. We have it's cache stored at: " + cacheKey)
+			return errors.New("Notification with id"+ notification.Id + " won't be sent and is bucketed. We have it's cache stored at: " + cacheKey)
 		}
 	}
 
