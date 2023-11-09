@@ -292,6 +292,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	bucketingTime := int32(bucketingMinutesInt)
 
 	log.Printf("[DEBUG] Bucketing time for cache is: %d", bucketingTime)
+	log.Printf("[DEBUG] Relieve notifications is: %t for notification %s", relieveNotifications, notification.Id)
 
 	if !relieveNotifications {
 		// worry about the 1440 minutes as timeout later
@@ -374,7 +375,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 						bucketingTime, 
 						notification.Id,
 					)
-				time.AfterFunc(time.Duration(bucketingTime), func() {
+				timeAfter := time.Duration(bucketingTime) * time.Minute
+				time.AfterFunc(timeAfter, func() {
 					err = DeleteCache(ctx, cacheKey)
 					if err != nil {
 						log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
