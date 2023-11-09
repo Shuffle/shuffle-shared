@@ -11900,6 +11900,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, "all_apps")
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
@@ -17479,7 +17480,7 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 
 	if exec.Status == "FINISHED" || exec.Status == "FAILURE" {
 		cacheKey := fmt.Sprintf("workflowexecution_%s", executionId)
-		err = SetCache(ctx, cacheKey, body, 30)
+		err = SetCache(ctx, cacheKey, body, 31)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for workflowexec key %s: %s", cacheKey, err)
 		}
