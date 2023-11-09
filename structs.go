@@ -1172,6 +1172,7 @@ type Notification struct {
 	UserId            string   `json:"user_id" datastore:"user_id"`
 	Tags              []string `json:"tags" datastore:"tags"`
 	Amount            int      `json:"amount" datastore:"amount"`
+	BucketDescription string   `json:"bucket_description" datastore:"bucket_description"`
 	Id                string   `json:"id" datastore:"id"`
 	ReferenceUrl      string   `json:"reference_url" datastore:"reference_url"`
 	OrgNotificationId string   `json:"org_notification_id" datastore:"org_notification_id"`

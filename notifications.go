@@ -320,6 +320,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 		log.Printf("Time elasped since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
 
+		// the problem is that notifications are being sent two times
+		// one time when cache is created, another time when cache is updated
 		if totalTimeElapsed > int64(bucketingMinutesInt) {
 			log.Printf("[DEBUG] Total time elapsed %d is more than bucketing time %d. Deleting cache!",
 				totalTimeElapsed,
@@ -335,6 +337,11 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 					err,
 				)
 			}
+			notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
+					cachedNotifications.Amount, 
+					totalTimeElapsed, 
+					bucketingMinutesInt,
+			)
 		} else {
 			// save cachedNotifications
 			err = SetCache(ctx, cacheKey, cacheData, bucketingTime)
@@ -346,7 +353,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				)
 				return err
 			}
-			return errors.New("Notification already sent with cacheKey: " + cacheKey)
+			return errors.New("Notification with id"+ notification.Id + " won't be sent. We have it's cache stored at: " + cacheKey)
 		}
 	} else {
 		timeNow := int64(time.Now().Unix())
@@ -385,6 +392,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			workflowId,
 			cacheKey,
 		)
+		return errors.New("Notification created for the first time with cachekey: " + cacheKey)
 	}
 
 
