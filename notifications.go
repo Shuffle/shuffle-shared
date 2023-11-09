@@ -359,7 +359,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
 
 			log.Printf("Time elasped since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
-g
+
 			err = SetCache(ctx, cacheKey, cacheData, 1440)
 			if err != nil {
 				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
@@ -370,7 +370,7 @@ g
 				return err
 			}
 			if cachedNotifications.Amount == 2 {
-				log.Printf("[DEBUG] starting timer for %d minutes for relieving notificaions through %s notification"
+				log.Printf("[DEBUG] starting timer for %d minutes for relieving notificaions through %s notification",
 						bucketingTime, 
 						notification.Id,
 					)
