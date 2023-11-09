@@ -235,8 +235,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 
 // how to make sure that the notification workflow bucket always empties itself:
 // call sendToNotificationWorkflow with the first cached notification 
-
-func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string) error {
+func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string, relieveNotifications bool) error {
 	log.Printf("[DEBUG] Sending notification to workflow with id: %s with userApikey being: %s", 
 			workflowId, 
 			userApikey,
@@ -294,96 +293,73 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	log.Printf("[DEBUG] Bucketing time for cache is: %d", bucketingTime)
 
-	// worry about the 14400 minutes as timeout later
-	if len(cacheData) == 0 {
-		timeNow := int64(time.Now().Unix())
-		// save to cache and send notification
-		cachedNotification := NotificationCached{
-			NotificationId: notification.Id,
-			OriginalNotification: notification.Id,
-			LastNotificationAttempted: notification.Id,
-			WorkflowId: workflowId,
-			LastUpdated: timeNow,
-			FirstUpdated: timeNow,
-			Amount: 1,
-		}
+	if !relieveNotifications {
+		// worry about the 1440 minutes as timeout later
+		if len(cacheData) == 0 {
+			timeNow := int64(time.Now().Unix())
+			// save to cache and send notification
+			cachedNotification := NotificationCached{
+				NotificationId: notification.Id,
+				OriginalNotification: notification.Id,
+				LastNotificationAttempted: notification.Id,
+				WorkflowId: workflowId,
+				LastUpdated: timeNow,
+				FirstUpdated: timeNow,
+				Amount: 1,
+			}
 
-		// marshal cachedNotifications
-		cacheData, err := json.Marshal(cachedNotification)
-		if err != nil {
-			log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
-			return err
-		}
-
-		err = SetCache(ctx, cacheKey, cacheData, 1440)
-		if err != nil {
-			log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (0)", 
-				cacheKey, 
-				notification.Id, 
-				err,
-			)
-			return err
-		}
-
-		notification.BucketDescription = fmt.Sprintf("First notification for %s workflow %s. If more notifications are sent within %d minutes, they will be bucketed",
-			notification.Id,
-			workflowId,
-			bucketingMinutesInt,
-		)
-	} else {
-		// unmarshal cached data
-		err := json.Unmarshal(cacheData, &cachedNotifications)
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshaling cached notifications: %s", err)
-			return err
-		}
-
-		// check cachedNotifications.cachedNotifications 
-		log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
-			cachedNotifications.Amount,
-			cachedNotifications.NotificationId,
-			workflowId,
-		)
-
-		cachedNotifications.Amount += 1
-		cachedNotifications.LastUpdated = int64(time.Now().Unix())
-		cachedNotifications.LastNotificationAttempted = notification.Id
-
-		// marshal cachedNotifications
-		cacheData, err := json.Marshal(cachedNotifications)
-		if err != nil {
-			log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
-			return err
-		}
-
-		totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
-
-		log.Printf("Time elasped since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
-
-		// the problem is that notifications are being sent two times
-		// one time when cache is created, another time when cache is updated
-		if totalTimeElapsed > int64(bucketingMinutesInt) {
-			log.Printf("[DEBUG] Total time elapsed %d is more than bucketing time %d. Deleting cache!",
-				totalTimeElapsed,
-				bucketingMinutesInt,
-			)
-
-			// deleting cache
-			err = DeleteCache(ctx, cacheKey)
+			// marshal cachedNotifications
+			cacheData, err := json.Marshal(cachedNotification)
 			if err != nil {
-				log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
-					cacheKey,
-					notification.Id,
+				log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
+				return err
+			}
+
+			err = SetCache(ctx, cacheKey, cacheData, 1440)
+			if err != nil {
+				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (0)", 
+					cacheKey, 
+					notification.Id, 
 					err,
 				)
+				return err
 			}
-			notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
-					cachedNotifications.Amount, 
-					totalTimeElapsed, 
-					bucketingMinutesInt,
+
+			notification.BucketDescription = fmt.Sprintf("First notification for %s workflow %s. If more notifications are sent within %d minutes, they will be bucketed",
+				notification.Id,
+				workflowId,
+				bucketingMinutesInt,
 			)
 		} else {
-			// save cachedNotifications
+			// unmarshal cached data
+			err := json.Unmarshal(cacheData, &cachedNotifications)
+			if err != nil {
+				log.Printf("[ERROR] Failed unmarshaling cached notifications: %s", err)
+				return err
+			}
+
+			// check cachedNotifications.cachedNotifications 
+			log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
+				cachedNotifications.Amount,
+				cachedNotifications.NotificationId,
+				workflowId,
+			)
+
+			cachedNotifications.Amount += 1
+			cachedNotifications.LastUpdated = int64(time.Now().Unix())
+			cachedNotifications.LastNotificationAttempted = notification.Id
+
+			// marshal cachedNotifications
+			cacheData, err := json.Marshal(cachedNotifications)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshaling cached notifications for notification %s: %s", notification.Id, err)
+				return err
+			}
+
+			totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
+
+			log.Printf("Time elasped since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
+g
 			err = SetCache(ctx, cacheKey, cacheData, 1440)
 			if err != nil {
 				log.Printf("[ERROR] Failed saving cached notifications %s for notification %s: %s (1)", 
@@ -393,10 +369,36 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				)
 				return err
 			}
+			if cachedNotifications.Amount == 2 {
+				log.Printf("[DEBUG] starting timer for %d minutes for relieving notificaions through %s notification"
+						bucketingTime, 
+						notification.Id,
+					)
+				time.AfterFunc(time.Duration(bucketingTime), func() {
+					err = DeleteCache(ctx, cacheKey)
+					if err != nil {
+						log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
+							cacheKey,
+							notification.Id,
+							err,
+						)
+					}
+					notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
+							cachedNotifications.Amount, 
+							totalTimeElapsed, 
+							bucketingMinutesInt,
+					)
+					go sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true)
+				})
+				return errors.New(
+					"Notification with id"+ notification.Id + " was the second bucketed notification. " + 
+					"It is responsible for relieving the bucket. " + 
+					"We have it's cache stored at: " + cacheKey,
+				)
+			}
 			return errors.New("Notification with id"+ notification.Id + " won't be sent and is bucketed. We have it's cache stored at: " + cacheKey)
 		}
 	}
-
 
 	if strings.Contains(strings.ToLower(notification.ReferenceUrl), strings.ToLower(workflowId)) {
 		return errors.New("Same workflow ID as notification ID. Stopped for infinite loop")
@@ -585,7 +587,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 		}
 
-		err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow)
+		err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
 		if err != nil {
 			log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
 		}
@@ -677,7 +679,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				}
 			}
 
-			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow)
+			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
 			if err != nil {
 				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
 			}
