@@ -236,9 +236,8 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 // how to make sure that the notification workflow bucket always empties itself:
 // call sendToNotificationWorkflow with the first cached notification 
 func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string, relieveNotifications bool) error {
-	log.Printf("[DEBUG] Sending notification to workflow with id: %s with userApikey being: %s", 
-			workflowId, 
-			userApikey,
+	log.Printf("[DEBUG] Sending notification to workflow with id: %s", 
+			workflowId,
 		)
 	if len(workflowId) < 10 {
 		return nil
@@ -385,7 +384,6 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 							notification.Id,
 							err,
 						)
-						return err
 					}
 
 					cacheData = []byte(cache.([]uint8))
@@ -395,8 +393,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 					// unmarshal cached data
 					err = json.Unmarshal(cacheData, &newCachedNotifications)
 					if err != nil {
-						log.Printf("[ERROR] Failed unmarshaling cached notifications: %s", err)
-						return err
+						log.Printf("[ERROR] Failed unmarshaling cached notifications for notification %s: %s", notification.Id, err)
+						return
 					}
 					notification.BucketDescription = fmt.Sprintf("Accumilated %d notifications in %d minutes. (Bucketing time: %d)", 
 							newCachedNotifications.Amount - 1, 
