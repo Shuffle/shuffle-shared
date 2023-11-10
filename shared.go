@@ -207,15 +207,15 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Search EDR (OSQuery)",
-								"type": "edr",
-								"priority": 90,
+				"type": "edr",
+				"priority": 90,
 				"last": "cases",
                 "items": {}
             },
             {
                 "name": "Search emails (Sublime)",
-								"priority": 90,
-								"type": "communication",
+				"priority": 90,
+				"type": "communication",
 				"last": "cases",
                 "items": {
                     "name": "Check headers and IOCs",
@@ -223,16 +223,23 @@ func GetUsecaseData() string {
                 }
             },
             {
+                "name": "Automate Threathunt (Kestrel)",
+				"priority": 50,
+				"type": "edr",
+				"last": "cases",
+                "items": {}
+            },
+            {
                 "name": "Search IOCs (ioc-finder)",
-								"priority": 50,
-								"type": "intel",
+				"priority": 50,
+				"type": "intel",
 				"last": "cases",
                 "items": {}
             },
             {
                 "name": "Search files (Yara)",
-								"priority": 50,
-								"type": "intel",
+				"priority": 50,
+				"type": "intel",
 				"last": "cases",
                 "items": {}
             },
@@ -267,20 +274,27 @@ func GetUsecaseData() string {
         "list": [
             {
                 "name": "Eradicate malware",
-								"priority": 90,
-								"type": "intel",
+				"priority": 90,
+				"type": "intel",
+				"last": "edr",
                 "items": {}
             },
             {
                 "name": "Quarantine host(s)",
-								"priority": 90,
-								"type": "edr",
+				"priority": 90,
+				"type": "edr",
+                "items": {}
+            },
+            {
+                "name": "Update Outdated Software",
+				"priority": 70,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Block IPs, URLs, Domains and Hashes",
-								"priority": 90,
-								"type": "network",
+				"priority": 90,
+				"type": "network",
                 "items": {}
             },
             {
@@ -19476,7 +19490,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 					}
 
 					if foundAction.Name == "" {
-						log.Printf("\n\n\n[WARNING] No action found for category %s\n\n\n", categoryname)
+						log.Printf("[ERROR] No action explainer found for category '%s'", categoryname)
 					} else {
 						log.Printf("Found action %s for category %s", foundAction.Name, categoryname)
 					}
@@ -20388,4 +20402,94 @@ func AssignAuthEverywhere(ctx context.Context, auth *AppAuthenticationStorage, u
 	}
 
 	return nil
+}
+
+func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in search workflow runs: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed workflow body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	search := WorkflowSearch{}
+	err = json.Unmarshal([]byte(body), &search)
+	if err != nil {
+		//log.Printf(string(body))
+		log.Printf("[ERROR] Failed workflow unmarshaling (save): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	log.Printf("[DEBUG] Got Run search: %+v", search)
+
+	// Here to check access rights
+	ctx := GetContext(request)
+	if len(search.WorkflowId) > 0 {
+		workflow, err := GetWorkflow(ctx, search.WorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting the workflow %s locally (search workflow runs): %s", search.WorkflowId, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// Check workflow.Sharing == private / public / org  too
+		if user.Id != workflow.Owner || len(user.Id) == 0 {
+			// Added org-reader as the user should be able to read everything in an org
+			if workflow.OrgId == user.ActiveOrg.Id {
+				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+			} else if workflow.Public {
+				log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
+
+				// Only for Read-Only. No executions or impersonations.
+			} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+				log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+			} else {
+				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+		}
+	}
+
+	runs, cursor, err := GetWorkflowRunsBySearch(ctx, user.ActiveOrg.Id, search)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow runs by search: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	workflowSearchResult := WorkflowSearchResult{
+		Success: true,
+		Runs:   runs,
+		Cursor: cursor,
+	}
+
+	respBody, err := json.Marshal(workflowSearchResult)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshaling workflow runs: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.Write(respBody)
 }

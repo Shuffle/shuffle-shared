@@ -2597,6 +2597,10 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 	fixedWorkflows := []Workflow{}
 	for _, workflow := range workflows {
+		if workflow.Hidden {
+			continue
+		}
+
 		if len(workflow.Name) == 0 && len(workflow.Actions) <= 1 {
 			continue
 		}
@@ -5501,19 +5505,18 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 	} else {
 		q := datastore.NewQuery(nameKey)
 
-
+		// Modify the query to filter for "before" timestamp.
 		if beforeTimestamp != 0 {
-			// Modify the query to filter for "before" timestamp.
 			q = q.Filter("Updated >", beforeTimestamp)
 		}
 	
+		// Modify the query to filter for "after" timestamp.
 		if afterTimestamp != 0 {
-			// Modify the query to filter for "after" timestamp.
 			q = q.Filter("Updated <", afterTimestamp)
 		}
 
 		if limit != 0 {
-			log.Printf("Limiting platform health to %d", limit)
+			//log.Printf("[ERROR] Limiting platform health to %d", limit)
 			q = q.Limit(limit)
 		}
 
@@ -5715,7 +5718,6 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 		return executions, nil
 	} else {
 		// FIXME: Sorting doesn't seem to work...
-		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
 		q := datastore.NewQuery(index).Limit(24)
 		_, err := project.Dbclient.GetAll(ctx, q, &executions)
 		if err != nil {
@@ -10075,4 +10077,272 @@ func GetDatastore() *datastore.Client {
 
 func GetStorage() *storage.Client {
 	return &project.StorageClient
+}
+
+func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowSearch) ([]WorkflowExecution, string, error) {
+	index := "workflowexecution"
+
+	var executions []WorkflowExecution
+	var err error
+	totalMaxSize := 11184810
+
+	inputcursor := search.Cursor
+	maxLimit := 20
+	if search.Limit > 0 {
+		maxLimit = search.Limit
+	}
+
+	cursor := ""
+	if project.DbType == "opensearch" {
+		return executions, "", errors.New("Not implemented yet")
+	} else {
+		//propertiesToRetrieve := []string{"execution_id"}
+		query := datastore.NewQuery(index).Filter("execution_org=", orgId).Order("-started_at").Limit(5)
+
+		if len(search.WorkflowId) > 0 {
+			query = query.Filter("workflow_id =", search.WorkflowId)
+		}
+
+		if inputcursor != "" {
+			outputcursor, err := datastore.DecodeCursor(inputcursor)
+			if err != nil {
+				log.Printf("[WARNING] Error decoding cursor: %s", err)
+				return executions, "", err
+			}
+
+			query = query.Start(outputcursor)
+		}
+
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := WorkflowExecution{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					//log.Printf("[WARNING] Error getting workflow executions: %s", err)
+					break
+				}
+
+				executions = append(executions, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("Breaking due to no more iterator")
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// This is a way to load as much data as we want, and the frontend will load the actual result for us
+			executionmarshal, err := json.Marshal(executions)
+			if err == nil {
+				if len(executionmarshal) > totalMaxSize {
+					// Reducing size
+
+					for execIndex, execution := range executions {
+						// Making sure the first 5 are "always" proper
+						if execIndex < 5 {
+							continue
+						}
+
+						newResults := []ActionResult{}
+
+						newActions := []Action{}
+						for _, action := range execution.Workflow.Actions {
+							newAction := Action{
+								Name:    action.Name,
+								ID:      action.ID,
+								AppName: action.AppName,
+								AppID:   action.AppID,
+							}
+
+							newActions = append(newActions, newAction)
+						}
+
+						executions[execIndex].Workflow = Workflow{
+							Name:     execution.Workflow.Name,
+							ID:       execution.Workflow.ID,
+							Triggers: execution.Workflow.Triggers,
+							Actions:  newActions,
+						}
+
+						for _, result := range execution.Results {
+							result.Result = "Result was too large to load. Full Execution needs to be loaded individually for this execution. Click \"Explore execution\" in the UI to see it in detail."
+							result.Action = Action{
+								Name:       result.Action.Name,
+								ID:         result.Action.ID,
+								AppName:    result.Action.AppName,
+								AppID:      result.Action.AppID,
+								LargeImage: result.Action.LargeImage,
+							}
+
+							newResults = append(newResults, result)
+						}
+
+						executions[execIndex].ExecutionArgument = "too large"
+						executions[execIndex].Results = newResults
+					}
+
+					executionmarshal, err = json.Marshal(executions)
+					if err == nil && len(executionmarshal) > totalMaxSize {
+						//log.Printf("Length breaking (2): %d", len(executionmarshal))
+						break
+					}
+				}
+			}
+
+			// expected to get here
+			if len(executions) >= maxLimit {
+				//log.Printf("[INFO] Breaking due to executions larger than amount (%d/%d)", len(executions), maxLimit)
+				// Get next cursor
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("[WARNING] Cursorerror: %s", err)
+				} else {
+					cursor = fmt.Sprintf("%s", nextCursor)
+				}
+
+				break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("[WARNING] Cursorerror: %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				cursor = nextStr
+				if cursorStr == nextStr {
+					//log.Printf("Breaking due to no new cursor")
+
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+
+	log.Printf("[DEBUG] Returning %d executions", len(executions))
+
+	// Find difference between what's in the list and what is in cache
+	removeIndexes := []int{}
+	for execIndex, execution := range executions {
+		if execution.ExecutionOrg != orgId {
+			removeIndexes = append(removeIndexes, execIndex)
+			continue
+		}
+
+		if execution.Status == "EXECUTING" {
+			// Get the right one from cache
+			newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+			if err == nil {
+				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
+				// Set the execution as well in the database
+				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
+					go SetWorkflowExecution(ctx, *newexec, true)
+				}
+
+				executions[execIndex] = *newexec
+			}
+		} else {
+			// Delete cache to clear up memory
+			if project.Environment != "cloud" && (execution.Status == "ABORTED" || execution.Status == "FAILURE" || execution.Status == "FINISHED") {
+				// Delete cache for it 
+				RunCacheCleanup(ctx, execution)
+			}
+		}
+
+		executions[execIndex].Workflow = Workflow{	
+			ID:       execution.Workflow.ID,
+			Name:     execution.Workflow.Name,
+		}
+
+		execution.Result = ""
+		for resIndex, _ := range execution.Results {
+			executions[execIndex].Results[resIndex].Action = Action{}
+			executions[execIndex].Results[resIndex].Result = ""
+		}
+	}
+
+	for _, removeIndex := range removeIndexes {
+		executions = append(executions[:removeIndex], executions[removeIndex+1:]...)
+	}
+
+	slice.Sort(executions[:], func(i, j int) bool {
+		return executions[i].StartedAt > executions[j].StartedAt
+	})
+
+	executionmarshal, err := json.Marshal(executions)
+	if err == nil {
+		if len(executionmarshal) > totalMaxSize {
+			// Reducing size
+
+			for execIndex, execution := range executions {
+				// Making sure the first 5 are "always" proper
+				if execIndex < 5 {
+					continue
+				}
+
+				newResults := []ActionResult{}
+
+				newActions := []Action{}
+				for _, action := range execution.Workflow.Actions {
+					newAction := Action{
+						Name:    action.Name,
+						ID:      action.ID,
+						AppName: action.AppName,
+						AppID:   action.AppID,
+					}
+
+					newActions = append(newActions, newAction)
+				}
+
+				executions[execIndex].Workflow = Workflow{
+					Name:     execution.Workflow.Name,
+					ID:       execution.Workflow.ID,
+					Triggers: execution.Workflow.Triggers,
+					Actions:  newActions,
+				}
+
+				for _, result := range execution.Results {
+					result.Result = "Result was too large to load. Full Execution needs to be loaded individually for this execution. Click \"Explore execution\" in the UI to see it in detail."
+					result.Action = Action{
+						Name:       result.Action.Name,
+						ID:         result.Action.ID,
+						AppName:    result.Action.AppName,
+						AppID:      result.Action.AppID,
+						LargeImage: result.Action.LargeImage,
+					}
+
+					newResults = append(newResults, result)
+				}
+
+				executions[execIndex].ExecutionArgument = "too large"
+				executions[execIndex].Results = newResults
+			}
+		}
+	}
+
+	/*
+	if project.CacheDb {
+		data, err := json.Marshal(executions)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling update execution cache: %s", err)
+			return executions, cursor, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 10)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache executions (%s): %s", workflowId, err)
+			return executions, cursor, nil
+		}
+	}
+	*/
+
+	return executions, cursor, nil
+
 }

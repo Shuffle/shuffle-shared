@@ -3590,3 +3590,16 @@ type BackupJob struct {
 	Workflows []Workflow `json:"workflows"`
 	Apps []WorkflowApp `json:"apps"`
 }
+
+type WorkflowSearch struct {
+	WorkflowId string `json:"workflow_id"`
+	Limit int `json:"limit"`
+	Cursor string `json:"cursor"`
+}
+
+type WorkflowSearchResult struct {
+	Success bool `json:"success"`
+	Runs []WorkflowExecution `json:"runs"`
+	Cursor string `json:"cursor"`
+}
+
