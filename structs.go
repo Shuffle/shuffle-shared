@@ -739,6 +739,7 @@ type LeadInfo struct {
 	SubOrg   bool `json:"sub_org,omitempty" datastore:"sub_org"`
 
 	OldCustomer  bool `json:"old_customer,omitempty" datastore:"old_customer"`
+	OldLead  bool `json:"old_lead,omitempty" datastore:"old_lead"`
 	TechPartner  bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
 	Creator bool `json:"creator,omitempty" datastore:"creator"`
 }
@@ -3595,6 +3596,10 @@ type WorkflowSearch struct {
 	WorkflowId string `json:"workflow_id"`
 	Limit int `json:"limit"`
 	Cursor string `json:"cursor"`
+
+	Status string `json:"status"`
+	SearchFrom string `json:"start_time"`
+	SearchUntil string `json:"end_time"`
 }
 
 type WorkflowSearchResult struct {

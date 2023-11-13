@@ -10080,10 +10080,9 @@ func GetStorage() *storage.Client {
 }
 
 func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowSearch) ([]WorkflowExecution, string, error) {
-	index := "workflowexecution"
+	nameKey := "workflowexecution"
 
 	var executions []WorkflowExecution
-	var err error
 	totalMaxSize := 11184810
 
 	inputcursor := search.Cursor
@@ -10094,14 +10093,167 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 	cursor := ""
 	if project.DbType == "opensearch" {
-		return executions, "", errors.New("Not implemented yet")
-	} else {
-		//propertiesToRetrieve := []string{"execution_id"}
-		query := datastore.NewQuery(index).Filter("execution_org=", orgId).Order("-started_at").Limit(5)
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"execution_org": orgId,
+							},
+						},
+					},
+				},
+			},
+			"sort": []interface{}{
+				map[string]interface{}{
+					"started_at": map[string]interface{}{
+						"order": "desc",
+					},
+				},
+			},
+			"size": maxLimit,
+		}
 
 		if len(search.WorkflowId) > 0 {
+			//log.Printf("[DEBUG] Filtering on workflow_id: %s", search.WorkflowId)
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]interface{}), map[string]interface{}{
+				"match": map[string]interface{}{
+					"workflow_id": search.WorkflowId,
+				},
+			})
+		}
+
+		if len(search.Status) > 0 {
+			log.Printf("[DEBUG] Filtering on status: %s", search.Status)
+
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]interface{}), map[string]interface{}{
+				"match": map[string]interface{}{
+					"status": search.Status,
+				},
+			})
+		}
+
+		// String to timestamp for search.SearchFrom (string)
+		startTimestamp, err := time.Parse(time.RFC3339, search.SearchFrom)
+		if err != nil {
+			log.Printf("[WARNING] Failed parsing start time: %s", err)
+		} else {
+			// Make it into a number instead of a string
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]interface{}), map[string]interface{}{
+				"range": map[string]interface{}{
+					"started_at": map[string]interface{}{
+						"gte": startTimestamp.Unix(),
+					},
+				},
+			})
+		}
+
+		// String to timestamp for search.SearchTo (string)
+		endTimestamp, err := time.Parse(time.RFC3339, search.SearchUntil)
+		if err != nil {
+			log.Printf("[WARNING] Failed parsing end time: %s", err)
+		} else {
+			// Make it into a number instead of a string
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]interface{}), map[string]interface{}{
+				"range": map[string]interface{}{
+					"started_at": map[string]interface{}{
+						"lte": endTimestamp.Unix(),
+					},
+				},
+			})
+		}
+
+		if len(inputcursor) > 0 {
+			log.Printf("[DEBUG] Using cursor: %s", inputcursor)
+			query["search_after"] = []interface{}{inputcursor}
+		}
+
+		log.Printf("[DEBUG] Query: %+v", query)
+		// Run the query
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[WARNING] Failed executing query: %s", err)
+			return executions, "", err
+		}
+
+		defer res.Body.Close()
+
+		if res.IsError() {
+			log.Printf("[WARNING] Failed executing query: %s", res.String())
+			return executions, "", errors.New(res.String())
+		}
+
+		var r map[string]interface{}
+		if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
+			log.Printf("[WARNING] Failed decoding response: %s", err)
+			return executions, "", err
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return executions, "", errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return executions, "", err
+		}
+
+		wrapped := ExecutionSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return executions, "", err
+		}
+
+		executions = []WorkflowExecution{}
+		for _, hit := range wrapped.Hits.Hits {
+			executions = append(executions, hit.Source)
+		}
+
+
+
+		return executions, "", errors.New("Not implemented yet")
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("execution_org=", orgId).Order("-started_at").Limit(5)
+
+		if len(search.WorkflowId) > 0 {
+			//log.Printf("[DEBUG] Filtering on workflow_id: %s", search.WorkflowId)
 			query = query.Filter("workflow_id =", search.WorkflowId)
 		}
+
+		if len(search.Status) > 0 {
+			query = query.Filter("status =", search.Status)
+		}
+
+		// String to timestamp for search.SearchFrom (string)
+		startTimestamp, err := time.Parse(time.RFC3339, search.SearchFrom)
+		if err != nil {
+			if len(search.SearchFrom) > 0 {
+				log.Printf("[WARNING] Failed parsing start time: %s", err)
+			}
+		} else {
+			// Make it into a number instead of a string
+			query = query.Filter("started_at >=", startTimestamp.Unix())
+		}
+
+		// String to timestamp for search.SearchUntil (string)
+		endTimestamp, err := time.Parse(time.RFC3339, search.SearchUntil)
+		if err != nil {
+			if len(search.SearchFrom) > 0 {
+				log.Printf("[WARNING] Failed parsing end time: %s", err)
+			}
+		} else {
+			// Make it into a number instead of a string
+			query = query.Filter("started_at <=", endTimestamp.Unix())
+		}
+
 
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)
@@ -10229,6 +10381,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 	log.Printf("[DEBUG] Returning %d executions", len(executions))
 
 	// Find difference between what's in the list and what is in cache
+
 	removeIndexes := []int{}
 	for execIndex, execution := range executions {
 		if execution.ExecutionOrg != orgId {
@@ -10256,9 +10409,22 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			}
 		}
 
+		parsedActions := []Action{}
+
+		for _, action := range execution.Workflow.Actions {
+			parsedActions = append(parsedActions, Action{
+				Name:    action.Name,
+				ID:      action.ID,
+				AppName: action.AppName,
+				AppID:   action.AppID,
+			})
+		}
+
 		executions[execIndex].Workflow = Workflow{	
 			ID:       execution.Workflow.ID,
 			Name:     execution.Workflow.Name,
+			Triggers: execution.Workflow.Triggers,
+			Actions:  parsedActions,
 		}
 
 		execution.Result = ""
@@ -10276,6 +10442,8 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		return executions[i].StartedAt > executions[j].StartedAt
 	})
 
+	/*
+	var err error
 	executionmarshal, err := json.Marshal(executions)
 	if err == nil {
 		if len(executionmarshal) > totalMaxSize {
@@ -10326,6 +10494,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			}
 		}
 	}
+	*/
 
 	/*
 	if project.CacheDb {

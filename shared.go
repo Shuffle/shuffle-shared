@@ -8180,6 +8180,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.Customer = true
 			}
 
+			if lead == "old lead" {
+				newLeadinfo.OldLead = true
+			}
+
 			if lead == "old customer" {
 				newLeadinfo.OldCustomer = true
 			}
@@ -20048,7 +20052,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			found := false
 			for _, existingPrio := range org.Priorities {
 				if strings.Contains(strings.ToLower(strings.ReplaceAll(existingPrio.Name, "Suggested Usecase: ", "")), prioName) {
-					log.Printf("[DEBUG] Org %s (%s) already has the priority for Usecase '%s' added. Added: %d", org.Name, org.Id, prio.Name, usecasesAdded)
+					//log.Printf("[DEBUG] Org %s (%s) already has the priority for Usecase '%s' added. Added: %d", org.Name, org.Id, prio.Name, usecasesAdded)
 					found = true
 					break
 				}
@@ -20067,7 +20071,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 			}
 		}
 	} else {
-		log.Printf("[DEBUG] Org %s (%s) already has the priorities added. Added: %d", org.Name, org.Id, usecasesAdded)
+		//log.Printf("[DEBUG] Org %s (%s) already has the priorities added. Added: %d", org.Name, org.Id, usecasesAdded)
 	}
 
 	return org, orgUpdated
@@ -20420,7 +20424,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Printf("[WARNING] Failed workflow body read: %s", err)
+		log.Printf("[WARNING] Failed workflow body read (workflow search): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -20430,7 +20434,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 	err = json.Unmarshal([]byte(body), &search)
 	if err != nil {
 		//log.Printf(string(body))
-		log.Printf("[ERROR] Failed workflow unmarshaling (save): %s", err)
+		log.Printf("[ERROR] Failed workflow unmarshaling (workflow search): %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
