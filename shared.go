@@ -7847,7 +7847,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	user.Orgs = append(user.Orgs, newOrg.Id)
-	log.Printf("[INFO] Usr: %s (%d)", user.Orgs, len(user.Orgs))
+	//log.Printf("[INFO] Usr orgs: %s (%d)", user.Orgs, len(user.Orgs))
 	err = SetUser(ctx, &user, false)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating user when setting creating suborg: %s", err)
@@ -14350,6 +14350,10 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				user.Session = sessionToken
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        request.RemoteAddr,
+					Timestamp: time.Now().Unix(),
+				})
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -14405,6 +14409,10 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				user.Session = sessionToken
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        request.RemoteAddr,
+					Timestamp: time.Now().Unix(),
+				})
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -14759,7 +14767,16 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        request.RemoteAddr,
+					Timestamp: time.Now().Unix(),
+				})
+
 				user.Session = sessionToken
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        request.RemoteAddr,
+					Timestamp: time.Now().Unix(),
+				})
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -14818,6 +14835,10 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				user.Session = sessionToken
+				user.LoginInfo = append(user.LoginInfo, LoginInfo{
+					IP:        request.RemoteAddr,
+					Timestamp: time.Now().Unix(),
+				})
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -14910,6 +14931,12 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newUser.Session = sessionToken
+
+	newUser.LoginInfo = append(newUser.LoginInfo, LoginInfo{
+		IP:        request.RemoteAddr,
+		Timestamp: time.Now().Unix(),
+	})
+
 	err = SetUser(ctx, newUser, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new user in DB: %s", err)
