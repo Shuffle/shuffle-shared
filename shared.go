@@ -8200,7 +8200,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				newLeadinfo.Creator = true
 			}
 
-			if lead == "tech_partner" {
+			if lead == "tech partner" {
 				newLeadinfo.TechPartner = true
 			}
 		}
