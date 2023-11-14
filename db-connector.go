@@ -512,7 +512,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
 			}
 
-			log.Printf("[DEBUG] Increment cache miss for %s", key)
+			//log.Printf("[DEBUG] Increment cache miss for %s", key)
 		} else {
 			// make item into a number
 

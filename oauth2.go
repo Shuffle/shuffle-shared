@@ -1040,6 +1040,7 @@ func MakeGmailSubscription(ctx context.Context, client *http.Client, folderIds [
 		return SubResponse{}, err
 	}
 
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] Gmail subscription Body: %s", err)
@@ -1098,6 +1099,7 @@ func ExtendOutlookSubscription(client *http.Client, subscriptionId string) error
 	}
 
 	//log.Printf("[INFO] Subscription Status: %d", res.StatusCode)
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("Body: %s", err)
@@ -1151,6 +1153,7 @@ func MakeOutlookSubscription(client *http.Client, folderIds []string, notificati
 	}
 
 	log.Printf("[INFO] Subscription Status: %d", res.StatusCode)
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("Body: %s", err)
@@ -2935,6 +2938,7 @@ func MakeGmailWebhookRequest(ctx context.Context, webhookUrl string, mappedData 
 		return err
 	}
 
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] Gmail subscription Body: %s", err)
@@ -3069,6 +3073,7 @@ func RunOpenidLogin(ctx context.Context, clientId, baseUrl, redirectUri, code, c
 		return []byte{}, err
 	}
 
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] OpenID client Body: %s", err)
@@ -3497,6 +3502,109 @@ func HandleGetOutlookFolders(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
+func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth AppAuthenticationStorage) (AppAuthenticationStorage, error) {
+	transport := http.DefaultTransport.(*http.Transport)
+	transport.MaxIdleConnsPerHost = 100
+	transport.ResponseHeaderTimeout = time.Second * 10
+	transport.Proxy = nil
+	client := &http.Client{
+		Transport: transport,
+	}
+
+	clientId := ""
+	clientSecret := ""
+	tokenUrl := ""
+	scope := ""
+	for _, field := range appAuth.Fields {
+		if field.Key == "client_secret" {
+			clientSecret = field.Value
+		} else if field.Key == "client_id" {
+			clientId = field.Value
+		} else if field.Key == "scope" {
+			scope = field.Value
+		} else if field.Key == "token_uri" {
+			tokenUrl = field.Value
+		} else {
+			log.Printf("[INFO][%s] Unparsed oauth2 field '%s' (not critical)", appAuth.Id, field.Key)
+		}
+	}
+
+	if len(tokenUrl) == 0 || len(clientId) == 0 || len(clientSecret) == 0  {
+		return appAuth, fmt.Errorf("Missing oauth2 fields. Required: token_uri, client_id, client_secret, scopes")
+	}
+
+	refreshData := fmt.Sprintf("grant_type=client_credentials")
+	if len(scope) > 0 {
+		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, " ", "%20", -1))
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		tokenUrl,
+		bytes.NewBuffer([]byte(refreshData)),
+	)
+
+	if err != nil {
+		return appAuth, err
+	}
+
+	// Basic auth handler. May not always be the case, it's currently used by default
+	authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientId, clientSecret))))
+	req.Header.Set("Authorization", authHeader)
+
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Add("Accept", "application/json")
+	newresp, err := client.Do(req)
+	if err != nil {
+		return appAuth, err
+	}
+
+	log.Printf("[DEBUG] Refresh Response for %s: %d", tokenUrl, newresp.StatusCode)
+
+	defer newresp.Body.Close()
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		return appAuth, err
+	}
+
+	if newresp.StatusCode >= 300 {
+		// Printing on error to handle in future instances
+		log.Printf("[ERROR] Oauth2 application data for %s: %#v", tokenUrl, string(body))
+		return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh for URL (refresh) %s: %d. Message: %s", tokenUrl, newresp.StatusCode, body))
+	}
+
+	if strings.Contains(string(body), "error") {
+		log.Printf("\n\n[ERROR] Oauth2 app RESPONSE: %s\n\nencoded: %#v", string(body))
+	}
+
+	// Parse out data like {"access_token":"ddpGSlBV4GhNhToPTLjHZSwbqRH6JUIv0QYPo6CW62NfAr","token_type":"Bearer","expires_in":1870}
+	var data map[string]interface{}
+	err = json.Unmarshal(body, &data)
+	if err != nil {
+		return appAuth, err
+	}
+
+	log.Printf("[DEBUG] Oauth2 data for %s: %d", tokenUrl, newresp.StatusCode)
+	// Check if access_token is in data
+	foundToken := ""
+	if _, ok := data["access_token"]; !ok {
+		return appAuth, errors.New(fmt.Sprintf("Missing access_token in response from %s", tokenUrl))
+	} else {
+		foundToken = data["access_token"].(string)
+	}
+
+	if len(foundToken) == 0 {
+		return appAuth, errors.New(fmt.Sprintf("Empty access_token in response from %s", tokenUrl))
+	}
+
+	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+		Key: "access_token",
+		Value: foundToken,
+	})
+
+	return appAuth, nil
+}
+
 func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationStorage, refresh bool) (AppAuthenticationStorage, error) {
 
 	//transport := http.DefaultTransport.(*http.Transport).Clone()
@@ -3525,6 +3633,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			requestData.ClientSecret = field.Value
 		} else if field.Key == "client_id" {
 			requestData.ClientId = field.Value
+		} else if field.Key == "scopes" {
+			requestData.Scope = field.Value
 		} else if field.Key == "scope" {
 			requestData.Scope = field.Value
 		} else if field.Key == "redirect_uri" {
@@ -3621,6 +3731,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		//log.Printf("Data: %#v", newresp)
 		//log.Printf("Data: %d", newresp.StatusCode)
 
+		defer newresp.Body.Close()
 		body, err := ioutil.ReadAll(newresp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling body from Oauth2 request for %s: %s", url, err)
@@ -3662,6 +3773,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		log.Printf("[DEBUG] Refresh Response for %s: %d", requestRefreshUrl, newresp.StatusCode)
 
+		defer newresp.Body.Close()
 		body, err := ioutil.ReadAll(newresp.Body)
 		if err != nil {
 			return appAuth, err
@@ -3690,7 +3802,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	if strings.Contains(string(respBody), "error") {
 		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v", string(respBody), v.Encode())
-
 	}
 
 	// Check if we have an authentication token and pre-set it

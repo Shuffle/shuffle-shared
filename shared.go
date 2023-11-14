@@ -1670,31 +1670,36 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully set up authentication", "id": "%s"}`, appAuth.Id)))
 		return
-	}
 
-	// Check if the items are correct
-	for _, field := range appAuth.Fields {
-		found := false
-		for _, param := range app.Authentication.Parameters {
-			//log.Printf("Fields: %s - %s", field, param.Name)
-			if field.Key == param.Name {
-				found = true
+	} else if appAuth.Type == "oauth2-app" {
+		// For application permissions set in Oauth2 frontend
+		// This should contain client-id, client-secret, scopes, token-url
+		// May need to also know how the auth actually works (e.g. basic auth or something else)
+		log.Printf("[DEBUG] OAUTH2-APP for workflow %s. User: %s (%s). App: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id, appAuth.App.Name, appAuth.App.ID)
+
+		//resp.WriteHeader(200)
+		//resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully set up authentication", "id": "%s"}`, appAuth.Id)))
+		//return
+	} else {
+		// Check if the items are correct
+		for _, field := range appAuth.Fields {
+			found := false
+			for _, param := range app.Authentication.Parameters {
+				//log.Printf("Fields: %s - %s", field, param.Name)
+				if field.Key == param.Name {
+					found = true
+				}
+			}
+
+			if !found {
+				log.Printf("[WARNING] Failed finding field '%s' in appauth fields for %s", field.Key, appAuth.App.Name)
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
+				return
 			}
 		}
-
-		if !found {
-			log.Printf("[WARNING] Failed finding field '%s' in appauth fields for %s", field.Key, appAuth.App.Name)
-			resp.WriteHeader(409)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
-			return
-		}
 	}
 
-	// FIXME: encryption
-	//for _, param := range appAuth.Fields {
-	//}
-
-	//appAuth.LargeImage = ""
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
 	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
@@ -11062,7 +11067,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			//log.Printf("\n\n[WARNING] Unmarshal success in workflow %s! Trying to check for success. Success: %#v\n\n", workflowExecution.Workflow.Name, resultCheck.Success)
 
 			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") && workflowExecution.Workflow.Hidden == false {
-				log.Printf("\n\n[WARNING] Making notification for %s\n\n", workflowExecution.ExecutionOrg)
+				//log.Printf("\n\n[WARNING] Making notification for %s\n\n", workflowExecution.ExecutionOrg)
 
 				err = CreateOrgNotification(
 					ctx,
@@ -15783,7 +15788,41 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			newParams := []WorkflowAppActionParameter{}
-			if strings.ToLower(curAuth.Type) == "oauth2" {
+			if strings.ToLower(curAuth.Type) == "oauth2-app" {
+				log.Printf("\n\n\n[DEBUG] Should replace auth parameters (Oauth2-app)\n\n\n")
+				user := User{
+					Username: "refresh",
+					ActiveOrg: OrgMini{
+						Id: curAuth.OrgId,
+					},
+				}	
+
+				newAuth, err := GetOauth2ApplicationPermissionToken(ctx, user, curAuth) 
+				if err != nil {
+					log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+
+					// Adding so it can be used to fail the auth naturally with Outlook
+					newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
+						Key:  "access_token",
+						Value: "FAILED_REFRESH",
+					})
+				} else {
+					//log.Printf("\n\n[DEBUG] Got new Oauth2 app auth: %#v\n\n", newAuth.Fields)
+					// Resets the params and overwrites with the relevant fields
+					curAuth = newAuth
+					newParams = action.Parameters
+					for _, param := range newAuth.Fields {
+						if param.Key != "access_token" {
+							continue
+						}
+
+						newParams = append(newParams, WorkflowAppActionParameter{
+							Name:  param.Key,
+							Value: param.Value,
+						})
+					}
+				}
+			} else if strings.ToLower(curAuth.Type) == "oauth2" {
 				//log.Printf("[DEBUG] Should replace auth parameters (Oauth2)")
 
 				runRefresh := false
@@ -15875,7 +15914,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							*/
 						}
 
-						//log.Printf("[DEBUG] Setting new auth to index: %d and curauth", authIndex)
 						allAuths[authIndex] = newAuth
 
 						// Does the oauth2 replacement

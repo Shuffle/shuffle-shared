@@ -396,7 +396,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 				extraHeaders += fmt.Sprintf(`if %s != " ": request_headers["%s"] = %s`, parsedKey, key, parsedKey)
 			} else if value.Value.In == "query" {
-				log.Printf("Handling extra queries for %#v", value.Value)
+				log.Printf("Handling extra queries for %#v", parsedKey)
+				if strings.Contains(parsedKey, "=") {
+					parsedKey = strings.Split(parsedKey, "=")[0]
+				}
+
 				queryString += fmt.Sprintf(", %s=\"\"", parsedKey)
 				if len(extraQueries) > 0 {
 					extraQueries += "\n        "
@@ -501,7 +505,12 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			//log.Printf("[DEBUG] Appending Oauth2 code")
 			authenticationParameter = ", username_basic, password_basic"
 			//api.Authentication.TokenUri = securitySchemes["jwt"].Value.In
-			authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"{authret.text}\")", api.Authentication.TokenUri)
+			//authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"{authret.text}\")", api.Authentication.TokenUri)
+
+			authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
+			
+
+			//log.Printf("[DEBUG] Appending jwt code for authenticationSetup:\n        %s", authenticationSetup)
 		}
 	}
 
@@ -810,9 +819,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	//if strings.Contains(strings.ToLower(functionname), "search") {
-	//	log.Printf("\n%s", data)
-	//}
+	if strings.Contains(strings.ToLower(functionname), "user") {
+		log.Printf("\n%s", data)
+	}
 
 	return functionname, data
 }
