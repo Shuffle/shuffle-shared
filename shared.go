@@ -5566,7 +5566,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						foundErr := fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
-							log.Printf("\n\n[DEBUG] Adding auth error 2: %s\n\n", foundErr)
+							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s\n\n", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
 							//continue
 						}
@@ -11282,7 +11282,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// 2nd: Handle it in worker for normal executions
 			/*
 				if len(workflowExecution.ExecutionParent) > 0 && (project.Environment == "onprem") {
-					log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", workflowExecution.Result, workflowExecution.ExecutionParent)
+					//log.Printf("[DEBUG] Got the result %s for subflow of %s. Check if this should be added to loop.", workflowExecution.Result, workflowExecution.ExecutionParent)
 
 					parentExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionParent)
 					if err == nil {
@@ -15007,7 +15007,7 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 	return []byte{}, errors.New(fmt.Sprintf("No body to handle for %s", url))
 }
 
-// // New execution with firestore
+// New execution with firestore
 func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *http.Request, maxExecutionDepth int64) (WorkflowExecution, ExecInfo, string, error) {
 	workflowBytes, err := json.Marshal(workflow)
 	if err != nil {
@@ -15789,6 +15789,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			newParams := []WorkflowAppActionParameter{}
 			if strings.ToLower(curAuth.Type) == "oauth2-app" {
+				// Check if they need to be decrypted
+
+				for fieldIndex, field := range curAuth.Fields {
+					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+					decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey) 
+					if err != nil {
+						log.Printf("[ERROR] Failed decryption in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+						continue
+					}
+
+					curAuth.Fields[fieldIndex].Value = string(decrypted)
+					//field.Value = decrypted
+				}
+
 				log.Printf("\n\n\n[DEBUG] Should replace auth parameters (Oauth2-app)\n\n\n")
 				user := User{
 					Username: "refresh",
@@ -15802,10 +15816,16 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
 
 					// Adding so it can be used to fail the auth naturally with Outlook
-					newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
-						Key:  "access_token",
-						Value: "FAILED_REFRESH",
-					})
+
+					workflowExecution.Status = "ABORTED"
+					workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
+
+					//workflowExecution.Results = append(workflowExecution.Results, ExecResult{
+
+					// Abort the workflow due to auth being bad
+					return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), err
+
+
 				} else {
 					//log.Printf("\n\n[DEBUG] Got new Oauth2 app auth: %#v\n\n", newAuth.Fields)
 					// Resets the params and overwrites with the relevant fields
