@@ -2953,7 +2953,13 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(data)
 }
 
-func GetResult(ctx context.Context, workflowExecution WorkflowExecution, id string) (WorkflowExecution, ActionResult) {
+func GetActionResult(ctx context.Context, workflowExecution WorkflowExecution, id string) (WorkflowExecution, ActionResult) {
+	// Get workflow execution to make sure we have the latest
+	newWorkflowExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	if err == nil && (len(newWorkflowExecution.Results) > len(workflowExecution.Results) || len(newWorkflowExecution.Results) == 0) {
+		workflowExecution = *newWorkflowExecution
+	}
+
 	for _, actionResult := range workflowExecution.Results {
 		if actionResult.Action.ID == id {
 			// ALWAYS relying on cache due to looping subflow issues
@@ -17885,8 +17891,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	relevantActions := []Action{}
 
 	log.Printf("[INFO][%s] Inside Decide execution with %d / %d results (extra: %d). Status: %s", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, extra, workflowExecution.Status)
-	// Check if status is aborted/failed
-
 
 	if len(startAction) == 0 {
 		startAction = workflowExecution.Start
@@ -17897,11 +17901,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			workflowExecution.Start = workflowExecution.Workflow.Start
 		}
 	}
-
-	//log.Printf("[DEBUG] NEXTACTIONS: %s", nextActions)
-	//if len(nextActions) == 0 {
-	//	nextActions = append(nextActions, startAction)
-	//}
 
 	queueNodes := []string{}
 	if len(workflowExecution.Results) == 0 {
@@ -18024,7 +18023,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		for _, item := range notFound {
 			if ArrayContains(executed, item) {
 				log.Printf("%s has already executed but no result!", item)
-				//return workflowExecution
 			}
 
 			// Visited means it's been touched in any way.
@@ -18044,7 +18042,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			fixed := 0
 			for _, parent := range parents[item] {
 				parentResult := ActionResult{}
-				workflowExecution, parentResult = GetResult(ctx, workflowExecution, parent)
+				workflowExecution, parentResult = GetActionResult(ctx, workflowExecution, parent)
 				if parentResult.Status == "FINISHED" || parentResult.Status == "SUCCESS" || parentResult.Status == "SKIPPED" || parentResult.Status == "FAILURE" {
 					fixed += 1
 				}
@@ -18097,6 +18095,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		// check whether the parent is finished executing
 
 		fixed := 0
+		fixedNames := []string{}
 		continueOuter := true
 		if action.IsStartNode {
 			continueOuter = false
@@ -18113,24 +18112,28 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 
 				// Not including ABORTED/FAILED
-				_, parentResult := GetResult(ctx, workflowExecution, parent)
+				_, parentResult := GetActionResult(ctx, workflowExecution, parent)
 				if parentResult.Status == "FINISHED" || parentResult.Status == "SUCCESS" || parentResult.Status == "SKIPPED" {
 					if parentResult.Status == "SKIPPED" {
 						skippedCnt += 1
 					}
 					fixed += 1
-				} else {
-					log.Printf("[WARNING][%s] Parentstatus for node %s is '%s' - NOT success, finished or skipped", workflowExecution.ExecutionId, parent, parentResult.Status)
-					// Should check if it's actually RAN at all?
-					parentId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, parent)
-					_, err := GetCache(ctx, parentId)
-					if err != nil {
-						//log.Printf("[INFO] No cache for parent ID %#v", parentId)
-					} else {
-						//log.Printf("Parent ID already ran. How long ago?")
-					}
 
-					//FIXME: Look for ABORT/FAILED
+					// Debug names
+					fixedNames = append(fixedNames, fmt.Sprintf("%s:%s", parent, parentResult.Status))
+				} else {
+					// Should check if it's actually RAN at all?
+					// This is not necessary anymore as the cache is used previously, and this won't be any different
+					
+
+					//Look for ABORT/FAILED?
+					//parentId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, parent)
+					//_, err := GetCache(ctx, parentId)
+					//if err != nil {
+					//	//log.Printf("[INFO] No cache for parent ID %#v", parentId)
+					//} else {
+					//	//log.Printf("Parent ID already ran. How long ago?")
+					//}
 				}
 			}
 
@@ -18138,7 +18141,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				continueOuter = false
 
 				if fixed > 0 && skippedCnt == len(parents[nextAction]) {
-					//log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+					log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
 					continueOuter = true
 				}
 			}
@@ -18158,8 +18161,10 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 		}
 
+
+
 		// get action status
-		workflowExecution, actionResult := GetResult(ctx, workflowExecution, nextAction)
+		workflowExecution, actionResult := GetActionResult(ctx, workflowExecution, nextAction)
 		if actionResult.Action.ID == action.ID {
 			//log.Printf("\n\n[INFO] %s (%s) already has status %s\n\n", action.Label, action.ID, actionResult.Status)
 			//DeleteCache(ctx, newExecId)
@@ -18168,12 +18173,21 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			//log.Printf("[INFO] %s:%s has no status result yet. Should execute.", action.Name, action.ID)
 		}
 
+		// Checked multiple times due to the cache
 		newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, nextAction)
 		_, err := GetCache(ctx, newExecId)
 		if err == nil {
 			//log.Printf("\n\n[DEBUG] Already found %s - returning\n\n", newExecId)
 			continue
 		}
+
+		parentlen := 0
+		// Check if nextAction in parents map, not len of it
+		if _, ok := parents[nextAction]; ok {
+			parentlen = len(parents[nextAction])
+		}
+
+		log.Printf("[DEBUG][%s] Running %s (%s) with %d parents. Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
 
 		if action.AppName == "Shuffle Workflow" {
 			branchesFound := 0
