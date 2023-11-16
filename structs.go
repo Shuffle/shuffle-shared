@@ -386,6 +386,7 @@ type Environment struct {
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
 	RunningIp  string `json:"running_ip" datastore:"running_ip"`
 	Auth       string `json:"auth" datastore:"auth"`
+	Queue	  int `json:"queue" datastore:"queue"`
 }
 
 // Saves some data, not sure what to have here lol

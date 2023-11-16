@@ -2589,6 +2589,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			environment.Id = uuid.NewV4().String()
 		}
 
+
 		found := false
 		for _, oldEnv := range newEnvironments {
 			if oldEnv.Name == environment.Name {
@@ -2597,6 +2598,22 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !found {
+			// Get the current Queue for it
+			environment.Queue = -1
+			if len(environments) < 5 && environment.Type != "cloud" {
+				//log.Printf("\n\nShould get queue for env %s (%s)\n\n", environment.Name, environment.Id)	
+				executionRequests, err := GetWorkflowQueue(ctx, environment.Name, 100)
+				if err != nil {
+					// Skipping as this comes up over and over
+					log.Printf("[ERROR] (2) Failed reading body for workflowqueue: %s", err)
+				}  else {
+					environment.Queue = len(executionRequests.Data)
+				}
+
+				log.Printf("\n\nGot %d executions for %s\n\n", len(executionRequests.Data), environment.Name)
+			}
+
+
 			newEnvironments = append(newEnvironments, environment)
 		}
 	}
