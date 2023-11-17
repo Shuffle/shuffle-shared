@@ -10235,7 +10235,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		startTimestamp, err := time.Parse(time.RFC3339, search.SearchFrom)
 		if err != nil {
 			if len(search.SearchFrom) > 0 {
-				log.Printf("[WARNING] Failed parsing start time: %s", err)
+				//log.Printf("[WARNING] Failed parsing start time: %s", err)
 			}
 		} else {
 			// Make it into a number instead of a string
@@ -10246,7 +10246,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		endTimestamp, err := time.Parse(time.RFC3339, search.SearchUntil)
 		if err != nil {
 			if len(search.SearchFrom) > 0 {
-				log.Printf("[WARNING] Failed parsing end time: %s", err)
+				//log.Printf("[WARNING] Failed parsing end time: %s", err)
 			}
 		} else {
 			// Make it into a number instead of a string

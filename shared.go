@@ -2251,11 +2251,6 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 
 func RerunExecution(ctx context.Context, environment string, workflow Workflow) (int, error) {
 	maxReruns := 100
-	//log.Printf("[DEBUG] Finding executions for %s", workflow.ID)
-	//if project.Environment == "cloud" && workflow.ID != "0a0752db-61ba-49ea-a488-4dfe6d2f57a0" {
-	//	log.Printf("Bad workflow ID during test: %s", workflow.ID)
-	//	return 0, nil
-	//}
 
 	executions, err := GetUnfinishedExecutions(ctx, workflow.ID)
 	if err != nil {
@@ -2267,10 +2262,6 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 		return 0, nil
 	}
 
-	//log.Printf("[DEBUG] Found %d POTENTIALLY unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
-	//log.Printf("[DEBUG] Found %d unfinished executions for workflow %s (%s) with environment %s that are more than 30 minutes old", len(executions), workflow.Name, workflow.ID, environment)
-
-	//backendUrl := os.Getenv("BASE_URL")
 	//if project.Environment == "cloud" {
 	//	backendUrl = "https://shuffler.io"
 	//} else {
@@ -2296,12 +2287,10 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 	executed := []string{}
 	for _, execution := range executions {
 		if timeNow < execution.StartedAt+int64(waitTime) {
-			//log.Printf("Bad timing: %d", execution.StartedAt)
 			continue
 		}
 
 		if execution.Status != "EXECUTING" {
-			//log.Printf("Bad status: %s", execution.Status)
 			continue
 		}
 
@@ -2589,7 +2578,6 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			environment.Id = uuid.NewV4().String()
 		}
 
-
 		found := false
 		for _, oldEnv := range newEnvironments {
 			if oldEnv.Name == environment.Name {
@@ -2600,9 +2588,16 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		if !found {
 			// Get the current Queue for it
 			environment.Queue = -1
-			if len(environments) < 5 && environment.Type != "cloud" {
+			if len(environments) < 10 && environment.Type != "cloud" {
 				//log.Printf("\n\nShould get queue for env %s (%s)\n\n", environment.Name, environment.Id)	
-				executionRequests, err := GetWorkflowQueue(ctx, environment.Name, 100)
+				//executionRequests, err := GetWorkflowQueue(ctx, environment.Id, 100)
+
+				foundName := environment.Name
+				if project.Environment == "cloud" {
+					foundName = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(environment.Name, " ", "-"), "_", "-")), user.ActiveOrg.Id)
+				}
+
+				executionRequests, err := GetWorkflowQueue(ctx, foundName, 100)
 				if err != nil {
 					// Skipping as this comes up over and over
 					log.Printf("[ERROR] (2) Failed reading body for workflowqueue: %s", err)
@@ -2610,7 +2605,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 					environment.Queue = len(executionRequests.Data)
 				}
 
-				log.Printf("\n\nGot %d executions for %s\n\n", len(executionRequests.Data), environment.Name)
+				//log.Printf("[DEBUG] Got %d executions for env %s", len(executionRequests.Data), environment.Name)
 			}
 
 
@@ -11003,7 +10998,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 				}
 
-				if !found {
+				// Send only IF it's not the startnode
+				//if !found {
+				if !found && foundAction.ID != workflowExecution.Start {
 					newResult := ActionResult{
 						Action:        foundAction,
 						ExecutionId:   actionResult.ExecutionId,
@@ -20586,7 +20583,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] Got Run search: %+v", search)
+	//log.Printf("[DEBUG] Got Run search: %+v", search)
 
 	// Here to check access rights
 	ctx := GetContext(request)
