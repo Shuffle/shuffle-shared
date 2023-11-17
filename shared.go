@@ -15538,6 +15538,35 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		//log.Printf("\n\n[INFO] Setting start to %s based on query!\n\n", start[0])
 		//workflowExecution.Workflow.Start = start[0]
 		workflowExecution.Start = start[0]
+	} else {
+
+		if workflowExecution.ExecutionSource == "schedule" {
+			// This is kind of silly as it doesn't really check which trigger
+			// it instead just picks one (meaning we can max have one..?)
+			for _, trigger := range workflowExecution.Workflow.Triggers {
+				if trigger.TriggerType != "SCHEDULE" {
+					continue
+				}
+
+				startChanged := false
+				for _, branch := range workflowExecution.Workflow.Branches {
+					if branch.SourceID != trigger.ID {
+						continue
+					}
+						
+					if workflowExecution.Start != branch.DestinationID {
+						//log.Printf("\n\n[INFO] Setting start to %s based on schedule!\n\n", branch.ID)
+						workflowExecution.Start = branch.DestinationID
+						startChanged = true 
+						break
+					}
+				}
+
+				if startChanged {
+					break
+				}
+			}
+		}
 	}
 
 	// FIXME - regex uuid, and check if already exists?
@@ -15592,6 +15621,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			startnodeFound = true
 		}
 
+		// Backup fallback in case we can't find the one assigned
 		if item.IsStartNode {
 			newStartnode = item.ID
 		}
@@ -16431,7 +16461,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	if !sourceExecutionOk {
 		sourceExecution, sourceExecutionOk = request.URL.Query()["reference_execution"]
 		if !sourceExecutionOk {
-			log.Printf("[AUDIT] No source_execution or reference_execution in test validation")
+			log.Printf("[AUDIT] No source_execution or reference_execution in access validation")
 			return false, ""
 		}
 	}
@@ -16440,7 +16470,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		//log.Printf("[DEBUG] Got source exec %s", sourceExecution)
 		newExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
 		if err != nil {
-			log.Printf("[INFO] Failed getting source_execution in test validation based on '%s'", sourceExecution[0])
+			//log.Printf("[INFO] Failed getting source_execution in test validation based on '%s'", sourceExecution[0])
 			return false, ""
 		} else {
 			workflowExecution = newExec
@@ -17631,7 +17661,6 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 			}
 		}
 	} else {
-		//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 	}
 
 	if len(org.MainPriority) == 0 {
@@ -18137,6 +18166,8 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 			}
 
+			// Check if there are as many successful results as there are parents
+			// Else, continueOuter = true by default, and it will be skipped
 			if fixed == len(parents[nextAction]) {
 				continueOuter = false
 
@@ -18155,13 +18186,12 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 			continue
 		} else {
+			// Was a bug related to bad parent
 			if len(parents[nextAction]) > 0 {
 				//log.Printf("[DEBUG][%s] ALL Parents of %s (%s) are finished. (%d/%d): %s. But are they succeeded?", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
 			}
 
 		}
-
-
 
 		// get action status
 		workflowExecution, actionResult := GetActionResult(ctx, workflowExecution, nextAction)

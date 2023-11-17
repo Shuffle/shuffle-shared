@@ -1161,7 +1161,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 			return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 		}
 	} else {
-		log.Printf("[WARNING][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
+		//log.Printf("[WARNING][%s] Failed getting cache for execution variables data %s: %s", executionId, executionId, err)
 	}
 
 	return "", 0, map[string][]string{}, map[string][]string{}, []string{}, []string{}, []string{}, []string{}
@@ -1675,7 +1675,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 				}
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
 		}
 	} else {
 		//log.Printf("[DEBUG] Skipping cache check in get app for ID %s", id)
@@ -4451,7 +4451,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				//log.Printf("[ERROR] DATALEN: %d", len(cacheData))
 			}
 		} else {
-			log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
+			//log.Printf("[DEBUG] Failed getting cache for apps with KEY %s: %s", cacheKey, err)
 		}
 	}
 
@@ -6081,7 +6081,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		cacheKey = fmt.Sprintf("%s_workflows", workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting cache for getworkflow '%s': %s", cacheKey, err)
+			//log.Printf("[WARNING] Failed getting cache for getworkflow '%s': %s", cacheKey, err)
 		} else {
 			var workflows []Workflow
 
