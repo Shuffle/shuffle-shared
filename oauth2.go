@@ -3538,7 +3538,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
-	log.Printf("REFRESH DATA: %s", refreshData)
+	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %s", refreshData)
 
 	req, err := http.NewRequest(
 		"POST",

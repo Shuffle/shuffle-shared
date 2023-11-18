@@ -12535,7 +12535,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		log.Printf("[ERROR] Error reading decryptionkey: %s", err)
+		//log.Printf("[ERROR] Error reading decryptionkey: %s", err)
 		return []byte{}, err
 	}
 
@@ -15756,8 +15756,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if len(action.AuthenticationId) > 0 {
-			//log.Printf("Action for
-
 			if len(allAuths) == 0 {
 				allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
 				if err != nil {
@@ -15777,7 +15775,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if len(curAuth.Id) == 0 {
-				//log.Printf("[WARNING] App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName)
 				//continue
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName))
 			}
@@ -15841,55 +15838,96 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if strings.ToLower(curAuth.Type) == "oauth2-app" {
 				// Check if they need to be decrypted
 
-				for fieldIndex, field := range curAuth.Fields {
-					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-					decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey) 
-					if err != nil {
-						log.Printf("[ERROR] Failed decryption in org %s for %s: %s", curAuth.OrgId, field.Key, err)
-						continue
-					}
+				// Check if it already has a new token in cache from same auth current execution
 
-					curAuth.Fields[fieldIndex].Value = string(decrypted)
-					//field.Value = decrypted
+				setAuth := false
+				executionAuthKey := fmt.Sprintf("%s", curAuth.Id)
+
+				log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
+				execAuthData, err := GetCache(ctx, executionAuthKey)
+				if err == nil {
+					log.Printf("[DEBUG] Successfully retrieved auth wrapper from cache for %s", executionAuthKey)
+					cacheData := []byte(execAuthData.([]uint8))
+
+					appAuthWrapper := AppAuthenticationStorage{}
+					err = json.Unmarshal(cacheData, &appAuthWrapper)
+					if err == nil {
+						log.Printf("[DEBUG] Successfully unmarshalled auth wrapper from cache for %s", executionAuthKey)
+
+						newParams = action.Parameters
+						for _, param := range appAuthWrapper.Fields {
+							if param.Key != "access_token" {
+								continue
+							}
+
+							newParams = append(newParams, WorkflowAppActionParameter{
+								Name:  param.Key,
+								Value: param.Value,
+							})
+						}
+				
+						setAuth = true 
+					} else {
+						log.Printf("[ERROR] Failed unmarshalling auth wrapper from cache for %s: %s", executionAuthKey, err)
+					}
 				}
 
-				log.Printf("\n\n\n[DEBUG] Should replace auth parameters (Oauth2-app)\n\n\n")
-				user := User{
-					Username: "refresh",
-					ActiveOrg: OrgMini{
-						Id: curAuth.OrgId,
-					},
-				}	
 
-				newAuth, err := GetOauth2ApplicationPermissionToken(ctx, user, curAuth) 
-				if err != nil {
-					log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
-
-					// Adding so it can be used to fail the auth naturally with Outlook
-
-					workflowExecution.Status = "ABORTED"
-					workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
-
-					//workflowExecution.Results = append(workflowExecution.Results, ExecResult{
-
-					// Abort the workflow due to auth being bad
-					return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), err
-
-
-				} else {
-					//log.Printf("\n\n[DEBUG] Got new Oauth2 app auth: %#v\n\n", newAuth.Fields)
-					// Resets the params and overwrites with the relevant fields
-					curAuth = newAuth
-					newParams = action.Parameters
-					for _, param := range newAuth.Fields {
-						if param.Key != "access_token" {
+				if !setAuth {
+					for fieldIndex, field := range curAuth.Fields {
+						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+						decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey) 
+						if err != nil {
+							log.Printf("[ERROR] Failed decryption in org %s for %s: %s", curAuth.OrgId, field.Key, err)
 							continue
 						}
 
-						newParams = append(newParams, WorkflowAppActionParameter{
-							Name:  param.Key,
-							Value: param.Value,
-						})
+						curAuth.Fields[fieldIndex].Value = string(decrypted)
+						//field.Value = decrypted
+					}
+
+					//log.Printf("\n\n\n[DEBUG] Should replace auth parameters (Oauth2-app)\n\n\n")
+					user := User{
+						Username: "refresh",
+						ActiveOrg: OrgMini{
+							Id: curAuth.OrgId,
+						},
+					}	
+
+					newAuth, err := GetOauth2ApplicationPermissionToken(ctx, user, curAuth) 
+					if err != nil {
+						log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+						workflowExecution.Status = "ABORTED"
+						workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
+
+						// Abort the workflow due to auth being bad
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), err
+
+
+					} else {
+						// Resets the params and overwrites with the relevant fields
+						curAuth = newAuth
+						newParams = action.Parameters
+						for _, param := range newAuth.Fields {
+							if param.Key != "access_token" {
+								continue
+							}
+
+							newParams = append(newParams, WorkflowAppActionParameter{
+								Name:  param.Key,
+								Value: param.Value,
+							})
+						}
+				
+						marshalledAuth, err := json.Marshal(newAuth)
+						if err == nil {
+							err = SetCache(ctx, executionAuthKey, marshalledAuth, 60)
+							if err != nil {
+								log.Printf("[ERROR] Failed setting cache for %s: %s", executionAuthKey, err)
+							}
+						} else {
+							log.Printf("[ERROR] Failed marshalling auth wrapper for %s: %s", executionAuthKey, err)
+						}
 					}
 				}
 			} else if strings.ToLower(curAuth.Type) == "oauth2" {
