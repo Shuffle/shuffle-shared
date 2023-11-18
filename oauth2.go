@@ -3515,6 +3515,10 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	clientSecret := ""
 	tokenUrl := ""
 	scope := ""
+
+	grantType := "client_credentials"
+	username := ""
+	password := ""
 	for _, field := range appAuth.Fields {
 		if field.Key == "client_secret" {
 			clientSecret = field.Value
@@ -3524,6 +3528,12 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 			scope = field.Value
 		} else if field.Key == "token_uri" {
 			tokenUrl = field.Value
+		} else if field.Key == "grant_type" {
+			grantType = field.Value
+		} else if field.Key == "username" {
+			username = field.Value
+		} else if field.Key == "password" {
+			password = field.Value
 		} else {
 			log.Printf("[INFO][%s] Unparsed oauth2 field '%s' (not critical)", appAuth.Id, field.Key)
 		}
@@ -3534,6 +3544,23 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	}
 
 	refreshData := fmt.Sprintf("grant_type=client_credentials")
+	if len(grantType) > 0 {
+		refreshData = fmt.Sprintf("grant_type=%s", grantType)
+	}
+
+	if grantType == "password" { 
+		if len(username) > 0 {
+			refreshData += fmt.Sprintf("&username=%s", username)
+		}
+
+		if len(password) > 0 {
+			refreshData += fmt.Sprintf("&password=%s", password)
+		}
+
+		refreshData += fmt.Sprintf("&client_id=%s", clientId)
+		refreshData += fmt.Sprintf("&client_secret=%s", clientSecret)
+	}
+
 	if len(scope) > 0 {
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
@@ -3550,9 +3577,11 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		return appAuth, err
 	}
 
-	// Basic auth handler. May not always be the case, it's currently used by default
-	authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientId, clientSecret))))
-	req.Header.Set("Authorization", authHeader)
+	// Basic auth handler for client_credentials. May not always be the case, it's currently used by default
+	if grantType == "client_credentials" {
+		authHeader := fmt.Sprintf("Basic %s", base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("%s:%s", clientId, clientSecret))))
+		req.Header.Set("Authorization", authHeader)
+	}
 
 	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Add("Accept", "application/json")

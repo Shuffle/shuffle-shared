@@ -217,6 +217,7 @@ type Authentication struct {
 	Scope        []string               `json:"scope" datastore:"scope" yaml:"scope"`
 	ClientId     string                 `json:"client_id" datastore:"client_id"`
 	ClientSecret string                 `json:"client_secret" datastore:"client_secret"`
+	GrantType    string                 `json:"grant_type" datastore:"grant_type"`
 }
 
 type AuthenticationStore struct {

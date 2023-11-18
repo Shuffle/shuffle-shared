@@ -543,7 +543,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// This is critical for onprem stuff.
 	// Added to_file as of July 2022
 	verifyParam := ", ssl_verify=False, to_file=False"
-	verifyWrapper := `if type(ssl_verify) == str: ssl_verify = False if ssl_verify.lower() == "false" or ssl_verify == "0" else True`
+	verifyWrapper := `ssl_verify = True if str(ssl_verify).lower() == "true" or ssl_verify == "1" else False`
 	verifyAddin := ", verify=ssl_verify"
 
 	// Codegen for headers
@@ -675,6 +675,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	}
 
 	data := fmt.Sprintf(`    def %s(self%s):
+        print(f"Started function %s")
         params={}
         %s
         url=f"%s%s"
@@ -793,6 +794,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		`,
 		functionname,
 		parsedParameters,
+		functionname,
 		preparedHeaders,
 		urlInline,
 		url,
@@ -819,9 +821,9 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	if strings.Contains(strings.ToLower(functionname), "user") {
-		log.Printf("\n%s", data)
-	}
+	//if strings.Contains(strings.ToLower(functionname), "user") {
+	//	log.Printf("\n%s", data)
+	//}
 
 	return functionname, data
 }
@@ -1007,7 +1009,6 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		} else if securitySchemes["Oauth2"] != nil {
 			api.Authentication.Type = "oauth2"
 			if val, ok := securitySchemes["Oauth2"].Value.ExtensionProps.Extensions["flow"]; ok {
-				//log.Printf("VAL:: %#v", val.(json.RawMessage))
 				newValue := string(fmt.Sprintf("%s", string(val.(json.RawMessage))))
 				//log.Printf("DATA: %s", newValue)
 
@@ -1028,6 +1029,23 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				return swagger, WorkflowApp{}, []string{}, errors.New("Missing Oauth2 refreshUrl, scope, authorization URL or Token URL")
 			}
 
+			if val, ok := securitySchemes["Oauth2"].Value.ExtensionProps.Extensions["x-grant-type"]; ok {
+
+				// Make val from json.rawMessage into a string
+				newValue := string(fmt.Sprintf("%s", string(val.(json.RawMessage))))
+				// Check if quotes on it
+				if len(newValue) > 2 && newValue[0] == '"' && newValue[len(newValue)-1] == '"' {
+					newValue = newValue[1 : len(newValue)-1]
+				}
+
+				// November 2023: password & client_credentials
+				if len(newValue) > 0 {
+					api.Authentication.GrantType = newValue
+				}
+
+				log.Printf("[DEBUG] Got special app build grant type: %s", newValue)
+			}
+
 			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 				Name:        "client_id",
 				Value:       "",
@@ -1040,8 +1058,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				},
 			})
 
-			//if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
-			//.AuthorizationUrl
+			/*
 			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 				Name:        "client_id",
 				Value:       "",
@@ -1053,6 +1070,8 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 					Type: securitySchemes["Oauth2"].Value.Scheme,
 				},
 			})
+			*/
+
 			api.Authentication.Parameters = append(api.Authentication.Parameters, AuthenticationParams{
 				Name:        "client_secret",
 				Value:       "",
@@ -1064,6 +1083,9 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 					Type: securitySchemes["Oauth2"].Value.Scheme,
 				},
 			})
+
+			// Check for securitySchemes
+			//} else if securitySchemes["Oauth2"] != nil {
 		} else if securitySchemes["jwt"] != nil {
 			if len(securitySchemes["jwt"].Value.In) > 0 {
 				api.Authentication.TokenUri = securitySchemes["jwt"].Value.In

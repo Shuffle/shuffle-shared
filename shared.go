@@ -15900,8 +15900,18 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						workflowExecution.Status = "ABORTED"
 						workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
 
+						workflowExecution.Results = append(workflowExecution.Results, ActionResult{
+							Action:        action,
+							ExecutionId:   workflowExecution.ExecutionId,
+							Authorization: workflowExecution.Authorization,
+							Result:        fmt.Sprintf(`{"success": false, "reason": "Failed running oauth2 request to refresh tokens. Are your credentials and URL correct? Contact support@shuffler.io if this persists.", "details": "%s"}`, strings.ReplaceAll(fmt.Sprintf("%s", err), `"`, `\"`)),
+							StartedAt:     workflowExecution.StartedAt,
+							CompletedAt:   workflowExecution.StartedAt,
+							Status:        "FAILURE",
+						})
+
 						// Abort the workflow due to auth being bad
-						return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), err
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), nil 
 
 
 					} else {
