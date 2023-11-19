@@ -184,3 +184,404 @@ Shuffle may temporarily suspend or limit access to the Platform if usage: (i) ex
 
 If you want this contract in PDF format to sign instead of as a digital End User License Agreement, please contact us at support@shuffler.io`)
 }
+
+// Should become a proper backend thing LOL
+func GetUsecaseData() string {
+	return (`[
+    {
+        "name": "1. Collect",
+        "color": "#c51152",
+        "list": [
+            {
+                "name": "Email management",
+				"priority": 100,
+				"type": "communication",
+				"last": "cases", 
+                "items": {
+                    "name": "Release a quarantined message",
+                    "items": {}
+                }
+            },
+            {
+                "name": "EDR to ticket",
+				"priority": 100,
+				"type": "edr",
+				"last": "cases",
+                "items": {
+                    "name": "Get host information",
+                    "items": {}
+                }
+            },
+            {
+                "name": "SIEM to ticket",
+				"priority": 100,
+				"type": "siem",
+				"last": "cases",
+				"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
+				"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
+				"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
+				"reference_image": "/images/detectionframework.png",
+                "items": {}
+            },
+            {
+				"type": "cases",
+				"last": "cases",
+                "name": "2-way Ticket synchronization",
+				"priority": 60,
+                "items": {}
+            },
+            {
+                "name": "ChatOps",
+								"priority": 70,
+								"type": "communication",
+								"last": "cases",
+                "items": {}
+            },
+            {
+                "name": "Threat Intel received",
+								"priority": 50,
+								"type": "intel",
+								"last": "cases",
+                "items": {}
+            },
+            {
+                "name": "Assign tickets",
+				"type": "iam",
+				"last": "cases",
+				"priority": 30,
+                "items": {}
+            },
+            {
+                "name": "Firewall alerts",
+				"priority": 90,
+				"type": "network",
+				"last": "cases",
+                "items": {
+                    "name": "URL filtering",
+                    "items": {}
+                }
+            },
+            {
+                "name": "IDS/IPS alerts",
+				"type": "network",
+				"last": "cases",
+				"priority": 30,
+                "items": {
+                    "name": "Manage policies",
+                    "items": {}
+                }
+            }
+        ]
+    },
+    {
+        "name": "2. Enrich",
+        "color": "#f4c20d",
+        "list": [
+            {
+                "name": "Internal Enrichment",
+				"priority": 100,
+				"type": "intel",
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            },
+            {
+                "name": "External historical Enrichment",
+				"priority": 90,
+				"type": "intel",
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Sandbox",
+								"priority": 60,
+								"type": "intel",
+                "items": {
+                    "name": "Use a sandbox to analyze",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Realtime",
+								"priority": 50,
+								"type": "intel",
+                "items": {
+                    "name": "Analyze screenshots, websites etc. in realtime",
+                    "items": {}
+                }
+						}
+        ]
+    },
+    {
+        "name": "3. Detect",
+        "color": "#3cba54",
+        "list": [
+            {
+                "name": "Search SIEM (Sigma)",
+				"priority": 90,
+				"type": "siem",
+				"last": "cases",
+                "items": {
+                    "name": "Endpoint",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Search EDR (OSQuery)",
+				"type": "edr",
+				"priority": 90,
+				"last": "cases",
+                "items": {}
+            },
+            {
+                "name": "Search emails (Sublime)",
+				"priority": 90,
+				"type": "communication",
+				"last": "cases",
+                "items": {
+                    "name": "Check headers and IOCs",
+                    "items": {}
+                }
+            },
+            {
+                "name": "Automate Threathunt (Kestrel)",
+				"priority": 50,
+				"type": "edr",
+				"last": "cases",
+                "items": {}
+            },
+            {
+                "name": "Search IOCs (ioc-finder)",
+				"priority": 50,
+				"type": "intel",
+				"last": "cases",
+                "items": {}
+            },
+            {
+                "name": "Search files (Yara)",
+				"priority": 50,
+				"type": "intel",
+				"last": "cases",
+                "items": {}
+            },
+            {
+                "name": "Memory Analysis (Volatility)",
+								"priority": 50,
+								"type": "intel",
+                "items": {}
+            },
+            {
+                "name": "IDS & IPS (Snort/Surricata)",
+								"priority": 50,
+								"type": "network",
+				"last": "cases",
+                "items": {}
+            },
+            {
+                "name": "Honeypot access",
+				"priority": 50,
+				"type": "network",
+				"last": "cases",
+                "items": {
+                    "name": "...",
+                    "items": {}
+                }
+            }
+        ]
+    },
+    {
+        "name": "4. Respond",
+        "color": "#4885ed",
+        "list": [
+            {
+                "name": "Eradicate malware",
+				"priority": 90,
+				"type": "intel",
+				"last": "edr",
+                "items": {}
+            },
+            {
+                "name": "Quarantine host(s)",
+				"priority": 90,
+				"type": "edr",
+                "items": {}
+            },
+            {
+                "name": "Update Outdated Software",
+				"priority": 70,
+				"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Block IPs, URLs, Domains and Hashes",
+				"priority": 90,
+				"type": "network",
+                "items": {}
+            },
+            {
+                "name": "Trigger scans",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Update indicators (FW, EDR, SIEM...)",
+				"priority": 50,
+				"type": "intel",
+				"last": "siem",
+                "items": {}
+            },
+            {
+                "name": "Autoblock activity when threat intel is received",
+								"priority": 50,
+								"type": "intel",
+								"last": "iam",
+                "items": {}
+            },
+            {
+                "name": "Lock/Delete/Reset account",
+								"priority": 50,
+								"type": "iam",
+                "items": {}
+            },
+            {
+                "name": "Lock vault",
+								"priority": 50,
+								"type": "iam",
+                "items": {}
+            },
+            {
+                "name": "Increase authentication",
+								"priority": 50,
+								"type": "iam",
+                "items": {}
+            },
+            {
+                "name": "Get policies from assets",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Run ansible scripts",
+								"type": "assets",
+								"priority": 50,
+                "items": {}
+            }
+        ]
+    },
+    {
+        "name": "5. Verify",
+        "color": "#7f00ff",
+        "list": [
+            {
+                "name": "Discover vulnerabilities",
+								"priority": 80,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Discover assets",
+								"priority": 80,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Ensure policies are followed",
+								"priority": 80,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Find Inactive users",
+								"priority": 50,
+								"type": "iam",
+                "items": {}
+            },
+            {
+                "name": "Botnet tracker",
+								"priority": 50,
+								"type": "network",
+                "items": {}
+            },
+            {
+                "name": "Ensure access rights match HR systems",
+								"priority": 50,
+								"type": "iam",
+                "items": {}
+            },
+            {
+                "name": "Ensure onboarding is followed",
+								"priority": 50,
+								"type": "iam",
+                "items": {}
+            },
+            {
+                "name": "Track third party SaaS apps",
+								"priority": 50,
+								"type": "iam",
+                "items": {}
+            },
+            {
+                "name": "Devices used for your cloud account",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Too much access in GCP/Azure/AWS other clouds",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Certificate validation",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Monitor domain creation and expiration",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Monitor new DNS entries for domain with passive DNS",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Monitor and track password dumps",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Monitor for mentions of domain on darknet sites",
+								"priority": 50,
+								"type": "assets",
+                "items": {}
+            },
+            {
+                "name": "Reporting",
+								"priority": 50,
+								"type": "assets",
+								"keywords": ["report", "reporting", "sheets", "excel"],
+								"keyword_matches": 1,
+                "items": {
+                    "name": "Monthly reports",
+                    "items": {
+                        "name": "...",
+                        "items": {}
+                    }
+                }
+            }
+        ]
+    }
+]`)
+}
