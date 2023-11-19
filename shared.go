@@ -16880,7 +16880,8 @@ func SetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
-	value.Type = strings.ToLower(value.Type)
+	// Trim and lower
+	value.Type = strings.ToLower(strings.TrimSpace(value.Type))
 	if value.Type == "email" || value.Type == "comms" {
 		value.Type = "communication"
 	}
