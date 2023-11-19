@@ -1411,6 +1411,55 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	return finalWorkflowExecution
 }
 
+func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowExecution, error) {
+	nameKey := "workflowexecution"
+	cacheKey := fmt.Sprintf("%s_auth_%s", nameKey, authId)
+
+	workflowExecution := &WorkflowExecution{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			//log.Printf("CACHEDATA: %s", cacheData)
+			err = json.Unmarshal(cacheData, &workflowExecution)
+			if err == nil {
+				return workflowExecution, nil
+			}
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		return workflowExecution, errors.New("Not implemented")
+	} else {
+		// Google datastore search based on "authorization ="
+		allExecutions := []*WorkflowExecution{}
+		q := datastore.NewQuery(nameKey).Filter("authorization =", authId).Limit(1)
+		_, err := project.Dbclient.GetAll(ctx, q, &allExecutions)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow execution by auth: %s", err)
+			return nil, err
+		} else {
+			if len(allExecutions) > 0 {
+				workflowExecution = allExecutions[0]
+			}
+		}
+	}
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Caching workflow execution %s", cacheKey)
+		workflowExecutionJson, err := json.Marshal(workflowExecution)
+		if err == nil {
+			err := SetCache(ctx, cacheKey, workflowExecutionJson, 10)
+			if err != nil {
+				log.Printf("[WARNING] Failed caching workflow execution %s: %s", cacheKey, err)
+			}
+		}
+	}
+
+
+	return workflowExecution, nil
+}
+
 func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, error) {
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
