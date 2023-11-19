@@ -13667,9 +13667,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	result.Success = true
 	result.Meta = githubResp
 
-	//applog.Infof(ctx, string(body))
-	//applog.Infof(ctx, "Url: %s", docPath)
-	//log.Printf("[INFO] GOT BODY OF LENGTH %d", len(string(body)))
 
 	result.Reason = string(body)
 	b, err := json.Marshal(result)
@@ -13678,8 +13675,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Not caching 404s
-	//if Result.Success && !strings.Contains(string(b), "404: Not Found") {
 	err = SetCache(ctx, cacheKey, b, 30)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for doc %s: %s", location[4], err)
