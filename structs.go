@@ -38,6 +38,17 @@ type QueryInput struct {
 	TimeStarted int64        `json:"time_started,omitempty"`
 	TimeEnded   int64        `json:"time_ended,omitempty"`
 	Formatting  string       `json:"formatting,omitempty"`
+
+	// For OpenAI assistant with Shuffle labels
+	ThreadId	string       `json:"thread_id,omitempty"`
+	RunId 		string 		 `json:"run_id,omitempty"`
+}
+
+type AtomicOutput struct {
+	Success bool   `json:"success"`
+	Reason string `json:"reason"`
+	ThreadId string `json:"thread_id"`
+	RunId string `json:"run_id"`
 }
 
 type ExecutionRequestWrapper struct {

@@ -1656,7 +1656,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 			}
 		}
 
-		log.Printf("[ERROR] Failed making App reader for %s: %s", fullParsedPath, err)
+		//log.Printf("[ERROR] Failed making App reader for %s: %s", fullParsedPath, err)
 		return workflowApp, err
 	}
 
@@ -1672,7 +1672,7 @@ func getCloudFileApp(ctx context.Context, workflowApp WorkflowApp, id string) (W
 		return workflowApp, err
 	}
 
-	log.Printf("[DEBUG] Got new file data for app with ID %s from filepath gs://%s/%s with %d actions", id, project.BucketName, fullParsedPath, len(workflowApp.Actions))
+	//log.Printf("[DEBUG] Got new file data for app with ID %s from filepath gs://%s/%s with %d actions", id, project.BucketName, fullParsedPath, len(workflowApp.Actions))
 	if project.CacheDb {
 		data, err := json.Marshal(workflowApp)
 		if err != nil {
@@ -1717,7 +1717,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 						workflowApp = &tmpApp
 						return workflowApp, nil
 					} else {
-						log.Printf("[DEBUG] Failed remote loading app '%s' (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
+						//log.Printf("[DEBUG] Failed remote loading app '%s' (%s) from file (cache): %s", workflowApp.Name, workflowApp.ID, err)
 					}
 				} else {
 					return workflowApp, nil
@@ -1756,7 +1756,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 		workflowApp = &wrapped.Source
 	} else {
-		log.Printf("[DEBUG] Getting app from datastore for ID %s", id)
+		//log.Printf("[DEBUG] Getting app from datastore for ID %s", id)
 
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		err := project.Dbclient.Get(ctx, key, workflowApp)
@@ -1768,7 +1768,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 				return workflowApp, errors.New("App doesn't exist")
 			}
 
-			log.Printf("[WARNING] Failed getting app in GetApp with name %s and ID %s. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
+			//log.Printf("[WARNING] Failed getting app in GetApp with name %s and ID %s. Actions: %d. Getting if EITHER is bad or 0. Err: %s", workflowApp.Name, id, len(workflowApp.Actions), err)
 			for _, app := range user.PrivateApps {
 				if app.ID == id {
 					workflowApp = &app
@@ -1781,10 +1781,10 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 				tmpApp, err := getCloudFileApp(ctx, *workflowApp, id)
 
 				if err == nil {
-					log.Printf("[DEBUG] Got app %s (%s) with %d actions from file", workflowApp.Name, workflowApp.ID, len(tmpApp.Actions))
+					//log.Printf("[DEBUG] Got app %s (%s) with %d actions from file", workflowApp.Name, workflowApp.ID, len(tmpApp.Actions))
 					workflowApp = &tmpApp
 				} else {
-					log.Printf("[DEBUG] Failed remote loading app  %s (%s) from file: %s", workflowApp.Name, workflowApp.ID, err)
+					//log.Printf("[DEBUG] Failed remote loading app  %s (%s) from file: %s", workflowApp.Name, workflowApp.ID, err)
 				}
 
 			} else {
@@ -4597,7 +4597,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					log.Printf("[INFO] App %s (%s) doesn't have actions (1) - check filepath", innerApp.Name, innerApp.ID)
+					//log.Printf("[INFO] App %s (%s) doesn't have actions (1) - check filepath", innerApp.Name, innerApp.ID)
 
 					foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
 					if err == nil {
@@ -4676,7 +4676,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if len(innerApp.Actions) == 0 {
-					log.Printf("[INFO] App %s (%s) doesn't have actions (2) - check filepath", innerApp.Name, innerApp.ID)
+					//log.Printf("[INFO] App %s (%s) doesn't have actions (2) - check filepath", innerApp.Name, innerApp.ID)
 
 					foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
 					if err == nil {
@@ -4769,7 +4769,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		var newApps = make([]WorkflowApp, len(allKeys))
 		err = project.Dbclient.GetMulti(ctx, allKeys, newApps)
 		if err != nil {
-			log.Printf("[ERROR] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
+			//log.Printf("[ERROR] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
 		}
 
 		log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
@@ -4779,7 +4779,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		// 2. Parse OpenAPI for it to get the actions
 		for appIndex, app := range newApps {
 			if len(app.Actions) == 0 && len(app.Name) > 0 {
-				log.Printf("[WARNING] %s has %d actions (%s). Getting directly.", app.Name, len(app.Actions), app.ID)
+				//log.Printf("[WARNING] %s has %d actions (%s). Getting directly.", app.Name, len(app.Actions), app.ID)
 
 				newApp, err := GetApp(ctx, app.ID, user, true)
 				if err != nil {
@@ -4855,7 +4855,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 		if len(notAppendedApps) > 0 {
 			//log.Printf("[INFO] Not appended apps (%d) for org %s (%s): %s", len(notAppendedApps), user.ActiveOrg.Name, user.ActiveOrg.Id, strings.Join(notAppendedApps, ", "))
-			log.Printf("[WARNING] %d non-allowed, but activated apps for org %s (%s). Removed.", len(notAppendedApps), user.ActiveOrg.Name, user.ActiveOrg.Id)
+			//log.Printf("[WARNING] %d non-allowed, but activated apps for org %s (%s). Removed.", len(notAppendedApps), user.ActiveOrg.Name, user.ActiveOrg.Id)
 		}
 
 		allApps = append(allApps, newApps...)
