@@ -651,6 +651,13 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		bodyParsing = ""
 	}
 
+	// Removes duplicate file IDs
+	if strings.Contains(parameterData, `, file_id=""`) && strings.Contains(fileParameter, ", file_id") {
+		parameterData = strings.Replace(parameterData, `, file_id=""`, "", -1)
+	} else if strings.Contains(parameterData, `, file_id`) && strings.Contains(fileParameter, ", file_id") {
+		parameterData = strings.Replace(parameterData, ", file_id", "", -1)
+	}
+
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
@@ -665,8 +672,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Handles default return value
-	//handleFileString := "try:\n            print(ret.json())\n            return ret.json()\n        except json.decoder.JSONDecodeError as e:\n            print(f\"[WARNING] JSON Exception in return: {e}\")\n            return ret.text\n        except Exception as e:\n            print(f\"[WARNING] Exception in return: {e}\")\n            return ret.text"
-
 	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.text"
 
 	parsedDataCurlParser := ""
@@ -821,9 +826,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	)
 
 	// Use lowercase when checking
-	//if strings.Contains(strings.ToLower(functionname), "user") {
+	//if strings.Contains(strings.ToLower(functionname), "upload_a_file") {
 	//	log.Printf("\n%s", data)
 	//}
+	
 
 	return functionname, data
 }

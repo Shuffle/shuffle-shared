@@ -15476,8 +15476,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					newAuth, err := GetOauth2ApplicationPermissionToken(ctx, user, curAuth) 
 					if err != nil {
 						log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: %s. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
-						workflowExecution.Status = "ABORTED"
-						workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
+						//workflowExecution.Status = "ABORTED"
+						//workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
 
 						workflowExecution.Results = append(workflowExecution.Results, ActionResult{
 							Action:        action,
