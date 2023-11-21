@@ -2820,6 +2820,9 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+
+
+
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
@@ -2842,9 +2845,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Query for the specifci workflowId
-	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId).Order("-started_at").Limit(30)
-	//q := datastore.NewQuery("workflowexecution").Filter("workflow_id =", fileId)
-	maxAmount := 100
+	maxAmount := 50 
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
 		val, err := strconv.Atoi(top[0])
@@ -2856,6 +2857,14 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	if maxAmount > 1000 {
 		maxAmount = 1000
 	}
+
+	// Add timeout of 6 seconds to the ctx
+	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
+	defer cancel()
+	maxAmount = 1000
+
+
+
 
 	cursor := ""
 	cursorList, cursorOk := request.URL.Query()["cursor"]
@@ -15420,7 +15429,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				// Check if it already has a new token in cache from same auth current execution
 
 				setAuth := false
-				executionAuthKey := fmt.Sprintf("%s", curAuth.Id)
+				executionAuthKey := fmt.Sprintf("oauth2_%s", curAuth.Id)
 
 				log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
 				execAuthData, err := GetCache(ctx, executionAuthKey)
@@ -15510,7 +15519,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				
 						marshalledAuth, err := json.Marshal(newAuth)
 						if err == nil {
-							err = SetCache(ctx, executionAuthKey, marshalledAuth, 60)
+							err = SetCache(ctx, executionAuthKey, marshalledAuth, 1)
 							if err != nil {
 								log.Printf("[ERROR] Failed setting cache for %s: %s", executionAuthKey, err)
 							}

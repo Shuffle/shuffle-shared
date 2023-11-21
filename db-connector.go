@@ -1400,6 +1400,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		}
 	}
 
+	// Sort results based on CompletedAt
+	sort.Slice(workflowExecution.Results, func(i, j int) bool {
+		return workflowExecution.Results[i].CompletedAt < workflowExecution.Results[j].CompletedAt
+	})
+
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
 	if workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
@@ -7885,6 +7890,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 
 	} else {
 
+
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)
@@ -7896,23 +7902,34 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			query = query.Start(outputcursor)
 		}
 
+		// Create a timeout to prevent the query from taking more than 5 seconds total
+
 		cursorStr := ""
 		for {
 			it := project.Dbclient.Run(ctx, query)
 
+			breakOuter := false
 			for {
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
-					//log.Printf("[WARNING] Error getting workflow executions: %s", err)
+					if strings.Contains(err.Error(), "context deadline exceeded") {
+						log.Printf("[WARNING] Error getting workflow executions: %s", err)
+						breakOuter = true 
+					}
+
 					break
 				}
 
 				executions = append(executions, innerWorkflow)
 			}
 
+			if breakOuter {
+				break
+			}
+
 			if err != iterator.Done {
-				//log.Printf("Breaking due to no more iterator")
+				//log.Printf("[DEBUG] Breaking due to no more iterator")
 				//log.Printf("[INFO] Failed fetching results: %v", err)
 				//break
 			}
@@ -7981,7 +7998,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				// Get next cursor
 				nextCursor, err := it.Cursor()
 				if err != nil {
-					log.Printf("[WARNING] Cursorerror: %s", err)
+					log.Printf("[ERROR] Cursorerror: %s", err)
 				} else {
 					cursor = fmt.Sprintf("%s", nextCursor)
 				}

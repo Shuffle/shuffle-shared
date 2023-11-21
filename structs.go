@@ -3600,6 +3600,9 @@ type WorkflowNodeRelations struct {
 // Anonymized data that is sent to the cloud
 // as backup. Saved in your organization and region
 type BackupJob struct {
+	Version string `json:"version"` 		// Instance version
+	LastSignin int64 `json:"last_signin"` 	// Last time user signed in
+
 	Stats ExecutionInfo `json:"stats"`
 	Workflows []Workflow `json:"workflows"`
 	Apps []WorkflowApp `json:"apps"`
