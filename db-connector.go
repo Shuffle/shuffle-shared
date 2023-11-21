@@ -943,6 +943,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// New struct, to not add body, author etc
+	log.Printf("[DEBUG][%s] Adding execution to database, not just cache. Workflow: %s (%s)", workflowExecution.ExecutionId, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
 	if project.DbType == "opensearch" {
 		// Need to fix an indexing problem?
 		// "mapper [workflow.actions.position.x] cannot be changed from type [float] to [long]"
@@ -1400,10 +1401,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		}
 	}
 
-	// Sort results based on CompletedAt
-	sort.Slice(workflowExecution.Results, func(i, j int) bool {
-		return workflowExecution.Results[i].CompletedAt < workflowExecution.Results[j].CompletedAt
-	})
 
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
@@ -1411,6 +1408,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode", workflowExecution.ExecutionId)
 
 		finalWorkflowExecution.Status = "FINISHED"
+		if finalWorkflowExecution.CompletedAt == 0 {
+			finalWorkflowExecution.CompletedAt = time.Now().Unix()
+		}
 	}
 
 	return finalWorkflowExecution
