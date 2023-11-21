@@ -3661,6 +3661,88 @@ func SetSession(ctx context.Context, user User, value string) error {
 	return nil
 }
 
+func FindWorkflowByName(ctx context.Context, name string) ([]Workflow, error) {
+	var workflows []Workflow
+
+	if project.DbType == "opensearch" {
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"name": name,
+				},
+			},
+		}
+
+		var buf bytes.Buffer
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return workflows, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix("workflow"))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get workflows named): %s", err)
+			return workflows, err
+		}
+
+		defer res.Body.Close()
+
+		if res.StatusCode == 404 {
+			return workflows, nil
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return workflows, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return workflows, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflows, err
+		}
+
+		wrapped := WorkflowSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflows, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			workflows = append(workflows, hit.Source)
+		}	
+	} else {
+		q := datastore.NewQuery("workflow").Filter("name =", name).Limit(100)
+
+		_, err := project.Dbclient.GetAll(ctx, q, &workflows)
+		if err != nil && len(workflows) == 0 {
+			return []Workflow{}, err
+		}
+	}
+
+	return workflows, nil
+}
+
 func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, error) {
 	var apps []WorkflowApp
 

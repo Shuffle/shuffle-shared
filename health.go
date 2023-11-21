@@ -387,6 +387,37 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 	return appHealth, nil
 }
 
+func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) error {
+	if project.Environment == "cloud" {
+		log.Printf("[DEBUG] Cloud environment. Not deleting junk ops workflow for now")
+		return errors.New("Cloud environment. Not deleting junk ops workflow for now")
+	}
+
+	workflows, err := FindWorkflowByName(ctx, "SHUFFLE_INTERNAL_OPS_WORKFLOW")
+	if err != nil {
+		log.Printf("[ERROR] Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s", err)
+		return err
+	}
+
+	if len(workflows) == 0 {
+		log.Printf("[DEBUG] Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
+		return errors.New("Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
+	}
+
+	for _, workflow := range workflows {
+		// delete these workflows
+		err = DeleteKey(ctx, "workflow", workflow.ID)
+		if err != nil {
+			log.Printf("[DEBUG] Failed deleting key %s", workflow.ID)
+			return err
+		} else {
+			log.Printf("[INFO] Deleted junk workflow with id: %s", workflow.ID)
+		}
+	}
+
+	return nil
+}
+
 func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1013,6 +1044,12 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		time.Sleep(2 * time.Second)
 	}
 
+	// Delete junk workflows
+	err = deleteJunkOpsWorkflow(ctx, workflowHealth)
+	if err != nil {
+		log.Printf("[ERROR] Failed deleting junk workflows: %s", err)
+	}
+
 	return workflowHealth, nil
 }
 
@@ -1163,11 +1200,10 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	}
 
 	// {"name":"demo","description":"demo","blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}
-	jsonData := `{"name":"demo","description":"demo","blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}`
+	jsonData := `{"name":"SHUFFLE_INTERNAL_OPS_WORKFLOW","description":"demo","hidden": true,"blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}`
 
 	// res, err := http.Post(url, "application/json", bytes.NewBuffer([]byte(jsonData)))
 	req, err := http.NewRequest("POST", baseUrl+"/api/v1/workflows", bytes.NewBuffer([]byte(jsonData)))
-	log.Printf("[SANITY CHECK] req method is: %s", req.Method)
 
 	if err != nil {
 		log.Println("[ERROR] creating HTTP request:", err)
