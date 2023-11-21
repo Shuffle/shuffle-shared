@@ -1200,7 +1200,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	}
 
 	// {"name":"demo","description":"demo","blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}
-	jsonData := `{"name":"SHUFFLE_INTERNAL_OPS_WORKFLOW","description":"demo","hidden": true,"blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}`
+	jsonData := `{"name":"SHUFFLE_INTERNAL_OPS_WORKFLOW","description":"demo","hidden":true,"blogpost":"","status":"test","default_return_value":"","usecase_ids":[]}`
 
 	// res, err := http.Post(url, "application/json", bytes.NewBuffer([]byte(jsonData)))
 	req, err := http.NewRequest("POST", baseUrl+"/api/v1/workflows", bytes.NewBuffer([]byte(jsonData)))
