@@ -4722,6 +4722,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	// Find public apps
+
+	appsAdded := []string{}
+
+	// Search for apps with these names, not all public ones
+	importantApps := []string{"Shuffle Tools", "http", "email"}
+
 	publicApps := []WorkflowApp{}
 	publicAppsKey := fmt.Sprintf("public_apps")
 	if project.CacheDb {
@@ -4740,65 +4746,74 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	// May be better to just list all, then set to true?
 	// Is this the slow one?
 	if len(publicApps) == 0 {
-		query := datastore.NewQuery(nameKey).Filter("public =", true).Limit(queryLimit)
-		for {
-			it := project.Dbclient.Run(ctx, query)
-
+		for _, name := range importantApps {
+			log.Printf("[INFO] Searching for public app %s", name)
+			query := datastore.NewQuery(nameKey).Filter("Name =", name).Limit(queryLimit)
 			for {
-				innerApp := WorkflowApp{}
-				_, err := it.Next(&innerApp)
-				if err != nil {
-					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						//log.Printf("[WARNING] Error in public app load: %s", err)
-						//continue
-					} else {
+				it := project.Dbclient.Run(ctx, query)
 
-						//log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
+				for {
+					innerApp := WorkflowApp{}
+					_, err := it.Next(&innerApp)
+					if err != nil {
+						//log.Printf("[WARNING] No more apps (public). Amount found: %d", len(publicApps)) 
+
+						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							//log.Printf("[WARNING] Error in public app load: %s", err)
+							//continue
+						} else {
+
+							//log.Printf("[WARNING] No more apps (public) - Breaking: %s.", err)
+							break
+						}
+					}
+
+					//log.Printf("[DEBUG] Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
+
+					if innerApp.Name == "Shuffle Subflow" {
+						continue
+					}
+
+					if innerApp.Public == false && innerApp.Sharing == false {
+						continue
+					}
+
+					if len(innerApp.Actions) == 0 {
+						foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
+						if err == nil {
+							innerApp = foundApp
+						}
+					}
+
+					//log.Printf("[DEBUG] Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
+					//publicApps = append(publicApps, innerApp)
+					//allApps, innerApp = fixAppAppend(allApps, innerApp)
+
+					publicApps, innerApp = fixAppAppend(allApps, innerApp)
+
+				}
+
+				if err != iterator.Done {
+				}
+
+				// Get the cursor for the next page of results.
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("Cursorerror: %s", err)
+					break
+				} else {
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if cursorStr == nextStr {
 						break
 					}
+
+					cursorStr = nextStr
+					query = query.Start(nextCursor)
 				}
 
-				if innerApp.Name == "Shuffle Subflow" {
-					continue
-				}
-
-				if len(innerApp.Actions) == 0 {
-					//log.Printf("[INFO] App %s (%s) doesn't have actions (2) - check filepath", innerApp.Name, innerApp.ID)
-
-					foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
-					if err == nil {
-						innerApp = foundApp
-					}
-
-					//log.Printf("%s\n%s - %s\n%d\n", string(data), innerApp.Name, innerApp.ID, len(innerApp.Actions))
-				}
-
-				allApps, innerApp = fixAppAppend(allApps, innerApp)
-
-			}
-
-			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching results: %v", err)
-				//break
-			}
-
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("Cursorerror: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
+				if len(allApps) > maxLen {
 					break
 				}
-
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
-			}
-
-			if len(allApps) > maxLen {
-				break
 			}
 		}
 
@@ -4815,9 +4830,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	//allApps = append(allApps, publicApps...)
+	allApps = append(allApps, publicApps...)
 	//log.Printf("Active apps: %d", len(org.ActiveApps))
-	appsAdded := []string{}
+	/*
 	if orgErr == nil {
 		for _, publicApp := range publicApps {
 			if ArrayContains(org.ActiveApps, publicApp.ID) {
@@ -4826,6 +4841,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		}
 	}
+	*/
+
+
+
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	// Instead loading in all public apps which is shared between all orgs
