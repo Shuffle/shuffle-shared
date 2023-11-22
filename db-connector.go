@@ -48,6 +48,7 @@ import (
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
+var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
 
 var maxCacheSize = 1020000
 
@@ -4746,9 +4747,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	// May be better to just list all, then set to true?
 	// Is this the slow one?
 	if len(publicApps) == 0 {
-		for _, name := range importantApps {
-			log.Printf("[INFO] Searching for public app %s", name)
-			query := datastore.NewQuery(nameKey).Filter("Name =", name).Limit(queryLimit)
+		//for _, name := range importantApps {
+			//query := datastore.NewQuery(nameKey).Filter("Name =", name).Limit(queryLimit)
+			query := datastore.NewQuery(nameKey).Filter("public =", true).Limit(queryLimit)
 			for {
 				it := project.Dbclient.Run(ctx, query)
 
@@ -4768,14 +4769,20 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						}
 					}
 
-					//log.Printf("[DEBUG] Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
 
 					if innerApp.Name == "Shuffle Subflow" {
 						continue
 					}
 
-					if innerApp.Public == false && innerApp.Sharing == false {
-						continue
+					// Special fix for other regions for these reserved apps
+					if innerApp.Public == false && innerApp.Sharing == false && gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+						if ArrayContains(importantApps, innerApp.Name) {
+							innerApp.Public = true 
+							innerApp.Sharing = true
+						} else {
+							log.Printf("[INFO] App %s is not public", innerApp.Name)
+							continue
+						}
 					}
 
 					if len(innerApp.Actions) == 0 {
@@ -4787,9 +4794,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 					//log.Printf("[DEBUG] Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
 					//publicApps = append(publicApps, innerApp)
-					//allApps, innerApp = fixAppAppend(allApps, innerApp)
-
-					publicApps, innerApp = fixAppAppend(allApps, innerApp)
+					//publicApps, innerApp = fixAppAppend(allApps, innerApp)
+					allApps, innerApp = fixAppAppend(allApps, innerApp)
 
 				}
 
@@ -4815,7 +4821,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					break
 				}
 			}
-		}
+		//}
 
 		newbody, err := json.Marshal(publicApps)
 		if err != nil {
@@ -4830,9 +4836,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	allApps = append(allApps, publicApps...)
-	//log.Printf("Active apps: %d", len(org.ActiveApps))
-	/*
+	//log.Printf("All apps: %d", len(allApps))
+	//allApps = append(allApps, publicApps...)
+	//log.Printf("All apps: %d", len(allApps))
+
 	if orgErr == nil {
 		for _, publicApp := range publicApps {
 			if ArrayContains(org.ActiveApps, publicApp.ID) {
@@ -4841,10 +4848,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		}
 	}
-	*/
-
-
-
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	// Instead loading in all public apps which is shared between all orgs
@@ -4985,7 +4988,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			continue
 		}
 
-		//log.Printf("[INFO] Found duplicate app: %s. Dedup index: %d", app.Name, replaceIndex)
+		//log.Printf("[INFO] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, replaceIndex)
 		// If owner of dedup, don't change
 		if dedupedApps[replaceIndex].Owner == user.Id {
 			//log.Printf("[INFO] Owner of deduped app is user. Not replacing.")
@@ -4993,14 +4996,14 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 
 		if app.Edited > dedupedApps[replaceIndex].Edited {
-			//log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
+			log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
 			dedupedApps[replaceIndex] = app
 			continue
 		}
 
 		// Check if image, and other doesn't have
 		if len(dedupedApps[replaceIndex].LargeImage) == 0 && len(app.LargeImage) > 0 {
-			//log.Printf("[INFO] Replacing deduped app with image in get apps (2): %s", app.Name)
+			log.Printf("[INFO] Replacing deduped app with image in get apps (2): %s", app.Name)
 			dedupedApps[replaceIndex] = app
 			continue
 		}

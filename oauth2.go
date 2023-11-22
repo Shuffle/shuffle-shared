@@ -3590,7 +3590,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		return appAuth, err
 	}
 
-	log.Printf("[DEBUG] Refresh Response for %s: %d", tokenUrl, newresp.StatusCode)
+	log.Printf("[DEBUG] Oauth2 application auth Response for %s: %d", tokenUrl, newresp.StatusCode)
 
 	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
@@ -3601,7 +3601,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	if newresp.StatusCode >= 300 {
 		// Printing on error to handle in future instances
 		log.Printf("[ERROR] Oauth2 application data for %s: %#v", tokenUrl, string(body))
-		return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh for URL (refresh) %s: %d. Message: %s", tokenUrl, newresp.StatusCode, body))
+		return appAuth, errors.New(fmt.Sprintf("Bad status code when getting access token for token URL %s: %d. Message: %s", tokenUrl, newresp.StatusCode, body))
 	}
 
 	if strings.Contains(string(body), "error") {

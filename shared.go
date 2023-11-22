@@ -1096,11 +1096,11 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	if len(appAuth.Id) == 0 {
-
 		// To not override, we should use an md5 based on the input fields + org to create the ID
 		fielddata := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, appAuth.Label)
 		for _, field := range appAuth.Fields {
 			fielddata += field.Key
+			fielddata += field.Value
 		}
 
 		// Happens in very rare circumstances
@@ -1276,11 +1276,19 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		// For application permissions set in Oauth2 frontend
 		// This should contain client-id, client-secret, scopes, token-url
 		// May need to also know how the auth actually works (e.g. basic auth or something else)
+
+		appAuth.App.AppVersion = app.AppVersion
 		log.Printf("[DEBUG] OAUTH2-APP for workflow %s. User: %s (%s). App: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id, appAuth.App.Name, appAuth.App.ID)
 
-		//resp.WriteHeader(200)
-		//resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully set up authentication", "id": "%s"}`, appAuth.Id)))
-		//return
+		// Testing if the auth works
+		_, err := GetOauth2ApplicationPermissionToken(ctx, user, appAuth) 
+		if err != nil {
+			log.Printf("\n[WARNING] Failed getting oauth2 application permission token: %s\n\n", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed authorization. Is your client ID, client secret and scope correct? Raw: %s"}`, strings.Replace(err.Error(), "\"", "\\\"", -1))))
+			return
+		}
+
 	} else {
 		// Check if the items are correct
 		for _, field := range appAuth.Fields {
@@ -2861,10 +2869,6 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	// Add timeout of 6 seconds to the ctx
 	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
 	defer cancel()
-	maxAmount = 1000
-
-
-
 
 	cursor := ""
 	cursorList, cursorOk := request.URL.Query()["cursor"]
@@ -8902,13 +8906,36 @@ func GetRequestIp(r *http.Request) string {
 	if forwardedFor != "" {
 		// The X-Forwarded-For header can contain a comma-separated list of IP addresses.
 		// The client's IP is usually the first one.
-		return strings.Split(forwardedFor, ",")[0]
+		stringSplit := strings.Split(forwardedFor, ",")
+		if len(stringSplit) > 1 {
+			log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s", forwardedFor)
+			return stringSplit[0]
+		} else {
+			return forwardedFor
+		}
 	}
 
 	// Check for the X-Real-IP header
 	realIP := r.Header.Get("X-Real-IP")
 	if realIP != "" {
 		return realIP
+	}
+
+	realIP = r.Header.Get("CF-Connecting-IP")
+	if realIP != "" {
+		return realIP
+	}
+
+	realIP = r.Header.Get("X-Appengine-User-Ip")
+	if realIP != "" {
+		return realIP
+	}
+
+	// Loop through and find headers with "IP" in them
+	for k, v := range r.Header {
+		if strings.Contains(strings.ToLower(k), "ip") {
+			log.Printf("[DEBUG] Found useful IP header %s: %s", k, v)
+		}
 	}
 
 	// If neither header is present, fall back to using the RemoteAddr field.
