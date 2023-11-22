@@ -8897,6 +8897,34 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 	return baseSSOUrl
 }
 
+func GetRequestIp(r *http.Request) string {
+	forwardedFor := r.Header.Get("X-Forwarded-For")
+	if forwardedFor != "" {
+		// The X-Forwarded-For header can contain a comma-separated list of IP addresses.
+		// The client's IP is usually the first one.
+		return strings.Split(forwardedFor, ",")[0]
+	}
+
+	// Check for the X-Real-IP header
+	realIP := r.Header.Get("X-Real-IP")
+	if realIP != "" {
+		return realIP
+	}
+
+	// If neither header is present, fall back to using the RemoteAddr field.
+	// Check for IPv6 and split accordingly.
+
+	re := regexp.MustCompile(`\[[^\]]+\]`)
+	remoteAddr := re.ReplaceAllString(r.RemoteAddr, "")
+	if remoteAddr != "" {
+		return remoteAddr
+	}
+
+	remoteAddrSplit := strings.Split(r.RemoteAddr, ":")
+	return remoteAddrSplit[0]
+
+}
+
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -9156,10 +9184,14 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
 	//}
 
+	// Why does request.RemoteAddr usually turn into 127.0.0.1:<port>?
+	// This is a hack to get the real IP address
+	// https://stackoverflow.com/questions/27234861/golang-http-request-returns-127-0-0-1
 	userdata.LoginInfo = append(userdata.LoginInfo, LoginInfo{
-		IP:        request.RemoteAddr,
+		IP:        GetRequestIp(request),
 		Timestamp: time.Now().Unix(),
 	})
+
 
 	tutorialsFinished := []Tutorial{}
 	for _, tutorial := range userdata.PersonalInfo.Tutorials {
@@ -13964,7 +13996,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				user.Session = sessionToken
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        request.RemoteAddr,
+					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
 				})
 				err = SetUser(ctx, &user, false)
@@ -14023,7 +14055,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				user.Session = sessionToken
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        request.RemoteAddr,
+					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
 				})
 				err = SetUser(ctx, &user, false)
@@ -14381,13 +14413,13 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        request.RemoteAddr,
+					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
 				})
 
 				user.Session = sessionToken
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        request.RemoteAddr,
+					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
 				})
 				err = SetUser(ctx, &user, false)
@@ -14449,7 +14481,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 				user.Session = sessionToken
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        request.RemoteAddr,
+					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
 				})
 				err = SetUser(ctx, &user, false)
@@ -14546,7 +14578,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.Session = sessionToken
 
 	newUser.LoginInfo = append(newUser.LoginInfo, LoginInfo{
-		IP:        request.RemoteAddr,
+		IP:        GetRequestIp(request),
 		Timestamp: time.Now().Unix(),
 	})
 
