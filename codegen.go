@@ -499,7 +499,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		} else if swagger.Components.SecuritySchemes["Oauth2"] != nil {
 			//log.Printf("[DEBUG] Appending Oauth2 code")
 			authenticationParameter = ", access_token"
-			authenticationSetup = fmt.Sprintf("if access_token != \" \": request_headers[\"Authorization\"] = f\"Bearer {access_token}\"\n        request_headers[\"Content-Type\"] = \"application/json\"")
+			authenticationSetup = fmt.Sprintf("if access_token != \" \": request_headers[\"Authorization\"] = f\"Bearer {access_token}\"\n        #request_headers[\"Content-Type\"] = \"application/json\"")
 
 		} else if swagger.Components.SecuritySchemes["jwt"] != nil {
 			//log.Printf("[DEBUG] Appending Oauth2 code")

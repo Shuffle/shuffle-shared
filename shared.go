@@ -13806,7 +13806,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//https://dev-18062475.okta.com/oauth2/default/v1/authorize?client_id=oa3romteykJ2aMgx5d7&response_type=code&scope=openid&redirect_uri=http%3A%2F%2Flocalhost%3A5002%2Fapi%2Fv1%2Flogin_openid&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601&code_challenge_method=S256&code_challenge=codechallenge
-	// http://localhost:5002/api/v1/login_openid?code=rrm8BS8eUIYpQWnoM_Lzh_QoT3-EwQ2c9YkjRcJWqk4&state=state-296bc9a0-a2a2-4a57-be1a-d0e2fd9bb601
 	// http://localhost:5001/api/v1/login_openid#id_token=asdasd&session_state=asde9d78d8-6535-45fe-848d-0efa9f119595
 
 	//code -> Token
