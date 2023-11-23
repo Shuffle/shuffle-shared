@@ -3041,6 +3041,8 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		newWorkflows = append(newWorkflows, workflow)
 	}
 
+	workflows = newWorkflows
+
 	// Get the org as well to manage priorities
 	// Only happens on first load, so it's like once per session~
 	if len(usecaseIds) > 0 {
@@ -18523,8 +18525,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
-
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting org %s (%s) in category action: %s", user.ActiveOrg.Name, user.ActiveOrg.Id, err)
@@ -18558,7 +18558,26 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if foundCategory.Name == "" && value.AppName == "" {
-		log.Printf("[DEBUG] No category found AND no app name set in category action")
+		log.Printf("[DEBUG] No category found AND no app name set in category action for user %s (%s). Returning", user.Username, user.Id)
+
+		structuredFeedback := StructuredCategoryAction{
+			Success: false,
+			Action: "select_category",
+			Category: foundAppType,
+			Reason: fmt.Sprintf("Help us set up a %s app for you first", foundAppType),
+		}
+
+		jsonBytes, err := json.Marshal(structuredFeedback)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshaling structured feedback in category action: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed marshaling structured feedback. Contact"}`))
+			return
+		}
+
+		resp.WriteHeader(400)
+		resp.Write(jsonBytes)
+		return
 	} else {
 		log.Printf("[DEBUG] Found item for category %s: %s (%s)", foundAppType, foundCategory.Name, foundCategory.ID)
 	}
@@ -18571,6 +18590,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		// If we HAVE an app as a category already
 		if len(value.AppName) == 0 {
 			if len(app.Categories) == 0 {
 				continue
@@ -18604,7 +18624,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[DEBUG] Selected app %s (%s) with action %s", selectedApp.Name, selectedApp.ID, selectedAction.Name)
 
 				// FIXME: Don't break on the first one?
-				break
+				//break
 			}
 
 			if foundCategory.ID == app.ID {
@@ -18612,6 +18632,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 
 		} else {
+			// If we DONT have a category app already
 			if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
 				log.Printf("[DEBUG] Found app: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 				selectedApp = app
@@ -18769,6 +18790,31 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if len(foundAuthenticationId) == 0 {
+		log.Printf("\n\n[WARNING] Couldn't find auth for app %s\n\n", selectedApp.Name)
+		structuredFeedback := StructuredCategoryAction{
+			Success: false,
+			Action: "app_authentication",
+			Category: foundAppType,
+			Reason: fmt.Sprintf("Help us set up a %s app for you first", foundAppType),
+			Apps: []WorkflowApp{
+				selectedApp,
+			},
+		}
+
+		jsonFormatted, err := json.Marshal(structuredFeedback)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling structured feedback: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed formatting your data"}`))
+			return
+		}
+
+		resp.WriteHeader(400)
+		resp.Write(jsonFormatted)
+		return
+	}
+
 
 	refUrl := ""
 	if project.Environment == "cloud" {
@@ -18831,8 +18877,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		secondAction.Parameters = append(secondAction.Parameters, param)
 	}
 
+	formattedQueryFields := []string{}
+	for _, field := range value.Fields {
+		formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
+	}
+
+	formattedQuery := fmt.Sprintf("Usefields %s with app %s to '%s'", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
+
 	newQueryInput := QueryInput{
-		Query: value.Label,
+		Query: formattedQuery,
 		OutputFormat: "action", 			// To run the action (?)
 		//OutputFormat: "action_parameters", 	// To get the action parameters back so we can run it manually
 
@@ -18860,9 +18913,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		streamUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 	}
 
-	// FIXME: 
 	streamUrl = "http://localhost:5002"
-
 	streamUrl = fmt.Sprintf("%s/api/v1/conversation", streamUrl)
 
 
@@ -18882,6 +18933,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("\n\n[DEBUG] LOCAL REQUEST SENT\n\n")
 	req.Header.Add("Authorization", request.Header.Get("Authorization"))
 	newresp, err := client.Do(req)
 	if err != nil {
@@ -18891,6 +18943,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("\n\n[DEBUG] LOCAL REQUEST RETURNED\n\n")
+
 	responseBody, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading body for execute generated workflow: %s", err)
@@ -18899,21 +18953,26 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] RESPONSE: %s", responseBody)
+	//log.Printf("[DEBUG] RESPONSE: %s", responseBody)
 
 	// Unmarshal responseBody back to secondAction
-	err = json.Unmarshal(responseBody, &secondAction)
+	newSecondAction := Action{}
+	err = json.Unmarshal(responseBody, &newSecondAction)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
 		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed parsing app response. Contact support if this persists."}`)))
 		return
 	}
 
+	log.Printf("[DEBUG] Taking params and image from second action and adding to workflow")
+	secondAction.Parameters = newSecondAction.Parameters
+	secondAction.LargeImage = newSecondAction.LargeImage
+	newWorkflow.Start = secondAction.ID
+	newWorkflow.Actions = append(newWorkflow.Actions, secondAction)
 
 	//resp.Write(responseBody)
 	//resp.WriteHeader(200)
-
 	//return
 	/*
 	*
@@ -18923,16 +18982,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	*
 	*/
 
+	/*
 	if len(missingFields) > 0 {
 		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
 		return
 	}
+	*/
 
 	// Add params and such of course
-	newWorkflow.Start = secondAction.ID
-	newWorkflow.Actions = append(newWorkflow.Actions, secondAction)
 
 	// Set workflow in cache only?
 	// That way it can be loaded during execution
@@ -18952,7 +19011,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		SetWorkflow(ctx, newWorkflow, newWorkflow.ID)
 	}
 
-	log.Printf("[DEBUG] Done preparing workflow %s (%s) to be ran for category action %s", newWorkflow.Name, newWorkflow.ID, selectedAction.Name)
+	log.Printf("[DEBUG] Done preparing workflow '%s' (%s) to be ran for category action %s", newWorkflow.Name, newWorkflow.ID, selectedAction.Name)
 
 	/*
 
@@ -19029,9 +19088,30 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	returnBody := HandleRetValidation(ctx, workflowExecution, len(newWorkflow.Actions))
 	log.Printf("[INFO] Got response from workflow: %#v", string(returnBody.Result))
 
-	resp.WriteHeader(200)
-	resp.Write([]byte(returnBody.Result))
+	structuredFeedback := StructuredCategoryAction{
+		Success: true,
+		WorkflowId: newWorkflow.ID,
+		ExecutionId: workflowExecution.ExecutionId,
+		Action: "done",
+		Category: foundAppType,
+		Reason: "Analyze Result for details",
 
+		Result: returnBody.Result,
+	}
+
+	jsonParsed, err := json.Marshal(structuredFeedback)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling structured feedback: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed marshalling structured feedback (END)"}`))
+		return
+	}
+
+	// Delete the workflow again 
+	//err = DeleteWorkflow(ctx, newWorkflow.ID)
+
+	resp.WriteHeader(200)
+	resp.Write(jsonParsed)
 }
 
 func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {

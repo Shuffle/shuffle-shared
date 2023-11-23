@@ -3624,3 +3624,15 @@ type WorkflowSearchResult struct {
 	Cursor string `json:"cursor"`
 }
 
+// Used for the integrations API to work with AI well
+type StructuredCategoryAction struct {
+	Success bool `json:"success"`
+	WorkflowId string `json:"workflow_id"`
+	ExecutionId string `json:"execution_id"`
+	Action string `json:"action"`
+	Category string `json:"category"`
+	Reason string `json:"reason"`
+	Apps []WorkflowApp `json:"apps"`
+
+	Result string `json:"result"`
+}

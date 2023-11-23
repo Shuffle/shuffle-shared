@@ -2307,6 +2307,9 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		}
 	}
 
+	newWorkflow := FixWorkflowPosition(ctx, *workflow)
+	workflow = &newWorkflow
+
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
@@ -4881,7 +4884,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[ERROR] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
 		}
 
-		log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
+		//log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
 
 		// IF the app doesn't have actions, check OpenAPI
 		// 1. Get the app directly
@@ -4996,14 +4999,14 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 
 		if app.Edited > dedupedApps[replaceIndex].Edited {
-			log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
+			//log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
 			dedupedApps[replaceIndex] = app
 			continue
 		}
 
 		// Check if image, and other doesn't have
 		if len(dedupedApps[replaceIndex].LargeImage) == 0 && len(app.LargeImage) > 0 {
-			log.Printf("[INFO] Replacing deduped app with image in get apps (2): %s", app.Name)
+			//log.Printf("[INFO] Replacing deduped app with image in get apps (2): %s", app.Name)
 			dedupedApps[replaceIndex] = app
 			continue
 		}
@@ -6179,6 +6182,42 @@ func fixPosition(position float64) float64 {
 		return position
 }
 
+func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
+	for index, action := range workflow.Actions {
+		workflow.Actions[index].Position.X = fixPosition(float64(action.Position.X))
+		workflow.Actions[index].Position.Y = fixPosition(float64(action.Position.Y))
+
+		// Check if no ID
+		if action.ID == "" {
+			workflow.Actions[index].ID = uuid.NewV4().String()
+		}
+	}
+
+	for index, comments := range workflow.Comments {
+		workflow.Comments[index].Position.X = fixPosition(float64(comments.Position.X))
+		workflow.Comments[index].Position.Y = fixPosition(float64(comments.Position.Y))
+
+		if comments.ID == "" {
+			workflow.Comments[index].ID = uuid.NewV4().String()
+		}
+	}
+
+	// Fix branches & triggers
+	for index, trigger := range workflow.Triggers {
+		if trigger.ID == "" {
+			workflow.Triggers[index].ID = uuid.NewV4().String()
+		}
+	}
+
+	for index, branch := range workflow.Branches {
+		if branch.ID == "" {
+			workflow.Branches[index].ID = uuid.NewV4().String()
+		}
+	}
+
+	return workflow
+}
+
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 	// Overwriting to be sure these are matching
 	// No real point in having id + workflow.ID anymore
@@ -6195,15 +6234,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		workflow.Edited += int64(optionalEditedSecondsOffset[0])
 	}
 
-	for index, action := range workflow.Actions {
-		workflow.Actions[index].Position.X = fixPosition(float64(action.Position.X))
-		workflow.Actions[index].Position.Y = fixPosition(float64(action.Position.Y))
-	}
-
-	for index, comments := range workflow.Comments {
-		workflow.Comments[index].Position.X = fixPosition(float64(comments.Position.X))
-		workflow.Comments[index].Position.Y = fixPosition(float64(comments.Position.Y))
-	}
+	workflow = FixWorkflowPosition(ctx, workflow)
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
