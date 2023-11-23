@@ -4342,6 +4342,30 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		}
 	}
 
+	// Should check if it's a child org and get parent orgs app auths that are shared
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+		log.Printf("In child org! Checking parent.")
+
+		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+		if err == nil {
+
+			// No recursion as parents can't have parents
+			parentAuths, err := GetAllWorkflowAppAuth(ctx, parentOrg.Id)
+			if err == nil {
+				log.Printf("[DEBUG] Got %d parent auths from parent org %s", len(parentAuths), parentOrg.Id)
+				for _, parentAuth := range parentAuths {
+					if !parentAuth.SuborgDistributed {
+						continue
+					}
+
+					log.Printf("[DEBUG] Checking parent auth %s", parentAuth.Id)
+					allworkflowappAuths = append(allworkflowappAuths, parentAuth)
+				}
+			}
+		}
+	}
+
 	// Deduplicate keys
 	for _, auth := range allworkflowappAuths {
 		allFields := []string{}
@@ -7379,7 +7403,12 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, appAuth); err != nil {
-			return &AppAuthenticationStorage{}, err
+			if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+				log.Printf("[ERROR] Failed loading app auth: %s", err)
+				return &AppAuthenticationStorage{}, err
+			}
+
+			log.Printf("[ERROR] Failed loading app auth fields for auth %s (continue anyway): %s", appAuth.Id, err)
 		}
 	}
 

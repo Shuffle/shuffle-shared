@@ -3151,14 +3151,14 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	auth, err := GetWorkflowAppAuthDatastore(ctx, fileId)
 	if err != nil {
-		log.Printf("Authget error: %s", err)
+		log.Printf("[WARNING] Authget error: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": ":("}`))
 		return
 	}
 
 	if auth.OrgId != user.ActiveOrg.Id {
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "User can't edit this org"}`))
 		return
 	}
@@ -3175,6 +3175,38 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Assigned auth everywhere")
 
 		}
+	} else if config.Action == "suborg_distribute" {
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting org %s: %s", auth.OrgId, err)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+			return
+		}
+
+		// Check if org doesn't have a creator org
+		if len(org.CreatorOrg) != 0 {
+			log.Printf("[INFO] Org %s has creator org %s, can't distribute", org.Id, org.CreatorOrg)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Can't distribute auth for suborgs"}`))
+			return
+		}
+
+		if auth.SuborgDistributed {
+			auth.SuborgDistributed = false
+		} else {
+			auth.SuborgDistributed = true 
+		}
+
+		err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting auth for org %s (%s): %s", org.Name, org.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed updating auth. Please try again."}`))
+			return
+		}
+	} else {
+		log.Printf("[WARNING] Unknown auth change action %s", config.Action)
 	}
 
 	resp.WriteHeader(200)
@@ -19086,7 +19118,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	returnBody := HandleRetValidation(ctx, workflowExecution, len(newWorkflow.Actions))
-	log.Printf("[INFO] Got response from workflow: %#v", string(returnBody.Result))
+	//log.Printf("[INFO] Got response from workflow: %#v", string(returnBody.Result))
 
 	structuredFeedback := StructuredCategoryAction{
 		Success: true,
@@ -19107,7 +19139,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Delete the workflow again 
+	// Delete the workflow again. This should happen 5-10 minutes later. 
 	//err = DeleteWorkflow(ctx, newWorkflow.ID)
 
 	resp.WriteHeader(200)
