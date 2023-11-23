@@ -4345,7 +4345,6 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 	// Should check if it's a child org and get parent orgs app auths that are shared
 	foundOrg, err := GetOrg(ctx, orgId)
 	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
-		log.Printf("In child org! Checking parent.")
 
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
 		if err == nil {
@@ -4353,13 +4352,11 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			// No recursion as parents can't have parents
 			parentAuths, err := GetAllWorkflowAppAuth(ctx, parentOrg.Id)
 			if err == nil {
-				log.Printf("[DEBUG] Got %d parent auths from parent org %s", len(parentAuths), parentOrg.Id)
 				for _, parentAuth := range parentAuths {
 					if !parentAuth.SuborgDistributed {
 						continue
 					}
 
-					log.Printf("[DEBUG] Checking parent auth %s", parentAuth.Id)
 					allworkflowappAuths = append(allworkflowappAuths, parentAuth)
 				}
 			}
