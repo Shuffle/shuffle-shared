@@ -18719,10 +18719,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		streamUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 	}
 
-	streamUrl = "http://localhost:5002"
+	//streamUrl = "http://localhost:5002"
 	streamUrl = fmt.Sprintf("%s/api/v1/conversation", streamUrl)
-
-
 	client := &http.Client{
 		Timeout: 30 * time.Second,
 	}
