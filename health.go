@@ -400,7 +400,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	}
 
 	if len(workflows) == 0 {
-		log.Printf("[DEBUG] Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
+		log.Printf("[DEBUG] Couldn't find any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
 		return errors.New("Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
 	}
 

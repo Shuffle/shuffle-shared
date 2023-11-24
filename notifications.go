@@ -459,12 +459,16 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		return err
 	}
 
+	defer newresp.Body.Close()
 	respBody, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		return err
 	}
 
-	log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
+	_ = respBody 
+
+	//log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
+	log.Printf("[DEBUG] Finished notification request to %s with status %d", executionUrl, newresp.StatusCode)
 	if newresp.StatusCode != 200 {
 		return errors.New(fmt.Sprintf("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId))
 	}

@@ -1984,6 +1984,7 @@ func RerunExecution(ctx context.Context, environment string, workflow Workflow) 
 				continue
 			}
 
+			defer newresp.Body.Close()
 			body, err := ioutil.ReadAll(newresp.Body)
 			if err != nil {
 				log.Printf("[WARNING] Failed reading body for manual rerun: %s", err)
@@ -2091,6 +2092,7 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 			continue
 		}
 
+		defer newresp.Body.Close()
 		body, err := ioutil.ReadAll(newresp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading parent body: %s", err)
@@ -8040,7 +8042,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] Successfully ran org priority webhook")
 				}
 
-				_ = res
+				defer res.Body.Close()
 			}
 		}
 	}
@@ -9526,6 +9528,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		return err
 	}
 
+	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading parent body: %s", err)
@@ -9962,7 +9965,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 		},
 	}
 
-	_, err = client.Do(req)
+	newresp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Error running resend action request - retries: %d, err: %s", retries, err)
 
@@ -9984,6 +9987,8 @@ func ResendActionResult(actionData []byte, retries int64) {
 
 		return
 	}
+
+	defer newresp.Body.Close()
 
 	//body, err := ioutil.ReadAll(newresp.Body)
 	//if err != nil {
@@ -10027,6 +10032,7 @@ func runTranslation(ctx context.Context, standard string, inputBody string) {
 		return
 	}
 
+	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error getting body from translation for %s: %s", standard, err)
@@ -10748,6 +10754,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						continue
 					}
 
+					defer newresp.Body.Close()
 					body, err := ioutil.ReadAll(newresp.Body)
 					if err != nil {
 						log.Printf("[ERROR] Failed reading body when running SKIPPED request (%s): %s", foundAction.Label, err)
@@ -13284,6 +13291,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		resp.WriteHeader(500)
@@ -13969,6 +13977,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		defer res.Body.Close()
 		body, err = ioutil.ReadAll(res.Body)
 		if err != nil {
 			log.Printf("[WARNING] OpenID client Body (2): %s", err)
@@ -14688,6 +14697,7 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 		return []byte{}, errors.New(fmt.Sprintf("No body to handle for %s. Status: %d", url, newresp.StatusCode))
 	}
 
+	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		SetCache(ctx, cacheKey, []byte{}, 30)
@@ -17003,6 +17013,7 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 		return exec, err
 	}
 
+	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading parent body: %s", err)
@@ -18749,6 +18760,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("\n\n[DEBUG] LOCAL REQUEST RETURNED\n\n")
 
+	defer newresp.Body.Close()
 	responseBody, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading body for execute generated workflow: %s", err)
@@ -18875,6 +18887,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	defer newresp.Body.Close()
 	executionBody, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading body for execute generated workflow: %s", err)

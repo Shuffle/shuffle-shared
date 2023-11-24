@@ -39,6 +39,7 @@ func executeCloudAction(action CloudSyncJob, apikey string) error {
 		return err
 	}
 
+	defer newresp.Body.Close()
 	respBody, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		return err
@@ -703,7 +704,6 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	}
 
 	defer newresp.Body.Close()
-
 	urlbody, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)

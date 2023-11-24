@@ -964,6 +964,7 @@ func getOutlookSubscriptions(outlookClient *http.Client) (SubscriptionsWrapper, 
 		return SubscriptionsWrapper{}, err
 	}
 
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("Suberror Body: %s", err)
@@ -1189,6 +1190,7 @@ func removeOutlookSubscription(outlookClient *http.Client, subscriptionId string
 		return err
 	}
 
+	defer res.Body.Close()
 	if res.StatusCode != 200 && res.StatusCode != 201 && res.StatusCode != 204 {
 		return errors.New(fmt.Sprintf("Bad status code when deleting subscription: %d", res.StatusCode))
 	}
@@ -1219,6 +1221,7 @@ func cancelGmailSubscription(ctx context.Context, gmailClient *http.Client) erro
 		return err
 	}
 
+	defer res.Body.Close()
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
 		log.Printf("[WARNING] Gmail subscription Body (2): %s", err)
@@ -1797,6 +1800,7 @@ func GetGmailUserProfile(ctx context.Context, gmailClient *http.Client) (GmailPr
 		return GmailProfile{}, err
 	}
 
+	defer res.Body.Close()
 	log.Printf("[INFO] Stop subscription on GMAIL Status: %d", res.StatusCode)
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
@@ -2096,6 +2100,7 @@ func GetGmailMessageAttachment(ctx context.Context, gmailClient *http.Client, us
 		return GmailAttachment{}, err
 	}
 
+	defer res.Body.Close()
 	log.Printf("[INFO] Get GMAIL attachment %#v Status: %d", messageId, res.StatusCode)
 	if res.StatusCode == 404 {
 		return GmailAttachment{}, errors.New(fmt.Sprintf("Failed to find mail for %s: %d", messageId, res.StatusCode))
@@ -2139,6 +2144,7 @@ func GetGithubRepoContributors(ctx context.Context, githubClient *http.Client, r
 		return []GithubProfile{}, err
 	}
 
+	defer res.Body.Close()
 	if res.StatusCode == 404 {
 		return []GithubProfile{}, errors.New(fmt.Sprintf("No repo contributors to get"))
 	}
@@ -2174,6 +2180,7 @@ func GetGithubProfile(ctx context.Context, githubClient *http.Client) (GithubPro
 		return GithubProfile{}, err
 	}
 
+	defer res.Body.Close()
 	if res.StatusCode == 404 {
 		return GithubProfile{}, errors.New(fmt.Sprintf("No user to get"))
 	}
@@ -2210,6 +2217,7 @@ func GetGmailThread(ctx context.Context, gmailClient *http.Client, userId, messa
 		return GmailThreadStruct{}, err
 	}
 
+	defer res.Body.Close()
 	log.Printf("[INFO] Get GMAIL thread %#v Status: %d", messageId, res.StatusCode)
 	if res.StatusCode == 404 {
 		return GmailThreadStruct{}, errors.New(fmt.Sprintf("Failed to find gmail thread for %s: %d", messageId, res.StatusCode))
@@ -2252,6 +2260,7 @@ func GetGmailMessage(ctx context.Context, gmailClient *http.Client, userId, mess
 		return GmailMessageStruct{}, err
 	}
 
+	defer res.Body.Close()
 	log.Printf("[INFO] Get GMAIL msg %#v Status: %d. User: %s", messageId, res.StatusCode, userId)
 	if res.StatusCode == 404 {
 		return GmailMessageStruct{}, errors.New(fmt.Sprintf("Failed to find mail for %s: %d", messageId, res.StatusCode))
@@ -2353,6 +2362,7 @@ func GetGmailProfile(ctx context.Context, gmailClient *http.Client, userId strin
 		return GmailHistoryStruct{}, err
 	}
 
+	defer res.Body.Close()
 	//log.Printf("[INFO] Get history status: %d", res.StatusCode)
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
@@ -2397,6 +2407,7 @@ func GetGmailMessages(ctx context.Context, gmailClient *http.Client, userId stri
 		return GmailMessagesStruct{}, err
 	}
 
+	defer res.Body.Close()
 	//log.Printf("[INFO] Get history status: %d", res.StatusCode)
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
@@ -2441,6 +2452,7 @@ func GetGmailHistory(ctx context.Context, gmailClient *http.Client, userId, hist
 		return GmailHistoryStruct{}, err
 	}
 
+	defer res.Body.Close()
 	//log.Printf("[INFO] Get history status: %d", res.StatusCode)
 	body, err := ioutil.ReadAll(res.Body)
 	if err != nil {
