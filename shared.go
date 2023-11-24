@@ -1684,7 +1684,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 
 		cnt, err := RerunExecution(ctx, environmentName, workflow)
 		if err != nil {
-			log.Printf("[ERROR] Failed rerunning execution for workflow %s: %s", workflow.Id, err)
+			log.Printf("[ERROR] Failed rerunning execution for workflow %s: %s", workflow.ID, err)
 		}
 
 		total += cnt
