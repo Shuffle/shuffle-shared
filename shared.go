@@ -17671,7 +17671,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				continueOuter = false
 
 				if fixed > 0 && skippedCnt == len(parents[nextAction]) {
-					log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+					log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s. Should set to skipped.", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
 					continueOuter = true
 				}
 			}
