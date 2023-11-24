@@ -1402,6 +1402,23 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		}
 	}
 
+	// Check for failures before setting to finished
+	if workflowExecution.Status == "EXECUTING" { 
+		//&& workflowExecution.Workflow.Configuration.ExitOnError {
+
+		for _, result := range workflowExecution.Results {
+			if result.Status == "FAILURE" || result.Status == "ABORTED" {
+				log.Printf("[DEBUG][%s] Setting execution to aborted because of result %s (%s) with status '%s'", workflowExecution.ExecutionId, result.Action.Name, result.Action.ID, result.Status)
+
+				workflowExecution.Status = "ABORTED"
+				if workflowExecution.CompletedAt == 0 {
+					workflowExecution.CompletedAt = time.Now().Unix()
+				}
+
+				break
+			}
+		}
+	}
 
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
@@ -1413,6 +1430,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			finalWorkflowExecution.CompletedAt = time.Now().Unix()
 		}
 	}
+
 
 	return finalWorkflowExecution
 }
