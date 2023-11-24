@@ -7473,7 +7473,10 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 		}
 
 		if orgId == "ALL" && project.Environment != "cloud" {
-			query = map[string]interface{}{}
+			query = map[string]interface{}{
+				"from": 0,
+				"size": 1000,
+			}
 		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
