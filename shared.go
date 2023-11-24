@@ -1647,6 +1647,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 			if environment.Name == fileId && len(environment.Id) > 0 {
 				environmentName = fileId
 				fileId = environment.Id
+
 				break
 			}
 		}
@@ -1660,7 +1661,6 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// 1: Loop all workflows
-	// 2: Stop all running executions (manually abort)
 	workflows, err := GetAllWorkflowsByQuery(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
@@ -1669,8 +1669,8 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	maxTotalReruns := 100
 	total := 0
+	maxTotalReruns := 100
 	for _, workflow := range workflows {
 		if workflow.OrgId != user.ActiveOrg.Id {
 			//log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
@@ -1682,7 +1682,11 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 			break
 		}
 
-		cnt, _ := RerunExecution(ctx, environmentName, workflow)
+		cnt, err := RerunExecution(ctx, environmentName, workflow)
+		if err != nil {
+			log.Printf("[ERROR] Failed rerunning execution for workflow %s: %s", workflow.Id, err)
+		}
+
 		total += cnt
 	}
 

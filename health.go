@@ -395,7 +395,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 
 	workflows, err := FindWorkflowByName(ctx, "SHUFFLE_INTERNAL_OPS_WORKFLOW")
 	if err != nil {
-		log.Printf("[ERROR] Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s", err)
+		log.Printf("[DEBUG] Failed finding any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s. Is the health API initialized?", err)
 		return err
 	}
 
