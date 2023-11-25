@@ -47,8 +47,10 @@ type QueryInput struct {
 type AtomicOutput struct {
 	Success bool   `json:"success"`
 	Reason string `json:"reason"`
-	ThreadId string `json:"thread_id"`
-	RunId string `json:"run_id"`
+
+	ThreadId string `json:"thread_id"` 	// Thread the assistant ran
+	RunId string `json:"run_id"` 		// Run ID for the thread
+	ToolCallID string `json:"tool_call_id,omitempty"` // Result inside the run
 }
 
 type ExecutionRequestWrapper struct {
@@ -3357,6 +3359,7 @@ type CategoryAction struct {
 	OptionalFields []Valuereplace `json:"optional_fields"`
 
 	OrgId            string `json:"org_id"`
+	WorkflowId 		 string `json:"workflow_id"` // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
 	AuthenticationId string `json:"authentication_id"`
 }
 
@@ -3637,4 +3640,6 @@ type StructuredCategoryAction struct {
 	Apps []WorkflowApp `json:"apps"`
 
 	Result string `json:"result"`
+
+	AvailableLabels []string `json:"available_labels"`
 }

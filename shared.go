@@ -18385,7 +18385,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Success: false,
 			Action: "select_category",
 			Category: foundAppType,
-			Reason: fmt.Sprintf("Help us set up a %s app for you first", foundAppType),
+			Reason: fmt.Sprintf("Help us set up an app in the '%s' category for you first", foundAppType),
 		}
 
 		jsonBytes, err := json.Marshal(structuredFeedback)
@@ -18406,6 +18406,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedApp := WorkflowApp{}
 	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
+
+	availableLabels := []string{}
 	for _, app := range newapps {
 		if app.Name == "" || len(app.Categories) == 0 {
 			continue
@@ -18427,6 +18429,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 
+				availableLabels = append(availableLabels, action.CategoryLabel[0])
+
 				if len(value.ActionName) > 0 && action.Name != value.ActionName {
 					continue
 				}
@@ -18446,6 +18450,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 				// FIXME: Don't break on the first one?
 				//break
+				availableLabels = []string{}
 			}
 
 			if foundCategory.ID == app.ID {
@@ -18463,6 +18468,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						continue
 					} else {
 						log.Printf("[DEBUG] Found category label %s", action.CategoryLabel)
+	
+						availableLabels = append(availableLabels, action.CategoryLabel[0])
 					}
 
 					if len(value.ActionName) > 0 && action.Name != value.ActionName {
@@ -18502,9 +18509,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if len(selectedAction.Name) == 0 {
 		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'", value.Label, selectedApp.Name)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding the label in app '%s'"}`, selectedApp.Name)))
-		return
+
+
+		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "use_app" {
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding the label in app '%s'"}`, selectedApp.Name)))
+			return
+		} else {
+			log.Printf("[DEBUG] NOT sending back due to label %s", value.Label)
+		}
 	}
 
 	log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
@@ -18581,7 +18594,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 
-	log.Printf("\n\n[INFO] Adding workflow %s\n\n", newWorkflow.ID)
 	foundAuthenticationId := value.AuthenticationId
 
 	if len(foundAuthenticationId) == 0 {
@@ -18621,6 +18633,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
+
+			AvailableLabels: availableLabels,
 		}
 
 		jsonFormatted, err := json.Marshal(structuredFeedback)
@@ -18636,6 +18650,47 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Send back with SUCCESS as we already have an authentication
+	// Use the labels to show what Jira can do
+	if value.Label == "app_authentication" || value.Label == "authenticate_app" || value.Label == "use_app" {
+		ifSuccess := true
+		reason := fmt.Sprintf("Please authenticate with %s", selectedApp.Name)
+
+		// Find out if it should re-authenticate or not
+		for _, field := range value.Fields {
+			if (field.Key == "re-authenticate" || field.Key == "reauthenticate") && field.Value == "true" {
+				ifSuccess = false
+				reason = fmt.Sprintf("Please re-authenticate with %s", selectedApp.Name)
+			}
+		}
+
+
+		structuredFeedback := StructuredCategoryAction{
+			Success: ifSuccess,
+			Action: "app_authentication",
+			Category: foundAppType,
+			Reason: reason,
+			Apps: []WorkflowApp{
+				selectedApp,
+			},
+			AvailableLabels: availableLabels,
+		}
+
+		// marshalled
+		jsonFormatted, err := json.Marshal(structuredFeedback)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling structured feedback: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed formatting your data"}`))
+			return
+		}
+
+		resp.WriteHeader(400)
+		resp.Write(jsonFormatted)
+		return
+	}
+
+	log.Printf("\n\n[INFO] Adding workflow %s\n\n", newWorkflow.ID)
 
 	refUrl := ""
 	if project.Environment == "cloud" {
