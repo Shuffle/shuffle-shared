@@ -18408,7 +18408,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	} else {
-		log.Printf("[DEBUG] No category set in category action")
+		//log.Printf("[DEBUG] No category set in category action")
 	}
 
 	log.Printf("[INFO] Found label %s in category %s. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
@@ -18450,7 +18450,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	} else if foundAppType == "siem" {
 		foundCategory = org.SecurityFramework.SIEM
 	} else {
-		log.Printf("[WARNING] Unknown app type in category action: %s", foundAppType)
+		if len(foundAppType) > 0 {
+			log.Printf("[WARNING] Unknown app type in category action: %#v", foundAppType)
+		}
 	}
 
 	if foundCategory.Name == "" && value.AppName == "" {
@@ -18475,7 +18477,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		resp.Write(jsonBytes)
 		return
 	} else {
-		log.Printf("[DEBUG] Found item for category %s: %s (%s)", foundAppType, foundCategory.Name, foundCategory.ID)
+		if len(foundCategory.Name) > 0 {
+			log.Printf("[DEBUG] Found item for category %s: %s (%s)", foundAppType, foundCategory.Name, foundCategory.ID)
+		}
 	}
 
 	selectedApp := WorkflowApp{}
@@ -18544,7 +18548,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					if len(action.CategoryLabel) == 0 {
 						continue
 					} else {
-						log.Printf("[DEBUG] Found category label %s", action.CategoryLabel)
+						//log.Printf("[DEBUG] Found label %s", action.CategoryLabel)
 	
 						availableLabels = append(availableLabels, action.CategoryLabel[0])
 					}
@@ -18564,7 +18568,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 							}
 						}
 
-						log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
+						//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
 						break
 					}
 				}
@@ -18594,7 +18598,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 							}
 						}
 
-						log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
+						//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
 						break
 					}
 				}
@@ -18612,7 +18616,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if len(selectedAction.Name) == 0 {
 		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'", value.Label, selectedApp.Name)
 
-
 		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "use_app" {
 			resp.WriteHeader(500)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding the label in app '%s'"}`, selectedApp.Name)))
@@ -18622,7 +18625,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
+	discoveredCategory := foundAppType
+	if len(selectedApp.Categories) > 0 {
+		discoveredCategory = selectedApp.Categories[0]
+	}
+
+	if len(selectedCategory.Name) > 0 {
+		log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
+	}
 	// Need translation here, now that we have the action
 	// Should just do an app injection into the workflow?
 
@@ -18674,16 +18684,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	 */
 
-	// 1. Generate the workflow based on the input above (make sure to set it to hidden)
-	// 2. Run the workflow
-	// 3. Get results for it
-	// 4. Delete it
+    // Uses the thread to continue generating in the same workflow
 	foundWorkflow := &Workflow{}
 	newWorkflowId := uuid.NewV4().String()
 	if !strings.HasPrefix(value.WorkflowId, "thread") {
 		newWorkflowId = value.WorkflowId
-
-		log.Printf("[DEBUG] REUISNG WORKFLOW ID %s. Should overwrite the entire workflow and use this instead", newWorkflowId)
 
 		// Get the workflow
 		foundWorkflow, err = GetWorkflow(ctx, newWorkflowId)
@@ -18734,6 +18739,20 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		environment = "Shuffle"
 	}
 
+	// Get the environments for the user and choose the default
+	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+	if err == nil {
+		for _, env := range environments {
+			if env.Archived {
+				continue
+			}
+
+			if env.Default {
+				environment = env.Name
+				break
+			}
+		}
+	}
 
 	foundAuthenticationId := value.AuthenticationId
 	if len(foundAuthenticationId) == 0 {
@@ -18758,7 +18777,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 				foundAuthenticationId = auth.Id
 				latestEdit = auth.Edited
-				log.Printf("[INFO] Found auth %s for app %s", auth.Id, auth.App.Name)
 			}
 		}
 	}
@@ -18785,13 +18803,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Reducing size drastically as it isn't really necessary
-		selectedApp.LargeImage = ""
 		selectedApp.Actions = []WorkflowAppAction{}
+		selectedApp.Authentication = Authentication{}
+		selectedApp.ChildIds = []string{}
+		selectedApp.SmallImage = ""
 		structuredFeedback := StructuredCategoryAction{
 			Success: false,
 			Action: "app_authentication",
-			Category: foundAppType,
-			Reason: fmt.Sprintf("Help us set up a %s app for you first", foundAppType),
+			Category: discoveredCategory,
+			Reason: fmt.Sprintf("Help us set up app '%s' for you first. Please authenticate with blank fields if you would just like to what it can do.", selectedApp.Name),
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -18822,16 +18842,19 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		for _, field := range value.Fields {
 			if (field.Key == "re-authenticate" || field.Key == "reauthenticate") && field.Value == "true" {
 				ifSuccess = false
-				reason = fmt.Sprintf("Please re-authenticate with %s", selectedApp.Name)
+				reason = fmt.Sprintf("Please re-authenticate with %s by clicking the button below!", selectedApp.Name)
 			}
 		}
 
 
 		selectedApp.Actions = []WorkflowAppAction{}
+		selectedApp.Authentication = Authentication{}
+		selectedApp.ChildIds = []string{}
+		selectedApp.SmallImage = ""
 		structuredFeedback := StructuredCategoryAction{
 			Success: ifSuccess,
 			Action: "app_authentication",
-			Category: foundAppType,
+			Category: discoveredCategory,
 			Reason: reason,
 			Apps: []WorkflowApp{
 				selectedApp,
@@ -19203,8 +19226,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("\n\n[DEBUG] Executionbody: %s\n\n", string(executionBody))
-
 	workflowExecution := WorkflowExecution{}
 	err = json.Unmarshal(executionBody, &workflowExecution)
 	if err != nil {
@@ -19218,10 +19239,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] got execution ID: %s", workflowExecution.ExecutionId)
 	returnBody := HandleRetValidation(ctx, workflowExecution, len(newWorkflow.Actions))
-	//log.Printf("[INFO] Got response from workflow: %#v", string(returnBody.Result))
-
 	selectedApp.LargeImage = ""
 	selectedApp.Actions = []WorkflowAppAction{}
 	structuredFeedback := StructuredCategoryAction{
@@ -19229,7 +19247,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		WorkflowId: newWorkflow.ID,
 		ExecutionId: workflowExecution.ExecutionId,
 		Action: "done",
-		Category: foundAppType,
+		Category: discoveredCategory,
 		Reason: "Analyze Result for details",
 
 		Result: returnBody.Result,

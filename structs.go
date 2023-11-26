@@ -89,6 +89,7 @@ type AppMini struct {
 	Category   string `json:"category,omitempty"`
 }
 
+
 type WorkflowApp struct {
 	Name        string `json:"name" yaml:"name" required:true datastore:"name"`
 	AppVersion  string `json:"app_version" yaml:"app_version" required:true datastore:"app_version"`
@@ -3645,4 +3646,11 @@ type StructuredCategoryAction struct {
 	Result string `json:"result"`
 
 	AvailableLabels []string `json:"available_labels"`
+}
+
+type ModelLabelParameter struct {
+	Name string 		`json:"name"`
+	Description string 	`json:"description"`
+	Type string 		`json:"type"`
+	Required bool 		`json:"required"`
 }
