@@ -1046,8 +1046,8 @@ type Branch struct {
 
 // Same format for a lot of stuff
 type Condition struct {
-	Condition   WorkflowAppActionParameter `json:"condition" datastore:"condition"`
 	Source      WorkflowAppActionParameter `json:"source" datastore:"source"`
+	Condition   WorkflowAppActionParameter `json:"condition" datastore:"condition"`
 	Destination WorkflowAppActionParameter `json:"destination" datastore:"destination"`
 }
 
@@ -3361,6 +3361,9 @@ type CategoryAction struct {
 	OrgId            string `json:"org_id"`
 	WorkflowId 		 string `json:"workflow_id"` // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
 	AuthenticationId string `json:"authentication_id"`
+
+	Step int64 		    `json:"step"` 			// The step to use put it in
+	Query 		string `json:"query,omitempty"` // Due to the API being built around programmatic, and then with LLMs, this was added to make context possible between nodes
 }
 
 type LabelStruct struct {

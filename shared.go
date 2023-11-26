@@ -1344,6 +1344,65 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Set it as the default app in the org as it's the "latest" of it's kind.
+	// This just means adding it to the app framework if a category exists
+	if len(app.Categories) > 0 {
+		// Get org
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil {
+			lowercased := strings.ToLower(app.Categories[0])
+			if lowercased == "communication" || lowercased == "email" {
+				org.SecurityFramework.Communication.ID = app.ID
+				org.SecurityFramework.Communication.Name = app.Name
+				org.SecurityFramework.Communication.LargeImage = app.LargeImage
+				org.SecurityFramework.Communication.Description = app.Description
+			} else if lowercased == "siem" {
+				org.SecurityFramework.SIEM.ID = app.ID
+				org.SecurityFramework.SIEM.Name = app.Name
+				org.SecurityFramework.SIEM.LargeImage = app.LargeImage
+				org.SecurityFramework.SIEM.Description = app.Description
+			} else if lowercased == "assets" {
+				org.SecurityFramework.Assets.ID = app.ID
+				org.SecurityFramework.Assets.Name = app.Name
+				org.SecurityFramework.Assets.LargeImage = app.LargeImage
+				org.SecurityFramework.Assets.Description = app.Description
+			} else if lowercased == "cases" {
+				org.SecurityFramework.Cases.ID = app.ID
+				org.SecurityFramework.Cases.Name = app.Name
+				org.SecurityFramework.Cases.LargeImage = app.LargeImage
+				org.SecurityFramework.Cases.Description = app.Description
+			} else if lowercased == "network" {
+				org.SecurityFramework.Network.ID = app.ID
+				org.SecurityFramework.Network.Name = app.Name
+				org.SecurityFramework.Network.LargeImage = app.LargeImage
+				org.SecurityFramework.Network.Description = app.Description
+			} else if lowercased == "intel" {
+				org.SecurityFramework.Intel.ID = app.ID
+				org.SecurityFramework.Intel.Name = app.Name
+				org.SecurityFramework.Intel.LargeImage = app.LargeImage
+				org.SecurityFramework.Intel.Description = app.Description
+			} else if lowercased == "edr" {
+				org.SecurityFramework.EDR.ID = app.ID
+				org.SecurityFramework.EDR.Name = app.Name
+				org.SecurityFramework.EDR.LargeImage = app.LargeImage
+				org.SecurityFramework.EDR.Description = app.Description
+			} else if lowercased == "iam" {
+				org.SecurityFramework.IAM.ID = app.ID
+				org.SecurityFramework.IAM.Name = app.Name
+				org.SecurityFramework.IAM.LargeImage = app.LargeImage
+				org.SecurityFramework.IAM.Description = app.Description
+			} else {
+				log.Printf("[ERROR] Unknown category %s for app %s (%s)", lowercased, app.Name, app.ID)
+			}
+
+			// Set the org
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org after setting default app: %s", err)
+			}
+		}
+	}
+
 	log.Printf("[INFO] Set new workflow auth for %s (%s) with ID %s", app.Name, app.ID, appAuth.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, appAuth.Id)))
@@ -2834,9 +2893,6 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
-
-
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
@@ -2896,7 +2952,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	if len(workflowExecutions) == 0 {
 		resp.WriteHeader(200)
-		resp.Write([]byte("[]"))
+		resp.Write([]byte(`{"success": true, "executions": [], "cursor": ""}`))
 		return
 	}
 
@@ -10874,12 +10930,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			workflowExecution.Results[outerindex] = actionResult
 		} else {
-			//log.Printf("[INFO] Setting value of %s (%s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
 			workflowExecution.Results = append(workflowExecution.Results, actionResult)
-			//if subresult.Status == "SKIPPED" subresult.Status != "FAILURE" {
 		}
 	} else {
-		log.Printf("[INFO] Setting value of %s (INIT - %s) in workflow %s to %s (%d)", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId, actionResult.Status, len(workflowExecution.Results))
+		log.Printf("[INFO][%s] Setting value of %s (INIT - %s) to %s (%d)", workflowExecution.ExecutionId, actionResult.Action.Label, actionResult.Action.ID, actionResult.Status, len(workflowExecution.Results))
 		workflowExecution.Results = append(workflowExecution.Results, actionResult)
 	}
 
@@ -10942,9 +10996,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if finished {
 			dbSave = true
 			if len(workflowExecution.ExecutionParent) == 0 {
-				log.Printf("[INFO] Execution of %s in workflow %s finished (not subflow).", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
+				log.Printf("[INFO][%s] Execution in workflow %s finished (not subflow).", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
 			} else {
-				log.Printf("[INFO] SubExecution %s of parentExecution %s in workflow %s finished (subflow).", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.ID)
+				log.Printf("[INFO][%s] SubExecution of parentExecution %s in workflow %s finished (subflow).", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.ID)
 
 			}
 
@@ -18304,7 +18358,28 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(value.Query) > 0 {
+		// Check if app authentication. If so, check if intent is to actually authenticate, or find the actual intent
+		if value.Label == "authenticate_app" && !strings.Contains(strings.ToLower(value.Query), "auth"){
+			log.Printf("[INFO] Got authenticate app request. Does the intent %#v match auth?", value.Query)
+		}
+	}
+
 	ctx := GetContext(request)
+	threadId := value.WorkflowId
+	if len(value.WorkflowId) > 0 {
+		// Should maybe cache this based on the thread? Then reuse and connect?
+		if strings.HasPrefix(value.WorkflowId, "thread") {
+			threadCache, err := GetCache(ctx, value.WorkflowId)
+			if err != nil {
+				//log.Printf("[WARNING] Error with getting thread cache in category action: %s", err)
+			} else {
+				// Make threadcache into a string and map it to value.WorkflowId
+				// Then use that to get the thread cache
+				value.WorkflowId = string([]byte(threadCache.([]uint8)))
+			}
+		}
+	}
 
 	categories := GetAllAppCategories()
 
@@ -18415,6 +18490,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		// If we HAVE an app as a category already
 		if len(value.AppName) == 0 {
+			availableLabels = []string{}
 			if len(app.Categories) == 0 {
 				continue
 			}
@@ -18461,6 +18537,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			// If we DONT have a category app already
 			if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
 				log.Printf("[DEBUG] Found app: %s vs %s (%s)", app.Name, value.AppName, app.ID)
+				availableLabels = []string{}
 				selectedApp = app
 
 				for _, action := range app.Actions {
@@ -18477,10 +18554,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					// For now just finding the first one
-					//log.Printf("Hi: %s & %s", strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_"), strings.ReplaceAll(strings.ToLower(value.Label), " ", "_"))
-
 					if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == strings.ReplaceAll(strings.ToLower(value.Label), " ", "_") {
-
 						selectedAction = action
 
 						for _, category := range categories {
@@ -18496,6 +18570,34 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				break
+			} else if selectedApp.ID == "" && len(value.AppName) > 0 && (strings.Contains(strings.ToLower(app.Name), strings.ToLower(value.AppName)) || strings.Contains(strings.ToLower(value.AppName), strings.ToLower(app.Name))) {
+				selectedApp = app
+				log.Printf("[WARNING] Set selected app to partial match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
+
+				availableLabels = []string{}
+
+				for _, action := range app.Actions {
+					if len(action.CategoryLabel) == 0 {
+						continue
+					} 
+
+					log.Printf("[DEBUG] Found category label %s", action.CategoryLabel)
+					availableLabels = append(availableLabels, action.CategoryLabel[0])
+
+					if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == strings.ReplaceAll(strings.ToLower(value.Label), " ", "_") {
+						selectedAction = action
+
+						for _, category := range categories {
+							if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
+								selectedCategory = category
+								break
+							}
+						}
+
+						log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
+						break
+					}
+				}
 			}
 		}
 	}
@@ -18503,7 +18605,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if len(selectedApp.ID) == 0 {
 		log.Printf("[WARNING] Couldn't find app with ID or name '%s' active in org %s (%s)", value.AppName, user.ActiveOrg.Name, user.ActiveOrg.Id)
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed finding an app with that name or ID"}`))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an app with that name or ID %s"}`, value.AppName)))
 		return
 	}
 
@@ -18576,15 +18678,54 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// 2. Run the workflow
 	// 3. Get results for it
 	// 4. Delete it
+	foundWorkflow := &Workflow{}
+	newWorkflowId := uuid.NewV4().String()
+	if !strings.HasPrefix(value.WorkflowId, "thread") {
+		newWorkflowId = value.WorkflowId
+
+		log.Printf("[DEBUG] REUISNG WORKFLOW ID %s. Should overwrite the entire workflow and use this instead", newWorkflowId)
+
+		// Get the workflow
+		foundWorkflow, err = GetWorkflow(ctx, newWorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow %s: %s", newWorkflowId, err)
+		}
+	}
+
+	if len(threadId) > 0 && strings.HasPrefix(threadId, "thread") {
+		// Set the thread ID in cache
+		err = SetCache(ctx, threadId, []byte(newWorkflowId), 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for thread ID %s: %s", threadId, err)
+		}
+	}
 
 	startId := uuid.NewV4().String()
+	workflowName := fmt.Sprintf("Category action: %s", selectedAction.Name)
+	if len(value.Query) > 0 {
+		workflowName = value.Query
+	}
+
 	newWorkflow := Workflow{
-		ID:        uuid.NewV4().String(),
-		Name:      fmt.Sprintf("Category action: %s", selectedAction.Name),
+		ID:        newWorkflowId,
+		Name:      workflowName,
+		Description: fmt.Sprintf("Category action: %s. This is a workflow generated and ran by ShuffleGPT. More here: https://shuffler.io/chat", selectedAction.Name),
 		Generated: true,
 		Hidden:    true,
 		Start:     startId,
 		OrgId:     user.ActiveOrg.Id,
+	}
+
+	if len(foundWorkflow.ID) > 0 {
+		newWorkflow = *foundWorkflow
+		newWorkflow.Start = startId
+
+		// Remove is startnode from previous nodes
+		for actionIndex, action := range newWorkflow.Actions {
+			if action.IsStartNode {
+				newWorkflow.Actions[actionIndex].IsStartNode = false
+			}
+		}
 	}
 
 	environment := "Cloud"
@@ -18595,7 +18736,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 
 	foundAuthenticationId := value.AuthenticationId
-
 	if len(foundAuthenticationId) == 0 {
 		// 1. Get auth
 		// 2. Append the auth
@@ -18625,6 +18765,28 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if len(foundAuthenticationId) == 0 {
 		log.Printf("\n\n[WARNING] Couldn't find auth for app %s\n\n", selectedApp.Name)
+
+		requiresAuth := false
+		for _, action := range selectedApp.Actions {
+			for _, param := range action.Parameters {
+				if param.Configuration {
+					requiresAuth = true
+					break
+				}
+			}
+
+			if requiresAuth {
+				break
+			}
+		}
+
+		if !requiresAuth {
+			log.Printf("\n\n[ERROR] App %s doesn't require auth, but we are still sending back with auth requires\n\n", selectedApp.Name)
+		}
+
+		// Reducing size drastically as it isn't really necessary
+		selectedApp.LargeImage = ""
+		selectedApp.Actions = []WorkflowAppAction{}
 		structuredFeedback := StructuredCategoryAction{
 			Success: false,
 			Action: "app_authentication",
@@ -18665,6 +18827,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 
+		selectedApp.Actions = []WorkflowAppAction{}
 		structuredFeedback := StructuredCategoryAction{
 			Success: ifSuccess,
 			Action: "app_authentication",
@@ -18692,6 +18855,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("\n\n[INFO] Adding workflow %s\n\n", newWorkflow.ID)
 
+	/*
 	refUrl := ""
 	if project.Environment == "cloud" {
 		location := "europe-west2"
@@ -18705,8 +18869,25 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		refUrl = fmt.Sprintf("https://%s-%s.cloudfunctions.net/%s", location, gceProject, functionName)
 	}
+	*/
 
 	// Now start connecting it to the correct app (Jira?)
+
+	label := selectedAction.Name
+	if strings.HasPrefix(label, "get_list") {
+		// Remove get_ at the start
+		label = strings.Replace(label, "get_list", "list", 1)
+	}
+
+	step := int64(0)
+	if value.Step >= 1 {
+		step = value.Step
+	} else {
+		step = int64(len(newWorkflow.Actions)+1)
+	}
+
+	log.Printf("[DEBUG] STEP: %#v", step)
+
 	secondAction := Action{
 		Name:        selectedAction.Name,
 		Label:       selectedAction.Name,
@@ -18718,12 +18899,66 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		ID:          uuid.NewV4().String(),
 		Parameters:  []WorkflowAppActionParameter{},
 		Position: Position{
-			X: 100.0,
+			X: 0.0+float64(step*300.0),
 			Y: 100.0,
 		},
 		AuthenticationId: foundAuthenticationId,
 		IsValid:          true,
-		ReferenceUrl:     refUrl,
+		//ReferenceUrl:     refUrl,
+	}
+
+	// Ensuring it gets overwritten 
+	startNode := Action{
+		Position: Position{
+			X: 100000,
+		},
+	}
+	if step > 0 {
+		// Should find nearest neighor to the left, and then add a branch from it to this one
+		// If it's a GENERATED app, add a condition to the branch checking if the output status is < 300
+
+
+		nearestXNeighbor := Action{}
+		for _, action := range newWorkflow.Actions {
+			if action.Position.X > nearestXNeighbor.Position.X {
+				nearestXNeighbor = action
+			}
+
+			// Find farthest to the left
+			if action.Position.X < startNode.Position.X {
+				startNode = action
+			}
+		}
+
+		if nearestXNeighbor.ID != "" {
+
+			//Conditions    []Condition `json:"conditions" datastore: "conditions"`
+
+			newWorkflow.Branches = append(newWorkflow.Branches, Branch{
+				Label: "Validating",
+
+				SourceID: nearestXNeighbor.ID,
+				DestinationID: secondAction.ID,
+				ID: uuid.NewV4().String(),
+
+				Conditions: []Condition{
+					Condition{
+						Source: WorkflowAppActionParameter{
+							Name: "source",
+							Value: fmt.Sprintf("$%s.status", strings.ReplaceAll(nearestXNeighbor.Label, " ", "_")),
+						}, 
+						Condition: WorkflowAppActionParameter{
+							Name: "condition",
+							Value: "less than",	
+						},
+						Destination: WorkflowAppActionParameter{
+							Name: "destination",
+							Value: "300",
+						},
+					},
+				},
+			})
+		}
 	}
 
 
@@ -18846,6 +19081,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	newWorkflow.Start = secondAction.ID
 	newWorkflow.Actions = append(newWorkflow.Actions, secondAction)
 
+	// Used to be where we stopped
 	//resp.Write(responseBody)
 	//resp.WriteHeader(200)
 	//return
@@ -18871,6 +19107,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// Set workflow in cache only?
 	// That way it can be loaded during execution
 
+	err = SetWorkflow(ctx, newWorkflow, newWorkflow.ID)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting workflow during category run: %s", err)
+	}
+
+
+	/*
 	workflowBytes, err := json.Marshal(newWorkflow)
 	if err != nil {
 		log.Printf("[WARNING] Failed marshal of workflow during cache setting: %s", err)
@@ -18879,12 +19122,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Force it to ONLY be in cache? Means it times out.
 	err = SetCache(ctx, fmt.Sprintf("workflow_%s", newWorkflow.ID), workflowBytes, 10)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for workflow during category run: %s", err)
 
 		SetWorkflow(ctx, newWorkflow, newWorkflow.ID)
 	}
+	*/
 
 	log.Printf("[DEBUG] Done preparing workflow '%s' (%s) to be ran for category action %s", newWorkflow.Name, newWorkflow.ID, selectedAction.Name)
 
@@ -18905,10 +19150,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	 */
 
+ 
+	// FIXME: Make dynamic? AKA input itself is what controls the workflow?
+	// E.g. for the "body", instead of having to know it's "body" we just have to know it's "input" and dynamically fill in based on execution args
+	executionArgument := "testing"
 	execData := ExecutionStruct{
 		Start:             startId,
-		ExecutionSource:   "category_action",
-		ExecutionArgument: `{"title": "hello"}`,
+		ExecutionSource:   "ShuffleGPT",
+		ExecutionArgument: executionArgument,
 	}
 
 	newExecBody, _ := json.Marshal(execData)
@@ -18924,7 +19173,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	streamUrl = fmt.Sprintf("%s/api/v1/workflows/%s/execute", streamUrl, newWorkflow.ID)
-
 	req, err = http.NewRequest(
 		"POST",
 		streamUrl,
@@ -18955,15 +19203,27 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("\n\n[DEBUG] Executionbody: %s\n\n", string(executionBody))
+
 	workflowExecution := WorkflowExecution{}
 	err = json.Unmarshal(executionBody, &workflowExecution)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
 	}
 
+	if len(workflowExecution.ExecutionId) == 0 {
+		log.Printf("[ERROR] Failed running the app. Raw: %s", string(executionBody))
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running the app. Contact support@shuffler.io if this persists."}`)))
+		return
+	}
+
+	log.Printf("[DEBUG] got execution ID: %s", workflowExecution.ExecutionId)
 	returnBody := HandleRetValidation(ctx, workflowExecution, len(newWorkflow.Actions))
 	//log.Printf("[INFO] Got response from workflow: %#v", string(returnBody.Result))
 
+	selectedApp.LargeImage = ""
+	selectedApp.Actions = []WorkflowAppAction{}
 	structuredFeedback := StructuredCategoryAction{
 		Success: true,
 		WorkflowId: newWorkflow.ID,
@@ -18983,8 +19243,25 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Delete the workflow again. This should happen 5-10 minutes later. 
-	//err = DeleteWorkflow(ctx, newWorkflow.ID)
+	if len(startNode.ID) > 0 {
+		log.Printf("[DEBUG] GOT STARTNODE: %s (%s)", startNode.Name, startNode.ID)
+		// Find the action and set it as the new startnode
+		// This works as the execution is already done
+		for actionIndex, action := range newWorkflow.Actions {
+			if action.ID == startNode.ID {
+				newWorkflow.Start = startNode.ID
+				newWorkflow.Actions[actionIndex].IsStartNode = true
+			} else {
+				newWorkflow.Actions[actionIndex].IsStartNode = false
+			}
+		}
+
+		// Save the workflow
+		err = SetWorkflow(ctx, newWorkflow, newWorkflow.ID)
+		if err != nil {
+			log.Printf("[WARNING] Failed saving workflow in run category action: %s", err)
+		}
+	}
 
 	resp.WriteHeader(200)
 	resp.Write(jsonParsed)
@@ -19099,6 +19376,7 @@ func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking categories. Please try again."}`)))
 		return
 	}
+
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
@@ -19328,7 +19606,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 
 			for _, synonym := range node.Synonyms {
 				if synonym == parsedCategory {
-					log.Printf("Found synonym %s for %s", synonym, parsedCategory)
+					log.Printf("[DEBUG] Found new synonym '%s' for '%s'", synonym, parsedCategory)
 					parsedCategory = key
 					break
 				}

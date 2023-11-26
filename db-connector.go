@@ -409,7 +409,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 		}
 
 		if _, err = tx.Commit(); err != nil {
-			log.Printf("[WARNING] Failed commiting stats: %s", err)
+			log.Printf("[ERROR] Failed commiting stats: %s", err)
 		}
 	}
 
@@ -879,10 +879,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
-		log.Printf("[WARNING] Workflowexeciton executionId can't be empty.")
+		log.Printf("[ERROR] Workflowexeciton executionId can't be empty.")
 		return errors.New("ExecutionId can't be empty.")
 	}
-
 
 	if len(workflowExecution.WorkflowId) == 0 {
 		log.Printf("[WARNING] Workflowexecution workflowId can't be empty.")
@@ -913,8 +912,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		hostname = "shuffle-backend"
 	}
 
+	// FIXME: This right here has caused more problems during dev than anything
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
-		//log.Printf("[INFO] Not saving execution to DB, since we are running in swarm mode.")
+		//log.Printf("[INFO] Not saving execution to DB (just cache), since we are running in swarm mode.")
 		return nil
 	}
 
@@ -3374,6 +3374,10 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 // Index = Username
 func DeleteKey(ctx context.Context, entity string, value string) error {
 	// Non indexed User data
+	if entity == "workflowexecution" {
+		log.Printf("\n\n\n\n\n\n[WARNING] Deleting workflowexecution: %s\n\n\n\n\n\n", value)
+	}
+
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
 	if len(value) == 0 {
 		log.Printf("[WARNING] Couldn't delete %s because value (id) must be longer than 0", entity)
@@ -7989,7 +7993,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		}
 
 	} else {
-
+		log.Printf("[DEBUG] In query check for workflow ID: %s", workflowId)
 
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		if inputcursor != "" {
@@ -9987,6 +9991,7 @@ func GetCreatorStats(ctx context.Context, creatorName string, startDate string, 
 	return stats, err
 }
 
+// Stopped clearing them out as the result from it is used in subsequent workflows as well (subflows). This means the 31 min timeout is default.
 func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 	// Keeping cache for 30-60 min due to rerun management
 	if project.Environment == "cloud" {
@@ -9998,8 +10003,6 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 		return
 	}
 
-
-	// Stopped clearing them out as the result from it is used in subsequent workflows as well (subflows). This means the 31 min timeout is default.
 
 	//log.Printf("[INFO][%s] Cleaning up cache for all %d results.", workflowExecution.ExecutionId, len(workflowExecution.Results))
 	//for _, result := range workflowExecution.Results {
@@ -10043,7 +10046,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-			log.Printf("[INFO] Already finished (validate)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
+			log.Printf("[INFO][%s] Already finished (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
 			return false
 		}
 
