@@ -10436,9 +10436,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			if err != nil {
 				log.Printf("[WARNING] Failed making org notification: %s", err)
 			}
-			
 		}
 	}
+
 
 	actionResult.Action = Action{
 		AppName:           actionResult.Action.AppName,
@@ -10451,10 +10451,29 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	// Cleaning up result authentication
+	notificationSent := false
 	for paramIndex, param := range actionResult.Action.Parameters {
 		if param.Configuration {
 			//log.Printf("[INFO] Deleting param %s (auth)", param.Name)
 			actionResult.Action.Parameters[paramIndex].Value = ""
+		}
+
+		if param.Name == "liquid_syntax_error" && !notificationSent {
+			// Send notification for it
+			err := CreateOrgNotification(
+				ctx,
+				fmt.Sprintf("Liquid Syntax Error in Workflow %s", workflowExecution.Workflow.Name),
+				fmt.Sprintf("Node %s in Workflow %s was found to have a Liquid Syntax Error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
+				fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
+				workflowExecution.ExecutionOrg,
+				true,
+			)
+
+			if err == nil {
+				notificationSent = true 
+			} else {
+				log.Printf("[WARNING] Failed making org notification: %s", err)
+			}
 		}
 	}
 
@@ -20487,7 +20506,7 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
@@ -20821,7 +20840,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 
 				// Only for Read-Only. No executions or impersonations.
 			} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-				log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+				log.Printf("[AUDIT] Letting verified support admin %s access workflow run debug search for %s", user.Username, workflow.ID)
 			} else {
 				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 				resp.WriteHeader(401)

@@ -10081,6 +10081,25 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			// Enrich IPs and the like by finding stuff with regex
 			RunCacheCleanup(ctx, workflowExecution)
 			RunIOCFinder(ctx, workflowExecution)
+
+			comparisonTime := workflowExecution.CompletedAt - workflowExecution.StartedAt
+			if comparisonTime > 600 {
+				// FIXME: Check if there are any actions with delays?
+
+				err := CreateOrgNotification(
+					ctx,
+					fmt.Sprintf("Workflow %s took too long to run", workflowExecution.Workflow.Name, comparisonTime),
+					fmt.Sprintf("This notification is made when the execution takes more than 10 minutes.", workflowExecution.Workflow.Name, comparisonTime),
+					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+					workflowExecution.ExecutionOrg,
+					true,
+				)
+
+				if err != nil {
+					log.Printf("[ERROR] Failed to create notification for workflow %s: %s", workflowExecution.Workflow.ID, err)
+				}
+			}
+
 			return true
 		}
 	}
@@ -10675,8 +10694,20 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			Actions:  parsedActions,
 		}
 
-		execution.Result = ""
+		//execution.Result = ""
+		if len(execution.Results) > 1000 {
+			execution.Results = execution.Results[:1000]
+		}
+
 		for resIndex, _ := range execution.Results {
+			if execIndex > len(executions) {
+				continue
+			}
+
+			if resIndex > len(executions[execIndex].Results) {
+				continue
+			}
+
 			executions[execIndex].Results[resIndex].Action = Action{}
 			executions[execIndex].Results[resIndex].Result = ""
 		}
