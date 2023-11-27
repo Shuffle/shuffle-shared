@@ -148,6 +148,7 @@ type WorkflowApp struct {
 		PartnerContacts string `json:"partner_contacts" datastore:"partner_contacts"`
 		DocumentationUrl string `json:"documentation_url" datastore:"documentation_url"`
 		GithubUrl        string `json:"github_url" datastore:"github_url"`
+		Triggers 		[]string `json:"triggers" datastore:"triggers"`
 	} `json:"reference_info" datastore:"reference_info"`
 	Blogpost                 string              `json:"blogpost" yaml:"blogpost" datastore:"blogpost"`
 	Video                    string              `json:"video" yaml:"video" datastore:"video"`
@@ -3363,8 +3364,9 @@ type CategoryAction struct {
 	WorkflowId 		 string `json:"workflow_id"` // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
 	AuthenticationId string `json:"authentication_id"`
 
-	Step int64 		    `json:"step"` 			// The step to use put it in
+	Step 		int64 		    `json:"step"` 			// The step to use put it in
 	Query 		string `json:"query,omitempty"` // Due to the API being built around programmatic, and then with LLMs, this was added to make context possible between nodes
+	DryRun 		bool   `json:"dry_run"` 		// If true, it will not actually execute the action, but instead just build the workflow
 }
 
 type LabelStruct struct {
@@ -3646,6 +3648,8 @@ type StructuredCategoryAction struct {
 	Result string `json:"result"`
 
 	AvailableLabels []string `json:"available_labels"`
+	ThreadId string `json:"thread_id"`
+	RunId string `json:"run_id"`
 }
 
 type ModelLabelParameter struct {

@@ -18387,6 +18387,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	value.Label = strings.ReplaceAll(strings.ToLower(value.Label), " ", "_")
 	value.AppName = strings.ReplaceAll(strings.ToLower(value.AppName), " ", "_")
 
+	if value.AppName == "email" {
+		value.Category = "email"
+		value.AppName = ""
+	}
+
+
 	foundIndex := -1
 	labelIndex := -1
 	if len(value.Category) > 0 {
@@ -18613,6 +18619,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if strings.Contains(strings.ToLower(strings.Join(selectedApp.ReferenceInfo.Triggers, ",")), "webhook") {
+		availableLabels = append(availableLabels, "Webhook")
+
+		if len(selectedAction.Name) == 0 {
+			log.Printf("\n\n[DEBUG] Due to webhook in app %s (%s), we don't need an action. Should not return\n\n", selectedApp.Name, selectedApp.ID)
+		}
+	}
+
 	if len(selectedAction.Name) == 0 {
 		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'", value.Label, selectedApp.Name)
 
@@ -18621,7 +18635,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding the label in app '%s'"}`, selectedApp.Name)))
 			return
 		} else {
-			log.Printf("[DEBUG] NOT sending back due to label %s", value.Label)
+			//log.Printf("[DEBUG] NOT sending back due to label %s", value.Label)
 		}
 	}
 
@@ -18726,11 +18740,22 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		newWorkflow.Start = startId
 
 		// Remove is startnode from previous nodes
+		newActions := []Action{}
 		for actionIndex, action := range newWorkflow.Actions {
+			if len(selectedAction.Name) > 0 && action.Name == selectedAction.Name {
+				log.Printf("[DEBUG] Found action %s, setting as start node", action.Name)
+				continue
+			}
+
 			if action.IsStartNode {
 				newWorkflow.Actions[actionIndex].IsStartNode = false
 			}
+
+			newActions = append(newActions, action)
 		}
+
+		// Remove any node with the same name
+		newWorkflow.Actions = newActions
 	}
 
 	environment := "Cloud"
@@ -18804,14 +18829,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		// Reducing size drastically as it isn't really necessary
 		selectedApp.Actions = []WorkflowAppAction{}
-		selectedApp.Authentication = Authentication{}
+		//selectedApp.Authentication = Authentication{}
 		selectedApp.ChildIds = []string{}
 		selectedApp.SmallImage = ""
 		structuredFeedback := StructuredCategoryAction{
 			Success: false,
 			Action: "app_authentication",
 			Category: discoveredCategory,
-			Reason: fmt.Sprintf("Help us set up app '%s' for you first. Please authenticate with blank fields if you would just like to what it can do.", selectedApp.Name),
+			Reason: fmt.Sprintf("Help us set up app '%s' for you first. If you want to skip this, fill in empty fields and submit it.", selectedApp.Name),
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -18848,7 +18873,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 
 		selectedApp.Actions = []WorkflowAppAction{}
-		selectedApp.Authentication = Authentication{}
+		//selectedApp.Authentication = Authentication{}
 		selectedApp.ChildIds = []string{}
 		selectedApp.SmallImage = ""
 		structuredFeedback := StructuredCategoryAction{
@@ -18969,14 +18994,17 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						Source: WorkflowAppActionParameter{
 							Name: "source",
 							Value: fmt.Sprintf("$%s.status", strings.ReplaceAll(nearestXNeighbor.Label, " ", "_")),
+							Variant: "STATIC_VALUE",
 						}, 
 						Condition: WorkflowAppActionParameter{
 							Name: "condition",
 							Value: "less than",	
+							Variant: "STATIC_VALUE",
 						},
 						Destination: WorkflowAppActionParameter{
 							Name: "destination",
 							Value: "300",
+							Variant: "STATIC_VALUE",
 						},
 					},
 				},
@@ -19041,6 +19069,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+
 	// Send request to /api/v1/conversation with this data
 	streamUrl := fmt.Sprintf("https://shuffler.io")
 	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
@@ -19050,7 +19079,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	//streamUrl = "http://localhost:5002"
 	streamUrl = fmt.Sprintf("%s/api/v1/conversation", streamUrl)
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: 60 * time.Second,
 	}
 
 	req, err := http.NewRequest(
@@ -19130,6 +19159,72 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// Set workflow in cache only?
 	// That way it can be loaded during execution
 
+	if startNode.ID != "" {
+		// Check if the workflow contains a trigger
+		// If it doesn't, add one. Schedule or Webhook.
+		// Default: schedule. Webhook is an option added
+
+		triggersFound := 0
+		for _, trigger := range newWorkflow.Triggers {
+			if trigger.Name != "Shuffle Workflow" && trigger.Name != "User Input" {
+				triggersFound++
+			}
+		}
+
+		if triggersFound == 0 {
+
+			decidedTrigger := Trigger{
+				Name: "Schedule",
+				Status: "uninitialized",
+				TriggerType: "SCHEDULE",
+				IsValid: true,
+				Label: "Scheduler",
+			}
+
+			if strings.Contains(strings.ToLower(strings.Join(selectedApp.ReferenceInfo.Triggers, ",")), "webhook") {
+				// Add a schedule trigger
+				decidedTrigger = Trigger{
+					Name: "Webhook",
+					Status: "uninitialized",
+					TriggerType: "WEBHOOK",
+					IsValid: true,
+					Label: "Webhook",
+				}
+			} else {
+				// Check if it's CRUD (Read)
+				// If it's List + schedule, we should add some kind of filter after 1st node 
+
+				// Check if startnode has "list" or "search" in it
+				if strings.Contains(strings.ToLower(startNode.Name), "list") || strings.Contains(strings.ToLower(startNode.Name), "search") {
+					log.Printf("[DEBUG] Found list/search in startnode name, adding filter after trigger? Can this be automatic?")
+				}
+
+			}
+
+			decidedTrigger.ID = uuid.NewV4().String()
+			decidedTrigger.Position = Position{
+				X: startNode.Position.X - 200,
+				Y: startNode.Position.Y,
+			}
+			decidedTrigger.AppAssociation = WorkflowApp{
+				Name: selectedApp.Name,
+				AppVersion: selectedApp.AppVersion,
+				ID: selectedApp.ID,
+				LargeImage: selectedApp.LargeImage,
+			}
+
+			newWorkflow.Triggers = append(newWorkflow.Triggers, decidedTrigger)
+			// Add a branch from trigger to startnode
+			newWorkflow.Branches = append(newWorkflow.Branches, Branch{
+				SourceID: decidedTrigger.ID,
+				DestinationID: startNode.ID,
+				ID: uuid.NewV4().String(),
+			})
+
+			log.Printf("[DEBUG] Added trigger to the generated workflow")
+		}
+	}
+
 	err = SetWorkflow(ctx, newWorkflow, newWorkflow.ID)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting workflow during category run: %s", err)
@@ -19173,10 +19268,38 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	 */
 
+	if value.DryRun {
+		log.Printf("\n\n[DEBUG] Returning before execution because dry run is set\n\n")
+		if len(startNode.ID) > 0 {
+			log.Printf("[DEBUG] GOT STARTNODE: %s (%s)", startNode.Name, startNode.ID)
+			// Find the action and set it as the new startnode
+			// This works as the execution is already done
+			for actionIndex, action := range newWorkflow.Actions {
+				if action.ID == startNode.ID {
+					newWorkflow.Start = startNode.ID
+					newWorkflow.Actions[actionIndex].IsStartNode = true
+				} else {
+					newWorkflow.Actions[actionIndex].IsStartNode = false
+				}
+			}
+
+			// Save the workflow
+			err = SetWorkflow(ctx, newWorkflow, newWorkflow.ID)
+			if err != nil {
+				log.Printf("[WARNING] Failed saving workflow in run category action: %s", err)
+			}
+		}
+
+		resp.Write([]byte(fmt.Sprintf(`{"success": true, "dry_run": true, "workflow_id": "%s", "reason": "Steps built, but workflow not executed"}`, newWorkflow.ID)))
+		resp.WriteHeader(200)
+
+		return 
+	}
+
  
 	// FIXME: Make dynamic? AKA input itself is what controls the workflow?
 	// E.g. for the "body", instead of having to know it's "body" we just have to know it's "input" and dynamically fill in based on execution args
-	executionArgument := "testing"
+	executionArgument := ""
 	execData := ExecutionStruct{
 		Start:             startId,
 		ExecutionSource:   "ShuffleGPT",
