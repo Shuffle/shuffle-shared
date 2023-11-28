@@ -914,13 +914,14 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check HTTP request: %s", err)
-		return workflowHealth, err
+		return workflowHealth, err	
 	}
 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed running health check workflow: %s. The status code is: %d", id, resp.StatusCode)
+
 		// print the response body
 		respBodyErr, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
@@ -937,8 +938,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 				log.Printf("[DEBUG] Fixed opensearch mappings successfully! Maybe try ops dashboard again?")
 			}
 		}
-
-		return workflowHealth, err
+		// return workflowHealth, err
 	}
 
 	respBody, err := ioutil.ReadAll(resp.Body)
@@ -951,8 +951,10 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	var execution WorkflowExecution
 	err = json.Unmarshal(respBody, &execution)
 
-	workflowHealth.Run = true
-	workflowHealth.ExecutionId = execution.ExecutionId
+	if resp.StatusCode == 200 {
+		workflowHealth.Run = true
+		workflowHealth.ExecutionId = execution.ExecutionId
+	}
 
 	updateOpsCache(workflowHealth)
 	timeout := time.After(5 * time.Minute)
@@ -972,7 +974,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// 3. Check if workflow ran successfully
 	// ping /api/v1/streams/results/<execution_id> while workflowHealth.RunFinished is false
 	// if workflowHealth.RunFinished is true, return workflowHealth
-	for workflowHealth.RunFinished == false {
+	for workflowHealth.RunFinished == false && workflowHealth.Run == true {
 		url := baseUrl + "/api/v1/streams/results"
 		req, err := http.NewRequest("POST", url, nil)
 		if err != nil {
@@ -1022,6 +1024,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		}
 
 		if executionResults.Status != "EXECUTING" {
+			log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
 			workflowHealth.RunFinished = true
 			workflowHealth.RunStatus = executionResults.Status
 		}
