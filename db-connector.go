@@ -944,7 +944,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// New struct, to not add body, author etc
-	log.Printf("[DEBUG][%s] Adding execution to database, not just cache. Workflow: %s (%s)", workflowExecution.ExecutionId, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
+	//log.Printf("[DEBUG][%s] Adding execution to database, not just cache. Workflow: %s (%s)", workflowExecution.ExecutionId, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
 	if project.DbType == "opensearch" {
 		// Need to fix an indexing problem?
 		// "mapper [workflow.actions.position.x] cannot be changed from type [float] to [long]"
@@ -7110,7 +7110,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(100)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-updated_at").Limit(200)
 		_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 
 		if err != nil && len(notifications) == 0 {
@@ -7122,6 +7122,15 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 				}
 			} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 				log.Printf("[INFO] Failed loading SOME notifications - skipping: %s", err)
+			} else if strings.Contains(fmt.Sprintf("%s", err), "no matching index found") || strings.Contains(fmt.Sprintf("%s", err), "not ready to serve") {
+				log.Printf("[ERROR] Failed loading notifications based on index: %s", err)
+
+				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(200)
+				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
+				if err != nil && len(notifications) == 0 {
+					return notifications, err
+				}
+
 			} else {
 				return notifications, err
 			}
@@ -7993,8 +8002,6 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		}
 
 	} else {
-		log.Printf("[DEBUG] In query check for workflow ID: %s", workflowId)
-
 		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)

@@ -70,14 +70,21 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 	notification, err := GetNotification(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting notification %s for user %s: %s", fileId, user.Id, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
 		return
 	}
 
-	if notification.UserId != user.Id {
+	if notification.Personal && notification.UserId != user.Id {
 		log.Printf("[WARNING] Bad user for notification. %s (wanted) vs %s", notification.UserId, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
+		return
+	}
+
+	if notification.OrgId != user.ActiveOrg.Id {
+		log.Printf("[WARNING] Bad org for notification. %s (wanted) vs %s", notification.OrgId, user.ActiveOrg.Id)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Bad userId or notification doesn't exist"}`))
 		return
 	}
@@ -135,6 +142,8 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 
 	for _, notification := range notifications {
 		// Not including this as we want to mark as read for all users in the org
+		// We stopped using personal vs org notifications
+		// Also added index to track by updated time
 		//if user.Id != notification.UserId {
 		//	continue
 		//}
@@ -193,7 +202,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//log.Printf("[AUDIT] Got %d notifications for user %s (%s)", len(notifications), user.Username, user.Id)
+	log.Printf("[AUDIT] Got %d notifications for org %s (%s)", len(notifications), user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	newNotifications := []Notification{}
 	for _, notification := range notifications {
@@ -202,9 +211,13 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		if notification.UserId != user.Id {
+		if notification.Personal {
 			continue
 		}
+
+		//if notification.UserId != user.Id {
+		//	continue
+		//}
 
 		notification.UserId = ""
 		//notification.OrgId = ""
@@ -384,11 +397,23 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 						)
 					}
 
-					cacheData = []byte(cache.([]uint8))
+					// Test if it's a string or uint8
+					var cacheData []byte
+					tmpString, ok := cache.(string)
+					if !ok {
+						tmpUint8, ok := cache.([]uint8)
+						if !ok {
+							log.Printf("[ERROR] Failed setting cache data for notification %s. Cache casting failed", notification.Id)
+							return
+						} else {
+							cacheData = []byte(tmpUint8)
+						}
+					} else {
+						cacheData = []byte(tmpString)
+					}
 
-					var newCachedNotifications NotificationCached
-					
 					// unmarshal cached data
+					var newCachedNotifications NotificationCached
 					err = json.Unmarshal(cacheData, &newCachedNotifications)
 					if err != nil {
 						log.Printf("[ERROR] Failed unmarshaling cached notifications for notification %s: %s", notification.Id, err)
@@ -430,7 +455,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		backendUrl = "https://shuffler.io"
 	}
 
-	// Callback to itself
+	// Callback to itself onprem. 
 	if len(backendUrl) == 0 {
 		backendUrl = "http://localhost:5001"
 	}
@@ -454,6 +479,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	)
 
 	req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, userApikey))
+	req.Header.Add("Org-Id", notification.OrgId)
 	newresp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -489,12 +515,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		cacheKey := fmt.Sprintf("notification-%s", referenceUrl)
 		_, err := GetCache(ctx, cacheKey) 
 		if err == nil {
-			// Avoiding duplicates for the same workflow
-			log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
+			// Avoiding duplicates for the same workflow+execution
+			//log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
 			return nil
 
 		} else {
-			log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
+			//log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
 			err := SetCache(ctx, cacheKey, []byte("1"), 31)
 			if err != nil {
 				log.Printf("[ERROR] Failed saving cached notification %s: %s", cacheKey, err)
@@ -513,6 +539,10 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	log.Printf("[DEBUG] Found %d existing notifications for org %s. Merge?", len(notifications), orgId)
 	matchingNotifications := []Notification{}
 	for _, notification := range notifications {
+		if notification.Personal {
+			continue
+		}
+
 		// notification.Title == title &&
 		//log.Printf("%s vs %s", notification.ReferenceUrl, referenceUrl)
 		if notification.Title == title && notification.Description == description {
@@ -620,6 +650,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		log.Printf("[INFO] New notification with title %#v is being made for users in org %s", title, orgId)
 
 
+		// Only gonna load this after
+		// All the other personal ones are kind of irrelevant
 		err = SetNotification(ctx, mainNotification)
 		if err != nil {
 			log.Printf("[WARNING] Failed making org notification with title %#v for org %s", title, orgId)
@@ -658,16 +690,21 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 
 			//log.Printf("[DEBUG] Made notification for user %s (%s)", user.Username, user.Id)
+			// Skipping personal notifications. Making them orgwide instead
+			// FIXME: Point of personal was to make it possible to see them across
+			// orgs. But that's not really used anymore. 
+			/*
 			newNotification := mainNotification
 			newNotification.Id = uuid.NewV4().String()
-			newNotification.UserId = user.Id
 			newNotification.OrgNotificationId = generatedId
+			newNotification.UserId = user.Id
 			newNotification.Personal = true
 
 			err = SetNotification(ctx, newNotification)
 			if err != nil {
 				log.Printf("[WARNING] Failed making USER notification with title %#v for user %s in org %s", title, user.Id, orgId)
 			}
+			*/
 		}
 
 		if len(org.Defaults.NotificationWorkflow) > 0 {

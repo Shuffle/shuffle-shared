@@ -17224,7 +17224,7 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 				Description: "Notifications help make your workflow infrastructure stable. Click the notification icon in the top right to see all open ones.",
 				Type:        "notifications",
 				Active:      true,
-				URL:         fmt.Sprintf("/notifications"),
+				URL:         fmt.Sprintf("/admin?tab=priorities"),
 				Severity:    1,
 			}, updated)
 
