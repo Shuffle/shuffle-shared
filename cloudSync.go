@@ -604,7 +604,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		}
 
 		// FIXME: When inside this, check if usage should be sent to the user
-		if org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit {
+		if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV || org.LeadInfo.Internal) {
 			return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this.", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit))
 		}
 
