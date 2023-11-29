@@ -10453,10 +10453,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				true,
 			)
 				
-			//fmt.Sprintf("Node %s in Workflow %s was found to have an error. Click to investigate", actionResult.Action.Label, workflowExecution.Workflow.Name),
-
 			if err != nil {
 				log.Printf("[WARNING] Failed making org notification: %s", err)
+			} else {
+				workflowExecution.NotificationsCreated++
 			}
 		}
 	}
@@ -10493,6 +10493,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			if err == nil {
 				notificationSent = true 
+				workflowExecution.NotificationsCreated++
 			} else {
 				log.Printf("[WARNING] Failed making org notification: %s", err)
 			}
@@ -10535,6 +10536,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				if err != nil {
 					log.Printf("[WARNING] Failed making org notification: %s", err)
+				} else {
+					workflowExecution.NotificationsCreated++
 				}
 			}
 		}
@@ -10894,6 +10897,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				if err != nil {
 					log.Printf("[WARNING] Failed making org notification for %s: %s", workflowExecution.ExecutionOrg, err)
+				} else {
+					workflowExecution.NotificationsCreated++
 				}
 			}
 		} else {
@@ -11037,7 +11042,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if finished {
 			dbSave = true
 			if len(workflowExecution.ExecutionParent) == 0 {
-				log.Printf("[INFO][%s] Execution in workflow %s finished (not subflow).", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
+				//log.Printf("[INFO][%s] Execution in workflow %s finished (not subflow).", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
 			} else {
 				log.Printf("[INFO][%s] SubExecution of parentExecution %s in workflow %s finished (subflow).", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.ID)
 
@@ -16170,7 +16175,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			// Backup env :>
 			if len(foundenv) == 0 && len(environments) > 0 {
-				log.Printf("[ERROR] Fallback to environment %s for subflow (default). Does it still run?", environments[0])
+				//log.Printf("[ERROR] Fallback to environment %s for subflow (default). Does it still run?", environments[0])
 				foundenv = environments[0]
 			}
 
@@ -17766,7 +17771,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				continueOuter = false
 
 				if fixed > 0 && skippedCnt == len(parents[nextAction]) {
-					log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s. Should set to skipped.", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
+					//log.Printf("[WARNING][%s] All parents of %s (%s) are skipped. (%d/%d): %s. Should set to skipped.", workflowExecution.ExecutionId, action.Label, nextAction, fixed, len(parents[nextAction]), strings.Join(parents[nextAction], ", "))
 					continueOuter = true
 				}
 			}

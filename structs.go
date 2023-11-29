@@ -962,6 +962,8 @@ type WorkflowExecution struct {
 	ExecutionSourceAuth string         `json:"execution_source_auth" yaml:"execution_source_auth"`
 	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"` // Max depth to execute subflows in infinite loops (10 by default)
 	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
+
+	NotificationsCreated int64 `json:"notifications_created" datastore:"notifications_created"`
 }
 
 type Position struct {
