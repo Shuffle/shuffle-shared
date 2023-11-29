@@ -207,9 +207,9 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 	newNotifications := []Notification{}
 	for _, notification := range notifications {
 		// Check how long ago?
-		if notification.Read {
-			continue
-		}
+		//if notification.Read {
+		//	continue
+		//}
 
 		if notification.Personal {
 			continue

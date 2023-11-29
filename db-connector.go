@@ -4793,9 +4793,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	// May be better to just list all, then set to true?
 	// Is this the slow one?
 	if len(publicApps) == 0 {
-		//for _, name := range importantApps {
-			//query := datastore.NewQuery(nameKey).Filter("Name =", name).Limit(queryLimit)
-			query := datastore.NewQuery(nameKey).Filter("public =", true).Limit(queryLimit)
+		for _, name := range importantApps {
+			query := datastore.NewQuery(nameKey).Filter("Name =", name).Limit(queryLimit)
+			//query := datastore.NewQuery(nameKey).Filter("public =", true).Limit(queryLimit)
 			for {
 				it := project.Dbclient.Run(ctx, query)
 
@@ -4867,7 +4867,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					break
 				}
 			}
-		//}
+		}
 
 		newbody, err := json.Marshal(publicApps)
 		if err != nil {
@@ -5022,8 +5022,13 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		found := false
 		replaceIndex := -1
 		for dedupIndex, dedupApp := range dedupedApps {
+			if len(strings.TrimSpace(dedupApp.Name)) == 0 {
+				continue
+			}
+
 			// Name, owner, ID, parent ID
 			if strings.ToLower(dedupApp.Name) == strings.ToLower(app.Name) {
+				//log.Printf("[DEBUG] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, dedupIndex)
 				found = true
 				replaceIndex = dedupIndex
 			}
@@ -5036,10 +5041,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 		//log.Printf("[INFO] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, replaceIndex)
 		// If owner of dedup, don't change
+		/*
 		if dedupedApps[replaceIndex].Owner == user.Id {
-			//log.Printf("[INFO] Owner of deduped app is user. Not replacing.")
+			log.Printf("[INFO] Owner of deduped app is user. Not replacing.")
 			continue
 		}
+		*/
 
 		if app.Edited > dedupedApps[replaceIndex].Edited {
 			//log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
@@ -5049,11 +5056,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 		// Check if image, and other doesn't have
 		if len(dedupedApps[replaceIndex].LargeImage) == 0 && len(app.LargeImage) > 0 {
-			//log.Printf("[INFO] Replacing deduped app with image in get apps (2): %s", app.Name)
+			log.Printf("[INFO] Replacing deduped app with image in get apps (2): %s", app.Name)
 			dedupedApps[replaceIndex] = app
-			continue
 		}
 	}
+
+	
 
 	allApps = dedupedApps
 	for appIndex, app := range allApps {
@@ -5085,6 +5093,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return allApps[i].Edited > allApps[j].Edited
 	})
 
+
 	if len(allApps) > 0 {
 		// Finds references
 		allApps = findReferenceAppDocs(ctx, allApps)
@@ -5101,7 +5110,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
-
 
 	return allApps, nil
 }
@@ -7104,6 +7112,10 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 
 		notifications = []Notification{}
 		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.Personal { 
+				continue
+			}
+
 			if hit.Source.OrgId == orgId {
 				notifications = append(notifications, hit.Source)
 			}
@@ -8808,7 +8820,6 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 			return workflows, err
 		}
 
-		log.Printf("\n\nFOUND: %d", len(wrapped.Hits.Hits))
 		workflows = []NewValue{}
 		for _, hit := range wrapped.Hits.Hits {
 			if hit.Source.Value == value && hit.Source.OrgId == orgId {

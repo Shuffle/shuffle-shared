@@ -4169,6 +4169,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	correctUser := false
 	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
+		log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
+
+		// if,ifelse: Public, Org owns it, or user owns it
 		if tmpworkflow.Public {
 			// FIXME:
 			// If the user Id is part of the creator: DONT update this way.
@@ -4292,7 +4295,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 									},
 								},
 								Running:        true,
-								OrgId:          user.ActiveOrg.Id,
+								OrgId:          workflow.OrgId,
 								Environment:    "cloud",
 								Auth:           hookAuth,
 								CustomResponse: customResponse,
@@ -4394,6 +4397,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	} else {
+		log.Printf("[AUDIT] User %s is creating or modifying workflow with ID %s as they are the owner / it's public", user.Username, workflow.ID)
 
 		if workflow.Public {
 			log.Printf("[WARNING] Rolling back public as the user set it to true themselves")
@@ -4402,6 +4406,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		if len(workflow.PublishedId) > 0 {
 			log.Printf("[INFO] Workflow %s has the published ID %s", workflow.ID, workflow.PublishedId)
+
+			// Overwrite ID here?
 		}
 	}
 
@@ -4453,24 +4459,24 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.DefaultReturnValue
 	}
 
-	log.Printf("[INFO] Saving workflow '%s' with %d action(s) and %d trigger(s)", workflow.Name, len(workflow.Actions), len(workflow.Triggers))
+	log.Printf("[INFO] Saving workflow '%s' with %d action(s) and %d trigger(s). Org: %s", workflow.Name, len(workflow.Actions), len(workflow.Triggers), workflow.OrgId)
 
-	if len(user.ActiveOrg.Id) > 0 {
+	if len(workflow.OrgId) == 0 && len(user.ActiveOrg.Id) > 0 {
 		if len(workflow.ExecutingOrg.Id) == 0 {
 			log.Printf("[INFO] Setting executing org for workflow to %s", user.ActiveOrg.Id)
 			user.ActiveOrg.Users = []UserMini{}
 			workflow.ExecutingOrg = user.ActiveOrg
 		}
 
-		//if len(workflow.Org) == 0 {
-		//	user.ActiveOrg.Users = []UserMini{}
-		//	//workflow.Org = user.ActiveOrg
-		//}
-
 		if len(workflow.OrgId) == 0 {
 			workflow.OrgId = user.ActiveOrg.Id
 		}
+	} else if len(workflow.OrgId) != 0 && len(workflow.ExecutingOrg.Id) == 0 {
+		log.Printf("[INFO] Setting executing org for workflow to %s", workflow.OrgId)
+		workflow.ExecutingOrg.Id = workflow.OrgId
+		workflow.ExecutingOrg.Name = ""
 	}
+
 
 	newActions := []Action{}
 	allNodes := []string{}
@@ -4488,13 +4494,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		},
 	}
 
-	//if project.Environment != "cloud" {
 	environments, err = GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting environments for org %s", user.ActiveOrg.Id)
 		environments = []Environment{}
 	}
-	//}
 
 	defaultEnv := ""
 	for _, env := range environments {
@@ -5578,10 +5582,17 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	// TBD: Is this too drastic? May lead to issues in the future.
 	if workflow.OrgId != user.ActiveOrg.Id {
-		log.Printf("[WARNING] Editing workflow to be owned by org %s", user.ActiveOrg.Id)
+		log.Printf("[WARNING] NOT Editing workflow to be owned by org %s. Instead just editing. Original org: %s", user.ActiveOrg.Id, workflow.OrgId)
+
+
+		/*
 		workflow.OrgId = user.ActiveOrg.Id
 		workflow.ExecutingOrg = user.ActiveOrg
 		workflow.Org = append(workflow.Org, user.ActiveOrg)
+		*/
+		//resp.WriteHeader(500)
+		//resp.Write([]byte(`{"success": false, "error": "Workflow does not belong to this org"}`))
+		//return
 	}
 
 	// Only happens if the workflow is public and being edited
@@ -6193,7 +6204,6 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// log.Printf("FOUND: %s", curUserFound)
 		foundUser = userInfo
 		//userInfo, err := HandleApiAuthentication(resp, request)
 	}
@@ -7433,6 +7443,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	type ReturnData struct {
 		OrgId string `json:"org_id" datastore:"org_id"`
+		OrgName string `json:"org_name" datastore:"org_name"`
 		Name  string `json:"name" datastore:"name"`
 	}
 
@@ -7445,10 +7456,14 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(tmpData.OrgName) > 0 && len(tmpData.Name) == 0 {
+		tmpData.Name = tmpData.OrgName
+	}
+
 	if len(tmpData.Name) < 3 {
 		log.Printf("[WARNING] Suborgname too short (min 3) %s", tmpData.Name)
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Name must at least be 3 characters."}`))
+		resp.Write([]byte(`{"success": false, "reason": "Name must at least be 3 characters. Required fields: org_id, name"}`))
 		return
 	}
 
@@ -7501,6 +7516,12 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	orgId := uuid.NewV4().String()
+	newApps := parentOrg.ActiveApps
+	if len(newApps) > 11 {
+		// Do the last 10 apps, not 10 first
+		newApps = newApps[len(newApps)-10:]
+	}
+
 	newOrg := Org{
 		Name:        tmpData.Name,
 		Description: fmt.Sprintf("Sub-org by user %s in parent-org %s", user.Username, parentOrg.Name),
@@ -7520,9 +7541,12 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		},
 		CloudSyncActive: parentOrg.CloudSyncActive,
 		CreatorOrg:      tmpData.OrgId,
-		ActiveApps:      parentOrg.ActiveApps,
 		Region:          parentOrg.Region,
 		RegionUrl:       parentOrg.RegionUrl,
+
+		// FIXME: Should this be here? Makes things slow~
+		// Should only append apps owned by the parentorg itself
+		ActiveApps:      newApps,
 	}
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
@@ -9692,8 +9716,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				break
 			}
 		}
-
-		//log.Printf("\n\nPARENTNODEFOUND: %t\n\n", parentNodeFound)
 
 		// If found, loop through and make sure to check the result for ALL of them. If they're not in there, add them as values.
 		if parentNodeFound {
