@@ -690,7 +690,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 		return nil
 	}
 
-
 	// Maxsize ish~
 	name = strings.Replace(name, " ", "_", -1)
 

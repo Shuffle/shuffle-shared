@@ -10100,6 +10100,16 @@ func FixActionResultOutput(actionResult ActionResult) ActionResult {
 		actionResult.CompletedAt = actionResult.CompletedAt*1000
 	}
 
+	if len(strconv.FormatInt(actionResult.StartedAt, 10)) == 19 {
+		actionResult.StartedAt = actionResult.StartedAt/1000000
+	}
+
+	if len(strconv.FormatInt(actionResult.CompletedAt, 10)) == 19 {
+		actionResult.CompletedAt = actionResult.CompletedAt/1000000
+	}
+
+	//log.Printf("[DEBUG] Fixed LEN: %d, %d", len(strconv.FormatInt(actionResult.StartedAt, 10)), len(strconv.FormatInt(actionResult.CompletedAt, 10)))
+
 	return actionResult
 }
 
