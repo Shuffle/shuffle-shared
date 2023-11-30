@@ -2113,7 +2113,7 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 		}
 
 		if execution.Status != "EXECUTING" {
-			//log.Printf("Bad status: %s", execution.Status)
+			//log.Printf("[ERROR][%s] Bad status for execution: %s", execution.ExecutionId, execution.Status)
 			continue
 		}
 
@@ -2624,26 +2624,28 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 
 func GetActionResult(ctx context.Context, workflowExecution WorkflowExecution, id string) (WorkflowExecution, ActionResult) {
 	// Get workflow execution to make sure we have the latest
-	newWorkflowExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-	if err == nil && (len(newWorkflowExecution.Results) > len(workflowExecution.Results) || len(newWorkflowExecution.Results) == 0) {
-		workflowExecution = *newWorkflowExecution
-	}
+	//newWorkflowExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	//if err == nil && (len(newWorkflowExecution.Results) > len(workflowExecution.Results) || len(newWorkflowExecution.Results) == 0) {
+	//	workflowExecution = *newWorkflowExecution
+	//}
 
 	for _, actionResult := range workflowExecution.Results {
-		if actionResult.Action.ID == id {
-			// ALWAYS relying on cache due to looping subflow issues
-			if actionResult.Status == "WAITING" && actionResult.Action.AppName == "User Input" {
-				break
-			}
-
-			if actionResult.Action.AppName == "shuffle-subflow" && project.Environment == "cloud" {
-				//if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-				//log.Printf("[INFO] Skipping due to cache requirement for subflow")
-				break
-			}
-
-			return workflowExecution, actionResult
+		if actionResult.Action.ID != id {
+			continue
 		}
+
+		// ALWAYS relying on cache due to looping subflow issues
+		if actionResult.Status == "WAITING" && actionResult.Action.AppName == "User Input" {
+			break
+		}
+
+		if actionResult.Action.AppName == "shuffle-subflow" && project.Environment == "cloud" {
+			//if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
+			//log.Printf("[INFO] Skipping due to cache requirement for subflow")
+			break
+		}
+
+		return workflowExecution, actionResult
 	}
 
 	//log.Printf("[WARNING] No result found for %s - add here too?", id)
@@ -11125,11 +11127,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				} else
 			*/
 			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
-				log.Printf("[DEBUG] Found execution parent %s for workflow '%s' (%s)", workflowExecution.ExecutionParent, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
+				log.Printf("[DEBUG][%s] Found execution parent %s for workflow '%s' (%s)", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
 
 				err = updateExecutionParent(ctx, workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode, workflowExecution.ExecutionId)
 				if err != nil {
-					log.Printf("[ERROR] Failed running update execution parent: %s", err)
+					log.Printf("[ERROR][%s] Failed running update execution parent: %s", workflowExecution.ExecutionId, err)
 				} else {
 					updateParentRan = true
 				}
@@ -13066,7 +13068,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 				if err != nil {
-					log.Printf("[ERROR] Failed decryption for %s: %s", field.Key, err)
+					log.Printf("[ERROR] Failed decryption (2) for %s: %s", field.Key, err)
 					break
 				}
 
@@ -15581,7 +15583,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
-						log.Printf("[ERROR] Failed decryption in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+						log.Printf("[ERROR] Failed decryption (3) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
 						setField = false
 						//fieldLength = 0
 						break
@@ -15615,9 +15617,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if setField {
 					curAuth.Fields = newFields
 
-					//log.Printf("[DEBUG] Outer decryption debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+					//log.Printf("[DEBUG] Outer decryption (1) debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
 				} else {
-					log.Printf("[ERROR] Outer decryption debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+					//log.Printf("[ERROR] Outer decryption (2) debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
 
 				}
 			} else {
@@ -15669,10 +15671,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 				if !setAuth {
 					for fieldIndex, field := range curAuth.Fields {
+
+
 						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 						decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey) 
 						if err != nil {
-							log.Printf("[ERROR] Failed decryption in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+							if field.Key != "access_key" && field.Key != "access_token" {
+								log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+							}
 							continue
 						}
 
@@ -17422,16 +17428,16 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		return []string{inputNode}
 	}
 
+	if ValidateFinished(ctx, extra, *workflowExecution) {
+		return []string{}
+	}
+
 	for _, trigger := range workflowExecution.Workflow.Triggers {
 		if trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
 			continue
 		}
 
 		extra += 1
-	}
-
-	if ValidateFinished(ctx, extra, *workflowExecution) {
-		return []string{}
 	}
 
 	for _, branch := range workflowExecution.Workflow.Branches {

@@ -89,6 +89,7 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	notification.ModifiedBy = user.Username
 	err = markNotificationRead(ctx, notification)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating notification %s (%s) to read: %s", notification.Title, notification.Id, err)
@@ -148,6 +149,7 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 		//	continue
 		//}
 
+		notification.ModifiedBy = user.Username
 		err = markNotificationRead(ctx, &notification)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification %s (%s) to read (clear): %s", notification.Title, notification.Id, err)
@@ -250,7 +252,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 // call sendToNotificationWorkflow with the first cached notification 
 func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string, relieveNotifications bool) error {
 	if project.Environment != "onprem" {
-		log.Printf("[ERROR] Skipping notification workflow send for workflow %s as workflows are disabled for cloud for now.", workflowId)
+		log.Printf("[DEBUG] Skipping notification workflow send for workflow %s as workflows are disabled for cloud for now.", workflowId)
 		return nil
 	}
 

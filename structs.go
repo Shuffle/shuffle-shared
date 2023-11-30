@@ -1199,6 +1199,8 @@ type Notification struct {
 	Dismissable       bool     `json:"dismissable" datastore:"dismissable"`
 	Personal          bool     `json:"personal" datastore:"personal"`
 	Read              bool     `json:"read" datastore:"read"`
+
+	ModifiedBy 		  string `json:"modified_by" datastore:"modified_by"`
 }
 
 type NotificationCached struct {

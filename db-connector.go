@@ -884,7 +884,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	if len(workflowExecution.WorkflowId) == 0 {
-		log.Printf("[WARNING] Workflowexecution workflowId can't be empty.")
+		log.Printf("[WARNING][%s] Workflowexecution workflowId can't be empty.", workflowExecution.ExecutionId)
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 	}
 
@@ -896,13 +896,13 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	if err == nil {
 		err = SetCache(ctx, cacheKey, executionData, 31)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
+			//log.Printf("[WARNING] Failed updating execution cache. Setting DB! %s", err)
 			dbSave = true
 		} else {
 
 		}
 	} else {
-		log.Printf("[ERROR] Failed marshalling execution for cache: %s", err)
+		//log.Printf("[ERROR] Failed marshalling execution for cache: %s", err)
 		//log.Printf("[INFO] Set execution cache for workflowexecution %s", cacheKey)
 	}
 
@@ -921,7 +921,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-		log.Printf("[INFO] Already finished (set workflow)! Stopping the rest of the request for execution %s.", workflowExecution.ExecutionId)
+		log.Printf("[INFO][%s] Already finished (set workflow) with status %s! Stopping the rest of the request for execution.", workflowExecution.ExecutionId, newexec.Status)
 		return nil
 	}
 
@@ -3023,7 +3023,17 @@ func GetFirstOrg(ctx context.Context) (*Org, error) {
 		}
 
 		if len(wrapped.Hits.Hits) > 0 {
-			curOrg = &wrapped.Hits.Hits[0].Source
+			for _, hit := range wrapped.Hits.Hits {
+				if len(hit.Source.Id) > 0 && len(hit.Source.Users) > 0 {
+					curOrg = &hit.Source
+					break
+				}
+			}
+
+			if curOrg.Id == "" {
+				log.Printf("[ERROR] No orgs found with users & an ID, returning first org")
+				curOrg = &wrapped.Hits.Hits[0].Source
+			}
 		} else {
 			return curOrg, errors.New("No orgs found")
 		}
