@@ -10091,6 +10091,15 @@ func FixActionResultOutput(actionResult ActionResult) ActionResult {
 		actionResult.Result = `{"success": false, "reason": "This App requires authentication with Oauth2. Make sure to authenticate it first."}`
 	}
 
+	// Check length of result timestamp
+	if len(strconv.FormatInt(actionResult.StartedAt, 10)) == 10 {
+		actionResult.StartedAt = actionResult.StartedAt*1000 
+	}
+
+	if len(strconv.FormatInt(actionResult.CompletedAt, 10)) == 10 {
+		actionResult.CompletedAt = actionResult.CompletedAt*1000
+	}
+
 	return actionResult
 }
 
@@ -14854,7 +14863,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		// This one doesn't really matter.
-		log.Printf("[INFO][%s] Running POST execution with body of length %d for workflow %s", workflowExecution.ExecutionId, len(string(body)), workflowExecution.Workflow.ID)
+		//log.Printf("[INFO][%s] Running POST execution with body of length %d for workflow %s", workflowExecution.ExecutionId, len(string(body)), workflowExecution.Workflow.ID)
 
 		if len(body) >= 4 {
 			if body[0] == 34 && body[len(body)-1] == 34 {
@@ -15007,7 +15016,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			log.Printf("[DEBUG][%s] Body: %s", workflowExecution.ExecutionId, string(body))
 		} else {
 			// Here for debug purposes
-			log.Printf("[DEBUG][%s] Body len: %d", workflowExecution.ExecutionId, len(string(body)))
+			//log.Printf("[DEBUG][%s] Body len: %d", workflowExecution.ExecutionId, len(string(body)))
 		}
 
 		var execution ExecutionRequest
@@ -15041,7 +15050,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		//log.Printf("Execution data: %s", execution)
 		if len(execution.Start) == 36 && len(workflow.Actions) > 0 {
-			log.Printf("[INFO][%s] Should start execution on node %s", execution.ExecutionId, execution.Start)
+			//log.Printf("[INFO][%s] Should start execution on node %s", execution.ExecutionId, execution.Start)
 			workflowExecution.Start = execution.Start
 
 			found := false
@@ -15400,7 +15409,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.ExecutionSource = "default"
 	}
 
-	log.Printf("[INFO][%s] Execution source is '%s' in workflow %s. Organization: %s", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
+	//log.Printf("[INFO][%s] Execution source is '%s' in workflow %s. Organization: %s", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
 
 	workflowExecution.ExecutionVariables = workflow.ExecutionVariables
 	if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {

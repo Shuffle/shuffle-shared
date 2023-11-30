@@ -680,10 +680,16 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 }
 
 func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
+	// Set cache verbose
+	//if strings.Contains(name, "execution") || strings.Contains(name, "action") && len(data) > 1 {
+	//	fmt.Printf("\n\n[DEBUG] Setting cache '%s', length %d\n\n", name, len(data))
+	//}
+
 	if len(name) == 0 {
 		log.Printf("[WARNING] Key '%s' is empty with value length %d and expiration %d. Skipping cache.", name, len(data), expiration)
 		return nil
 	}
+
 
 	// Maxsize ish~
 	name = strings.Replace(name, " ", "_", -1)
