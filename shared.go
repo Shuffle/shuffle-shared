@@ -13536,6 +13536,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	path := "docs"
 	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
+		log.Printf("[WARNING] Failed getting docs list: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
 		return
@@ -13579,7 +13580,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = SetCache(ctx, cacheKey, b, 30)
+	err = SetCache(ctx, cacheKey, b, 300)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
 	}
