@@ -13609,6 +13609,7 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 		return err
 	}
 	//log.Printf("\n\nGOT EXEC WITH RESULT %s (%d)\n\n", execution.Status, len(execution.Results))
+	log.Printf("[DEBUG] Got validation for execution %s", execution.ExecutionId)
 
 	baseExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
 	if err != nil {
