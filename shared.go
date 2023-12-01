@@ -16565,7 +16565,7 @@ func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if newresp.StatusCode >= 400 {
-		resp.WriteHeader(201)
+		resp.WriteHeader(200)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, urlbody)))
 		return
 	}
