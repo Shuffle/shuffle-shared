@@ -9633,7 +9633,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		return err
 	}
 
-	log.Printf("[DEBUG] Parent execution results length: %d", len(newExecution.Results))
+	//log.Printf("[DEBUG] Parent execution results length: %d", len(newExecution.Results))
 
 	foundResult := ActionResult{}
 	for _, result := range newExecution.Results {
@@ -10889,7 +10889,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					//log.Printf("[DEBUG] Skipped body return from %s (%d): %s", streamUrl, newresp.StatusCode, string(body))
 					if strings.Contains(string(body), "already finished") {
 						log.Printf("[WARNING] Data couldn't be re-inputted for %s.", foundAction.Label)
-						return &workflowExecution, true, errors.New(fmt.Sprintf("Failed updating skipped action %s", foundAction.Label))
+						// DONT CHANGE THE ERROR OUTPUT HERE
+						return &workflowExecution, true, errors.New(fmt.Sprintf("Workflow has already been ran with label %s. Raw: %s", foundAction.Label), string(body))
 					}
 				}
 			}
