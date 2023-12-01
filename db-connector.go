@@ -1534,7 +1534,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				newexec := Fixexecution(ctx, *workflowExecution)
 				workflowExecution = &newexec
 
-				//log.Printf("[DEBUG] Returned execution %s from cache with %d results", id, len(workflowExecution.Results))
+				log.Printf("[DEBUG][%s] Returned execution from cache with %d results", id, len(workflowExecution.Results))
 				return workflowExecution, nil
 			} else {
 				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
@@ -1619,7 +1619,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 	//log.Printf("[DEBUG] Returned execution %s with %d results (2)", id, len(workflowExecution.Results))
 
-	if project.CacheDb {
+	if project.CacheDb && workflowExecution.Authorization != "" {
 		newexecution, err := json.Marshal(workflowExecution)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling execution: %s", err)
@@ -2275,7 +2275,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			cacheData := []byte(cache.([]uint8))
 			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflow)
-			if err == nil {
+			if err == nil && workflow.ID != "" {
 				return workflow, nil
 			}
 		} else {
@@ -2333,7 +2333,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
 
-	if project.CacheDb {
+	if project.CacheDb && workflow.ID != "" { 
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
 		if err != nil {
@@ -2529,7 +2529,11 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 		//log.Printf("Found workflows: %d", len(wrapped.Hits.Hits))
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.Owner == user.Id {
+			if hit.Source.ID == "" {
+				continue
+			}
+
+			if hit.Source.Owner == user.Id || hit.Source.OrgId == user.ActiveOrg.Id {
 				workflows = append(workflows, hit.Source)
 			} else {
 				//log.Printf("bad workflow owner: %s", hit.Source.Owner)
@@ -2600,6 +2604,10 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 			userWorkflowLen := len(workflows)
 			for _, hit := range wrapped.Hits.Hits {
+				if hit.Source.ID == "" {
+					continue
+				}
+
 				found := false
 				for _, workflow := range workflows {
 					if workflow.ID == hit.ID {

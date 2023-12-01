@@ -6407,7 +6407,13 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public IF cloud.", err)
+
+		if project.Environment != "cloud" {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	location := strings.Split(request.URL.String(), "/")
@@ -6427,6 +6433,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(fileId) != 36 {
+		log.Printf("[WARNING] Workflow ID when getting workflow is not valid: %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
 		return
@@ -6446,7 +6453,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// Added org-reader as the user should be able to read everything in an org
 		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] User %s is accessing workflow %s as the org is same (get workflow)", user.Username, workflow.ID)
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 
@@ -6454,7 +6461,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			log.Printf("[AUDIT] Wrong user %s (%s) for workflow '%s' (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, user.Id, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
