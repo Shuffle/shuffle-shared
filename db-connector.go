@@ -9222,7 +9222,7 @@ func GetEsConfig() *opensearch.Client {
 
 	skipSSLVerify := false
 	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" {
-		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
+		//log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
 		skipSSLVerify = true
 	}
 

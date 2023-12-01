@@ -9691,7 +9691,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	sendRequest := false
 	resultData := []byte{}
 	if isLooping {
-		//log.Printf("\n\n[DEBUG] ITS LOOPING - SHOULD ADD TO A LIST INSTEAD!\n\n")
+		log.Printf("[DEBUG][%s] SUBFLOW LOOPING - SHOULD ADD TO A LIST!", subflowExecutionId)
 
 		// Saved for each subflow ID -> parentNode
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
@@ -9705,18 +9705,20 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		parentNodeFound := false
 		var parentSubflowResult []SubflowData
 		for _, result := range newExecution.Results {
-			if result.Action.ID == parentNode {
-				//log.Printf("[DEBUG] FOUND RES: %s", foundResult.Result)
-
-				parentNodeFound = true
-				err = json.Unmarshal([]byte(foundResult.Result), &parentSubflowResult)
-				if err != nil {
-					log.Printf("[ERROR] Failed to unmarshal result to parentsubflow res: %s", err)
-					continue
-				}
-
-				break
+			if result.Action.ID != parentNode {
+				continue
 			}
+
+			//log.Printf("[DEBUG] FOUND RES: %s", foundResult.Result)
+
+			parentNodeFound = true
+			err = json.Unmarshal([]byte(foundResult.Result), &parentSubflowResult)
+			if err != nil {
+				log.Printf("[ERROR] Failed to unmarshal result to parentsubflow res: %s", err)
+				continue
+			}
+
+			break
 		}
 
 		// If found, loop through and make sure to check the result for ALL of them. If they're not in there, add them as values.
@@ -9794,14 +9796,14 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				}
 			}
 		} else {
-			log.Printf("[DEBUG][%s] Did not enter parentNodeFound in subflow loop", subflowExecutionId)
+			log.Printf("\n\n[ERROR][%s] Did NOT enter parentNodeFound in subflow loop. This means we can't update the parent.\n\n", subflowExecutionId)
 
 		}
 
 		// Check if the item alreayd exists or not in results
 		//return nil
 	} else {
-		//log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
+		log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
 
 		if len(selectedTrigger.ID) > 0 {
 			foundResult.Action.ID = selectedTrigger.ID
@@ -18177,7 +18179,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 	skipSSLVerify := false
 	if strings.ToLower(os.Getenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY")) == "true" || strings.ToLower(os.Getenv("SHUFFLE_SKIPSSL_VERIFY")) == "true" { 
-		log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
+		//log.Printf("[DEBUG] SKIPPING SSL verification with Opensearch")
 		skipSSLVerify = true
 
 		os.Setenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY", "true")
