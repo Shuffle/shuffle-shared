@@ -10890,7 +10890,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					if strings.Contains(string(body), "already finished") {
 						log.Printf("[WARNING] Data couldn't be re-inputted for %s.", foundAction.Label)
 						// DONT CHANGE THE ERROR OUTPUT HERE
-						return &workflowExecution, true, errors.New(fmt.Sprintf("Workflow has already been ran with label %s. Raw: %s", foundAction.Label), string(body))
+						return &workflowExecution, true, errors.New(fmt.Sprintf("Workflow has already been ran with label %s. Raw: %s", foundAction.Label, string(body)))
 					}
 				}
 			}
