@@ -10232,7 +10232,7 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
 	var err error
-	if actionResult.Action.ID == "" {
+	if actionResult.Action.ID == "" && actionResult.Action.Name == "" {
 		// Can we find it based on label?
 
 		log.Printf("\n\n[ERROR][%s] Failed handling EMPTY action %#v (ParsedExecutionResult). Usually ONLY happens during worker run that sets everything?\n\n", workflowExecution.ExecutionId, actionResult)
@@ -20913,7 +20913,12 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	runs, cursor, err := GetWorkflowRunsBySearch(ctx, user.ActiveOrg.Id, search)
+	chosenOrg := user.ActiveOrg.Id
+	if search.IgnoreOrg == true && user.SupportAccess {
+		chosenOrg = ""
+	}
+
+	runs, cursor, err := GetWorkflowRunsBySearch(ctx, chosenOrg, search)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflow runs by search: %s", err)
 		resp.WriteHeader(400)
@@ -20921,6 +20926,18 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	parsedRuns := []WorkflowExecution{}
+	for _, run := range runs {
+		if run.ExecutionOrg != user.ActiveOrg.Id {
+			if !user.SupportAccess{
+				continue
+			} 
+		}
+
+		parsedRuns = append(parsedRuns, run)
+	}
+
+	runs = parsedRuns
 	workflowSearchResult := WorkflowSearchResult{
 		Success: true,
 		Runs:   runs,

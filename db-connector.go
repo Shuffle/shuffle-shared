@@ -1275,7 +1275,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		found := false
 		result := ActionResult{}
 
-
 		workflowExecution.Workflow.Actions[actionIndex].LargeImage = ""
 		workflowExecution.Workflow.Actions[actionIndex].SmallImage = ""
 
@@ -1388,6 +1387,11 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	handled := []string{}
 	newResults := []ActionResult{}
 	for _, result := range workflowExecution.Results {
+		if result.Action.ID == "" && result.Action.Name == "" && result.Result == "" {
+			log.Printf("[DEBUG][%s] Removing empty result started at %d and finished at %d", workflowExecution.ExecutionId, result.StartedAt, result.CompletedAt)
+			continue
+		}
+
 		if ArrayContains(handled, result.Action.ID) {
 			continue
 		}
@@ -1397,8 +1401,13 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	}
 
 	workflowExecution.Results = newResults
-	for varKey, variable := range workflowExecution.Workflow.ExecutionVariables {
 
+	// Sort results based on CompletedAt
+	sort.Slice(workflowExecution.Results, func(i, j int) bool {
+		return workflowExecution.Results[i].CompletedAt < workflowExecution.Results[j].CompletedAt
+	})
+
+	for varKey, variable := range workflowExecution.Workflow.ExecutionVariables {
 		for key, value := range lastexecVar {
 			if key == variable.Name {
 				workflowExecution.Workflow.ExecutionVariables[varKey].Value = value.Result
@@ -1408,12 +1417,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	}
 
 	// Check for failures before setting to finished
+	// Update execution parent
 	if workflowExecution.Status == "EXECUTING" { 
-		//&& workflowExecution.Workflow.Configuration.ExitOnError {
 
 		for _, result := range workflowExecution.Results {
 			if result.Status == "FAILURE" || result.Status == "ABORTED" {
-				log.Printf("[DEBUG][%s] Setting execution to aborted because of result %s (%s) with status '%s'", workflowExecution.ExecutionId, result.Action.Name, result.Action.ID, result.Status)
+				log.Printf("[DEBUG][%s] Setting execution to aborted because of result %s (%s) with status '%s'. Should update execution parent if it exists (not implemented).", workflowExecution.ExecutionId, result.Action.Name, result.Action.ID, result.Status)
 
 				workflowExecution.Status = "ABORTED"
 				if workflowExecution.CompletedAt == 0 {
@@ -1428,7 +1437,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
 	if workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
-		log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode", workflowExecution.ExecutionId)
+		log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented).", workflowExecution.ExecutionId)
 
 		finalWorkflowExecution.Status = "FINISHED"
 		if finalWorkflowExecution.CompletedAt == 0 {
@@ -1534,7 +1543,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				newexec := Fixexecution(ctx, *workflowExecution)
 				workflowExecution = &newexec
 
-				log.Printf("[DEBUG][%s] Returned execution from cache with %d results", id, len(workflowExecution.Results))
+				//log.Printf("[DEBUG][%s] Returned execution from cache with %d results", id, len(workflowExecution.Results))
 				return workflowExecution, nil
 			} else {
 				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
@@ -10534,6 +10543,11 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 	} else {
 		query := datastore.NewQuery(index).Filter("execution_org=", orgId).Order("-started_at").Limit(5)
 
+		// This is a trick for SupportAccess users
+		if len(orgId) == 0 {
+			query = datastore.NewQuery(index).Order("-started_at").Limit(5)
+		}
+
 		if len(search.WorkflowId) > 0 {
 			query = query.Filter("workflow_id =", search.WorkflowId)
 		}
@@ -10544,9 +10558,15 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 		// String to timestamp for search.SearchFrom (string)
 		startTimestamp, err := time.Parse(time.RFC3339, search.SearchFrom)
+		endTimestamp, enderr := time.Parse(time.RFC3339, search.SearchUntil)
 		if err != nil {
 			if len(search.SearchFrom) > 0 {
 				//log.Printf("[WARNING] Failed parsing start time: %s", err)
+
+				// If there is no endTimestamp
+				if enderr != nil {
+					// FIXME: Set 3 months back in time
+				}
 			}
 		} else {
 			// Make it into a number instead of a string
@@ -10554,8 +10574,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 		}
 
 		// String to timestamp for search.SearchUntil (string)
-		endTimestamp, err := time.Parse(time.RFC3339, search.SearchUntil)
-		if err != nil {
+		if enderr != nil {
 			if len(search.SearchFrom) > 0 {
 				//log.Printf("[WARNING] Failed parsing end time: %s", err)
 			}
@@ -10692,7 +10711,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 	removeIndexes := []int{}
 	for execIndex, execution := range executions {
-		if execution.ExecutionOrg != orgId {
+		if execution.ExecutionOrg != orgId && len(orgId) > 0 {
 			removeIndexes = append(removeIndexes, execIndex)
 			continue
 		}
@@ -10740,6 +10759,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			execution.Results = execution.Results[:1000]
 		}
 
+		/*
 		for resIndex, _ := range execution.Results {
 			if execIndex > len(executions) {
 				continue
@@ -10752,11 +10772,17 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			executions[execIndex].Results[resIndex].Action = Action{}
 			executions[execIndex].Results[resIndex].Result = ""
 		}
+		*/
+
+		// Set action in all execution results to empty
+
 	}
 
-	for _, removeIndex := range removeIndexes {
-		executions = append(executions[:removeIndex], executions[removeIndex+1:]...)
+	// Loop through removeIndexes backwards and remove them
+	for i := len(removeIndexes) - 1; i >= 0; i-- {
+		executions = append(executions[:removeIndexes[i]], executions[removeIndexes[i]+1:]...)
 	}
+
 
 	slice.Sort(executions[:], func(i, j int) bool {
 		return executions[i].StartedAt > executions[j].StartedAt

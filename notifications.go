@@ -632,7 +632,11 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			//	continue
 			//}
 
-			notification.Read = false
+			// Added ignore as someone could want to never see a specific alert again due to e.g. expecting a 404 on purpose
+			if notification.Ignored { 
+				notification.Read = false
+			}
+
 			notification.Amount += 1
 			notification.ReferenceUrl = referenceUrl
 

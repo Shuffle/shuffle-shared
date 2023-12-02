@@ -1201,6 +1201,7 @@ type Notification struct {
 	Read              bool     `json:"read" datastore:"read"`
 
 	ModifiedBy 		  string `json:"modified_by" datastore:"modified_by"`
+	Ignored 		  bool   `json:"ignored" datastore:"ignored"`
 }
 
 type NotificationCached struct {
@@ -3631,6 +3632,8 @@ type WorkflowSearch struct {
 	Status string `json:"status"`
 	SearchFrom string `json:"start_time"`
 	SearchUntil string `json:"end_time"`
+	
+	IgnoreOrg bool `json:"ignore_org"`
 }
 
 type WorkflowSearchResult struct {
