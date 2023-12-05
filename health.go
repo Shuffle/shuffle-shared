@@ -388,16 +388,18 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 }
 
 func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) error {
-	if project.Environment == "cloud" {
-		log.Printf("[DEBUG] Cloud environment. Not deleting junk ops workflow for now")
-		return errors.New("Cloud environment. Not deleting junk ops workflow for now")
-	}
+	// if project.Environment == "cloud" {
+	// 	log.Printf("[DEBUG] Cloud environment. Not deleting junk ops workflow for now")
+	// 	return errors.New("Cloud environment. Not deleting junk ops workflow for now")
+	// }
 
 	workflows, err := FindWorkflowByName(ctx, "SHUFFLE_INTERNAL_OPS_WORKFLOW")
 	if err != nil {
 		log.Printf("[DEBUG] Failed finding any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s. Is the health API initialized?", err)
 		return err
 	}
+
+	log.Printf("[DEBUG] Found %d workflows named SHUFFLE_INTERNAL_OPS_WORKFLOW: ", len(workflows))
 
 	if len(workflows) == 0 {
 		log.Printf("[DEBUG] Couldn't find any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
@@ -1100,7 +1102,8 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	client := &http.Client{}
 	body := GetWorkflowTest()
 	if project.Environment == "cloud" {
-		url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
+		// url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
+		url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Println("[ERROR] creating HTTP request:", err)
