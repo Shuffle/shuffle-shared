@@ -13770,7 +13770,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 	//log.Printf("IS IT SUBFLOW?")
 	if len(execution.ExecutionParent) > 0 && execution.Status != "EXECUTING" && (project.Environment == "onprem" || project.Environment == "cloud") {
 
-		log.Printf("\n\n\n[DEBUG][%s] Got the result '%s' for subflow of %s. Workflow: '%s' Check if this should be added to loop.\n\n", execution.ExecutionId, execution.Result, execution.ExecutionParent, execution.WorkflowId)
+		//log.Printf("\n\n\n[DEBUG][%s] Got the result '%s' for subflow of %s. Workflow: '%s' Check if this should be added to loop.\n\n", execution.ExecutionId, execution.Result, execution.ExecutionParent, execution.WorkflowId)
 
 		parentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
 		if err == nil {
@@ -13829,7 +13829,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 						continue
 					}
 
-					log.Printf("[DEBUG] Found action %s' results: %s", result.Action.ID, result.Result)
+					//log.Printf("[DEBUG] Found action %s' results: %s", result.Action.ID, result.Result)
 					if result.Status != "WAITING" {
 						break
 					}
@@ -13849,7 +13849,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 							continue
 						}
 
-						log.Printf("[DEBUG] Found right execution on index %d. Result: %s", subflowIndex, subflowResult.Result)
+						//log.Printf("[DEBUG] Found right execution on index %d. Result: %s", subflowIndex, subflowResult.Result)
 						if len(subflowResult.Result) == 0 {
 							updateIndex = subflowIndex
 						}
@@ -17416,7 +17416,7 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 	checkedNodes = append(checkedNodes, inputNode)
 	parentRan := false
 	for _, result := range workflowExecution.Results {
-		if result.Action.ID == inputNode {
+		if result.Action.ID == inputNode && result.Status != "WAITING" {
 			parentRan = true
 		}
 	}
@@ -18863,7 +18863,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		newActions := []Action{}
 		for actionIndex, action := range newWorkflow.Actions {
 			if len(selectedAction.Name) > 0 && action.Name == selectedAction.Name {
-				log.Printf("[DEBUG] Found action %s, setting as start node", action.Name)
+				//log.Printf("[DEBUG] Found action %s, setting as start node", action.Name)
 				continue
 			}
 
