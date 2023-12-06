@@ -204,7 +204,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[AUDIT] Got %d notifications for org %s (%s)", len(notifications), user.ActiveOrg.Name, user.ActiveOrg.Id)
+	//log.Printf("[AUDIT] Got %d notifications for org %s (%s)", len(notifications), user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	newNotifications := []Notification{}
 	for _, notification := range notifications {

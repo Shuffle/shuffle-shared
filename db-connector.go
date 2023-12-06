@@ -1399,8 +1399,35 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			continue
 		}
 
+		// Checks for subflows in waiting status
+		// May also work for user input in the future
+		if result.Status == "WAITING" {
+			tmpResult, changed := parseSubflowResults(ctx, result)
+			if changed && (tmpResult.Status == "SUCCESS" || tmpResult.Status == "FAILURE") {
+
+				// FIXME: This fails due to being too fast and not updating
+				/*
+				log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
+
+				// Forcing a resend to handle transaction normally
+				actionData, err := json.Marshal(tmpResult)
+				if err == nil {
+					log.Printf("DATA: %d", len(string(actionData)))
+					go ResendActionResult(actionData, 4) 
+				} else {
+					result = tmpResult
+				}
+				*/
+
+				result = tmpResult
+			} else {
+				result = tmpResult
+			}
+		}
+
 		handled = append(handled, result.Action.ID)
 		newResults = append(newResults, result)
+
 	}
 
 	workflowExecution.Results = newResults
@@ -1418,6 +1445,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			}
 		}
 	}
+
+
 
 	// Check for failures before setting to finished
 	// Update execution parent
@@ -10107,7 +10136,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 				validResults += 1
 			}
 
-			if result.Status == "ABORTED" || result.Status == "FAILED" {
+			if result.Status == "ABORTED" || result.Status == "FAILURE" {
 				invalidResults += 1
 			}
 
