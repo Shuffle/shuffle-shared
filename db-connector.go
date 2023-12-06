@@ -10078,7 +10078,17 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
 	// Print 1/5 times to
+	// Should find it if it doesn't exist
+	if extra == -1 {
+		extra = 0
+		for _, trigger := range workflowExecution.Workflow.Triggers {
+			if trigger.Name == "User Input" && trigger.AppName == "User Input" {
+				extra += 1
+			}
+		}
+	}
 
+	workflowExecution = Fixexecution(ctx, workflowExecution)
 	if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
 		log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 	}
@@ -10111,7 +10121,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
 			log.Printf("[INFO][%s] Already finished (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
-			return false
+			return true 
 		}
 
 		// Updating stats for the workflow
@@ -10129,14 +10139,12 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			}
 		}
 
-		//log.Printf("\n\nFINISHED!\n\n")
 		workflowExecution.CompletedAt = int64(time.Now().Unix())
 		workflowExecution.Status = "FINISHED"
 		err = SetWorkflowExecution(ctx, workflowExecution, true)
 		if err != nil {
 			log.Printf("[ERROR] Failed to set execution during finalization %s: %s", workflowExecution.ExecutionId, err)
 		} else {
-
 			log.Printf("[INFO] Finalized execution %s for workflow %s with %d results and status %s", workflowExecution.ExecutionId, workflowExecution.Workflow.ID, len(workflowExecution.Results), workflowExecution.Status)
 
 			// Validate text vs previous executions
