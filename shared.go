@@ -9813,7 +9813,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		// Check if the item alreayd exists or not in results
 		//return nil
 	} else {
-		log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
+		//log.Printf("\n\n[DEBUG] ITS NOT LOOP for parent node '%s'. Found data: %s\n\n", parentNode, returnValue)
 
 		if len(selectedTrigger.ID) > 0 {
 			foundResult.Action.ID = selectedTrigger.ID
@@ -17431,7 +17431,7 @@ func findMissingChildren(ctx context.Context, workflowExecution *WorkflowExecuti
 			// Check if the parent and its childs have a result
 			found := false
 			for _, result := range workflowExecution.Results {
-				if result.Action.ID == child && result.Status != "WAITING" {
+				if result.Action.ID == child {
 					foundCnt += 1
 					found = true
 					break
