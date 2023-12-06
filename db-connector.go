@@ -398,7 +398,6 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 			orgStatistics.OrgId = orgId
 		}
 
-
 		orgStatistics = HandleIncrement(dataType, orgStatistics) 
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
@@ -721,7 +720,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 					nextStep = len(data)
 				}
 
-				//log.Printf("%d - %d = ", currentChunk, nextStep)
 				parsedData := data[currentChunk:nextStep]
 				item := &memcache.Item{
 					Key:        keyname,
@@ -744,7 +742,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-						log.Printf("[WARNING] Failed setting cache for '%s' (1): %s", keyname, err)
+						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", keyname, err)
 					}
 					break
 				} else {
@@ -869,7 +867,7 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for 'setapp' key %s: %s", cacheKey, err)
+			log.Printf("[ERROR] Failed setting cache for 'setapp' key %s: %s", cacheKey, err)
 
 		}
 
@@ -884,13 +882,18 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
-		log.Printf("[ERROR] Workflowexeciton executionId can't be empty.")
+		log.Printf("[ERROR] Workflowexecution executionId can't be empty.")
 		return errors.New("ExecutionId can't be empty.")
 	}
 
 	if len(workflowExecution.WorkflowId) == 0 {
 		log.Printf("[WARNING][%s] Workflowexecution workflowId can't be empty.", workflowExecution.ExecutionId)
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	}
+
+	if len(workflowExecution.Authorization) == 0 {
+		log.Printf("[WARNING][%s] Workflowexecution authorization can't be empty.", workflowExecution.ExecutionId)
+		return errors.New("Authorization can't be empty.")
 	}
 
 	// Fixes missing pieces
@@ -4805,7 +4808,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	appsAdded := []string{}
 
 	// Search for apps with these names, not all public ones
-	importantApps := []string{"Shuffle Tools", "http", "email"}
+	importantApps := []string{"Shuffle Tools", "http"}
 
 	publicApps := []WorkflowApp{}
 	publicAppsKey := fmt.Sprintf("public_apps")

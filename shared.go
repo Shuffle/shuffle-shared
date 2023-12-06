@@ -2683,8 +2683,9 @@ func GetAction(workflowExecution WorkflowExecution, id, environment string) Acti
 				Name:        trigger.AppName,
 				Environment: environment,
 				Label:       trigger.Label,
+				ExecutionDelay: trigger.ExecutionDelay,
 			}
-			log.Printf("FOUND TRIGGER: %s!", trigger)
+			log.Printf("[DEBUG] Found trigger to be ran as app (?): %s!", trigger)
 		}
 	}
 
@@ -9866,6 +9867,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 					AppName:     "shuffle-subflow",
 					AppVersion:  "1.0.0",
 					Environment: selectedTrigger.Environment,
+					ExecutionDelay: selectedTrigger.ExecutionDelay,
 				}
 
 				newResult := ActionResult{
@@ -13255,6 +13257,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	}
 
 	if user.ActiveOrg.Id != "" {
+		//log.Printf("ACTIVEORG: %#v", user.ActiveOrg)
 		workflow.ExecutingOrg = user.ActiveOrg
 		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
 		workflowExecution.OrgId = user.ActiveOrg.Id
@@ -16166,12 +16169,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	//	//workflowExecution.ExecutionOrg.SyncFeatures = Org{}
 	//}
 
+	if len(workflowExecution.Workflow.ExecutingOrg.Id) == 0 || workflowExecution.ExecutionOrg != workflowExecution.Workflow.ExecutingOrg.Id {
+		workflowExecution.Workflow.ExecutingOrg = OrgMini{
+			Id: workflowExecution.ExecutionOrg,
+		}
+	} 
+
+	/*
 	workflowExecution.Workflow.ExecutingOrg = OrgMini{
 		Id: workflowExecution.Workflow.ExecutingOrg.Id,
 	}
 	workflowExecution.Workflow.Org = []OrgMini{
 		workflowExecution.Workflow.ExecutingOrg,
 	}
+	*/
 
 	// Means executing a subflow is happening
 	if len(workflowExecution.ExecutionParent) > 0 {
@@ -18021,6 +18032,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					action.AppName = "shuffle-subflow"
 					action.Name = "run_userinput"
 					action.AppVersion = "1.1.0"
+					action.ExecutionDelay = trigger.ExecutionDelay
 
 					for _, innertrigger := range workflowExecution.Workflow.Triggers {
 						if innertrigger.ID == action.ID {
