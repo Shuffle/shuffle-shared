@@ -250,7 +250,7 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	}
 
 	if len(newDaily) < len(stats.OnpremStats) {
-		log.Printf("\n\n[INFO] Deduped %d stats for org %s\n\n", len(stats.OnpremStats) - len(newDaily), id)
+		log.Printf("[INFO] Deduped %d stats for org %s", len(stats.OnpremStats) - len(newDaily), id)
 	}
 
 	stats.OnpremStats = newDaily
@@ -355,7 +355,6 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 		orgStatistics = HandleIncrement(dataType, orgStatistics) 
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
-		//log.Printf("\n\nDaily stats: %d\n\n", len(orgStatistics.DailyStatistics))
 
 		// Set the data back in the database
 		marshalledData, err := json.Marshal(orgStatistics)
@@ -681,7 +680,6 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
 	// Set cache verbose
 	//if strings.Contains(name, "execution") || strings.Contains(name, "action") && len(data) > 1 {
-	//	fmt.Printf("\n\n[DEBUG] Setting cache '%s', length %d\n\n", name, len(data))
 	//}
 
 	if len(name) == 0 {
@@ -878,7 +876,6 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 }
 
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
-	//log.Printf("\n\n\nRESULT: %s\n\n\n. Save: %t", workflowExecution.Status, dbSave)
 
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
@@ -1154,7 +1151,6 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 		return err
 	}
 
-	//log.Printf("[INFO] Successfully set cache for execution variables %s. Extra: %d\n\n", cacheKey, extra)
 	return nil
 }
 
@@ -1292,7 +1288,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		if found {
 			// Handles execution vars
 			if len(action.ExecutionVariable.Name) > 0 {
-				//log.Printf("\n\n[INFO] Found execution variable %s (2)\n\n", result.Action.ExecutionVariable.Name)
 
 				// Check if key in lastexecVar
 				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
@@ -1323,7 +1318,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			workflowExecution.Results = append(workflowExecution.Results, result)
 
 			if len(action.ExecutionVariable.Name) > 0 {
-				//log.Printf("\n\n[INFO] Found execution variable %s (1)\n\n", result.Action.ExecutionVariable.Name)
 
 				// Check if key in lastexecVar
 				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
@@ -1403,25 +1397,35 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		// May also work for user input in the future
 		if result.Status == "WAITING" {
 			tmpResult, changed := parseSubflowResults(ctx, result)
+
 			if changed && (tmpResult.Status == "SUCCESS" || tmpResult.Status == "FAILURE") {
+				// Making sure we don't infinite loop :) 
+				// Keeping for 1 minute, as that's the rerun period
+				cacheKey := fmt.Sprintf("%s_%s_sent", workflowExecution.ExecutionId, tmpResult.Action.ID)
+				cache, err := GetCache(ctx, cacheKey)
+				if err == nil && cache != nil {
+					//result = tmpResult
+					SetCache(ctx, cacheKey, []byte("1"), 1)
 
-				// FIXME: This fails due to being too fast and not updating
-				/*
-				log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
-
-				// Forcing a resend to handle transaction normally
-				actionData, err := json.Marshal(tmpResult)
-				if err == nil {
-					log.Printf("DATA: %d", len(string(actionData)))
-					go ResendActionResult(actionData, 4) 
 				} else {
-					result = tmpResult
-				}
-				*/
+					// FIXME: This fails due to being too fast and not updating
+					SetCache(ctx, cacheKey, []byte("1"), 1)
 
-				result = tmpResult
+					log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for the full response of it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
+
+					// Forcing a resend to handle transaction normally
+					actionData, err := json.Marshal(tmpResult)
+					if err == nil {
+						log.Printf("DATA: %d", len(string(actionData)))
+						go ResendActionResult(actionData, 4) 
+					} else {
+						//result = tmpResult
+					}
+				}
+
+				//result = tmpResult
 			} else {
-				result = tmpResult
+				//result = tmpResult
 			}
 		}
 
@@ -7986,7 +7990,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			if err == nil {
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status { 
-					go SetWorkflowExecution(ctx, *newexec, true)
+					SetWorkflowExecution(ctx, *newexec, true)
 				}
 
 				executions[execIndex] = *newexec
@@ -8236,7 +8240,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
-					go SetWorkflowExecution(ctx, *newexec, true)
+					SetWorkflowExecution(ctx, *newexec, true)
 				}
 
 				executions[execIndex] = *newexec
@@ -10126,10 +10130,16 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		validResults := 0
 		invalidResults := 0
 		subflows := 0
+
+		lastResult := ActionResult{}
 		for _, result := range workflowExecution.Results {
 			if result.Status == "EXECUTING" || result.Status == "WAITING" {
 				log.Printf("[WARNING][%s] Waiting for action %s to finish", workflowExecution.ExecutionId, result.Action.ID)
 				return false
+			}
+
+			if result.Status == "SUCCESS" && result.CompletedAt >= lastResult.CompletedAt {
+				lastResult = result
 			}
 		
 			if result.Status == "SUCCESS" {
@@ -10144,6 +10154,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 				subflows += 1
 			}
 		}
+
 
 
 		// Check if status is already set first from cache
@@ -10166,6 +10177,11 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			for i := 0; i < subflows; i++ {
 				IncrementCache(ctx, workflowExecution.OrgId, "subflow_executions")
 			}
+		}
+
+
+		if len(workflowExecution.Result) == 0 && len(lastResult.Result) > 0 {
+			workflowExecution.Result = lastResult.Result
 		}
 
 		workflowExecution.CompletedAt = int64(time.Now().Unix())
@@ -10774,7 +10790,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
-					go SetWorkflowExecution(ctx, *newexec, true)
+					SetWorkflowExecution(ctx, *newexec, true)
 				}
 
 				executions[execIndex] = *newexec
