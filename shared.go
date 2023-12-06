@@ -9701,13 +9701,13 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	sendRequest := false
 	resultData := []byte{}
 	if isLooping {
-		log.Printf("[DEBUG][%s] SUBFLOW LOOPING - SHOULD ADD TO A LIST!", subflowExecutionId)
+		//log.Printf("[DEBUG][%s] SUBFLOW LOOPING - SHOULD ADD TO A LIST!", subflowExecutionId)
 
 		// Saved for each subflow ID -> parentNode
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
 		err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 61)
 		if err != nil {
-			log.Printf("\n\n\n[ERROR] Failed setting subflow loop cache result for action in parsed exec results %s: %s\n\n", subflowResultCacheId, err)
+			log.Printf("[ERROR] Failed setting subflow loop cache result for action in parsed exec results %s: %s", subflowResultCacheId, err)
 			return err
 		}
 
@@ -9761,7 +9761,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 						cache, err := GetCache(ctx, subflowResultCacheId)
 						if err == nil {
 							cacheData := []byte(cache.([]uint8))
-							//log.Printf("[DEBUG] Cachedata for other subflow: %s", string(cacheData))
 							res.Result = string(cacheData)
 							res.ResultSet = true
 							ranUpdate = true
@@ -9782,9 +9781,14 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				log.Printf("[DEBUG][%s] Finished workflow because status of all should be set to finished now", subflowExecutionId)
 
 				// Status is used to determine if the current subflow is finished
-				//foundResult.Status = "SUCCESS"
+
+				/*
 				foundResult.Status = "SUCCESS"
-				foundResult.CompletedAt = time.Now().Unix()
+
+				if result.CompletedAt == 0 {
+					result.CompletedAt = time.Now().Unix()*1000
+				}
+				*/
 			}
 
 			if ranUpdate {
@@ -10545,7 +10549,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	//}
 
 	// Fills in data from subflows, whether they're loops or not
-	// Deprecated! Now runs updateExecutionParent() instead
 	// Update: handling this farther down the function
 	//log.Printf("[DEBUG] STATUS OF %s: %s", actionResult.Action.AppName, actionResult.Status)
 	if actionResult.Status == "SUCCESS" && actionResult.Action.AppName == "shuffle-subflow" {
@@ -11187,8 +11190,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		if runCheck {
-			// err = updateExecutionParent(workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode)
-
 			var subflowData SubflowData
 			jsonerr := json.Unmarshal([]byte(actionResult.Result), &subflowData)
 
@@ -11288,8 +11289,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 
 					if amountFinished == len(subflowDataList) {
-						log.Printf("[INFO] All subflows finished, setting to FINISHED")
-						actionResult.Status = "SUCCESS"
+						log.Printf("[INFO] All subflows finished, setting to FINISHED?")
+						//actionResult.Status = "SUCCESS"
 					} else {
 						actionResult.Status = "WAITING"
 					}
@@ -11303,10 +11304,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 						foundSubflow = true 
 						workflowExecution.Results[resultIndex] = actionResult
-
-						// Check how many are finished with ResultSet
-
-
 						actionResultBody, err := json.Marshal(actionResult)
 						if err == nil {
 							cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
@@ -13766,9 +13763,10 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 
 	// Long convoluted way of validating and setting the value of a subflow that is also a loop
 	// timing issues / non-queues
-	if executionSet {
-		RunFixParentWorkflowResult(ctx, execution)
-	}
+	_ = executionSet
+	//if executionSet {
+	//	RunFixParentWorkflowResult(ctx, execution)
+	//}
 
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", execution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", execution.WorkflowId))
@@ -13785,7 +13783,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 
 		parentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
 		if err == nil {
-			log.Printf("[DEBUG] Got parent execution: %s", parentExecution.ExecutionId)
+			//log.Printf("[DEBUG] Got parent execution: %s", parentExecution.ExecutionId)
 			
 			isLooping := false
 			setExecution := true
@@ -13923,7 +13921,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 							// FIXME: This will break if subflow with loop is last node in two workflows in a row (main workflow -> []subflow -> []subflow)
 							// Should it send the whole thing back as a result to itself to be handled manually? :thinking:
 							if allFinished {
-								newParentExecution.Results[resultIndex].Status = "SUCCESS"
+								//newParentExecution.Results[resultIndex].Status = "SUCCESS"
 
 								extra := 0
 								for _, trigger := range newParentExecution.Workflow.Triggers {
@@ -15953,25 +15951,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					extra += 1
 				}
 			}
-
-			/*
-				defaultResults = []ActionResult{}
-				for _, result := range workflowExecution.Results {
-					if result.Status == "WAITING" {
-						result.Status = "SUCCESS"
-						result.Result = `{"success": true, "reason": "Continuing from user input"}`
-
-						//log.Printf("Actions + extra = %d. Results = %d", len(workflowExecution.Workflow.Actions)+extra, len(workflowExecution.Results))
-						if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra {
-							workflowExecution.Status = "FINISHED"
-						} else {
-							workflowExecution.Status = "EXECUTING"
-						}
-					}
-
-					defaultResults = append(defaultResults, result)
-				}
-			*/
 		} else if len(workflowExecution.Results) == 0 && !workflowExecution.Workflow.Configuration.StartFromTop {
 			found := false
 			for _, nodeId := range childNodes {
@@ -21022,9 +21001,11 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 	var parentSubflowResult []SubflowData
 	err := json.Unmarshal([]byte(result.Result), &parentSubflowResult)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshaling subflow result. This could be due to it not being a list: %s", err)
+		//log.Printf("[WARNING] Failed unmarshaling subflow result. This could be due to it not being a list: %s", err)
 		return result, false
 	}
+
+	//log.Printf("\n\n\n[DEBUG] Got parent subflow result \n\n\n")
 
 	newResults := []SubflowData{}
 	finishedSubflows := 0
@@ -21032,7 +21013,7 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 	failedCount := 0
 	for _, res := range parentSubflowResult {
 		// If value length = 0 for any, then check cache and add the result
-		if res.ResultSet {
+		if res.ResultSet && len(res.Result) > 0 {
 			newResults = append(newResults, res)
 			finishedSubflows += 1
 			continue
@@ -21050,14 +21031,15 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 		cache, err := GetCache(ctx, subflowResultCacheId)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("[DEBUG] Cachedata for other subflow: %s", string(cacheData))
-			res.Result = string(cacheData)
+			//log.Printf("[DEBUG] Cachedata for other subflow: '%s'", string(cacheData))
+			if len(cacheData) > 0 {
+				res.Result = string(cacheData)
+			}
+
 			res.ResultSet = true
 
 			finishedSubflows += 1
 		} else {
-			//log.Printf("[DEBUG] No cache data set for subflow cache %s", subflowResultCacheId)
-
 			// Get the workflow execution for the subflow
 			subflowExecution, err := GetWorkflowExecution(ctx, res.ExecutionId)
 			if err != nil {
@@ -21088,7 +21070,9 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 					res.ResultSet = true
 					finishedSubflows += 1
 
-					SetCache(ctx, subflowResultCacheId, []byte(subflowExecution.Result), 60)
+					if len(res.Result) > 0 {
+						SetCache(ctx, subflowResultCacheId, []byte(subflowExecution.Result), 60)
+					}
 				}
 			}
 
@@ -21114,7 +21098,10 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 			result.Status = "SUCCESS"
 		}
 
-		result.CompletedAt = time.Now().Unix()*1000
+		if result.CompletedAt == 0 {
+			result.CompletedAt = time.Now().Unix()*1000
+		}
+
 	} else {
 		//log.Printf("[DEBUG] Not finished sub result from caching yet")
 	}

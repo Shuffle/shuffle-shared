@@ -1393,6 +1393,16 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			continue
 		}
 
+		// Checking if results are correct or not
+		if result.Status != "WAITING" && result.Status != "SKIPPED" && (result.Action.AppName == "User Input" || result.Action.AppName == "Shuffle Workflow" || result.Action.AppName == "shuffle-subflow") {
+			tmpResult, _ := parseSubflowResults(ctx, result)
+
+			if result.Status == "SUCCESS" {
+				result.Result = tmpResult.Result
+			}
+			//log.Printf("[DEBUG][%s] Getting '%s' result ", workflowExecution.ExecutionId, result.Action.AppName)
+		}
+
 		// Checks for subflows in waiting status
 		// May also work for user input in the future
 		if result.Status == "WAITING" {
@@ -1408,7 +1418,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 					SetCache(ctx, cacheKey, []byte("1"), 1)
 
 				} else {
-					// FIXME: This fails due to being too fast and not updating
 					SetCache(ctx, cacheKey, []byte("1"), 1)
 
 					log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for the full response of it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
@@ -1417,13 +1426,12 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 					actionData, err := json.Marshal(tmpResult)
 					if err == nil {
 						log.Printf("DATA: %d", len(string(actionData)))
-						go ResendActionResult(actionData, 4) 
+						ResendActionResult(actionData, 4) 
 					} else {
 						//result = tmpResult
 					}
 				}
 
-				//result = tmpResult
 			} else {
 				//result = tmpResult
 			}
@@ -4694,7 +4702,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
 	allApps := []WorkflowApp{}
-	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
 	// 1. Caching apps locally
 	// Make it based on org and not user :)
