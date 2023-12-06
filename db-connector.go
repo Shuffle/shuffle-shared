@@ -990,7 +990,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		key := datastore.NameKey(nameKey, strings.ToLower(workflowExecution.ExecutionId), nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-			log.Printf("[WARNING] Error adding workflow_execution to datastore: %s", err)
+			log.Printf("[ERROR] Problem adding workflow_execution to datastore: %s", err)
 
 			// Has to do with certain data coming back in parameters where it shouldn't, causing saving to be impossible
 			if strings.Contains(fmt.Sprintf("%s", err), "contains an invalid nested") {
@@ -1440,11 +1440,22 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
 	if workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
-		log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented).", workflowExecution.ExecutionId)
 
-		finalWorkflowExecution.Status = "FINISHED"
-		if finalWorkflowExecution.CompletedAt == 0 {
-			finalWorkflowExecution.CompletedAt = time.Now().Unix()
+		skipFinished := false
+		for _, result := range workflowExecution.Results {
+			if result.Status == "WAITING" {
+				skipFinished = true 
+				break
+			}
+		}
+
+		if !skipFinished { 
+			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented).", workflowExecution.ExecutionId)
+
+			finalWorkflowExecution.Status = "FINISHED"
+			if finalWorkflowExecution.CompletedAt == 0 {
+				finalWorkflowExecution.CompletedAt = time.Now().Unix()
+			}
 		}
 	}
 

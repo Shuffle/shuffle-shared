@@ -10256,7 +10256,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	setCache := true
 	if actionResult.Action.AppName == "shuffle-subflow" {
-		//log.Printf("\n\n\n\n\n\n\n\n\n\n\n\n\nSUBFLOW RESULT!!!")
 
 		// Verifying if the userinput should be sent properly or not
 		if actionResult.Action.Name == "run_userinput" {
@@ -16175,6 +16174,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	} 
 
+	workflowExecution.Workflow.OrgId = workflowExecution.Workflow.ExecutingOrg.Id
+
 	/*
 	workflowExecution.Workflow.ExecutingOrg = OrgMini{
 		Id: workflowExecution.Workflow.ExecutingOrg.Id,
@@ -16415,8 +16416,9 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		return false, ""
 	}
 
-	if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
-		log.Printf("[AUDIT] Bad org ID in workflowexecution defined. Required: %s vs %s vs %s", workflow.OrgId, workflowExecution.Workflow.OrgId, workflow.ExecutingOrg.Id, workflowExecution.Workflow.ExecutingOrg.Id)
+	//if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
+	if workflow.OrgId == "" || workflow.OrgId != workflowExecution.Workflow.OrgId {
+		log.Printf("[ERROR][%s] Bad org ID in workflowexecution subflow run. Required: %s vs %s", workflowExecution.ExecutionId, workflow.OrgId, workflowExecution.Workflow.OrgId)
 		return false, ""
 	}
 
