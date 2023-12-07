@@ -1407,6 +1407,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			// May also work for user input in the future
 			if result.Status == "WAITING" {
 				tmpResult, changed := parseSubflowResults(ctx, result)
+				//log.Printf("HANDLE HERE: %s", tmpResult.Status)
 
 				if changed && (tmpResult.Status == "SUCCESS" || tmpResult.Status == "FAILURE") {
 					// Making sure we don't infinite loop :) 

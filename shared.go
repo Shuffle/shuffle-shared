@@ -9655,7 +9655,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		}
 	}
 
-	//log.Printf("FOUND RESULT: %s", foundResult)
 	isLooping := false
 	selectedTrigger := Trigger{}
 	for _, trigger := range newExecution.Workflow.Triggers {
@@ -10343,7 +10342,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			} else {
 				for _, param := range actionResult.Action.Parameters {
 					if param.Name == "check_result" {
-						//log.Printf("[INFO] RESULT: %s", param)
 						if param.Value == "true" {
 							setCache = false
 						}
@@ -21068,12 +21066,16 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 	for _, res := range parentSubflowResult {
 		// If value length = 0 for any, then check cache and add the result
 		if res.ResultSet && len(res.Result) > 0 {
+			//log.Printf("[DEBUG][%s] Got result set for subflow. Result: %#v", res.ExecutionId, res.Result)
+
 			newResults = append(newResults, res)
 			finishedSubflows += 1
 			continue
 		}
 
 		if !res.Success {
+			//log.Printf("[DEBUG][%s] Subflow failed", res.ExecutionId)
+
 			newResults = append(newResults, res)
 	
 			failedCount += 1
@@ -21088,19 +21090,26 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 			//log.Printf("[DEBUG] Cachedata for other subflow: '%s'", string(cacheData))
 			if len(cacheData) > 0 {
 				res.Result = string(cacheData)
+				res.ResultSet = true
+				finishedSubflows += 1
+			} else {
+				DeleteCache(ctx, subflowResultCacheId)
 			}
 
-			res.ResultSet = true
-
-			finishedSubflows += 1
 		} else {
 			// Get the workflow execution for the subflow
+
+			// Can't do this, as it causes an infinite loop?
+			// This function is used in GetWorkflowExecution
 			subflowExecution, err := GetWorkflowExecution(ctx, res.ExecutionId)
+			log.Printf("[DEBUG] Got subflow execution: %s", subflowExecution.Status)
+
 			if err != nil {
-				log.Printf("[ERROR] Failed getting subflow execution: %s", err)
+				log.Printf("[ERROR] Failed getting subflow execution: %s", subflowExecution.Status)
 			} else {
 				if subflowExecution.Status != "EXECUTING" {
 					// Ensure it gets the last result based on CompletedAt
+					log.Printf("[DEBUG] NOT EXECUTING!!")
 					foundResult := ActionResult{}
 					for _, result := range subflowExecution.Results {
 						if result.Status == "SUCCESS" && result.CompletedAt >= foundResult.CompletedAt {
