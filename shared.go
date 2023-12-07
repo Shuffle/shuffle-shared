@@ -17885,10 +17885,14 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 
 				branchesFound += 1
+
+				found := false
 				for _, result := range workflowExecution.Results {
 					if result.Action.ID != item.SourceID {
 						continue
 					}
+				
+					found = true 
 
 					// Check for fails etc
 					if result.Status == "SUCCESS" || result.Status == "SKIPPED" {
@@ -17898,6 +17902,20 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					}
 
 					break
+				}
+
+				if !found {
+					// Ensuring triggers are handled as they should
+					for _, trigger := range workflowExecution.Workflow.Triggers {
+						if trigger.AppName == "Shuffle Workflow" || trigger.AppName == "User Input" || trigger.AppName == "shuffle-subworkflow" {
+							continue
+						}
+
+						if trigger.ID == item.SourceID {
+							found = true
+							parentFinished += 1
+						}
+					}
 				}
 			}
 
