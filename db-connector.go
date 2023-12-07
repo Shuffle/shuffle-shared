@@ -1394,48 +1394,50 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		}
 
 		// Checking if results are correct or not
-		if result.Status != "WAITING" && result.Status != "SKIPPED" && (result.Action.AppName == "User Input" || result.Action.AppName == "Shuffle Workflow" || result.Action.AppName == "shuffle-subflow") {
-			tmpResult, _ := parseSubflowResults(ctx, result)
+		if project.Environment != "worker" {
+			if result.Status != "WAITING" && result.Status != "SKIPPED" && (result.Action.AppName == "User Input" || result.Action.AppName == "Shuffle Workflow" || result.Action.AppName == "shuffle-subflow") {
+				tmpResult, _ := parseSubflowResults(ctx, result)
 
-			if result.Status == "SUCCESS" {
-				result.Result = tmpResult.Result
+				if result.Status == "SUCCESS" {
+					result.Result = tmpResult.Result
+				}
+				//log.Printf("[DEBUG][%s] Getting '%s' result ", workflowExecution.ExecutionId, result.Action.AppName)
 			}
-			//log.Printf("[DEBUG][%s] Getting '%s' result ", workflowExecution.ExecutionId, result.Action.AppName)
-		}
 
-		// Checks for subflows in waiting status
-		// May also work for user input in the future
-		if result.Status == "WAITING" {
-			tmpResult, changed := parseSubflowResults(ctx, result)
+			// Checks for subflows in waiting status
+			// May also work for user input in the future
+			if result.Status == "WAITING" {
+				tmpResult, changed := parseSubflowResults(ctx, result)
 
-			if changed && (tmpResult.Status == "SUCCESS" || tmpResult.Status == "FAILURE") {
-				// Making sure we don't infinite loop :) 
-				// Keeping for 1 minute, as that's the rerun period
-				cacheKey := fmt.Sprintf("%s_%s_sent", workflowExecution.ExecutionId, tmpResult.Action.ID)
-				cache, err := GetCache(ctx, cacheKey)
-				if err == nil && cache != nil {
-					//result = tmpResult
-					SetCache(ctx, cacheKey, []byte("1"), 1)
+				if changed && (tmpResult.Status == "SUCCESS" || tmpResult.Status == "FAILURE") {
+					// Making sure we don't infinite loop :) 
+					// Keeping for 1 minute, as that's the rerun period
+					cacheKey := fmt.Sprintf("%s_%s_sent", workflowExecution.ExecutionId, tmpResult.Action.ID)
+					cache, err := GetCache(ctx, cacheKey)
+					if err == nil && cache != nil {
+						//result = tmpResult
+						SetCache(ctx, cacheKey, []byte("1"), 1)
+
+					} else {
+						SetCache(ctx, cacheKey, []byte("1"), 1)
+
+						log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for the full response of it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
+
+						// Forcing a resend to handle transaction normally
+						actionData, err := json.Marshal(tmpResult)
+						if err == nil {
+							//log.Printf("DATA: %d", len(string(actionData)))
+							ResendActionResult(actionData, 4) 
+						} else {
+							//result = tmpResult
+						}
+					}
 
 				} else {
-					SetCache(ctx, cacheKey, []byte("1"), 1)
-
-					log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for the full response of it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
-
-					// Forcing a resend to handle transaction normally
-					actionData, err := json.Marshal(tmpResult)
-					if err == nil {
-						log.Printf("DATA: %d", len(string(actionData)))
-						ResendActionResult(actionData, 4) 
-					} else {
-						//result = tmpResult
-					}
+					//result = tmpResult
 				}
-
-			} else {
-				//result = tmpResult
 			}
-		}
+		} 
 
 		handled = append(handled, result.Action.ID)
 		newResults = append(newResults, result)
@@ -7997,7 +7999,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			if err == nil {
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status { 
-					SetWorkflowExecution(ctx, *newexec, true)
+					go SetWorkflowExecution(ctx, *newexec, true)
 				}
 
 				executions[execIndex] = *newexec
@@ -8247,7 +8249,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
-					SetWorkflowExecution(ctx, *newexec, true)
+					go SetWorkflowExecution(ctx, *newexec, true)
 				}
 
 				executions[execIndex] = *newexec
@@ -10797,7 +10799,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
-					SetWorkflowExecution(ctx, *newexec, true)
+					go SetWorkflowExecution(ctx, *newexec, true)
 				}
 
 				executions[execIndex] = *newexec

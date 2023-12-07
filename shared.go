@@ -2941,7 +2941,9 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
-	log.Printf("[DEBUG] Getting %d executions for workflow %s (V2). Org %s (%s).", maxAmount, fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	if maxAmount != 50 {
+		log.Printf("[DEBUG] Getting %d executions for workflow %s (V2). Org %s (%s).", maxAmount, fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	}
 
 	workflowExecutions, newCursor, err := GetAllWorkflowExecutionsV2(ctx, fileId, maxAmount, cursor)
 	if err != nil {
@@ -9705,10 +9707,13 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 		// Saved for each subflow ID -> parentNode
 		subflowResultCacheId := fmt.Sprintf("%s_%s_subflowresult", subflowExecutionId, parentNode)
-		err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 61)
-		if err != nil {
-			log.Printf("[ERROR] Failed setting subflow loop cache result for action in parsed exec results %s: %s", subflowResultCacheId, err)
-			return err
+
+		if len(returnValue) > 0 {
+			err = SetCache(ctx, subflowResultCacheId, []byte(returnValue), 61)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting subflow loop cache result for action in parsed exec results %s: %s", subflowResultCacheId, err)
+				return err
+			}
 		}
 
 		// Every time we get here, we need to both SET the value in cache AND look for other values in cache to make sure the list is good.
@@ -17296,7 +17301,6 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 	cache, err := GetCache(ctx, fmt.Sprintf("notifications_%s", org.Id))
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
-		//log.Printf("CACHEDATA: %s", cacheData)
 		err = json.Unmarshal(cacheData, &notifications)
 		if err == nil && len(notifications) > 0 {
 			org, updated = AddPriority(*org, Priority{
