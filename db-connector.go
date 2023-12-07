@@ -1417,7 +1417,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 					if err == nil && cache != nil {
 						//SetCache(ctx, cacheKey, []byte("1"), 1)
 
-						//result = tmpResult
+						result = tmpResult
 					} else {
 						SetCache(ctx, cacheKey, []byte("1"), 1)
 

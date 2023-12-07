@@ -11277,7 +11277,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				} else {
 					log.Printf("[WARNING] LIST sinkholed (len: %d) for action %s (%s) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.", len(subflowDataList), actionResult.Action.Label, actionResult.Action.ID)
 
-					log.Printf("\n\n\nRESULT: %#v\n\n\n", actionResult.Result)
+					//log.Printf("\n\n\nRESULT: %#v\n\n\n", actionResult.Result)
 
 					// Set to executing, as the point is for the subflows themselves to update this part. This does NOT happen in the subflow, but in the parent workflow, which is waiting for results to be ingested, hence it's set to EXECUTING
 
@@ -11327,7 +11327,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								//log.Printf("[DEBUG] Set cache for SUBFLOW action result %s", cacheId)
 							}
 						} else {
-							log.Printf("[ERROR] Failed marshalling action result for SUBFLOW to WAITING: %s", err)
+							//log.Printf("[ERROR] Failed marshalling action result for SUBFLOW to WAITING: %s", err)
 						}
 
 						break
@@ -13313,9 +13313,13 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 	// VERY short sleeptime here on purpose
 	maxSeconds := 10
-	sleeptime := 25
+	if project.Environment != "cloud" {
+		maxSeconds = 30
+	}
+
+	sleeptime := 100
 	for {
-		time.Sleep(25 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 
 		newExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err != nil {
@@ -13638,6 +13642,11 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 		}
 
 		return err
+	}
+
+	if len(execution.ExecutionId) == 0 {
+		log.Printf("[ERROR] No execution id provided to validate new worker")
+		return errors.New("No execution id provided to validate new worker")
 	}
 
 	baseExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)

@@ -395,16 +395,17 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 
 	workflows, err := FindWorkflowByName(ctx, "SHUFFLE_INTERNAL_OPS_WORKFLOW")
 	if err != nil {
-		log.Printf("[DEBUG] Failed finding any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s. Is the health API initialized?", err)
+		//log.Printf("[DEBUG] Failed finding any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s. Is the health API initialized?", err)
 		return err
 	}
 
-	log.Printf("[DEBUG] Found %d workflows named SHUFFLE_INTERNAL_OPS_WORKFLOW: ", len(workflows))
 
 	if len(workflows) == 0 {
-		log.Printf("[DEBUG] Couldn't find any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
+		//log.Printf("[DEBUG] Couldn't find any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
 		return errors.New("Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
 	}
+
+	//log.Printf("[DEBUG] Found %d workflows named SHUFFLE_INTERNAL_OPS_WORKFLOW: ", len(workflows))
 
 	for _, workflow := range workflows {
 		// delete these workflows
@@ -895,12 +896,12 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 	workflow := *workflowPtr
 
-	log.Printf("[DEBUG] Running health check workflow. workflowHealth till now: %#v", workflowHealth)
+	//log.Printf("[DEBUG] Running health check workflow. workflowHealth till now: %#v", workflowHealth)
 
 	// 2. Run workflow
 	id := workflow.ID
 	url := baseUrl + "/api/v1/workflows/" + id + "/execute"
-	log.Printf("[DEBUG] Running health check workflow with URL: %s", url)
+	//log.Printf("[DEBUG] Running health check workflow with URL: %s", url)
 	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
 		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
@@ -1052,7 +1053,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// Delete junk workflows
 	err = deleteJunkOpsWorkflow(ctx, workflowHealth)
 	if err != nil {
-		log.Printf("[ERROR] Failed deleting junk workflows: %s", err)
+		//log.Printf("[ERROR] Failed deleting junk workflows: %s", err)
 	}
 
 	return workflowHealth, nil
@@ -1315,6 +1316,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		return "", errors.New("Failed saving ops dashboard workflow")
 	}
 
-	log.Printf("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
+	//log.Printf("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
 	return workflowData.ID, nil
 }
