@@ -11292,12 +11292,21 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 
 					log.Printf("[DEBUG] %d / %d subflows finished with a result. If equal, status = SUCCESS", amountFinished, len(subflowDataList))
+					actionResultCache := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 					if amountFinished >= len(subflowDataList) {
 						actionResult.Status = "SUCCESS"
+
+						// Force updating cache
+						parsedAction, err := json.Marshal(actionResult)
+						if err == nil {
+							SetCache(ctx, actionResultCache, parsedAction, 35)
+						}
 				
 						dbSave = true
 					} else {
 						actionResult.Status = "WAITING"
+
+						DeleteCache(ctx, actionResultCache)
 					}
 
 					foundSubflow := false
@@ -11309,7 +11318,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						foundSubflow = true 
 						workflowExecution.Results[resultIndex] = actionResult
 						actionResultBody, err := json.Marshal(actionResult)
-						if err == nil {
+						if err == nil && actionResult.Status != "WAITING" {
 							cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 							err = SetCache(ctx, cacheId, actionResultBody, 35)
 							if err != nil {
@@ -21103,16 +21112,16 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 			// Can't do this, as it causes an infinite loop?
 			// This function is used in GetWorkflowExecution
 			subflowExecution, err := GetWorkflowExecution(ctx, res.ExecutionId)
-			log.Printf("[DEBUG][%s] Got subflow execution: %s", res.ExecutionId, subflowExecution.Status)
+			//log.Printf("[DEBUG][%s] Got subflow execution: %s", res.ExecutionId, subflowExecution.Status)
 
 			if err != nil {
 				log.Printf("[ERROR] Failed getting subflow execution: %s", subflowExecution.Status)
 			} else {
 				if subflowExecution.Status == "EXECUTING" {
-					DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", res.ExecutionId))
+					//DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", res.ExecutionId))
 				} else if subflowExecution.Status != "EXECUTING" {
 					// Ensure it gets the last result based on CompletedAt
-					log.Printf("[DEBUG] NOT EXECUTING!!")
+					//log.Printf("[DEBUG] NOT EXECUTING!!")
 					foundResult := ActionResult{}
 					for _, result := range subflowExecution.Results {
 						if result.Status == "SUCCESS" && result.CompletedAt >= foundResult.CompletedAt {

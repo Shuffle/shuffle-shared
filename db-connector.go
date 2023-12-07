@@ -1415,9 +1415,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 					cacheKey := fmt.Sprintf("%s_%s_sent", workflowExecution.ExecutionId, tmpResult.Action.ID)
 					cache, err := GetCache(ctx, cacheKey)
 					if err == nil && cache != nil {
-						//result = tmpResult
-						SetCache(ctx, cacheKey, []byte("1"), 1)
+						//SetCache(ctx, cacheKey, []byte("1"), 1)
 
+						//result = tmpResult
 					} else {
 						SetCache(ctx, cacheKey, []byte("1"), 1)
 
