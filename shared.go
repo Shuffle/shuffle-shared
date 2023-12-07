@@ -17903,7 +17903,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 			if branchesFound != parentFinished {
 				log.Printf("[WARNING] Skipping execution of %s (%s) due to unfinished parents (%d/%d). Orig parentlen: %d", action.Label, nextAction, parentFinished, branchesFound, parentlen)
-				return
+				continue
 			}
 		}
 
