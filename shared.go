@@ -11293,9 +11293,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 					}
 
+					log.Printf("[DEBUG] %d / %d subflows finished with a result", amountFinished, len(subflowDataList))
 					if amountFinished == len(subflowDataList) {
-						log.Printf("[INFO] All subflows finished, setting to FINISHED?")
-						//actionResult.Status = "SUCCESS"
+						actionResult.Status = "SUCCESS"
 					} else {
 						actionResult.Status = "WAITING"
 					}
