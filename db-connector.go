@@ -1161,7 +1161,6 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
-		//log.Printf("CACHEDATA: %s", cacheData)
 		err = json.Unmarshal(cacheData, &wrapper)
 		if err == nil {
 			return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
@@ -1426,7 +1425,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 						// Forcing a resend to handle transaction normally
 						actionData, err := json.Marshal(tmpResult)
 						if err == nil {
-							//log.Printf("DATA: %d", len(string(actionData)))
 							ResendActionResult(actionData, 4) 
 						} else {
 							//result = tmpResult
@@ -1515,7 +1513,6 @@ func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowEx
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				return workflowExecution, nil
@@ -1564,7 +1561,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
@@ -1799,7 +1795,6 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowApp)
 			if err == nil {
 
@@ -1951,7 +1946,6 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &sub)
 			if err == nil {
 				return sub, nil
@@ -2028,7 +2022,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &files)
 			if err == nil {
 				return files, nil
@@ -2184,7 +2177,6 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &env)
 			if err == nil {
 				return env, nil
@@ -2339,7 +2331,6 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil && workflow.ID != "" {
 				return workflow, nil
@@ -2835,7 +2826,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &curOrg)
 			if err == nil {
 				return curOrg, nil
@@ -2927,7 +2917,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &curOrg)
 			if err == nil {
 				return curOrg, nil
@@ -3402,7 +3391,6 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
-		//log.Printf("CACHEDATA: %s", cacheData)
 		err = json.Unmarshal(cacheData, &session)
 		if err == nil {
 			return session, nil
@@ -4363,7 +4351,6 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &allworkflowappAuths)
 			if err == nil {
 				return allworkflowappAuths, nil
@@ -4522,7 +4509,6 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &environments)
 			if err == nil {
 				return environments, nil
@@ -5451,7 +5437,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			it := project.Dbclient.Run(ctx, query)
 			//innerApp := WorkflowApp{}
 			//data, err := it.Next(&innerApp)
-			//log.Printf("DATA: %s, err: %s", data, err)
 
 			for {
 				innerApp := WorkflowApp{}
@@ -5870,7 +5855,6 @@ func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				return workflowExecution, nil
@@ -6637,7 +6621,6 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil && len(user.Id) > 0 {
 
@@ -6862,7 +6845,6 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &hook)
 			if err == nil && len(hook.Id) > 0 {
 				return hook, nil
@@ -7123,7 +7105,6 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &notifications)
 			if err == nil {
 				return notifications, nil
@@ -7492,7 +7473,6 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &appAuth)
 			if err == nil {
 				return appAuth, nil
@@ -8349,7 +8329,6 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			cache, err := GetCache(ctx, cacheKey)
 			if err == nil {
 				cacheData := []byte(cache.([]uint8))
-				//log.Printf("CACHEDATA: %s", cacheData)
 				err = json.Unmarshal(cacheData, &executions)
 				if err == nil {
 					if len(executions) > amount {
@@ -9035,7 +9014,6 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			parsedCache := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(parsedCache, &cacheData)
 			if err == nil {
 				return cacheData, nil
@@ -9471,7 +9449,6 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &usecase)
 			if err == nil {
 				return usecase, nil
@@ -10306,7 +10283,6 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &suggestion)
 			if err == nil {
 				return suggestion, nil

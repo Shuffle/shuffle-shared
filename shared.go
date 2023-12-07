@@ -11279,7 +11279,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				} else {
 					log.Printf("[WARNING] LIST sinkholed (len: %d) for action %s (%s) - Should apply list setup for same as subflow without result! Set the execution back to EXECUTING and the action to WAITING, as it's already running. Waiting for each individual result to add to the list.", len(subflowDataList), actionResult.Action.Label, actionResult.Action.ID)
 
-					//log.Printf("\n\n\nRESULT: %#v\n\n\n", actionResult.Result)
+					log.Printf("\n\n\nRESULT: %#v\n\n\n", actionResult.Result)
 
 					// Set to executing, as the point is for the subflows themselves to update this part. This does NOT happen in the subflow, but in the parent workflow, which is waiting for results to be ingested, hence it's set to EXECUTING
 
@@ -11294,7 +11294,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					}
 
 					log.Printf("[DEBUG] %d / %d subflows finished with a result", amountFinished, len(subflowDataList))
-					if amountFinished == len(subflowDataList) {
+					if amountFinished >= len(subflowDataList) {
 						actionResult.Status = "SUCCESS"
 					} else {
 						actionResult.Status = "WAITING"
@@ -17875,6 +17875,38 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 		log.Printf("[DEBUG][%s] Running %s (%s) with %d parents. Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
 
+		if project.Environment != "cloud" {
+			branchesFound := 0
+			parentFinished := 0
+
+			for _, item := range workflowExecution.Workflow.Branches {
+				if item.DestinationID != action.ID {
+					continue
+				}
+
+				branchesFound += 1
+				for _, result := range workflowExecution.Results {
+					if result.Action.ID != item.SourceID {
+						continue
+					}
+
+					// Check for fails etc
+					if result.Status == "SUCCESS" || result.Status == "SKIPPED" {
+						parentFinished += 1
+					} else {
+						log.Printf("[WARNING] Parent %s has status %s", result.Action.Label, result.Status)
+					}
+
+					break
+				}
+			}
+
+			if branchesFound != parentFinished {
+				log.Printf("[WARNING] Skipping execution of %s (%s) due to unfinished parents (%d/%d). Orig parentlen: %d", action.Label, nextAction, parentFinished, branchesFound, parentlen)
+				return
+			}
+		}
+
 		if action.AppName == "Shuffle Workflow" {
 			branchesFound := 0
 			parentFinished := 0
@@ -17903,7 +17935,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				action.Environment = environment
 				action.AppName = "shuffle-subflow"
 				action.Name = "run_subflow"
-				action.AppVersion = "1.0.0"
+				action.AppVersion = "1.1.0"
 
 				//appname := action.AppName
 				//appversion := action.AppVersion
