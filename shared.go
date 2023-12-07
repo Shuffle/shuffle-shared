@@ -9875,7 +9875,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 					ID:          parentNode,
 					Name:        "run_subflow",
 					AppName:     "shuffle-subflow",
-					AppVersion:  "1.0.0",
+					AppVersion:  "1.1.0",
 					Environment: selectedTrigger.Environment,
 					ExecutionDelay: selectedTrigger.ExecutionDelay,
 				}
@@ -11291,13 +11291,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 					}
 
-					log.Printf("[DEBUG] %d / %d subflows finished with a result", amountFinished, len(subflowDataList))
+					log.Printf("[DEBUG] %d / %d subflows finished with a result. If equal, status = SUCCESS", amountFinished, len(subflowDataList))
 					if amountFinished >= len(subflowDataList) {
 						actionResult.Status = "SUCCESS"
+				
+						dbSave = true
 					} else {
 						actionResult.Status = "WAITING"
 					}
-
 
 					foundSubflow := false
 					for resultIndex, result := range workflowExecution.Results {
@@ -16242,7 +16243,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			action.ID = trigger.ID
 			action.Name = "run_subflow"
 			action.AppName = "shuffle-subflow"
-			action.AppVersion = "1.0.0"
+			action.AppVersion = "1.1.0"
 
 			action.Parameters = []WorkflowAppActionParameter{}
 			for _, parameter := range trigger.Parameters {
@@ -21102,12 +21103,14 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 			// Can't do this, as it causes an infinite loop?
 			// This function is used in GetWorkflowExecution
 			subflowExecution, err := GetWorkflowExecution(ctx, res.ExecutionId)
-			log.Printf("[DEBUG] Got subflow execution: %s", subflowExecution.Status)
+			log.Printf("[DEBUG][%s] Got subflow execution: %s", res.ExecutionId, subflowExecution.Status)
 
 			if err != nil {
 				log.Printf("[ERROR] Failed getting subflow execution: %s", subflowExecution.Status)
 			} else {
-				if subflowExecution.Status != "EXECUTING" {
+				if subflowExecution.Status == "EXECUTING" {
+					DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", res.ExecutionId))
+				} else if subflowExecution.Status != "EXECUTING" {
 					// Ensure it gets the last result based on CompletedAt
 					log.Printf("[DEBUG] NOT EXECUTING!!")
 					foundResult := ActionResult{}
