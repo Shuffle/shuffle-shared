@@ -18260,11 +18260,11 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 	overrideHttpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
 	overrideHttpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
-	if len(overrideHttpProxy) > 0 {
+	if len(overrideHttpProxy) > 0 && strings.ToLower(overrideHttpProxy) != "noproxy" {
 		httpProxy = overrideHttpProxy
 	}
 
-	if len(overrideHttpsProxy) > 0 {
+	if len(overrideHttpsProxy) > 0 && strings.ToLower(overrideHttpProxy) != "noproxy" {
 		httpsProxy = overrideHttpsProxy
 	}
 

@@ -9163,7 +9163,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
-	if strings.ToLower(environment) != "worker" && strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch" {
+	if strings.ToLower(environment) != "worker" && (strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch") {
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
