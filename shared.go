@@ -11378,7 +11378,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				// Clean up results' actions
 
 				dbSave = true
-				log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
+				log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
 				actionId := "execution_argument"
 
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
@@ -11398,6 +11398,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"extra": "",
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+					log.Printf("[DEBUG] len(executionArgument) is %d for execution Id %s", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId)
 
 					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
 					log.Printf("[DEBUG] Saving value of %s to storage path %s", actionId, fullParsedPath)
@@ -11491,7 +11493,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			if err == nil {
 				log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				if len(jsonString) > 1000000 {
-					log.Printf("[WARNING] Execution size is still too large (%d) when running %s!", len(jsonString), saveLocationInfo)
+					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 					//for _, action := range workflowExecution.Workflow.Actions {
 					//	actionData, err := json.Marshal(action)
 					//	if err == nil {
@@ -11517,6 +11519,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 				}
 			}
+
+			log.Printf("[DEBUG] Execution size now: %d for %s where executionArgument is %d and results is %d", len(tmpJson), workflowExecution.ExecutionId, len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
 		}
 	}
 
