@@ -250,7 +250,7 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	}
 
 	if len(newDaily) < len(stats.OnpremStats) {
-		log.Printf("\n\n[INFO] Deduped %d stats for org %s\n\n", len(stats.OnpremStats) - len(newDaily), id)
+		log.Printf("[INFO] Deduped %d stats for org %s", len(stats.OnpremStats) - len(newDaily), id)
 	}
 
 	stats.OnpremStats = newDaily
@@ -355,7 +355,6 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 		orgStatistics = HandleIncrement(dataType, orgStatistics) 
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
-		//log.Printf("\n\nDaily stats: %d\n\n", len(orgStatistics.DailyStatistics))
 
 		// Set the data back in the database
 		marshalledData, err := json.Marshal(orgStatistics)
@@ -397,7 +396,6 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 
 			orgStatistics.OrgId = orgId
 		}
-
 
 		orgStatistics = HandleIncrement(dataType, orgStatistics) 
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
@@ -682,7 +680,6 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
 	// Set cache verbose
 	//if strings.Contains(name, "execution") || strings.Contains(name, "action") && len(data) > 1 {
-	//	fmt.Printf("\n\n[DEBUG] Setting cache '%s', length %d\n\n", name, len(data))
 	//}
 
 	if len(name) == 0 {
@@ -721,7 +718,6 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 					nextStep = len(data)
 				}
 
-				//log.Printf("%d - %d = ", currentChunk, nextStep)
 				parsedData := data[currentChunk:nextStep]
 				item := &memcache.Item{
 					Key:        keyname,
@@ -744,7 +740,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-						log.Printf("[WARNING] Failed setting cache for '%s' (1): %s", keyname, err)
+						log.Printf("[ERROR] Failed setting cache for '%s' (1): %s", keyname, err)
 					}
 					break
 				} else {
@@ -869,7 +865,7 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for 'setapp' key %s: %s", cacheKey, err)
+			log.Printf("[ERROR] Failed setting cache for 'setapp' key %s: %s", cacheKey, err)
 
 		}
 
@@ -880,17 +876,21 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 }
 
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
-	//log.Printf("\n\n\nRESULT: %s\n\n\n. Save: %t", workflowExecution.Status, dbSave)
 
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
-		log.Printf("[ERROR] Workflowexeciton executionId can't be empty.")
+		log.Printf("[ERROR] Workflowexecution executionId can't be empty.")
 		return errors.New("ExecutionId can't be empty.")
 	}
 
 	if len(workflowExecution.WorkflowId) == 0 {
 		log.Printf("[WARNING][%s] Workflowexecution workflowId can't be empty.", workflowExecution.ExecutionId)
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	}
+
+	if len(workflowExecution.Authorization) == 0 {
+		log.Printf("[WARNING][%s] Workflowexecution authorization can't be empty.", workflowExecution.ExecutionId)
+		return errors.New("Authorization can't be empty.")
 	}
 
 	// Fixes missing pieces
@@ -987,7 +987,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		key := datastore.NameKey(nameKey, strings.ToLower(workflowExecution.ExecutionId), nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-			log.Printf("[WARNING] Error adding workflow_execution to datastore: %s", err)
+			log.Printf("[ERROR] Problem adding workflow_execution to datastore: %s", err)
 
 			// Has to do with certain data coming back in parameters where it shouldn't, causing saving to be impossible
 			if strings.Contains(fmt.Sprintf("%s", err), "contains an invalid nested") {
@@ -1151,7 +1151,6 @@ func UpdateExecutionVariables(ctx context.Context, executionId, startnode string
 		return err
 	}
 
-	//log.Printf("[INFO] Successfully set cache for execution variables %s. Extra: %d\n\n", cacheKey, extra)
 	return nil
 }
 
@@ -1162,7 +1161,6 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
-		//log.Printf("CACHEDATA: %s", cacheData)
 		err = json.Unmarshal(cacheData, &wrapper)
 		if err == nil {
 			return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
@@ -1289,7 +1287,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 		if found {
 			// Handles execution vars
 			if len(action.ExecutionVariable.Name) > 0 {
-				//log.Printf("\n\n[INFO] Found execution variable %s (2)\n\n", result.Action.ExecutionVariable.Name)
 
 				// Check if key in lastexecVar
 				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
@@ -1320,7 +1317,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			workflowExecution.Results = append(workflowExecution.Results, result)
 
 			if len(action.ExecutionVariable.Name) > 0 {
-				//log.Printf("\n\n[INFO] Found execution variable %s (1)\n\n", result.Action.ExecutionVariable.Name)
 
 				// Check if key in lastexecVar
 				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
@@ -1396,8 +1392,55 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			continue
 		}
 
+		// Checking if results are correct or not
+		if project.Environment != "worker" {
+			if result.Status != "WAITING" && result.Status != "SKIPPED" && (result.Action.AppName == "User Input" || result.Action.AppName == "Shuffle Workflow" || result.Action.AppName == "shuffle-subflow") {
+				tmpResult, _ := parseSubflowResults(ctx, result)
+
+				if result.Status == "SUCCESS" {
+					result.Result = tmpResult.Result
+				}
+				//log.Printf("[DEBUG][%s] Getting '%s' result ", workflowExecution.ExecutionId, result.Action.AppName)
+			}
+
+			// Checks for subflows in waiting status
+			// May also work for user input in the future
+			if result.Status == "WAITING" {
+				tmpResult, changed := parseSubflowResults(ctx, result)
+				//log.Printf("HANDLE HERE: %s", tmpResult.Status)
+
+				if changed && (tmpResult.Status == "SUCCESS" || tmpResult.Status == "FAILURE") {
+					// Making sure we don't infinite loop :) 
+					// Keeping for 1 minute, as that's the rerun period
+					cacheKey := fmt.Sprintf("%s_%s_sent", workflowExecution.ExecutionId, tmpResult.Action.ID)
+					cache, err := GetCache(ctx, cacheKey)
+					if err == nil && cache != nil {
+						//SetCache(ctx, cacheKey, []byte("1"), 1)
+
+						result = tmpResult
+					} else {
+						SetCache(ctx, cacheKey, []byte("1"), 1)
+
+						log.Printf("[DEBUG][%s] Found waiting result for %s, now with status %s. Sending request to self for the full response of it", workflowExecution.ExecutionId, result.Action.ID, tmpResult.Status)
+
+						// Forcing a resend to handle transaction normally
+						actionData, err := json.Marshal(tmpResult)
+						if err == nil {
+							ResendActionResult(actionData, 4) 
+						} else {
+							//result = tmpResult
+						}
+					}
+
+				} else {
+					//result = tmpResult
+				}
+			}
+		} 
+
 		handled = append(handled, result.Action.ID)
 		newResults = append(newResults, result)
+
 	}
 
 	workflowExecution.Results = newResults
@@ -1415,6 +1458,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			}
 		}
 	}
+
+
 
 	// Check for failures before setting to finished
 	// Update execution parent
@@ -1437,11 +1482,22 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
 	if workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
-		log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented).", workflowExecution.ExecutionId)
 
-		finalWorkflowExecution.Status = "FINISHED"
-		if finalWorkflowExecution.CompletedAt == 0 {
-			finalWorkflowExecution.CompletedAt = time.Now().Unix()
+		skipFinished := false
+		for _, result := range workflowExecution.Results {
+			if result.Status == "WAITING" {
+				skipFinished = true 
+				break
+			}
+		}
+
+		if !skipFinished { 
+			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented).", workflowExecution.ExecutionId)
+
+			finalWorkflowExecution.Status = "FINISHED"
+			if finalWorkflowExecution.CompletedAt == 0 {
+				finalWorkflowExecution.CompletedAt = time.Now().Unix()
+			}
 		}
 	}
 
@@ -1458,7 +1514,6 @@ func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowEx
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				return workflowExecution, nil
@@ -1507,7 +1562,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
@@ -1742,7 +1796,6 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowApp)
 			if err == nil {
 
@@ -1894,7 +1947,6 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &sub)
 			if err == nil {
 				return sub, nil
@@ -1971,7 +2023,6 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &files)
 			if err == nil {
 				return files, nil
@@ -2127,7 +2178,6 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &env)
 			if err == nil {
 				return env, nil
@@ -2282,7 +2332,6 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil && workflow.ID != "" {
 				return workflow, nil
@@ -2778,7 +2827,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &curOrg)
 			if err == nil {
 				return curOrg, nil
@@ -2870,7 +2918,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &curOrg)
 			if err == nil {
 				return curOrg, nil
@@ -3345,7 +3392,6 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
-		//log.Printf("CACHEDATA: %s", cacheData)
 		err = json.Unmarshal(cacheData, &session)
 		if err == nil {
 			return session, nil
@@ -4306,7 +4352,6 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &allworkflowappAuths)
 			if err == nil {
 				return allworkflowappAuths, nil
@@ -4465,7 +4510,6 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &environments)
 			if err == nil {
 				return environments, nil
@@ -4647,7 +4691,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
 	allApps := []WorkflowApp{}
-	//log.Printf("[INFO] LOOPING REAL APPS: %d. Private: %d", len(user.PrivateApps))
 
 	// 1. Caching apps locally
 	// Make it based on org and not user :)
@@ -4805,7 +4848,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	appsAdded := []string{}
 
 	// Search for apps with these names, not all public ones
-	importantApps := []string{"Shuffle Tools", "http", "email"}
+	importantApps := []string{"Shuffle Tools", "http"}
 
 	publicApps := []WorkflowApp{}
 	publicAppsKey := fmt.Sprintf("public_apps")
@@ -5395,7 +5438,6 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			it := project.Dbclient.Run(ctx, query)
 			//innerApp := WorkflowApp{}
 			//data, err := it.Next(&innerApp)
-			//log.Printf("DATA: %s, err: %s", data, err)
 
 			for {
 				innerApp := WorkflowApp{}
@@ -5814,7 +5856,6 @@ func GetOpenseaAsset(ctx context.Context, id string) (*OpenseaAsset, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &workflowExecution)
 			if err == nil {
 				return workflowExecution, nil
@@ -6581,7 +6622,6 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &user)
 			if err == nil && len(user.Id) > 0 {
 
@@ -6806,7 +6846,6 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &hook)
 			if err == nil && len(hook.Id) > 0 {
 				return hook, nil
@@ -7067,7 +7106,6 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &notifications)
 			if err == nil {
 				return notifications, nil
@@ -7436,7 +7474,6 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &appAuth)
 			if err == nil {
 				return appAuth, nil
@@ -8293,7 +8330,6 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			cache, err := GetCache(ctx, cacheKey)
 			if err == nil {
 				cacheData := []byte(cache.([]uint8))
-				//log.Printf("CACHEDATA: %s", cacheData)
 				err = json.Unmarshal(cacheData, &executions)
 				if err == nil {
 					if len(executions) > amount {
@@ -8979,7 +9015,6 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			parsedCache := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(parsedCache, &cacheData)
 			if err == nil {
 				return cacheData, nil
@@ -9128,7 +9163,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	}
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
-	if strings.ToLower(environment) != "worker" && strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch" {
+	if strings.ToLower(environment) != "worker" && (strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch") {
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
@@ -9415,7 +9450,6 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &usecase)
 			if err == nil {
 				return usecase, nil
@@ -10064,7 +10098,17 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
 	// Print 1/5 times to
+	// Should find it if it doesn't exist
+	if extra == -1 {
+		extra = 0
+		for _, trigger := range workflowExecution.Workflow.Triggers {
+			if trigger.Name == "User Input" && trigger.AppName == "User Input" {
+				extra += 1
+			}
+		}
+	}
 
+	workflowExecution = Fixexecution(ctx, workflowExecution)
 	if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
 		log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 	}
@@ -10073,17 +10117,23 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		validResults := 0
 		invalidResults := 0
 		subflows := 0
+
+		lastResult := ActionResult{}
 		for _, result := range workflowExecution.Results {
 			if result.Status == "EXECUTING" || result.Status == "WAITING" {
 				log.Printf("[WARNING][%s] Waiting for action %s to finish", workflowExecution.ExecutionId, result.Action.ID)
 				return false
+			}
+
+			if result.Status == "SUCCESS" && result.CompletedAt >= lastResult.CompletedAt {
+				lastResult = result
 			}
 		
 			if result.Status == "SUCCESS" {
 				validResults += 1
 			}
 
-			if result.Status == "ABORTED" || result.Status == "FAILED" {
+			if result.Status == "ABORTED" || result.Status == "FAILURE" {
 				invalidResults += 1
 			}
 
@@ -10093,11 +10143,12 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		}
 
 
+
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
 			log.Printf("[INFO][%s] Already finished (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
-			return false
+			return true 
 		}
 
 		// Updating stats for the workflow
@@ -10115,14 +10166,17 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			}
 		}
 
-		//log.Printf("\n\nFINISHED!\n\n")
+
+		if len(workflowExecution.Result) == 0 && len(lastResult.Result) > 0 {
+			workflowExecution.Result = lastResult.Result
+		}
+
 		workflowExecution.CompletedAt = int64(time.Now().Unix())
 		workflowExecution.Status = "FINISHED"
 		err = SetWorkflowExecution(ctx, workflowExecution, true)
 		if err != nil {
 			log.Printf("[ERROR] Failed to set execution during finalization %s: %s", workflowExecution.ExecutionId, err)
 		} else {
-
 			log.Printf("[INFO] Finalized execution %s for workflow %s with %d results and status %s", workflowExecution.ExecutionId, workflowExecution.Workflow.ID, len(workflowExecution.Results), workflowExecution.Status)
 
 			// Validate text vs previous executions
@@ -10230,7 +10284,6 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
-			//log.Printf("CACHEDATA: %s", cacheData)
 			err = json.Unmarshal(cacheData, &suggestion)
 			if err == nil {
 				return suggestion, nil
