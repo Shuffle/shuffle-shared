@@ -11504,7 +11504,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						//_ = resultData
 						actionData, err := json.Marshal(result.Action)
 						if err == nil {
-							log.Printf("[DEBUG] Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
+							// log.Printf("[DEBUG] Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
 						}
 
 						if len(actionData) > 10000 {
