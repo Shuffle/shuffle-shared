@@ -11341,7 +11341,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				// Clean up results' actions
 
 				dbSave = true
-				//log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
+				log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
 				actionId := "execution_argument"
 
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
@@ -11406,7 +11406,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						// 2. If it doesn't exist, add it
 						_, err := getExecutionFileValue(ctx, workflowExecution, item)
 						if err == nil {
-							//log.Printf("[DEBUG] Found execution locally for %s. Not saving another.", item.Action.Label)
+							log.Printf("[DEBUG] Found execution locally for %s. Not saving another.", item.Action.Label)
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
 							log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
@@ -11450,7 +11450,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
-				//log.Printf("Execution size: %d", len(jsonString))
+				log.Printf("[DEBUG] Execution size: %d for %d", len(jsonString), workflowExecution.ExecutionId)
 				if len(jsonString) > 1000000 {
 					//for _, action := range workflowExecution.Workflow.Actions {
 					//	actionData, err := json.Marshal(action)
