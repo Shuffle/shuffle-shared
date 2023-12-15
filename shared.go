@@ -11373,6 +11373,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
 		if project.DbType != "opensearch" {
+			log.Printf("[DEBUG] Result length is %d for execution Id %s", len(tmpJson), workflowExecution.ExecutionId)
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 
@@ -11413,6 +11414,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							log.Printf("[WARNING] Failed closing new exec file (2): %s", err)
 							workflowExecution.ExecutionArgument = baseResult
 						} else {
+							log.Printf("[DEBUG] Saved execution argument to %s", fullParsedPath)
 							workflowExecution.ExecutionArgument = fmt.Sprintf(`{
 								"success": false,
 								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
@@ -11427,6 +11429,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				newResults := []ActionResult{}
 				//shuffle-large-executions
 				for _, item := range workflowExecution.Results {
+					log.Printf("[DEBUG] Result length is %d for execution Id %s", len(item.Result), workflowExecution.ExecutionId)
 					if len(item.Result) > maxSize {
 
 						itemSize := len(item.Result)
@@ -11486,8 +11489,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
-				log.Printf("[DEBUG] Execution size: %d for %d", len(jsonString), workflowExecution.ExecutionId)
+				log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				if len(jsonString) > 1000000 {
+					log.Printf("[WARNING] Execution size is still too large (%d) when running %s!", len(jsonString), saveLocationInfo)
 					//for _, action := range workflowExecution.Workflow.Actions {
 					//	actionData, err := json.Marshal(action)
 					//	if err == nil {
@@ -11500,7 +11504,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						//_ = resultData
 						actionData, err := json.Marshal(result.Action)
 						if err == nil {
-							//log.Printf("Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
+							log.Printf("[DEBUG] Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
 						}
 
 						if len(actionData) > 10000 {
