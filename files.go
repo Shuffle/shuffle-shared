@@ -1316,6 +1316,8 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if workflow.ExecutingOrg.Id != curfile.OrgId {
+			log.Printf("[DEBUG] Workflow executing org (%s) isn't file Org Id (%s) in file create. %d orgs have access to it.", workflow.ExecutingOrg.Id, curfile.OrgId, len(workflow.Org))
+
 			found := false
 			for _, curorg := range workflow.Org {
 				if curorg.Id == curfile.OrgId {
@@ -1325,7 +1327,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !found {
-				log.Printf("[ERROR] Org %s doesn't have access to %s.", curfile.OrgId, curfile.WorkflowId)
+				log.Printf("[ERROR] Org %s doesn't have access to %s. %s org should instead.", curfile.OrgId, curfile.WorkflowId, curfile.OrgId)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "Error with workflow id or org id"}`))
 				return
