@@ -11377,6 +11377,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 
+				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, workflow Size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Workflow), len(workflowExecution.Results))
+
 				dbSave = true
 				log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
 				actionId := "execution_argument"
@@ -11435,7 +11437,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				for _, item := range workflowExecution.Results {
 					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
 					if len(item.Result) > maxSize {
-						log.Printf("[WARNING][%s] result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, item.Action.Label, len(item.Result))
+						log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
 
 						itemSize := len(item.Result)
 						baseResult := fmt.Sprintf(`{
@@ -11490,8 +11492,10 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 
 					newResults = append(newResults, item)
+					log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
 				}
 
+				log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
 				workflowExecution.Results = newResults
 			}
 
