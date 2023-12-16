@@ -11373,7 +11373,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
 		if project.DbType != "opensearch" {
-			log.Printf("[DEBUG] Result length is %d for execution Id %s", len(tmpJson), workflowExecution.ExecutionId)
+			log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 
@@ -11388,6 +11388,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				// Arbitrary reduction size
 				maxSize := 50000
 				bucketName := fmt.Sprintf("%s.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"))
+
+				log.Printf("[DEBUG] Execution Argument length is %d for execution Id %s (%s)", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId, saveLocationInfo)
 
 				if len(workflowExecution.ExecutionArgument) > maxSize {
 					itemSize := len(workflowExecution.ExecutionArgument)
@@ -11431,8 +11433,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				newResults := []ActionResult{}
 				//shuffle-large-executions
 				for _, item := range workflowExecution.Results {
-					log.Printf("[DEBUG] Result length is %d for execution Id %s", len(item.Result), workflowExecution.ExecutionId)
+					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
 					if len(item.Result) > maxSize {
+						log.Printf("[WARNING][%s] result length is larger than maxSize", workflowExecution.ExecutionId)
 
 						itemSize := len(item.Result)
 						baseResult := fmt.Sprintf(`{
@@ -11450,7 +11453,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							log.Printf("[DEBUG] Found execution locally for %s. Not saving another.", item.Action.Label)
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
-							log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
+							log.Printf("[DEBUG] (1) Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
 							bucket := project.StorageClient.Bucket(bucketName)
 							obj := bucket.Object(fullParsedPath)
 							w := obj.NewWriter(ctx)
