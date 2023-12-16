@@ -11435,7 +11435,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				for _, item := range workflowExecution.Results {
 					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
 					if len(item.Result) > maxSize {
-						log.Printf("[WARNING][%s] result length is larger than maxSize", workflowExecution.ExecutionId)
+						log.Printf("[WARNING][%s] result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, item.Action.Label, len(item.Result))
 
 						itemSize := len(item.Result)
 						baseResult := fmt.Sprintf(`{
@@ -11459,7 +11459,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							w := obj.NewWriter(ctx)
 							//log.Printf("RES: ", item.Result)
 							if _, err := fmt.Fprint(w, item.Result); err != nil {
-								log.Printf("[WARNING] Failed writing new exec file: %s", err)
+								log.Printf("[WARNING][%s] Failed writing new exec file: %s", err, workflowExecution.ExecutionId)
 								item.Result = baseResult
 								newResults = append(newResults, item)
 								continue
@@ -11467,12 +11467,13 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 							// Close, just like writing a file.
 							if err := w.Close(); err != nil {
-								log.Printf("[WARNING] Failed closing new exec file (1): %s", err)
+								log.Printf("[WARNING][%s] Failed closing new exec file (1): %s", err, workflowExecution.ExecutionId)
 								item.Result = baseResult
 								newResults = append(newResults, item)
 								continue
 							}
 						}
+
 
 						item.Result = fmt.Sprintf(`{
 								"success": false,
@@ -11481,6 +11482,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"extra": "replace",
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
+
+							log.Printf("[DEBUG][%s] Overwriting result for %s (%s) with %s", workflowExecution.ExecutionId, item.Action.Label, item.Action.ID, baseResult)
 						// Setting an arbitrary decisionpoint to get it
 						// Backend will use this ID + action ID to get the data back
 						//item.Result = fmt.Sprintf("EXECUTION=%s", workflowExecution.ExecutionId)
