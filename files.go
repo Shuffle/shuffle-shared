@@ -1317,7 +1317,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 
 		if workflow.ExecutingOrg.Id != curfile.OrgId {
 			log.Printf("[DEBUG] Workflow executing org (%s) isn't file Org Id (%s) in file create. %d orgs have access to it.", workflow.ExecutingOrg.Id, curfile.OrgId, len(workflow.Org))
-			log.Printf("[DEBUG][%s] Workflow: %#v", workflow)
+			log.Printf("[DEBUG] Workflow: %+v", workflow)
 
 			found := false
 			for _, curorg := range workflow.Org {
