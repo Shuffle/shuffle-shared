@@ -11377,7 +11377,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 
-				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, workflow Size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Workflow), len(workflowExecution.Results))
+				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
 
 				dbSave = true
 				log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
