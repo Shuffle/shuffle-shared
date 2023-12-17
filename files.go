@@ -1261,6 +1261,9 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		Tags       []string `json:"tags"`
 	}
 
+	var executionId string
+	executionId = request.URL.Query().Get("execution_id")
+
 	var curfile FileStructure
 	err = json.Unmarshal(body, &curfile)
 	if err != nil {
@@ -1316,14 +1319,24 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if workflow.ExecutingOrg.Id != curfile.OrgId {
-			log.Printf("[DEBUG] Workflow executing org (%s) isn't file Org Id (%s) in file create. %d orgs have access to it.", workflow.ExecutingOrg.Id, curfile.OrgId, len(workflow.Org))
-			log.Printf("[DEBUG] Workflow: %+v", workflow)
-
 			found := false
-			for _, curorg := range workflow.Org {
-				if curorg.Id == curfile.OrgId {
-					found = true
-					break
+
+			log.Printf("[DEBUG] Workflow executing org (%s) isn't file Org Id (%s) in file create. %d orgs have access to it.", workflow.ExecutingOrg.Id, curfile.OrgId, len(workflow.Org))
+			if len(workflow.Org) == 0 && len(executionId) > 0 {
+					log.Printf("[DEBUG] Trying to get workflow from execution %s and no orgs are set (workflow probably is deleted!)", executionId)
+					execution, err := GetWorkflowExecution(ctx, executionId)
+					if err != nil {
+						log.Printf("[ERROR] Execution %s doesn't exist.", executionId)
+					} else if (curfile.OrgId == execution.OrgId) && (curfile.WorkflowId == execution.WorkflowId) {{
+							found = true
+					}
+				}
+			} else {
+				for _, curorg := range workflow.Org {
+					if curorg.Id == curfile.OrgId {
+						found = true
+						break
+					}
 				}
 			}
 
