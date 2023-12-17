@@ -1098,8 +1098,9 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		return "", errors.New("Ops dashboard user not admin")
 	}
 
-	// Should be local
-	// Create a new HTTP GET request
+	log.Printf("[DEBUG] Ops dashboard user found. Setting up ops workflow")
+
+
 	client := &http.Client{}
 	body := GetWorkflowTest()
 	if project.Environment == "cloud" {
@@ -1110,6 +1111,8 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 			log.Println("[ERROR] creating HTTP request:", err)
 			return "", errors.New("Error creating HTTP request: " + err.Error())
 		}
+
+		log.Printf("[DEBUG] Fetching health ops workflow with URL: %s", url)
 
 		// send the request
 		resp, err := client.Do(req)
@@ -1137,6 +1140,8 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		log.Println("[ERROR] unmarshalling Ops workflowData JSON data:", err)
 		return "", errors.New("Error unmarshalling JSON data: " + err.Error())
 	}
+
+	log.Printf("[DEBUG] Original workflow has ID: %s", workflowData.ID)
 
 	variables := workflowData.WorkflowVariables
 	for _, variable := range variables {
