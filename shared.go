@@ -1127,10 +1127,16 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !auth.Active {
+
+				// Forcing it active
+				appAuth.Active = true
+
+				/*
 				log.Printf("[WARNING] Auth isn't active for edit")
 				resp.WriteHeader(409)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't update an inactive auth"}`)))
 				return
+				*/
 			}
 
 			if auth.App.Name != appAuth.App.Name {
@@ -1179,7 +1185,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			// Decrypt with old label to ensure re-encryption with new label
 			for fieldIndex, field := range appAuth.Fields {
 
-				if len(field.Value) == 0 {
+				if len(field.Value) == 0 || strings.Contains(field.Value, "Secret. Replaced") {
 					for _, existingField := range auth.Fields {
 						if existingField.Key != field.Key {
 							continue
@@ -1217,10 +1223,12 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			appAuth.Encrypted = false
 			//return
 		} else {
-			log.Printf("[WARNING] Failed finding existing auth: %s", err)
-			resp.WriteHeader(409)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't find existing auth"}`)))
-			return
+			// ID sometimes used in creation as well
+
+			//log.Printf("[WARNING] Failed finding existing auth: %s", err)
+			//resp.WriteHeader(409)
+			//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't find existing auth"}`)))
+			//return
 		}
 	}
 
@@ -7722,7 +7730,7 @@ func getSignatureSample(org Org) PaymentSubscription {
 		}
 	}
 
-	log.Printf("[DEBUG] No signature sample found for org %s", org.Id)
+	//log.Printf("[DEBUG] No signature sample found for org %s", org.Id)
 
 	parsedEula := GetOnpremPaidEula() 
 	if (org.LeadInfo.Customer || org.LeadInfo.POV || len(org.ManagerOrgs) > 0) && !org.LeadInfo.OpenSource {
@@ -15494,6 +15502,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Don't override workflow defaults
 	}
 
+
+
 	if workflowExecution.SubExecutionCount == 0 {
 		workflowExecution.SubExecutionCount = 1
 	}
@@ -15577,7 +15587,63 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.ExecutionSource = "default"
 	}
 
-	//log.Printf("[INFO][%s] Execution source is '%s' in workflow %s. Organization: %s", workflowExecution.ExecutionSource, workflowExecution.ExecutionId, workflowExecution.Workflow.ID, workflowExecution.OrgId)
+	// Look for header 'appauth' with upper/lowercase check
+	authHeader := ""
+	for key, value := range request.Header {
+		if strings.ToLower(key) == "appauth" {
+			authHeader = value[0]
+			break
+		}
+	}
+
+	// curl 'http://localhost:5002/api/v1/workflows/{workflow_id}/run' -H 'app_auth: appname=auth_id;appname2=auth_id2'
+	allAuths := []AppAuthenticationStorage{}
+	if len(authHeader) > 0 {
+		if len(allAuths) == 0 {
+			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting all app authentications: %s", err)
+			}
+		}
+
+		appAuthSplit := strings.Split(authHeader, ";")
+		for _, authitem:= range appAuthSplit {
+			authitemSplit := strings.Split(authitem, "=")
+			if len(authitemSplit) != 2 {
+				continue
+			}
+
+			// Find the app in the workflow and replace the ID
+			appname := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(authitemSplit[0])), " ", "_")
+			authId := strings.ReplaceAll(strings.TrimSpace(authitemSplit[1]), " ", "_")
+
+			authFound := false
+			for _, auth := range allAuths {
+				if auth.Id == authId || strings.ReplaceAll(auth.Label, " ", "_")  == authId {
+					authFound = true
+					authId = auth.Id
+				}
+			}
+
+			if !authFound {
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App auth not found: %s", authId), errors.New("App auth not found")
+			}
+
+			found := false
+			for actionIndex, action := range workflowExecution.Workflow.Actions {
+				if strings.ReplaceAll(strings.ToLower(action.AppName), " ", "_") != appname {
+					continue
+				}
+
+				//log.Printf("[DEBUG] Found app auth: %s\n\n\n", appname)
+				workflowExecution.Workflow.Actions[actionIndex].AuthenticationId = authId
+			}
+
+			if !found {
+				log.Printf("[DEBUG][%s] Didn't find custom app/auth: %s", workflowExecution.ExecutionId, appname)
+			}
+		}
+	}
 
 	workflowExecution.ExecutionVariables = workflow.ExecutionVariables
 	if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
@@ -15651,7 +15717,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		//}
 	}
 
-	allAuths := []AppAuthenticationStorage{}
 	previousEnvironment := ""
 	for _, action := range workflowExecution.Workflow.Actions {
 		//action.LargeImage = ""
