@@ -11453,11 +11453,14 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
 		if project.DbType != "opensearch" {
+			log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 
+				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
+
 				dbSave = true
-				//log.Printf("[WARNING] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", len(tmpJson), saveLocationInfo)
+				log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
 				actionId := "execution_argument"
 
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
@@ -11468,6 +11471,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				maxSize := 50000
 				bucketName := fmt.Sprintf("%s.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"))
 
+				log.Printf("[DEBUG] Execution Argument length is %d for execution Id %s (%s)", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId, saveLocationInfo)
+
 				if len(workflowExecution.ExecutionArgument) > maxSize {
 					itemSize := len(workflowExecution.ExecutionArgument)
 					baseResult := fmt.Sprintf(`{
@@ -11477,6 +11482,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"extra": "",
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, actionId)
+
+					log.Printf("[DEBUG] len(executionArgument) is %d for execution Id %s", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId)
 
 					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
 					log.Printf("[DEBUG] Saving value of %s to storage path %s", actionId, fullParsedPath)
@@ -11493,6 +11500,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							log.Printf("[WARNING] Failed closing new exec file (2): %s", err)
 							workflowExecution.ExecutionArgument = baseResult
 						} else {
+							log.Printf("[DEBUG] Saved execution argument to %s", fullParsedPath)
 							workflowExecution.ExecutionArgument = fmt.Sprintf(`{
 								"success": false,
 								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
@@ -11507,7 +11515,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				newResults := []ActionResult{}
 				//shuffle-large-executions
 				for _, item := range workflowExecution.Results {
+					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
 					if len(item.Result) > maxSize {
+						log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
 
 						itemSize := len(item.Result)
 						baseResult := fmt.Sprintf(`{
@@ -11522,16 +11532,16 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						// 2. If it doesn't exist, add it
 						_, err := getExecutionFileValue(ctx, workflowExecution, item)
 						if err == nil {
-							//log.Printf("[DEBUG] Found execution locally for %s. Not saving another.", item.Action.Label)
+							log.Printf("[DEBUG] Found execution locally for %s. Not saving another.", item.Action.Label)
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
-							log.Printf("[DEBUG] Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
+							log.Printf("[DEBUG] (1) Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
 							bucket := project.StorageClient.Bucket(bucketName)
 							obj := bucket.Object(fullParsedPath)
 							w := obj.NewWriter(ctx)
 							//log.Printf("RES: ", item.Result)
 							if _, err := fmt.Fprint(w, item.Result); err != nil {
-								log.Printf("[WARNING] Failed writing new exec file: %s", err)
+								log.Printf("[WARNING][%s] Failed writing new exec file: %s", err, workflowExecution.ExecutionId)
 								item.Result = baseResult
 								newResults = append(newResults, item)
 								continue
@@ -11539,12 +11549,13 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 							// Close, just like writing a file.
 							if err := w.Close(); err != nil {
-								log.Printf("[WARNING] Failed closing new exec file (1): %s", err)
+								log.Printf("[WARNING][%s] Failed closing new exec file (1): %s", err, workflowExecution.ExecutionId)
 								item.Result = baseResult
 								newResults = append(newResults, item)
 								continue
 							}
 						}
+
 
 						item.Result = fmt.Sprintf(`{
 								"success": false,
@@ -11553,21 +11564,26 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"extra": "replace",
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
+
+							log.Printf("[DEBUG][%s] Overwriting result for %s (%s) with %s", workflowExecution.ExecutionId, item.Action.Label, item.Action.ID, baseResult)
 						// Setting an arbitrary decisionpoint to get it
 						// Backend will use this ID + action ID to get the data back
 						//item.Result = fmt.Sprintf("EXECUTION=%s", workflowExecution.ExecutionId)
 					}
 
 					newResults = append(newResults, item)
+					log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
 				}
 
+				log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
 				workflowExecution.Results = newResults
 			}
 
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
-				//log.Printf("Execution size: %d", len(jsonString))
+				log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				if len(jsonString) > 1000000 {
+					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 					//for _, action := range workflowExecution.Workflow.Actions {
 					//	actionData, err := json.Marshal(action)
 					//	if err == nil {
@@ -11580,7 +11596,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						//_ = resultData
 						actionData, err := json.Marshal(result.Action)
 						if err == nil {
-							//log.Printf("Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
+							// log.Printf("[DEBUG] Result Size (%s - action: %d): %d. Value size: %d", result.Action.Label, len(resultData), len(actionData), len(result.Result))
 						}
 
 						if len(actionData) > 10000 {
@@ -11593,6 +11609,8 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 				}
 			}
+
+			log.Printf("[DEBUG] Execution size now: %d for %s where executionArgument is %d and results is %d", len(tmpJson), workflowExecution.ExecutionId, len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
 		}
 	}
 
