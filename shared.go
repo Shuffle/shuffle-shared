@@ -1095,6 +1095,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 
 	ctx := GetContext(request)
+
 	if len(appAuth.Id) == 0 {
 		// To not override, we should use an md5 based on the input fields + org to create the ID
 		fielddata := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, appAuth.Label)
@@ -1139,8 +1140,87 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
+			for fieldIndex, field := range appAuth.Fields {
+				if !strings.Contains(field.Value, "Secret. Replaced") {
+					continue
+				}
+
+				//log.Printf("Field '%s' has secret. Replace with the real value", field.Key)
+				for _, existingField := range auth.Fields {
+					if existingField.Key != field.Key {
+						continue
+					}
+
+					//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
+
+					//field.Value = existingField.Value
+					appAuth.Fields[fieldIndex].Value = existingField.Value
+
+					if auth.Encrypted {
+						// Decrypt it here
+						parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
+						if err != nil {
+							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+						} else {
+							//log.Printf("Decrypted value: %s", newValue)
+							appAuth.Fields[fieldIndex].Value = string(newValue)
+						}
+					}
+
+					break
+				}
+			}
+
+			if len(appAuth.Fields) == 0 {
+				appAuth.Fields = auth.Fields
+			}
+
+			// Decrypt with old label to ensure re-encryption with new label
+			for fieldIndex, field := range appAuth.Fields {
+
+				if len(field.Value) == 0 {
+					for _, existingField := range auth.Fields {
+						if existingField.Key != field.Key {
+							continue
+						}
+
+						//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
+
+						// Decrypt it based on auth
+						parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
+						if err != nil {
+							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+						} else {
+							//log.Printf("Decrypted value: %s", newValue)
+							appAuth.Fields[fieldIndex].Value = string(newValue)
+							field.Value = string(newValue)
+						}
+					}
+				}
+
+
+				//log.Printf("Default value: %s", field.Value)
+
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
+				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				if err != nil {
+					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+				} else {
+					//log.Printf("Decrypted value: %s", newValue)
+					appAuth.Fields[fieldIndex].Value = string(newValue)
+				}
+			}
+
 			// Setting this to ensure that any new config is encrypted anew
-			auth.Encrypted = false
+			appAuth.Encrypted = false
+			//return
+		} else {
+			log.Printf("[WARNING] Failed finding existing auth: %s", err)
+			resp.WriteHeader(409)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't find existing auth"}`)))
+			return
 		}
 	}
 
@@ -1403,7 +1483,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] Set new workflow auth for %s (%s) with ID %s", app.Name, app.ID, appAuth.Id)
+	log.Printf("[INFO] Set new app auth for %s (%s) with ID %s", app.Name, app.ID, appAuth.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, appAuth.Id)))
 }
@@ -1657,7 +1737,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in stop executions: %s", err)
+		log.Printf("[WARNING] Api authentication failed in Rerun executions: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1763,7 +1843,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in stop executions: %s", err)
+		log.Printf("[WARNING] Api authentication failed in ABORT dangling executions: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -20076,7 +20156,7 @@ func HandleGetenvStats(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in stop executions: %s", err)
+		log.Printf("[WARNING] Api authentication failed in get env stats executions: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return

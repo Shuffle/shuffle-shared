@@ -430,6 +430,12 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while
 func IncrementCache(ctx context.Context, orgId, dataType string) {
+	// Check if environment is worker and skip
+	if project.Environment == "worker" {
+		//log.Printf("[DEBUG] Skipping cache increment for worker with datatype %s", dataType)
+		return
+	}
+
 
 	//log.Printf("[DEBUG] Incrementing cache '%s' for org '%s'", dataType, orgId)
 
@@ -6457,13 +6463,19 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	// Uses OrgId (Database) + Backend (ENV) modifier for the keys.
 	// Using created timestamp to ensure it's always unique, even if it's the same key of same app in same org.
 	if !workflowappauth.Encrypted {
-		//log.Printf("[INFO] Encrypting authentication values")
 		setEncrypted := true
 		newFields := []AuthenticationStore{}
 		for _, field := range workflowappauth.Fields {
+			// Custom skip for this
+			//if field.Key == "url" {
+			//	newFields = append(newFields, field)
+			//	continue
+			//}
+
 			parsedKey := fmt.Sprintf("%s_%d_%s_%s", workflowappauth.OrgId, workflowappauth.Created, workflowappauth.Label, field.Key)
 			newKey, err := handleKeyEncryption([]byte(field.Value), parsedKey)
 			if err != nil {
+				//log.Printf("[WARNING] Failed encrypting key '%s': %s", field.Key, err)
 				setEncrypted = false
 				break
 			}
@@ -6473,6 +6485,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 		}
 
 		if setEncrypted {
+			//log.Printf("[INFO] Encrypted authentication values as they weren't already encrypted")
 			workflowappauth.Fields = newFields
 			workflowappauth.Encrypted = true
 		}
