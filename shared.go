@@ -15355,6 +15355,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					result.CompletedAt = int64(time.Now().Unix())
+					log.Printf("[INFO][%s] Setting result to %s", oldExecution.ExecutionId, result.Action.Label)
 					if answer[0] == "false" {
 						result.Status = "SKIPPED"
 					} else {
