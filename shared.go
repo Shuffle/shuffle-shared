@@ -10806,10 +10806,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 						UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, startAction, children, parents, visited, executed, nextActions, environments, extra)
 					} else {
-						//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
+						// log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
 						//var visited []string
 						//var executed []string
 						//var nextActions []string
+						log.Printf("[DEBUG][%s] Not adding %s - %s as a skipaction.", workflowExecution.ExecutionId, action.Label, nodeId)
 					}
 				}
 			}
