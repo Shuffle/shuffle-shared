@@ -10704,9 +10704,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				for _, action := range workflowExecution.Workflow.Actions {
 					if action.ID == nodeId {
 						curAction = action
+						log.Printf("[DEBUG][%s] Found action %s (%s) for node %s", workflowExecution.ExecutionId, action.Label, action.ID, nodeId)
 						break
 					}
 				}
+				log.Printf("[DEBUG][%s] Found action with ID: %s", workflowExecution.ExecutionId, curAction.ID)
 
 				isTrigger := false
 				if len(curAction.ID) == 0 {
@@ -10730,6 +10732,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 					if len(curAction.ID) == 0 {
 						//log.Printf("Couldn't find subnode %s", nodeId)
+						log.Printf("[WARNING][%s] Couldn't find subnode %s. Forgetting about it", workflowExecution.ExecutionId, nodeId)
 						continue
 					}
 				}
