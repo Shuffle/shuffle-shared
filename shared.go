@@ -10734,6 +10734,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				resultExists := false
 				for _, result := range workflowExecution.Results {
+					log.Printf("[DEBUG][%s] Checking if result %s (%s) exists in results", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID)
 					if result.Action.ID == curAction.ID {
 						resultExists = true
 						break
