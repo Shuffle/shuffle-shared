@@ -10810,7 +10810,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						//var visited []string
 						//var executed []string
 						//var nextActions []string
-						log.Printf("[DEBUG][%s] Not adding %s - %s as a skipaction.", workflowExecution.ExecutionId, action.Label, nodeId)
+						log.Printf("[DEBUG][%s] Not adding %s - %s as a skipaction.", workflowExecution.ExecutionId, curAction.ID, nodeId)
 					}
 				}
 			}
