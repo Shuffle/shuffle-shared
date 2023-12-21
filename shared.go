@@ -10757,22 +10757,29 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							for _, trigger := range workflowExecution.Workflow.Triggers {
 								if trigger.ID == branch.SourceID {
 									if trigger.AppName != "User Input" && trigger.AppName != "Shuffle Workflow" {
+										log.Printf("[DEBUG][%s] Parent %s (%s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, curAction.Label)
 										parentTrigger = true
 									}
 								}
 							}
 
 							if parentTrigger {
+								log.Printf("[DEBUG][%s] Parent %s (of child %s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
 								continue
 							}
+
+							log.Printf("[DEBUG][%s] Parent %s (of child %s) is NOT a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
 
 							sourceNodeFound := false
 							for _, item := range childNodes {
 								if item == branch.SourceID {
+									log.Printf("[DEBUG][%s] Found source node %s (%s) for node %s", workflowExecution.ExecutionId, branch.SourceID, curAction.Label, nodeId)
 									sourceNodeFound = true
 									break
 								}
 							}
+
+							log.Printf("[DEBUG][%s] sourceNodeFound: %t for node %s", workflowExecution.ExecutionId, sourceNodeFound, nodeId)
 
 							if !sourceNodeFound {
 								// FIXME: Shouldn't add skip for child nodes of these nodes. Check if this node is parent of upcoming nodes.
