@@ -10692,7 +10692,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID, []string{}, []string{})
 			log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
 			for _, nodeId := range childNodes {
+				log.Printf("[DEBUG][%s] Checking if node %s is already in results", workflowExecution.ExecutionId, nodeId)
 				if nodeId == actionResult.Action.ID {
+					log.Printf("[DEBUG][%s] Skipping marking node %s (%s) as anything", workflowExecution.ExecutionId, nodeId, actionResult.Action.Label)
 					continue
 				}
 
