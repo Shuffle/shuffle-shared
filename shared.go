@@ -10689,9 +10689,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
-			//log.Printf("CHILD NODES: %d", len(childNodes))
 			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID, []string{}, []string{})
-			//log.Printf("\n\nFOUND %d CHILDNODES\n\n", len(childNodes))
+			log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
 			for _, nodeId := range childNodes {
 				if nodeId == actionResult.Action.ID {
 					continue
@@ -10814,6 +10813,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		lastResult := ""
 		// type ActionResult struct {
 		for _, result := range workflowExecution.Results {
+			log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
 			if actionResult.Action.ID == result.Action.ID {
 				continue
 			}
@@ -10888,7 +10888,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			//log.Printf("\n\n\n[WARNING] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", foundAction.Label, foundAction.ID)
+			log.Printf("\n\n\n[WARNING][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", workflowExecution.ExecutionId, foundAction.Label, foundAction.ID)
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -10914,7 +10914,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			skippedCount := len(skippedBranches)
 
-			//log.Printf("\n\n[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s\n\n", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
+			log.Printf("\n\n[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s\n\n", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
