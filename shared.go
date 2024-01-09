@@ -10689,11 +10689,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
-			//log.Printf("CHILD NODES: %d", len(childNodes))
 			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID, []string{}, []string{})
-			//log.Printf("\n\nFOUND %d CHILDNODES\n\n", len(childNodes))
+			log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
 			for _, nodeId := range childNodes {
+				log.Printf("[DEBUG][%s] Checking if node %s is already in results", workflowExecution.ExecutionId, nodeId)
 				if nodeId == actionResult.Action.ID {
+					log.Printf("[DEBUG][%s] Skipping marking node %s (%s) as anything", workflowExecution.ExecutionId, nodeId, actionResult.Action.Label)
 					continue
 				}
 
@@ -10703,9 +10704,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				for _, action := range workflowExecution.Workflow.Actions {
 					if action.ID == nodeId {
 						curAction = action
+						log.Printf("[DEBUG][%s] Found action %s (%s) for node %s", workflowExecution.ExecutionId, action.Label, action.ID, nodeId)
 						break
 					}
 				}
+				log.Printf("[DEBUG][%s] Found action with ID: %s", workflowExecution.ExecutionId, curAction.ID)
 
 				isTrigger := false
 				if len(curAction.ID) == 0 {
@@ -10729,12 +10732,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 					if len(curAction.ID) == 0 {
 						//log.Printf("Couldn't find subnode %s", nodeId)
+						log.Printf("[WARNING][%s] Couldn't find subnode %s. Forgetting about it", workflowExecution.ExecutionId, nodeId)
 						continue
 					}
 				}
 
 				resultExists := false
 				for _, result := range workflowExecution.Results {
+					log.Printf("[DEBUG][%s] Checking if result %s (%s) exists in results", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID)
 					if result.Action.ID == curAction.ID {
 						resultExists = true
 						break
@@ -10752,22 +10757,29 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							for _, trigger := range workflowExecution.Workflow.Triggers {
 								if trigger.ID == branch.SourceID {
 									if trigger.AppName != "User Input" && trigger.AppName != "Shuffle Workflow" {
+										log.Printf("[DEBUG][%s] Parent %s (%s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, curAction.Label)
 										parentTrigger = true
 									}
 								}
 							}
 
 							if parentTrigger {
+								log.Printf("[DEBUG][%s] Parent %s (of child %s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
 								continue
 							}
+
+							log.Printf("[DEBUG][%s] Parent %s (of child %s) is NOT a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
 
 							sourceNodeFound := false
 							for _, item := range childNodes {
 								if item == branch.SourceID {
+									log.Printf("[DEBUG][%s] Found source node %s (%s) for node %s", workflowExecution.ExecutionId, branch.SourceID, curAction.Label, nodeId)
 									sourceNodeFound = true
 									break
 								}
 							}
+
+							log.Printf("[DEBUG][%s] sourceNodeFound: %t for node %s", workflowExecution.ExecutionId, sourceNodeFound, nodeId)
 
 							if !sourceNodeFound {
 								// FIXME: Shouldn't add skip for child nodes of these nodes. Check if this node is parent of upcoming nodes.
@@ -10801,10 +10813,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 						UpdateExecutionVariables(ctx, workflowExecution.ExecutionId, startAction, children, parents, visited, executed, nextActions, environments, extra)
 					} else {
-						//log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
+						// log.Printf("\n\nNOT adding %s as skipaction - should add to execute?", nodeId)
 						//var visited []string
 						//var executed []string
 						//var nextActions []string
+						log.Printf("[DEBUG][%s] Not adding %s - %s as a skipaction.", workflowExecution.ExecutionId, curAction.ID, nodeId)
 					}
 				}
 			}
@@ -10814,6 +10827,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		lastResult := ""
 		// type ActionResult struct {
 		for _, result := range workflowExecution.Results {
+			log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
 			if actionResult.Action.ID == result.Action.ID {
 				continue
 			}
@@ -10888,7 +10902,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			//log.Printf("\n\n\n[WARNING] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", foundAction.Label, foundAction.ID)
+			log.Printf("\n\n\n[WARNING][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", workflowExecution.ExecutionId, foundAction.Label, foundAction.ID)
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -10914,7 +10928,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			skippedCount := len(skippedBranches)
 
-			//log.Printf("\n\n[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s\n\n", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
+			log.Printf("\n\n[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s\n\n", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
@@ -15355,6 +15369,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					result.CompletedAt = int64(time.Now().Unix())
+					log.Printf("[INFO][%s] Setting result to %s", oldExecution.ExecutionId, result.Action.Label)
 					if answer[0] == "false" {
 						result.Status = "SKIPPED"
 					} else {
