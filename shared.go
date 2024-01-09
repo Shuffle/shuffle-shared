@@ -1095,7 +1095,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 
 	ctx := GetContext(request)
-
+	originalId := appAuth.Id
 	if len(appAuth.Id) == 0 {
 		// To not override, we should use an md5 based on the input fields + org to create the ID
 		fielddata := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, appAuth.Label)
@@ -1299,8 +1299,8 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//log.Printf("[INFO] TYPE: %s", appAuth.Type)
-	if appAuth.Type == "oauth2" {
+	log.Printf("\n\n\n\n\nAUTH ID: %#v", originalId)
+	if appAuth.Type == "oauth2" && len(originalId) == 0 {
 		log.Printf("[DEBUG] OAUTH2 for workflow %s. User: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id)
 
 		if len(appAuth.ReferenceWorkflow) > 0 {
@@ -1360,7 +1360,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully set up authentication", "id": "%s"}`, appAuth.Id)))
 		return
 
-	} else if appAuth.Type == "oauth2-app" {
+	} else if appAuth.Type == "oauth2-app" && len(originalId) == 0 {
 		// For application permissions set in Oauth2 frontend
 		// This should contain client-id, client-secret, scopes, token-url
 		// May need to also know how the auth actually works (e.g. basic auth or something else)
@@ -1378,23 +1378,31 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 
 	} else {
-		// Check if the items are correct
-		for _, field := range appAuth.Fields {
-			found := false
-			for _, param := range app.Authentication.Parameters {
-				//log.Printf("Fields: %s - %s", field, param.Name)
-				if field.Key == param.Name {
-					found = true
+		// Edgecases for oauth2 as they need reauth
+		if appAuth.Type == "oauth2" || appAuth.Type == "oauth2-app" {
+		} else {
+			// Check if the items are correct
+			for _, field := range appAuth.Fields {
+				found := false
+				for _, param := range app.Authentication.Parameters {
+					//log.Printf("Fields: %s - %s", field, param.Name)
+					if field.Key == param.Name {
+						found = true
+					}
+				}
+
+				if !found {
+					log.Printf("[WARNING] Failed finding field '%s' in appauth fields for %s", field.Key, appAuth.App.Name)
+					resp.WriteHeader(409)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
+					return
 				}
 			}
-
-			if !found {
-				log.Printf("[WARNING] Failed finding field '%s' in appauth fields for %s", field.Key, appAuth.App.Name)
-				resp.WriteHeader(409)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "All auth fields required"}`)))
-				return
-			}
 		}
+	}
+
+	if len(appAuth.App.LargeImage) == 0 && len(app.LargeImage) > 0 {
+		appAuth.App.LargeImage = app.LargeImage
 	}
 
 	appAuth.OrgId = user.ActiveOrg.Id
