@@ -17331,7 +17331,6 @@ func GetBackendexecution(ctx context.Context, executionId, authorization string)
 	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
 
 	topClient := GetExternalClient(backendUrl)
-
 	requestData := ActionResult{
 		ExecutionId:   executionId,
 		Authorization: authorization,

@@ -680,7 +680,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	handleFileString := "if not to_file:\n            return self.prepare_response(ret)\n\n        return ret.text"
 
 	parsedDataCurlParser := ""
-	if method == "post" || method == "patch" || method == "put" {
+	if method == "post" || method == "patch" || method == "put" || method == "delete" {
 		parsedDataCurlParser = `parsed_curl_command += f""" -d '{body}'""" if isinstance(body, str) else f""" -d '{body.decode("utf-8")}'"""`
 	}
 
