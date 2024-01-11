@@ -815,6 +815,11 @@ type Defaults struct {
 	WorkflowDownloadBranch string `json:"workflow_download_branch" datastore:"workflow_download_branch"`
 	NotificationWorkflow   string `json:"notification_workflow" datastore:"notification_workflow"`
 	DocumentationReference string `json:"documentation_reference" datastore:"documentation_reference"`
+
+	WorkflowUploadRepo  string `json:"workflow_upload_repo" datastore:"workflow_upload_repo"`
+	WorkflowUploadBranch string `json:"workflow_upload_branch" datastore:"workflow_upload_branch"`
+	WorkflowUploadUsername   string `json:"workflow_upload_username" datastore:"workflow_upload_username"`
+	WorkflowUploadToken string `json:"workflow_upload_token" datastore:"workflow_upload_token"`
 }
 
 type CacheKeyData struct {

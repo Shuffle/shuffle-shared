@@ -10208,7 +10208,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 				err := CreateOrgNotification(
 					ctx,
-					fmt.Sprintf("Workflow %s took too long to run", workflowExecution.Workflow.Name, comparisonTime),
+					fmt.Sprintf("Workflow %s took too long to run. Time taken: %d seconds", workflowExecution.Workflow.Name, comparisonTime),
 					fmt.Sprintf("This notification is made when the execution takes more than 10 minutes.", workflowExecution.Workflow.Name, comparisonTime),
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 					workflowExecution.ExecutionOrg,

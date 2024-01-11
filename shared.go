@@ -5765,7 +5765,29 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Id:   user.ActiveOrg.Id,
 		Name: user.ActiveOrg.Name,
 	}
+
 	SetWorkflowRevision(ctx, workflow)
+	err = SetGitWorkflow(ctx, workflow, org)
+	if err != nil {
+
+		// Make a notification for this
+		err = CreateOrgNotification(
+			ctx,
+			fmt.Sprintf("Failed setting git workflow for %s (%s): %s", workflow.Name, workflow.ID, err),
+			fmt.Sprintf("User %s (%s) tried to upload %s (%s) but failed: %s. Make sure there is already a file in the repository, like README.md", user.Username, user.Id, workflow.Name, workflow.ID, err),
+			fmt.Sprintf("/workflows/%s", workflow.ID),
+			user.ActiveOrg.Id,
+			true,
+		)
+
+		if err != nil {
+			log.Printf("[WARNING] Failed creating notification for failed git workflow for %s (%s): %s", workflow.Name, workflow.ID, err)
+		} else {
+			log.Printf("[WARNING] Failed setting git workflow for %s (%s). Notification created. %s", workflow.Name, workflow.ID, err)
+		}
+
+	}
+
 
 	type returnData struct {
 		Success bool     `json:"success"`
@@ -11720,6 +11742,7 @@ func FindChildNodes(workflowExecution WorkflowExecution, nodeId string, parents,
 	return newNodes
 }
 
+// Also deactivates. It's a toggle for off and on.
 func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -11744,6 +11767,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
+	activate := true 
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			resp.WriteHeader(401)
@@ -11752,7 +11776,11 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		fileId = location[4]
+		if strings.ToLower(location[5]) == "deactivate" {
+			activate = false
+		}
 	}
+
 
 	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
@@ -11795,7 +11823,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	org := &Org{}
 	added := false
-	if app.Sharing || app.Public {
+	if app.Sharing || app.Public || !activate {
 		org, err = GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
 			if len(org.ActiveApps) > 150 {
@@ -11816,8 +11844,23 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
 			}
 
-			if !ArrayContains(org.ActiveApps, app.ID) {
-				org.ActiveApps = append(org.ActiveApps, app.ID)
+			if activate {
+				if !ArrayContains(org.ActiveApps, app.ID) {
+					org.ActiveApps = append(org.ActiveApps, app.ID)
+					added = true
+				}
+			} else {
+				// Remove from the array
+				newActiveApps := []string{}
+				for _, activeApp := range org.ActiveApps {
+					if activeApp == app.ID {
+						continue
+					}
+
+					newActiveApps = append(newActiveApps, activeApp)
+				}
+
+				org.ActiveApps = newActiveApps
 				added = true
 			}
 
@@ -11838,7 +11881,13 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	if activate {
+		log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	} else {
+		log.Printf("[DEBUG] App %s (%s) deactivated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	}
+
+
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 	DeleteCache(ctx, "all_apps")

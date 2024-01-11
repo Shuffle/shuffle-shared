@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/url"
 	"context"
+	"io"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,9 +14,18 @@ import (
 	"os"
 	"strings"
 	"time"
+	"path/filepath"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
+	"github.com/go-git/go-billy/v5"
+	"github.com/go-git/go-billy/v5/memfs"
+	"github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/config"
+	//"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/object"
+	"github.com/go-git/go-git/v5/storage/memory"
+
 )
 
 func executeCloudAction(action CloudSyncJob, apikey string) error {
@@ -775,4 +785,169 @@ func CheckCreatorSelfPermission(ctx context.Context, requestUser, creatorUser Us
 	}
 
 	return false 
+}
+
+// Uploads updates for a workflow to a specific file on git
+func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
+
+	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadBranch == "" || org.Defaults.WorkflowUploadUsername == "" || org.Defaults.WorkflowUploadToken == "" {
+		//log.Printf("[DEBUG] No workflow upload repo for org %s (%s)", org.Name, org.Id)
+		return nil
+	}
+
+	org.Defaults.WorkflowUploadRepo = strings.TrimSpace(org.Defaults.WorkflowUploadRepo)
+	if strings.HasPrefix(org.Defaults.WorkflowUploadRepo, "https://") {
+		org.Defaults.WorkflowUploadRepo = strings.Replace(org.Defaults.WorkflowUploadRepo, "https://", "", 1)
+		org.Defaults.WorkflowUploadRepo = strings.Replace(org.Defaults.WorkflowUploadRepo, "http://", "", 1)
+	}
+
+	if strings.HasSuffix(org.Defaults.WorkflowUploadRepo, ".git") {
+		org.Defaults.WorkflowUploadRepo = strings.TrimSuffix(org.Defaults.WorkflowUploadRepo, ".git")
+	}
+
+	log.Printf("[DEBUG] Uploading workflow %s to repo %s for org %s (%s)", workflow.ID, org.Defaults.WorkflowUploadRepo, org.Name, org.Id)
+
+	// Use git to upload the workflow. 
+	workflowData, err := json.Marshal(workflow)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling workflow %s (%s) for git upload: %s", workflow.Name, workflow.ID, err)
+		return err
+	}
+
+	commitMessage := fmt.Sprintf("User %s updated workflow %s", workflow.Name, workflow.ID)
+	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, org.Defaults.WorkflowUploadToken, org.Defaults.WorkflowUploadRepo)
+	log.Printf("[DEBUG] Parsed URL: %s", location)
+
+	fs := memfs.New()
+	if len(workflow.Status) == 0 {
+		workflow.Status = "test"
+	}
+	//filePath := fmt.Sprintf("/%s/%s.json", workflow.Status, workflow.ID)
+	filePath := fmt.Sprintf("%s_%s.json", workflow.Status, workflow.ID)
+
+	// Specify the file path within the repository
+	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{
+    	URL: location,
+	})
+
+	// Initialize a new Git repository in memory
+	w := &git.Worktree{}
+	if err != nil {
+		log.Printf("[ERROR] Error cloning repo: %s", err)
+		return err
+	} 
+
+	// Create a new commit with the in-memory file
+	w, err = repo.Worktree()
+	if err != nil {
+		log.Printf("[ERROR] Error getting worktree (2): %s", err)
+		return err
+	}
+
+	// Write the byte blob to the in-memory file system
+	file, err := fs.Create(filePath)
+	if err != nil {
+		log.Printf("[ERROR] Creating file: %v", err)
+		return err
+	}
+
+	defer file.Close()
+	//_, err = io.Copy(file, bytes.NewReader(workflowData))
+	_, err = io.Copy(file, bytes.NewReader(workflowData))
+	if err != nil {
+		log.Printf("[ERROR] Writing data to file: %v", err)
+		return err
+	}
+
+	// Add the file to the staging area
+	_, err = w.Add(filePath)
+	if err != nil {
+		log.Printf("[ERROR] Error adding file to staging area (2): %s", err)
+		return err
+	}
+
+	// Commit the changes
+	commit, err := w.Commit(commitMessage, &git.CommitOptions{
+		Author: &object.Signature{
+			Name:  org.Defaults.WorkflowUploadUsername,
+			Email: "",
+			When:  time.Now(),
+		},
+	})
+	if err != nil {
+		log.Printf("[ERROR] Committing changes: %v (2)", err)
+		return err
+	}
+
+		// Print the commit hash
+	log.Printf("[DEBUG] Commit Hash: %s", commit)
+
+	// Push the changes to a remote repository (replace URL with your repository URL)
+	// fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)},
+	ref := fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)
+	err = repo.Push(&git.PushOptions{
+		RemoteName: "origin",
+		RefSpecs:   []config.RefSpec{config.RefSpec(ref)},
+		RemoteURL:  location,
+	})
+	if err != nil {
+		log.Printf("[ERROR] Pushing changes: %v (2)", err)
+		return err
+	}
+
+	log.Println("[DEBUG] File uploaded successfully!")
+
+
+
+	return nil
+}
+
+// Creates osfs from folderpath with a basepath as directory base
+func CreateFs(basepath, pathname string) (billy.Filesystem, error) {
+	log.Printf("[INFO] MemFS base: %s, pathname: %s", basepath, pathname)
+
+	fs := memfs.New()
+	err := filepath.Walk(pathname,
+		func(path string, info os.FileInfo, err error) error {
+			if err != nil {
+				return err
+			}
+
+			if strings.Contains(path, ".git") {
+				return nil
+			}
+
+			// Fix the inner path here
+			newpath := strings.ReplaceAll(path, pathname, "")
+			fullpath := fmt.Sprintf("%s%s", basepath, newpath)
+			switch mode := info.Mode(); {
+			case mode.IsDir():
+				err = fs.MkdirAll(fullpath, 0644)
+				if err != nil {
+					log.Printf("Failed making folder: %s", err)
+				}
+			case mode.IsRegular():
+				srcData, err := ioutil.ReadFile(path)
+				if err != nil {
+					log.Printf("Src error: %s", err)
+					return err
+				}
+
+				dst, err := fs.Create(fullpath)
+				if err != nil {
+					log.Printf("Dst error: %s", err)
+					return err
+				}
+
+				_, err = dst.Write(srcData)
+				if err != nil {
+					log.Printf("Dst write error: %s", err)
+					return err
+				}
+			}
+
+			return nil
+		})
+
+	return fs, err
 }
