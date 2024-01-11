@@ -1299,7 +1299,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("\n\n\n\n\nAUTH ID: %#v", originalId)
+	//log.Printf("\n\n\n\n\nAUTH ID: %#v", originalId)
 	if appAuth.Type == "oauth2" && len(originalId) == 0 {
 		log.Printf("[DEBUG] OAUTH2 for workflow %s. User: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id)
 
@@ -1440,6 +1440,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+
 	// Set it as the default app in the org as it's the "latest" of it's kind.
 	// This just means adding it to the app framework if a category exists
 	if len(app.Categories) > 0 {
@@ -1496,6 +1497,14 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[WARNING] Failed setting org after setting default app: %s", err)
 			}
+		}
+	}
+
+	if appAuth.SuborgDistributed {
+		// Clear auth cache for all suborgs
+		for _, org := range user.ActiveOrg.ChildOrgs {
+			cacheKey := fmt.Sprintf("workflowappauth_%s", org.Id)
+			DeleteCache(ctx, cacheKey)
 		}
 	}
 
@@ -5390,7 +5399,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if authRequired && fieldsFilled > 1 {
-						foundErr := fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication (1)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("\n\n[DEBUG] Adding auth error 1: %s\n\n", foundErr)
@@ -5398,7 +5407,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 							//continue
 						}
 					} else if authRequired && fieldsFilled == 1 {
-						foundErr := fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication (2)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s\n\n", foundErr)
@@ -5441,7 +5450,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
-										thisError = fmt.Sprintf("%s requires authentication", strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+										thisError = fmt.Sprintf("Action %s (%s) requires authentication (3)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 									}
 
 									action.Errors = append(action.Errors, thisError)
@@ -7397,7 +7406,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	if !foundOrg || tmpData.OrgId != fileId {
 		log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
 		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "No permission to change to this org"}`))
+		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org. Please contact support@shuffler.io if this is unexpected."}`))
 		return
 	}
 
@@ -7430,10 +7439,10 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !userFound {
+	if !userFound && !user.SupportAccess {
 		log.Printf("[WARNING] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
 		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "No permission to change to this org"}`))
+		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org (2). Please contact support@shuffler.io if this is unexpected."}`))
 		return
 	}
 
@@ -7593,7 +7602,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] User can't edit the org \"%s\"", tmpData.OrgId)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "No permission to edit this org (1). Org Id has to match in the body and the request."}`))
+		resp.Write([]byte(`{"success": false, "reason": "No permission to edit this org (1). Org Id has to match in the body and the request."}`))
 		return
 	}
 
@@ -7605,10 +7614,10 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		if !parentOrg.SyncFeatures.MultiTenant.Active {
+		if !parentOrg.SyncFeatures.MultiTenant.Active && !parentOrg.LeadInfo.Customer && !parentOrg.LeadInfo.POV && !parentOrg.LeadInfo.Internal {
 			log.Printf("[WARNING] Org %s is not allowed to make a sub-organization: %s", tmpData.OrgId, err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription with access to multi-tenancy. Contact support to try it out."}`))
+			resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription or to be in the POV stage with access to multi-tenancy. Contact support@shuffler.io to try it out."}`))
 			return
 		}
 
@@ -7891,7 +7900,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] User can't edit org %s (active: %s)", fileId, user.ActiveOrg.Id)
 		if !user.SupportAccess {
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "No permission to edit this org (2)"}`))
+			resp.Write([]byte(`{"success": false, "reason": "No permission to edit this org (2)"}`))
 			return
 		}
 
@@ -15846,7 +15855,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
-						log.Printf("[ERROR] Failed decryption (3) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+						log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
 						setField = false
 						//fieldLength = 0
 						break

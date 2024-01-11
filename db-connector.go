@@ -3462,7 +3462,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 func DeleteKey(ctx context.Context, entity string, value string) error {
 	// Non indexed User data
 	if entity == "workflowexecution" {
-		log.Printf("\n\n\n\n\n\n[WARNING] Deleting workflowexecution: %s\n\n\n\n\n\n", value)
+		log.Printf("[WARNING] Deleting workflowexecution: %s", value)
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
