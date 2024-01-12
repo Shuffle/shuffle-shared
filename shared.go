@@ -9230,6 +9230,15 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in login", GetRequestIp(request))
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+
 	// Gets a struct of Username, password
 	data, err := ParseLoginParameters(resp, request)
 	if err != nil {
@@ -21435,3 +21444,105 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 
 	return result, true
 }
+
+
+func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) error {
+	// 1. Get current amount of requests for the user
+	// 2. Check if the user is allowed to make more requests
+	// 3. If not, return error
+	// 4. If yes, continue and add the request to the list
+	// Use the GetCache() and SetCache() functions to store the request count
+
+	// Max amount per minute
+	maxAmount := 4
+	foundIP := GetRequestIp(request) 
+	if foundIP == "" || foundIP == "127.0.0.1" || foundIP == "::1" {
+		log.Printf("[DEBUG] Skipping request overload check for IP: %s", foundIP)
+		return nil
+	}
+
+	// Check if the foundIP includes ONE colon for the port
+	if strings.Count(foundIP, ":") == 1 {
+		foundIP = strings.Split(foundIP, ":")[0]
+	}
+
+	timenow := time.Now().Unix()
+	userRequest := UserRequest{
+		IP 		  : foundIP,
+		Method    : request.Method,
+		Path 	  : request.URL.Path,
+		Timestamp : timenow,
+	}
+
+
+	log.Printf("[DEBUG] User request: %#v", userRequest)
+
+	requestList := []UserRequest{}
+
+	// Maybe do per path? Idk
+	ctx := GetContext(request)
+	cacheKey := fmt.Sprintf("userrequest_%s", userRequest.IP)
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting cache for key %s: %s", cacheKey, err)
+		requestList = append(requestList, userRequest)
+
+		b, err := json.Marshal(requestList)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling requestlist: %s", err)
+			return nil
+		}
+
+		// Set cache for 1 minute
+		err = SetCache(ctx, cacheKey, b, 1)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for key %s: %s", cacheKey, err)
+			return nil
+		}
+
+		return nil 
+	}
+
+	// Parse out the data in the cache
+	cacheData := []byte(cache.([]uint8))
+	err = json.Unmarshal(cacheData, &requestList)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling requestlist: %s", err)
+		return nil
+	}
+
+	log.Printf("[DEBUG] Requestlist: %#v", requestList)
+
+	// Remove any item more than 60 seconds back to make a sliding window
+	newList := []UserRequest{}
+	for _, req := range requestList {
+		if req.Timestamp < (timenow - 60) {
+			continue
+		}
+
+		newList = append(newList, req)
+	}
+
+	if len(newList) > maxAmount {
+		// FIXME: Should we add to the list even if we return an error?
+
+		return errors.New("Too many requests")
+	}
+
+	log.Printf("[DEBUG] Adding request to list")
+	newList = append(newList, userRequest)
+	b, err := json.Marshal(newList)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling requestlist: %s", err)
+		return nil
+	}
+
+	// Set cache for 1 minute
+	err = SetCache(ctx, cacheKey, b, 1)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting cache for key %s: %s", cacheKey, err)
+	}
+
+	return nil 
+}
+	

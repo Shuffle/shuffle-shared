@@ -3670,3 +3670,10 @@ type ModelLabelParameter struct {
 	Type string 		`json:"type"`
 	Required bool 		`json:"required"`
 }
+
+type UserRequest struct {
+	IP 		  string `json:"ip"`
+	Method    string `json:"method"`
+	Path 	  string `json:"path"`
+	Timestamp int64 `json:"time"`
+}

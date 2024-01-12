@@ -251,10 +251,13 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 // how to make sure that the notification workflow bucket always empties itself:
 // call sendToNotificationWorkflow with the first cached notification 
 func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string, relieveNotifications bool) error {
+	/*
+	// FIXME: Was used for disabling it before due to possible issues with infinite loops.
 	if project.Environment != "onprem" {
 		log.Printf("[DEBUG] Skipping notification workflow send for workflow %s as workflows are disabled for cloud for now.", workflowId)
 		return nil
 	}
+	*/
 
 	log.Printf("[DEBUG] Sending notification to workflow with id: %s", workflowId)
 	if len(workflowId) < 10 {

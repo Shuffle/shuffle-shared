@@ -814,7 +814,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		return err
 	}
 
-	commitMessage := fmt.Sprintf("User %s updated workflow %s", workflow.Name, workflow.ID)
+	commitMessage := fmt.Sprintf("User '%s' updated workflow '%s' with status '%s'", workflow.UpdatedBy, workflow.Name, workflow.Status)
 	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, org.Defaults.WorkflowUploadToken, org.Defaults.WorkflowUploadRepo)
 	log.Printf("[DEBUG] Parsed URL: %s", location)
 
@@ -823,7 +823,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		workflow.Status = "test"
 	}
 	//filePath := fmt.Sprintf("/%s/%s.json", workflow.Status, workflow.ID)
-	filePath := fmt.Sprintf("%s_%s.json", workflow.Status, workflow.ID)
+	filePath := fmt.Sprintf("%s.json", workflow.ID)
 
 	// Specify the file path within the repository
 	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{

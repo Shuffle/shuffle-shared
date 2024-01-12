@@ -683,6 +683,7 @@ func GetCache(ctx context.Context, name string) (interface{}, error) {
 	return "", errors.New(fmt.Sprintf("No cache found for %s", name))
 }
 
+// Sets a key in cache. Expiration is in minutes.
 func SetCache(ctx context.Context, name string, data []byte, expiration int32) error {
 	// Set cache verbose
 	//if strings.Contains(name, "execution") || strings.Contains(name, "action") && len(data) > 1 {
