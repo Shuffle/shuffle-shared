@@ -2342,7 +2342,11 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
-			return cache.(int), nil
+			cacheData := []byte(cache.([]uint8))
+			count, err = strconv.Atoi(string(cacheData))
+			if err == nil {
+				return count, nil
+			}
 		}
 		log.Printf("[DEBUG] Failed getting cache for workflow id %d count: %s", id, err)
 	}
@@ -2370,6 +2374,18 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 			return 0, err
 		}
 	}
+
+	// count int to []byte
+	countStr := strconv.Itoa(count)
+	countBytes := []byte(countStr)
+
+	if project.CacheDb {
+		err := SetCache(ctx, cacheKey, countBytes, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for workflow id %d count: %s", id, err)
+		}
+	}
+
 	return count, nil
 }
 
