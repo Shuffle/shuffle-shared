@@ -2345,6 +2345,7 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 			cacheData := []byte(cache.([]uint8))
 			count, err = strconv.Atoi(string(cacheData))
 			if err == nil {
+				log.Printf("[DEBUG] Got count %d from cache for workflow id %s", count, id)
 				return count, nil
 			}
 		}
