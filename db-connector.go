@@ -2333,6 +2333,46 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	return env, nil
 }
 
+func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
+	nameKey := "workflowexecution"
+	cacheKey := fmt.Sprintf("%s_count_%s", nameKey, id)
+
+	count := 0
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			return cache.(int), nil
+		}
+		log.Printf("[DEBUG] Failed getting cache for workflow id %d count: %s", id, err)
+	}
+
+	if project.DbType == "opensearch" {
+		return 0, errors.New("Not implemented")
+	} else {
+		// get workflow and verify that it belongs to user
+		workflow, err := GetWorkflow(ctx, id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow %d : %s while getting count", id, err)
+			return 0, err
+		}
+
+		if (workflow.OrgId != user.ActiveOrg.Id) {
+			log.Printf("[WARNING] User %s tried to get workflow %d count for org %s", user.Email, id, workflow.OrgId)
+			return 0, errors.New("Not authorized")
+		}
+
+		// count WorkflowExecution where workflowId = id
+		query := datastore.NewQuery(nameKey).Filter("workflow_id =", strings.ToLower(id))
+		count, err := project.Dbclient.Count(ctx, query)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting count for workflow %d : %s", id, err)
+			return 0, err
+		}
+	}
+	return count, nil
+}
+
 func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	workflow := &Workflow{}
 	nameKey := "workflow"

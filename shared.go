@@ -2819,6 +2819,58 @@ func ArrayContains(visited []string, id string) bool {
 	return found
 }
 
+func GetWorkflowExecutionCount(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in getting workflow execution count: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow execution count is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflowCount, err := GetWorkflowCount(ctx, fileId, user)
+
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow count for %s", fileId)
+		if err.Error() == "Not authorized" {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "User doesn't belong in this org"}`))
+		}
+
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "count": %d}`, workflowCount)))
+}
+
 func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
