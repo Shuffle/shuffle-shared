@@ -2358,13 +2358,13 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 		}
 
 		if (workflow.OrgId != user.ActiveOrg.Id) {
-			log.Printf("[WARNING] User %s tried to get workflow %d count for org %s", user.Email, id, workflow.OrgId)
+			log.Printf("[WARNING] User %s tried to get workflow %d count for org %s", user.Username, id, workflow.OrgId)
 			return 0, errors.New("Not authorized")
 		}
 
 		// count WorkflowExecution where workflowId = id
 		query := datastore.NewQuery(nameKey).Filter("workflow_id =", strings.ToLower(id))
-		count, err := project.Dbclient.Count(ctx, query)
+		count, err = project.Dbclient.Count(ctx, query)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting count for workflow %d : %s", id, err)
 			return 0, err
