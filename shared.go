@@ -11002,7 +11002,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("\n\n\n[WARNING][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", workflowExecution.ExecutionId, foundAction.Label, foundAction.ID)
+			log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -11028,7 +11028,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			skippedCount := len(skippedBranches)
 
-			log.Printf("\n\n[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s\n\n", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
+			log.Printf("[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
@@ -11072,6 +11072,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							streamUrl = fmt.Sprintf("http://%s:33333/api/v1/streams", os.Getenv("WORKER_HOSTNAME"))
 						}
 
+						log.Printf("[DEBUG] OPTIMIZED: %s, PORT: %s", os.Getenv("SHUFFLE_OPTIMIZED"), os.Getenv("WORKER_PORT"))
 						if os.Getenv("SHUFFLE_OPTIMIZED") == "true" && len(os.Getenv("WORKER_PORT")) > 0 {
 							streamUrl = fmt.Sprintf("http://localhost:%s/api/v1/streams", os.Getenv("WORKER_PORT"))
 						} else if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker")  {
@@ -11087,7 +11088,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 					}
 
-					log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", streamUrl)
+					log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", foundAction.Label, foundAction.AppName, streamUrl)
+					
 					req, err := http.NewRequest(
 						"POST",
 						streamUrl,
