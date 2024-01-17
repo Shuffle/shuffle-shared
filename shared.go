@@ -11072,17 +11072,22 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							streamUrl = fmt.Sprintf("http://%s:33333/api/v1/streams", os.Getenv("WORKER_HOSTNAME"))
 						}
 
-						if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
-
+						if os.Getenv("SHUFFLE_OPTIMIZED") == "true" && len(os.Getenv("WORKER_PORT")) > 0 {
+							streamUrl = fmt.Sprintf("http://localhost:%s/api/v1/streams", os.Getenv("WORKER_PORT"))
+						} else if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker")  {
 							streamUrl = fmt.Sprintf("http://localhost:33333/api/v1/streams")
 
 						} else {
-							if len(os.Getenv("BASE_URL")) > 0 {
+							// Does this fuck it up? This should only run 
+							// if the worker is NON OPTIMIZED. Problem:
+							// The worker needs to talk back to itself.
+							if len(os.Getenv("BASE_URL")) > 0  {
 								streamUrl = fmt.Sprintf("%s/api/v1/streams", os.Getenv("BASE_URL"))
 							}
 						}
 					}
 
+					log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", streamUrl)
 					req, err := http.NewRequest(
 						"POST",
 						streamUrl,
