@@ -3583,10 +3583,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			isSelf = CheckCreatorSelfPermission(ctx, userInfo, *foundUser, &AlgoliaSearchCreator{ObjectID: foundUser.Id, IsOrg: true,})
 		}
 
-		if !isSelf || len(foundUser.Id) != 32 {
-			log.Printf("[AUDIT] User %s is admin, but can't edit users outside their own org (%s).", userInfo.Id, foundUser.Id)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+		if (!isSelf || len(foundUser.Id) != 32) && !userInfo.SupportAccess {
+			log.Printf("[AUDIT] User %s (%s) is admin, but can't edit users outside their own org (%s).", userInfo.Username, userInfo.Id, foundUser.Id)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have access to modify this user. Contact support@shuffler.io if you think this is wrong."}`)))
 			return
 		}
 	}
@@ -6375,7 +6375,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		if !orgFound {
 			log.Printf("[AUDIT] User %s (%s) is admin, but can't change user's (%s) password outside their own org.", userInfo.Username, userInfo.Id, foundUser.Username)
 			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org (2)."}`)))
 			return
 		}
 	} else {
@@ -6785,12 +6785,10 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !orgFound {
-
-
-		log.Printf("[AUDIT] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
+	if !orgFound && !userInfo.SupportAccess {
+		log.Printf("[AUDIT] User %s (%s) is admin, but can't delete users outside their own org.", userInfo.Username, userInfo.Id)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org (1)."}`)))
 		return
 	}
 
@@ -6856,7 +6854,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Successfully removed %s from org %s", foundUser.Username, userInfo.ActiveOrg.Id)
+	log.Printf("[AUDIT] User %s (%s) successfully removed %s from org %s", userInfo.Username, userInfo.Id, foundUser.Username, userInfo.ActiveOrg.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
