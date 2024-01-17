@@ -2381,7 +2381,7 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 	countBytes := []byte(countStr)
 
 	if project.CacheDb {
-		err := SetCache(ctx, cacheKey, countBytes, 30)
+		err := SetCache(ctx, cacheKey, countBytes, 1)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for workflow id %d count: %s", id, err)
 		}
