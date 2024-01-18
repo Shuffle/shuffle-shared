@@ -617,7 +617,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 	if len(matchingNotifications) > 0 {
 		// FIXME: This may have bugs for old workflows with new users (not being rediscovered)
-		log.Printf("[DEBUG] Found %d matching notifications for org %s. Merging...", len(matchingNotifications), orgId)
+		log.Printf("[DEBUG] Found %d matching notification(s) for org %s. Merging...", len(matchingNotifications), orgId)
 
 		usersHandled := []string{}
 		// Make sure to only reopen one per user

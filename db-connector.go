@@ -901,7 +901,10 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	// Fixes missing pieces
-	workflowExecution = Fixexecution(ctx, workflowExecution)
+	workflowExecution, newDbSave := Fixexecution(ctx, workflowExecution)
+	if newDbSave {
+		dbSave = true
+	}
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
@@ -1274,7 +1277,8 @@ func sanitizeString(input string) string {
 	return input
 }
 
-func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) WorkflowExecution {
+func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (WorkflowExecution, bool) {
+	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
 	// Make sure to not having missing items in the execution
@@ -1480,6 +1484,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 				log.Printf("[DEBUG][%s] Setting execution to aborted because of result %s (%s) with status '%s'. Should update execution parent if it exists (not implemented).", workflowExecution.ExecutionId, result.Action.Name, result.Action.ID, result.Status)
 
 				workflowExecution.Status = "ABORTED"
+				dbsave = true 
 				if workflowExecution.CompletedAt == 0 {
 					workflowExecution.CompletedAt = time.Now().Unix()
 				}
@@ -1505,6 +1510,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented).", workflowExecution.ExecutionId)
 
 			finalWorkflowExecution.Status = "FINISHED"
+			dbsave = true 
 			if finalWorkflowExecution.CompletedAt == 0 {
 				finalWorkflowExecution.CompletedAt = time.Now().Unix()
 			}
@@ -1512,7 +1518,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) Work
 	}
 
 
-	return finalWorkflowExecution
+	return finalWorkflowExecution, dbsave
 }
 
 func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowExecution, error) {
@@ -1604,7 +1610,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				}
 
 				// Fixes missing pieces
-				newexec := Fixexecution(ctx, *workflowExecution)
+				newexec, _ := Fixexecution(ctx, *workflowExecution)
 				workflowExecution = &newexec
 
 				//log.Printf("[DEBUG][%s] Returned execution from cache with %d results", id, len(workflowExecution.Results))
@@ -1687,7 +1693,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	//log.Printf("[DEBUG] Returned execution %s with %d results (1)", id, len(workflowExecution.Results))
 
 	// Fixes missing pieces
-	newexec := Fixexecution(ctx, *workflowExecution)
+	newexec, _  := Fixexecution(ctx, *workflowExecution)
 	workflowExecution = &newexec
 
 	//log.Printf("[DEBUG] Returned execution %s with %d results (2)", id, len(workflowExecution.Results))
@@ -2349,7 +2355,8 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 				return count, nil
 			}
 		}
-		log.Printf("[DEBUG] Failed getting cache for workflow id %d count: %s", id, err)
+
+		log.Printf("[DEBUG] Failed getting count cache for workflow id %s: %s", id, err)
 	}
 
 	if project.DbType == "opensearch" {
@@ -10182,7 +10189,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		}
 	}
 
-	workflowExecution = Fixexecution(ctx, workflowExecution)
+	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
 		log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 	}

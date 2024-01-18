@@ -1937,7 +1937,6 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 				},
 			}
 
-			// FIXME: Example & Multiline
 			if param.Value.Example != nil {
 				curParam.Example = param.Value.Example.(string)
 
@@ -1945,6 +1944,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 					curParam.Value = param.Value.Example.(string)
 				}
 			}
+
 			if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 				j, err := json.Marshal(&val)
 				if err == nil {
