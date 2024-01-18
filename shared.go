@@ -3584,10 +3584,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			isSelf = CheckCreatorSelfPermission(ctx, userInfo, *foundUser, &AlgoliaSearchCreator{ObjectID: foundUser.Id, IsOrg: true,})
 		}
 
-		if !isSelf || len(foundUser.Id) != 32 {
-			log.Printf("[AUDIT] User %s is admin, but can't edit users outside their own org (%s).", userInfo.Id, foundUser.Id)
-			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+		if (!isSelf || len(foundUser.Id) != 32) && !userInfo.SupportAccess {
+			log.Printf("[AUDIT] User %s (%s) is admin, but can't edit users outside their own org (%s).", userInfo.Username, userInfo.Id, foundUser.Id)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have access to modify this user. Contact support@shuffler.io if you think this is wrong."}`)))
 			return
 		}
 	}
@@ -6376,7 +6376,7 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		if !orgFound {
 			log.Printf("[AUDIT] User %s (%s) is admin, but can't change user's (%s) password outside their own org.", userInfo.Username, userInfo.Id, foundUser.Username)
 			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org (2)."}`)))
 			return
 		}
 	} else {
@@ -6786,12 +6786,10 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !orgFound {
-
-
-		log.Printf("[AUDIT] User %s is admin, but can't delete users outside their own org.", userInfo.Id)
+	if !orgFound && !userInfo.SupportAccess {
+		log.Printf("[AUDIT] User %s (%s) is admin, but can't delete users outside their own org.", userInfo.Username, userInfo.Id)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org."}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change users outside your org (1)."}`)))
 		return
 	}
 
@@ -6857,7 +6855,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Successfully removed %s from org %s", foundUser.Username, userInfo.ActiveOrg.Id)
+	log.Printf("[AUDIT] User %s (%s) successfully removed %s from org %s", userInfo.Username, userInfo.Id, foundUser.Username, userInfo.ActiveOrg.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -11003,7 +11001,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("\n\n\n[WARNING][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n\n", workflowExecution.ExecutionId, foundAction.Label, foundAction.ID)
+			log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -11029,7 +11027,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			skippedCount := len(skippedBranches)
 
-			log.Printf("\n\n[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s\n\n", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
+			log.Printf("[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
@@ -11073,6 +11071,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							streamUrl = fmt.Sprintf("http://%s:33333/api/v1/streams", os.Getenv("WORKER_HOSTNAME"))
 						}
 
+						log.Printf("[DEBUG] OPTIMIZED: %s, PORT: %s", os.Getenv("SHUFFLE_OPTIMIZED"), os.Getenv("WORKER_PORT"))
 						if os.Getenv("SHUFFLE_OPTIMIZED") == "true" && len(os.Getenv("WORKER_PORT")) > 0 {
 							streamUrl = fmt.Sprintf("http://localhost:%s/api/v1/streams", os.Getenv("WORKER_PORT"))
 						} else if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker")  {
@@ -11088,7 +11087,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 					}
 
-					log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", streamUrl)
+					log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", foundAction.Label, foundAction.AppName, streamUrl)
+					
 					req, err := http.NewRequest(
 						"POST",
 						streamUrl,
