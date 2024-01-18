@@ -2349,7 +2349,7 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 				return count, nil
 			}
 		}
-		log.Printf("[DEBUG] Failed getting cache for workflow id %d count: %s", id, err)
+		log.Printf("[DEBUG] Failed getting cache for workflow id %s count: %s", id, err)
 	}
 
 	if project.DbType == "opensearch" {
@@ -2358,12 +2358,12 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 		// get workflow and verify that it belongs to user
 		workflow, err := GetWorkflow(ctx, id)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting workflow %d : %s while getting count", id, err)
+			log.Printf("[WARNING] Failed getting workflow %s : %s while getting count", id, err)
 			return 0, err
 		}
 
-		if (workflow.OrgId != user.ActiveOrg.Id) {
-			log.Printf("[WARNING] User %s tried to get workflow %d count for org %s", user.Username, id, workflow.OrgId)
+		if (workflow.OrgId != user.ActiveOrg.Id || !user.SupportAccess) {
+			log.Printf("[WARNING] User %s tried to get workflow %s count for org %s", user.Username, id, workflow.OrgId)
 			return 0, errors.New("Not authorized")
 		}
 
@@ -2371,7 +2371,7 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 		query := datastore.NewQuery(nameKey).Filter("workflow_id =", strings.ToLower(id))
 		count, err = project.Dbclient.Count(ctx, query)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting count for workflow %d : %s", id, err)
+			log.Printf("[WARNING] Failed getting count for workflow %s : %s", id, err)
 			return 0, err
 		}
 	}
@@ -2383,7 +2383,7 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 	if project.CacheDb {
 		err := SetCache(ctx, cacheKey, countBytes, 1)
 		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for workflow id %d count: %s", id, err)
+			log.Printf("[WARNING] Failed setting cache for workflow id %s count: %s", id, err)
 		}
 	}
 

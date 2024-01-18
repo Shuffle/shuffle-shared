@@ -2860,6 +2860,7 @@ func GetWorkflowExecutionCount(resp http.ResponseWriter, request *http.Request) 
 		if err.Error() == "Not authorized" {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "User doesn't belong in this org"}`))
+			return
 		}
 
 		resp.WriteHeader(401)
