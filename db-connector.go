@@ -2362,7 +2362,7 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 			return 0, err
 		}
 
-		if (workflow.OrgId != user.ActiveOrg.Id || !user.SupportAccess) {
+		if (workflow.OrgId != user.ActiveOrg.Id && !user.SupportAccess) {
 			log.Printf("[WARNING] User %s tried to get workflow %s count for org %s", user.Username, id, workflow.OrgId)
 			return 0, errors.New("Not authorized")
 		}
