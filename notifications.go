@@ -282,18 +282,20 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	// check if cache exists
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
+		/*
 		log.Printf("[ERROR] Failed getting cached notifications %s for notification %s: %s. Assuming no notifications are found!", 
 			cacheKey, 
 			notification.Id, 
 			err,
 		)
+		*/
 		cacheData = []byte{}
 	} else {
 		cacheData = []byte(cache.([]uint8))
 	}
 
-	log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s", len(cacheData), notification.Id, workflowId)
-	log.Printf("[DEBUG] Using cacheKey: %s for notification bucketing for notification id: %s", cacheKey, notification.Id)
+	//log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s", len(cacheData), notification.Id, workflowId)
+	//log.Printf("[DEBUG] Using cacheKey: %s for notification bucketing for notification id: %s", cacheKey, notification.Id)
 
 	bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
 	if len(bucketingMinutes) == 0 {

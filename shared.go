@@ -11581,14 +11581,14 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	tmpJson, err := json.Marshal(workflowExecution)
 	if err == nil {
 		if project.DbType != "opensearch" {
-			log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
+			//log.Printf("[DEBUG] Result length is %d for execution Id %s, %s", len(tmpJson), workflowExecution.ExecutionId, saveLocationInfo)
 			if len(tmpJson) >= 1000000 {
 				// Clean up results' actions
 
-				log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
+				//log.Printf("[DEBUG][%s](%s) ExecutionVariables size: %d, Result size: %d, executionArgument size: %d, Results size: %d", workflowExecution.ExecutionId, saveLocationInfo, len(workflowExecution.ExecutionVariables), len(workflowExecution.Result), len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
 
 				dbSave = true
-				log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
+				//log.Printf("[WARNING][%s] Result length is too long (%d) when running %s! Need to reduce result size. Attempting auto-compression by saving data to disk.", workflowExecution.ExecutionId, len(tmpJson), saveLocationInfo)
 				actionId := "execution_argument"
 
 				//gs://shuffler.appspot.com/extra_specs/0373ed696a3a2cba0a2b6838068f2b80
@@ -11599,7 +11599,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				maxSize := 50000
 				bucketName := fmt.Sprintf("%s.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"))
 
-				log.Printf("[DEBUG] Execution Argument length is %d for execution Id %s (%s)", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId, saveLocationInfo)
+				//log.Printf("[DEBUG] Execution Argument length is %d for execution Id %s (%s)", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId, saveLocationInfo)
 
 				if len(workflowExecution.ExecutionArgument) > maxSize {
 					itemSize := len(workflowExecution.ExecutionArgument)
@@ -11643,7 +11643,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				newResults := []ActionResult{}
 				//shuffle-large-executions
 				for _, item := range workflowExecution.Results {
-					log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
+					//log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
 					if len(item.Result) > maxSize {
 						log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
 
@@ -11700,18 +11700,18 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 
 					newResults = append(newResults, item)
-					log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
+					//log.Printf("[DEBUG][%s] newResults: %d and item labelled %s length is: %d", workflowExecution.ExecutionId, len(newResults), item.Action.Label, len(item.Result))
 				}
 
-				log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
+				//log.Printf("[DEBUG][%s](%s) Overwriting executions results now! newResults length: %d", workflowExecution.ExecutionId, saveLocationInfo, len(newResults))
 				workflowExecution.Results = newResults
 			}
 
 			jsonString, err := json.Marshal(workflowExecution)
 			if err == nil {
-				log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
+				//log.Printf("[DEBUG] Execution size: %d for %s", len(jsonString), workflowExecution.ExecutionId)
 				if len(jsonString) > 1000000 {
-					log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
+					//log.Printf("[WARNING][%s] Execution size is still too large (%d) when running %s!", workflowExecution.ExecutionId, len(jsonString), saveLocationInfo)
 					//for _, action := range workflowExecution.Workflow.Actions {
 					//	actionData, err := json.Marshal(action)
 					//	if err == nil {
@@ -11738,7 +11738,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				}
 			}
 
-			log.Printf("[DEBUG] Execution size now: %d for %s where executionArgument is %d and results is %d", len(tmpJson), workflowExecution.ExecutionId, len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
+			//log.Printf("[DEBUG] Execution size now: %d for %s where executionArgument is %d and results is %d", len(tmpJson), workflowExecution.ExecutionId, len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
 		}
 	}
 

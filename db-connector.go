@@ -988,10 +988,10 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		//log.Printf("[INFO] Successfully saved new execution %s. Timestamp: %d!", workflowExecution.ExecutionId, workflowExecution.StartedAt)
 	} else {
-		log.Printf("[DEBUG][%s] compressing Workflow Execution with status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+		//log.Printf("[DEBUG][%s] compressing Workflow Execution with status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
 
-		log.Printf("[DEBUG][%s] Saving compressed Workflow Execution with status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+		//log.Printf("[DEBUG][%s] Saving compressed Workflow Execution with status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
 
 		// Print 1 out of X times as a debug mode 
 		if rand.Intn(20) == 1 {
