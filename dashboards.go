@@ -364,8 +364,8 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			return info.DailyStatistics[i].Date.Before(info.DailyStatistics[j].Date)
 		})
 
-		// Get a max of the last 60 days
-		if len(info.DailyStatistics) > 60 {
+		// Get a max of the last 365 days
+		if len(info.DailyStatistics) > 365 {
 			info.DailyStatistics = info.DailyStatistics[len(info.DailyStatistics)-60:]
 		}
 	}
