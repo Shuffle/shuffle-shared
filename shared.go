@@ -627,12 +627,15 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.ChildOrgs = []OrgMini{}
 		org.Invites = []string{}
 	} else {
-		org.SyncFeatures.AppExecutions.Description = "The amount of Apps within Workflows you can run per month. This limit can be exceeded when running workflows without a trigger (manual execution)."
+		org.SyncFeatures.AppExecutions.Description = "The amount of Apps within Workflows you can run per month. This limit can be exceeded when running workflows without a trigger (manual execution). Usage resets monthly."
 		org.SyncFeatures.WorkflowExecutions.Description = "N/A. See App Executions"
 		org.SyncFeatures.Webhook.Description = "Webhooks are Triggers that take an HTTP input to start a workflow. Read docs for more."
 		org.SyncFeatures.Schedules.Description = "Schedules are Triggers that run on an interval defined by you. Read docs for more."
 		org.SyncFeatures.MultiEnv.Description = "Multiple Environments are used to run automation in different physical locations. Change from /admin?tab=environments"
 		org.SyncFeatures.MultiTenant.Description = "Multiple Tenants can be used to segregate information for each MSSP Customer. Change from /admin?tab=suborgs"
+		org.SyncFeatures.MultiRegion.Description = "Multiregion allows you to change region to our other data centers around the world."
+		org.SyncFeatures.SendSms.Description = "Allows you to send SMS through Shuffle Tools or our API. Usage resets monthly."
+		org.SyncFeatures.SendMail.Description = "Allows you to send email through Shuffle Tools or our API. Usage resets monthly."
 		//org.SyncFeatures.MultiTenant.Description = "Multiple Tenants can be used to segregate information for each MSSP Customer. Change from /admin?tab=suborgs"
 
 		//log.Printf("LIMIT: %s", org.SyncFeatures.AppExecutions.Limit)

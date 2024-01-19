@@ -875,6 +875,7 @@ type SyncUsage struct {
 	AppExecutions      SyncDataUsage `json:"app_executions" datastore:"app_executions"`
 	Workflows          SyncDataUsage `json:"workflows" datastore:"workflows"`
 	MultiTenant        SyncDataUsage `json:"multi_tenant" datastore:"multi_tenant"`
+	MultiRegion 	   SyncDataUsage `json:"multi_region" datastore:"multi_region"`
 	MultiEnv           SyncDataUsage `json:"multi_env" datastore:"multi_env"`
 	Apps               SyncDataUsage `json:"apps" datastore:"apps"`
 }
