@@ -7200,7 +7200,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
@@ -7211,8 +7211,8 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	var tmpData ReturnData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("Failed unmarshalling test: %s", err)
-		resp.WriteHeader(401)
+		log.Printf("[ERROR] Failed unmarshalling test: %s", err)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7946,13 +7946,15 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		CreatorConfig string `json:"creator_config" datastore:"creator_config"`
 		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
+
+		SyncFeatures SyncFeatures `json:"sync_features" datastore:"sync_features"`
 	}
 
 	var tmpData ReturnData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("Failed unmarshalling test: %s", err)
-		resp.WriteHeader(401)
+		log.Printf("[ERROR] Failed unmarshalling test: %s", err)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7963,7 +7965,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
@@ -8260,6 +8262,13 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			org.EulaSignedBy = user.Username
 			org.EulaSigned = true
 		}
+	}
+
+	if project.Environment == "cloud" && user.SupportAccess && tmpData.SyncFeatures.Editing {
+		log.Printf("[DEBUG] Updating features for org %s (%s)", org.Name, org.Id)
+
+		org.SyncFeatures = tmpData.SyncFeatures
+		org.SyncFeatures.Editing = false
 	}
 
 	// Built a system around this now, which checks for the actual org. 

@@ -904,10 +904,12 @@ type MailLevel struct {
 }
 
 type SyncFeatures struct {
+	Editing 		   bool `json:"editing" datastore:"editing"`
 	MailSent           []MailLevel `json:"mail_sent" datastore:"mail_sent"`
 	AppExecutions      SyncData    `json:"app_executions" datastore:"app_executions"`
 	MultiEnv           SyncData    `json:"multi_env" datastore:"multi_env"`
 	MultiTenant        SyncData    `json:"multi_tenant" datastore:"multi_tenant"`
+	MultiRegion 	   SyncData    `json:"multi_region" datastore:"multi_region"`
 	Webhook            SyncData    `json:"webhook" datastore:"webhook"`
 	Schedules          SyncData    `json:"schedules" datastore:"schedules"`
 	UserInput          SyncData    `json:"user_input" datastore:"user_input"`
