@@ -18387,8 +18387,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 					executed = append(executed, action.ID)
 					continue
 				} else {
-					//log.Printf("Should stop after this iteration because it's user-input based. %s", action)
-					log.Printf("[DEBUG] Should stop after this iteration because it's user-input based.") //%s", action)
+					log.Printf("[DEBUG][%s] Should stop after this iteration because it's user-input based.", workflowExecution.ExecutionId)
 
 					trigger := Trigger{}
 					for _, innertrigger := range workflowExecution.Workflow.Triggers {
@@ -18510,7 +18509,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						})
 					}
 
-					log.Printf("Starting with sourcenode '%s'", trigger.ID)
+					log.Printf("[DEBUG][%s] Starting with user input sourcenode '%s'", workflowExecution.ExecutionId, trigger.ID)
 					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
 						Name:  "source_node",
 						Value: trigger.ID,
@@ -18518,10 +18517,10 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 					// If sms/email, it should be setting the apikey based on the org
 					syncApikey := workflowExecution.Authorization
-					if project.Environment != "cloud" {
+					if project.Environment != "cloud" && project.Environment != "worker"{
 						org, err := GetOrg(ctx, workflowExecution.ExecutionOrg)
 						if err == nil {
-							log.Printf("Got syncconfig key: %s", org.SyncConfig.Apikey)
+							log.Printf("[DEBUG] Got syncconfig key: %s", org.SyncConfig.Apikey)
 							syncApikey = org.SyncConfig.Apikey
 						} else {
 							log.Printf("[ERROR] Failed to get org %s: %s", workflowExecution.ExecutionOrg, err)
