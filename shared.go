@@ -10487,30 +10487,37 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					log.Printf("[INFO][%s] Userinput subflow failed. Should abort workflow or continue execution by default?", actionResult.ExecutionId)
 				} else {
 					log.Printf("[INFO][%s] Userinput subflow succeeded. Should continue execution by default? Value: %s", actionResult.ExecutionId, actionResult.Result)
+
+					if strings.Contains(actionResult.Result, "\"execution_id\":") && strings.Contains(actionResult.Result, "\"authorization\":") {
+						log.Printf("\n\n[DEBUG][%s] Found execution_id and authorization in result. Now verifying if the workflow should just continue or not\n\n", actionResult.ExecutionId)
+						return &workflowExecution, false, errors.New("User Input")
+					}
 				}
 			}
 
 			// Finding the waiting node and changing it to this result
 			foundWaiting := false
 			for resultIndex, result := range workflowExecution.Results {
-				if result.Action.ID == actionResult.Action.ID {
-					workflowExecution.Results[resultIndex].Result = actionResult.Result
-
-					// Updating cache for the result to always use the latest
-					//actionResultBody, err := json.Marshal(workflowExecution.Results[resultIndex].Result)
-					actionResultBody, err := json.Marshal(actionResult)
-					if err == nil {
-						cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
-						err = SetCache(ctx, cacheId, actionResultBody, 35)
-						if err != nil {
-							log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
-							continue
-						}
-					}
-
-					foundWaiting = true
-					break
+				if result.Action.ID != actionResult.Action.ID {
+					continue
 				}
+
+				workflowExecution.Results[resultIndex].Result = actionResult.Result
+
+				// Updating cache for the result to always use the latest
+				//actionResultBody, err := json.Marshal(workflowExecution.Results[resultIndex].Result)
+				actionResultBody, err := json.Marshal(actionResult)
+				if err == nil {
+					cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+					err = SetCache(ctx, cacheId, actionResultBody, 35)
+					if err != nil {
+						log.Printf("[WARNING] Couldn't find in fix exec %s (2): %s", cacheId, err)
+						continue
+					}
+				}
+
+				foundWaiting = true
+				break
 			}
 
 			if !foundWaiting {
@@ -15220,14 +15227,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if sourceAuthOk {
 			workflowExecution.ExecutionSourceAuth = sourceAuth[0]
 		} else {
-			//log.Printf("Did NOT get source workflow")
+			log.Printf("[DEBUG] Did NOT get source workflow auth")
 		}
 
 		sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
 		if sourceNodeOk {
 			workflowExecution.ExecutionSourceNode = sourceNode[0]
 		} else {
-			//log.Printf("Did NOT get source workflow")
+			log.Printf("[DEBUG] Did NOT get source workflow node")
 		}
 
 		//workflowExecution.ExecutionSource = "default"
@@ -15236,10 +15243,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			//log.Printf("Got source workflow %s", sourceWorkflow)
 			workflowExecution.ExecutionSource = sourceWorkflow[0]
 		} else {
-			//log.Printf("Did NOT get source workflow")
+			log.Printf("[DEBUG] Did NOT get source workflow (real). Not critical, as it can be overwritten with reference execution matching.")
 		}
 
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
+
+		referenceExecution, referenceExecutionOk := request.URL.Query()["reference_execution"]
+		if referenceExecutionOk {
+			sourceExecutionOk = true
+			sourceExecution = referenceExecution
+		}
+
 		parentExecution := &WorkflowExecution{}
 		if sourceExecutionOk {
 			//log.Printf("[INFO] Got source execution%s", sourceExecution)
@@ -15469,7 +15483,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			newResults := []ActionResult{}
 			foundresult := ActionResult{}
 			for _, result := range oldExecution.Results {
-				log.Printf("Action: %s - %s", result.Action.ID, start[0])
+				//log.Printf("Action: %s - %s", result.Action.ID, start[0])
 
 				if result.Action.ID == start[0] {
 					if result.Status == "ABORTED" {
@@ -15486,13 +15500,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				if result.Status == "WAITING" {
-					log.Printf("[INFO] Found result: %s (%s)", result.Action.Label, result.Action.ID)
+					log.Printf("[INFO][%s] Found result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
 
 					var userinputResp UserInputResponse
 					err = json.Unmarshal([]byte(result.Result), &userinputResp)
 					// Error here should just be warnings
 					if err != nil {
-						log.Printf("[DEBUG] Failed unmarshalling userinput (not critical): %s", err)
+						log.Printf("[DEBUG][%s] Failed unmarshalling userinput (not critical): %s", result.ExecutionId, err)
 					}
 
 					//if err == nil {
@@ -15532,7 +15546,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						}
 
 						// Should send result to self?
-						log.Printf("[DEBUG] Sending result to self: %s", string(fullMarshal))
+						//log.Printf("[DEBUG][%s] Sending result to self: %s", result.ExecutionId, string(fullMarshal))
+						log.Printf("[DEBUG][%s] Sending result to self", result.ExecutionId)
 
 						backendUrl := os.Getenv("BASE_URL")
 						if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
@@ -16760,8 +16775,12 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		//}
 
 	} else {
-		log.Printf("[AUDIT] Did NOT get source workflow in subflow execution")
-		return false, ""
+		if len(workflowExecution.Workflow.ID) > 0 {
+			log.Printf("[AUDIT][%s] Got source workflow in subflow execution. Continuing.", workflowExecution.ExecutionId)
+		} else {
+			log.Printf("[AUDIT] Did NOT get source workflow in subflow execution. Failing out.")
+			return false, ""
+		}
 	}
 
 	//if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
@@ -16776,6 +16795,22 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 
 	sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
 	if !sourceNodeOk {
+		// Use default startnode instead
+
+		/*
+		// This is finding the startnode of the parent workflow, not the actual startnode of the execution
+		sourceNode = []string{workflowExecution.Workflow.Start}
+		startFound := false
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.Id == workflowExecution.Workflow.Start {
+				startFound = true
+				break
+			}
+		}
+
+		if !startFound {
+		*/
+
 		log.Printf("[AUDIT] Couldn't find source node that started the execution")
 		return false, ""
 	}

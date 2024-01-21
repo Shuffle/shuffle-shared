@@ -887,6 +887,9 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
 		log.Printf("[ERROR] Workflowexecution executionId can't be empty.")
+
+		// Generate it on the fly?
+		//workflowExecution.ExecutionId = uuid.NewV4().String()
 		return errors.New("ExecutionId can't be empty.")
 	}
 
@@ -897,6 +900,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	if len(workflowExecution.Authorization) == 0 {
 		log.Printf("[WARNING][%s] Workflowexecution authorization can't be empty.", workflowExecution.ExecutionId)
+		//workflowExecution.Authorization = uuid.NewV4().String()
 		return errors.New("Authorization can't be empty.")
 	}
 
