@@ -293,7 +293,7 @@ type DailyStatistics struct {
 	OrgSyncActions             int64 `json:"org_sync_actions" datastore:"org_sync_actions"`
 	CloudExecutions            int64 `json:"cloud_executions" datastore:"cloud_executions"`
 	OnpremExecutions           int64 `json:"onprem_executions" datastore:"onprem_executions"`
-	AIUsage               int64 `json:"ai_executions" datastore:"ai_executions"`
+	AIUsage               	   int64 `json:"ai_executions" datastore:"ai_executions"`
 
 	ApiUsage                   int64 `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
@@ -881,6 +881,7 @@ type SyncUsage struct {
 	MultiRegion 	   SyncDataUsage `json:"multi_region" datastore:"multi_region"`
 	MultiEnv           SyncDataUsage `json:"multi_env" datastore:"multi_env"`
 	Apps               SyncDataUsage `json:"apps" datastore:"apps"`
+	ShuffleGPT 		   SyncDataUsage `json:"shuffle_gpt" datastore:"shuffle_gpt"`
 }
 
 type SyncDataUsage struct {
@@ -927,6 +928,7 @@ type SyncFeatures struct {
 	Authentication     SyncData    `json:"authentication" datastore:"authentication"`
 	Schedule           SyncData    `json:"schedule" datastore:"schedule"`
 	Apps               SyncData    `json:"apps" datastore:"apps"`
+	ShuffleGPT 		   SyncData    `json:"shuffle_gpt" datastore:"shuffle_gpt"`
 }
 
 type SyncData struct {
