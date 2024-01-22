@@ -513,9 +513,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
-
-	// Commented out because of org distribution working it should
-	/*
+	// Commented out because of org distribution working? 
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
@@ -524,7 +522,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	*/
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
