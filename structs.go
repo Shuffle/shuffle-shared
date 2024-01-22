@@ -820,6 +820,9 @@ type Defaults struct {
 	WorkflowUploadBranch string `json:"workflow_upload_branch" datastore:"workflow_upload_branch"`
 	WorkflowUploadUsername   string `json:"workflow_upload_username" datastore:"workflow_upload_username"`
 	WorkflowUploadToken string `json:"workflow_upload_token" datastore:"workflow_upload_token"`
+
+	NewsletterDisabled bool `json:"newsletter" datastore:"newsletter"`
+	WeeklyRecommendationsDisabled bool `json:"weekly_recommendations" datastore:"weekly_recommendations"`
 }
 
 type CacheKeyData struct {
