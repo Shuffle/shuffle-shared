@@ -96,7 +96,7 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte("OK"))
+	resp.Write([]byte(`{"success": true}`))
 }
 
 func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {

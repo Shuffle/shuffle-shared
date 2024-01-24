@@ -1234,11 +1234,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		return "", errors.New("Error sending HTTP request: " + err.Error())
 	}
 
-	if err != nil {
-		log.Println("[ERROR] sending Ops create workflow HTTP request:", err)
-		return "", errors.New("Error sending HTTP request: " + err.Error())
-	}
-
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed creating ops dashboard workflow: %s. The status code was: %d", err, resp.StatusCode)
 		// print the response body

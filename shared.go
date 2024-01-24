@@ -2304,7 +2304,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Always make Cloud the default environment
-	// If there are multiple
+	// If there are multiple and none are chosen
 	if project.Environment == "cloud" {
 		defaults := []int{}
 		cloudFound := false
@@ -3999,13 +3999,13 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Overwriting all settings as a just in case
 	workflow.ID = uuid.NewV4().String()
 	workflow.Owner = user.Id
 	workflow.Sharing = "private"
 	user.ActiveOrg.Users = []UserMini{}
 	workflow.ExecutingOrg = user.ActiveOrg
 	workflow.OrgId = user.ActiveOrg.Id
-	//log.Printf("TRIGGERS: %d", len(workflow.Triggers))
 
 	ctx := GetContext(request)
 	//err = increaseStatisticsField(ctx, "total_workflows", workflow.ID, 1, workflow.OrgId)
@@ -4110,7 +4110,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	} else {
-		log.Printf("[INFO] Has %d actions already", len(newActions))
+		//log.Printf("[INFO] Has %d actions already", len(newActions))
 		// FIXME: Check if they require authentication and if they exist locally
 		//log.Printf("\n\nSHOULD VALIDATE AUTHENTICATION")
 		//AuthenticationId string `json:"authentication_id,omitempty" datastore:"authentication_id"`
@@ -4191,6 +4191,43 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.IsValid = true
 	workflow.Configuration.ExitOnError = false
 	workflow.Created = timeNow
+
+	auth, authOk := request.URL.Query()["set_auth"]
+	log.Printf("\n\n\n[DEBUG] AUTH: %#v\n\n\n", auth)
+	if authOk && len(auth) > 0 && auth[0] == "true" {
+		allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		workflowapps, apperr := GetPrioritizedApps(ctx, user)
+		if autherr != nil || apperr != nil {
+			log.Printf("[ERROR] Failed to get auths/app: %s/%s", autherr, apperr)
+		} else {
+			for actionIndex, action := range workflow.Actions {
+				if action.AuthenticationId != "" {
+					continue
+				}
+
+				// Check if auth is required
+				outerapp := WorkflowApp{}
+				for _, app := range workflowapps {
+					if app.Name != action.AppName {
+						continue
+					}
+
+					outerapp = app
+					break
+				}
+
+				if len(outerapp.ID) > 0 && outerapp.Authentication.Required {
+					for _, auth := range allAuths {
+						if auth.App.ID == outerapp.ID || auth.App.Name == outerapp.Name {
+							log.Printf("[DEBUG] Automatically setting authentication for action %s (%s) in workflow %s (%s)", action.Name, action.ID, workflow.Name, workflow.ID)
+
+							workflow.Actions[actionIndex].AuthenticationId = auth.Id
+						}
+					}
+				}
+			}
+		}
+	}
 
 	workflowjson, err := json.Marshal(workflow)
 	if err != nil {
@@ -5742,6 +5779,37 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+
+	auth, authOk := request.URL.Query()["set_auth"]
+	if authOk && len(auth) > 0 && auth[0] == "true" {
+		for actionIndex, action := range workflow.Actions {
+			if action.AuthenticationId != "" {
+				continue
+			}
+
+			// Check if auth is required
+			outerapp := WorkflowApp{}
+			for _, app := range workflowapps {
+				if app.Name != action.AppName {
+					continue
+				}
+
+				outerapp = app
+				break
+			}
+
+			if len(outerapp.ID) > 0 && outerapp.Authentication.Required {
+				for _, auth := range allAuths {
+					if auth.App.ID == outerapp.ID || auth.App.Name == outerapp.Name {
+						log.Printf("[DEBUG] Automatically setting authentication for action %s (%s) in workflow %s (%s)", action.Name, action.ID, workflow.Name, workflow.ID)
+
+						workflow.Actions[actionIndex].AuthenticationId = auth.Id
+					}
+				}
+			}
+		}
+	}
+
 	workflow.Actions = newActions
 	workflow.IsValid = true
 
@@ -5764,6 +5832,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if correctUser {
 		workflow.Public = true
 
+		// FIXME: This is a bit hacky. Should be done in a better way.
+
 		// Should save it in Algolia too?
 		_, err = handleAlgoliaWorkflowUpdate(ctx, workflow)
 		if err != nil {
@@ -5772,6 +5842,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[DEBUG] User %s (%s) updated their public workflow %s (%s)", user.Username, user.Id, workflow.Name, workflow.ID)
 		}
 	}
+
+
 
 	workflow.UpdatedBy = user.Username
 	err = SetWorkflow(ctx, workflow, workflow.ID)
@@ -6693,6 +6765,67 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
+	if len(workflow.Name) == 0 && len(workflow.ID) == 0 {
+		log.Printf("[ERROR] Workflow has no name or ID, hence may not exist. Reference ID (maybe from Algolia?: %s)", fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No workflow found"}`))
+		return
+	}
+
+	// Never load without a node
+	if len(workflow.Actions) == 0 {
+		// Append 
+		nodeId := uuid.NewV4().String()
+		workflow.Start = nodeId
+
+		envName := "cloud"
+		if project.Environment != "cloud" {
+			envName = "Shuffle"
+		}
+
+		workflowapps, err := GetPrioritizedApps(ctx, user)
+		if err == nil {
+			for _, item := range workflowapps {
+				//log.Printf("NAME: %s", item.Name)
+				if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.2.0" {
+					newAction := Action{
+						Label:       "Change Me",
+						Name:        "repeat_back_to_me",
+						Environment: envName,
+						Parameters: []WorkflowAppActionParameter{
+							WorkflowAppActionParameter{
+								Name:      "call",
+								Value:     "Hello world",
+								Example:   "Repeating: Hello World",
+								Multiline: true,
+							},
+						},
+						Priority:    0,
+						Errors:      []string{},
+						ID:          nodeId,
+						IsValid:     true,
+						IsStartNode: true,
+						Sharing:     true,
+						PrivateID:   "",
+						SmallImage:  "",
+						AppName:     "Shuffle Tools",
+						AppVersion:  "1.2.0",
+						AppID:       item.ID,
+						LargeImage:  item.LargeImage,
+					}
+					newAction.Position = Position{
+						X: 449.5,
+						Y: 446,
+					}
+
+					workflow.Actions = append(workflow.Actions, newAction)
+					break
+				}
+			}
+		}
+	}
+
 
 	body, err := json.Marshal(workflow)
 	if err != nil {
@@ -12275,14 +12408,17 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	if len(version.SwaggerVersion) > 0 && len(version.Swagger) == 0 {
 		version.Swagger = version.SwaggerVersion
 	}
+
 	log.Printf("[INFO] Version: %s", version)
 	log.Printf("[INFO] OpenAPI: %s", version.OpenAPI)
-
 	if strings.HasPrefix(version.Swagger, "3.") || strings.HasPrefix(version.OpenAPI, "3.") {
 		log.Printf("[INFO] Handling v3 API")
 		swaggerLoader := openapi3.NewSwaggerLoader()
 		swaggerLoader.IsExternalRefsAllowed = true
-		swagger, err := swaggerLoader.LoadSwaggerFromData(body)
+		//swagger, err := swaggerLoader.LoadSwaggerFromData(body)
+
+		swagger := &openapi3.Swagger{}
+		swagger, err = swaggerLoader.LoadSwaggerFromData(body)
 		if err != nil {
 			log.Printf("[WARNING] Failed to convert v3 API: %s", err)
 			resp.WriteHeader(401)
@@ -19152,7 +19288,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(selectedAction.Name) == 0 {
-		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'", value.Label, selectedApp.Name)
+		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'. If authentication/use_app, ignore this.", value.Label, selectedApp.Name)
 
 		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "use_app" {
 			resp.WriteHeader(500)
