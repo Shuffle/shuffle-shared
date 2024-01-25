@@ -768,3 +768,88 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 	return nil
 }
+
+func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// 1. Check user directly
+	// 2. Check workflow execution authorization
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] INITIAL Api authentication failed in Create notification api: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+
+	// Unmarshal body to the Notification struct
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading body in create notification api: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	notification := Notification{}
+	err = json.Unmarshal(body, &notification)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling body in create notification api: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	orgId := user.ActiveOrg.Id
+	if len(notification.OrgId) > 0 {
+		orgId = notification.OrgId
+
+		// Check if user has access
+		org, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting org %s in create notification api: %s", orgId, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		found := false
+		for _, user := range org.Users {
+			if user.Id == user.Id {
+				found = true 
+				break
+			}
+		}
+
+		if !found {
+			log.Printf("[ERROR] User %s does not have access to org %s in create notification api", user.Id, orgId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	err = CreateOrgNotification(
+		ctx,
+		notification.Title,
+		notification.Description,
+		notification.ReferenceUrl, 
+		orgId,
+		false,
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed creating notification in create notification api: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed creating notification"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
