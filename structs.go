@@ -1217,6 +1217,7 @@ type Notification struct {
 
 	ModifiedBy 		  string `json:"modified_by" datastore:"modified_by"`
 	Ignored 		  bool   `json:"ignored" datastore:"ignored"`
+	ExecutionId 	  string `json:"execution_id" datastore:"execution_id"`
 }
 
 type NotificationCached struct {
