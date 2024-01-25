@@ -13071,7 +13071,6 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[INFO] Organization doesn't exist: %s", err)
@@ -13080,49 +13079,76 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
-	if err != nil {
-		log.Printf("[INFO] Failed getting the execution: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
-		return
-	}
-
-	// Allows for execution auth AND user auth
-	if workflowExecution.Authorization != tmpData.Authorization {
-		// Get the user?
-		user, err := HandleApiAuthentication(resp, request)
+	selectedOrg := tmpData.OrgId
+	if len(tmpData.ExecutionId) > 0 {
+		workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 		if err != nil {
-			log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
+			log.Printf("[INFO] Failed getting the execution: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+			resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
 			return
-		} else {
-			if user.ActiveOrg.Id != org.Id {
-				log.Printf("[INFO] Execution auth %s and %s don't match (2)", workflowExecution.Authorization, tmpData.Authorization)
+		}
+
+		// Allows for execution auth AND user auth
+		if workflowExecution.Authorization != tmpData.Authorization {
+			// Get the user?
+			user, err := HandleApiAuthentication(resp, request)
+			if err != nil {
+				log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
 				return
+			} else {
+				if user.ActiveOrg.Id != org.Id {
+					log.Printf("[INFO] Execution auth %s and %s don't match (2)", workflowExecution.Authorization, tmpData.Authorization)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+					return
+				}
 			}
 		}
+
+		if workflowExecution.Status != "EXECUTING" {
+			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
+			return
+		}
+
+		if workflowExecution.ExecutionOrg != org.Id {
+			log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
+			return
+		}
+	} else {
+		// Fail over to user if exec isn't there
+
+		user, err := HandleApiAuthentication(resp, request)
+		if err != nil {
+			log.Printf("[INFO] Missing auth when deleting key %s for org %s", tmpData.Key, tmpData.OrgId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+			return
+		} 
+
+		if user.ActiveOrg.Id != org.Id {
+			org, err = GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[INFO] Organization doesn't exist in cache delete: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+		}
+
+
+		selectedOrg = user.ActiveOrg.Id
 	}
 
-	if workflowExecution.Status != "EXECUTING" {
-		log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
-		return
-	}
-
-	if workflowExecution.ExecutionOrg != org.Id {
-		log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
-		return
-	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
-	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
 	if err != nil {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete)", tmpData.Key, tmpData.OrgId)
@@ -13132,8 +13158,13 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	entity := "org_cache"
+	DeleteKey(ctx, entity, url.QueryEscape(cacheId))
+	err = DeleteKey(ctx, entity, cacheId)
+	if err != nil {
+		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete)", tmpData.Key, tmpData.OrgId)
+	}
 
-	DeleteKey(ctx, entity, cacheId)
+
 	if len(cacheData.WorkflowId) > 0 {
 		escapedKey := url.QueryEscape(tmpData.Key)
 
@@ -13141,13 +13172,14 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s_%s", org.Id, cacheData.WorkflowId, escapedKey))
 
 		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, cacheData.Key))
-
 		DeleteKey(ctx, entity, fmt.Sprintf("%s_%s", cacheData.WorkflowId, escapedKey))
 	}
 
 	DeleteCache(ctx, tmpData.Key)
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, tmpData.Key))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, org.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheId))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, url.QueryEscape(cacheId)))
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -13250,9 +13282,12 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
+
+	//log.Printf("\n\n[INFO] GET cache key '%s' for org %s. ERR: %s\n\n", tmpData.Key, tmpData.OrgId, err)
+
 	if err != nil {
-		log.Printf("[WARNING] Failed to GET cache key %s for org %s (get)", tmpData.Key, tmpData.OrgId)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING][%s] Failed to GET cache key %s for org %s (get)", workflowExecution.ExecutionId, tmpData.Key, tmpData.OrgId)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
 		return
 	}
@@ -13266,7 +13301,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	b, err := json.Marshal(cacheData)
 	if err != nil {
 		log.Printf("[WARNING] Failed to GET cache key %s for org %s", tmpData.Key, tmpData.OrgId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
 		return
 	}

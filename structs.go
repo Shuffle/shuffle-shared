@@ -834,6 +834,8 @@ type CacheKeyData struct {
 	Key           string `json:"key" datastore:"Key"`
 	Value         string `json:"value" datastore:"Value,noindex"`
 	Edited        int64  `json:"edited" datastore:"Edited"`
+
+	FormattedKey string `json:"formatted_key,omitempty" datastore:"FormattedKey"`
 }
 
 type SyncConfig struct {

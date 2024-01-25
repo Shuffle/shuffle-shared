@@ -57,6 +57,9 @@ func HandleStreamWorkflowUpdate(resp http.ResponseWriter, request *http.Request)
 		if workflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (SET workflow stream)", user.Username, workflow.ID)
 
+			//} else if workflow.Public {
+			//log.Printf("[AUDIT] Letting user %s access workflow %s for streaming because it's public (SET workflow stream)", user.Username, workflow.ID)
+
 		} else if project.Environment == "cloud" && user.Verified == true && user.SupportAccess == true && user.Role == "admin" {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
 

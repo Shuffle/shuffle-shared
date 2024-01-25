@@ -9172,10 +9172,11 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 
 				// Search for it in datastore with key =
 				cacheKeys := []CacheKeyData{}
+				cacheData.FormattedKey = newId 
 				query := datastore.NewQuery(nameKey).Filter("Key =", newId).Limit(5)
 				_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
 				if err != nil {
-					log.Printf("[WARNING] Failed getting cacheKey %s: %s", newId, err)
+					log.Printf("[WARNING] Failed getting cacheKey %s: %s (1)", newId, err)
 					return cacheData, err
 				}
 
@@ -9191,13 +9192,16 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 						return cacheData, errors.New("Key doesn't exist")
 					}
 				} else {
-					log.Printf("[WARNING] Failed getting cacheKey %s: %s", newId, err)
+					log.Printf("[WARNING] Failed getting cacheKey %s: %s (2)", newId, err)
 
-					return cacheData, err
+					return cacheData, errors.New("Key doesn't exist")
 				}
 			}
+		} else {
+			cacheData.FormattedKey = id
 		}
 	}
+
 
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
