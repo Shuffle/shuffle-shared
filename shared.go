@@ -1299,7 +1299,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//log.Printf("\n\n\n\n\nAUTH ID: %#v", originalId)
 	if appAuth.Type == "oauth2" && len(originalId) == 0 {
 		log.Printf("[DEBUG] OAUTH2 for workflow %s. User: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id)
 
@@ -2757,8 +2756,6 @@ func GetActionResult(ctx context.Context, workflowExecution WorkflowExecution, i
 	cacheId := fmt.Sprintf("%s_%s_result", workflowExecution.ExecutionId, id)
 	cache, err := GetCache(ctx, cacheId)
 	if err == nil {
-		//log.Printf("[DEBUG] Already found %s executed, but not in list.. Adding!\n\n\n\n\n", id)
-
 		actionResult := ActionResult{}
 		cacheData := []byte(cache.([]uint8))
 		// Just ensuring the data is good
@@ -4193,7 +4190,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.Created = timeNow
 
 	auth, authOk := request.URL.Query()["set_auth"]
-	log.Printf("\n\n\n[DEBUG] AUTH: %#v\n\n\n", auth)
+	//log.Printf("\n\n\n[DEBUG] AUTH: %#v\n\n\n", auth)
 	if authOk && len(auth) > 0 && auth[0] == "true" {
 		allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 		workflowapps, apperr := GetPrioritizedApps(ctx, user)
@@ -9999,8 +9996,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			continue
 		}
 
-		log.Printf("\n\n\nFound trigger: %s\n\n\n", trigger.ID)
-
 		selectedTrigger = trigger
 		for _, param := range trigger.Parameters {
 			if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
@@ -10746,10 +10741,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if err == nil {
 			err = SetCache(ctx, actionCacheId, actionResultBody, 35)
 			if err != nil {
-				log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
+				//log.Printf("\n\n\n[ERROR] Failed setting cache for action in parsed exec results %s: %s\n\n", actionCacheId, err)
 			}
 		} else {
-			log.Printf("\n\n[ERROR] Failed marshalling result and put it in cache.")
+			log.Printf("[ERROR] Failed marshalling result and put it in cache.")
 		}
 	} else {
 		//log.Printf("[WARNING] Skipping cache for %s", actionResult.Action.Name)
@@ -14339,7 +14334,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 
 				// FIXME: MAY cause transaction issues.
 				if updateIndex >= 0 && resultIndex >= 0 {
-					log.Printf("\n\n\n[DEBUG] Should update index %d in resultIndex %d with new result %s\n\n\n", updateIndex, resultIndex, execution.Result)
+					//log.Printf("\n\n\n[DEBUG] Should update index %d in resultIndex %d with new result %s\n\n\n", updateIndex, resultIndex, execution.Result)
 
 					// Again, get the result, just in case, and update that exact value instantly
 					newParentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
@@ -15985,7 +15980,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					continue
 				}
 
-				//log.Printf("[DEBUG] Found app auth: %s\n\n\n", appname)
 				workflowExecution.Workflow.Actions[actionIndex].AuthenticationId = authId
 			}
 
@@ -16276,7 +16270,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						//field.Value = decrypted
 					}
 
-					//log.Printf("\n\n\n[DEBUG] Should replace auth parameters (Oauth2-app)\n\n\n")
 					user := User{
 						Username: "refresh",
 						ActiveOrg: OrgMini{
@@ -18158,7 +18151,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						for _, subresult := range workflowExecution.Results {
 							if subresult.Action.ID == branch.SourceID {
 								if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
-									//log.Printf("\n\n\nSUBRESULT PARENT STATUS: %s\n\n\n", subresult.Status)
 									isSkipped = false
 
 									break
@@ -20530,7 +20522,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 
 
 					if foundCategory.Name == "" {
-						log.Printf("\n\n\n[ERROR] No app found for category %s\n\n\n", categoryname)
+						log.Printf("[ERROR] No app found for category %s", categoryname)
 						continue
 					}
 
@@ -21615,7 +21607,6 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 		}
 	}
 
-	//log.Printf("\n\n\n[DEBUG] Got parent subflow result \n\n\n")
 
 	newResults := []SubflowData{}
 	finishedSubflows := 0
