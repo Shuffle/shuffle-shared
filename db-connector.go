@@ -1005,6 +1005,13 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		key := datastore.NameKey(nameKey, strings.ToLower(workflowExecution.ExecutionId), nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
 			log.Printf("[ERROR] Problem adding workflow_execution to datastore: %s", err)
+			if strings.Contains(fmt.Sprintf("%s", err), "context deadline exceeded") {
+				log.Printf("[ERROR] Context deadline exceeded. Retrying...")
+				ctx := context.Background()
+				if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
+					log.Printf("[ERROR] Workflow execution Error number 1: %s", err)
+				}
+			}
 
 			// Has to do with certain data coming back in parameters where it shouldn't, causing saving to be impossible
 			if strings.Contains(fmt.Sprintf("%s", err), "contains an invalid nested") {
@@ -1418,7 +1425,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 				if result.Status == "SUCCESS" {
 					result.Result = tmpResult.Result
 				}
-				//log.Printf("[DEBUG][%s] Getting '%s' result ", workflowExecution.ExecutionId, result.Action.AppName)
 			}
 
 			// Checks for subflows in waiting status

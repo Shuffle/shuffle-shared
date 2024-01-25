@@ -9986,13 +9986,67 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 	isLooping := false
 	selectedTrigger := Trigger{}
+
+	// Validating parent node
+	checkResult := false
+
+	log.Printf("[DEBUG] Parent workflow triggers: %d. Parentnode: %s. Parentworkflow: %s", len(newExecution.Workflow.Triggers), parentNode, newExecution.Workflow.ID)
+
+
+	// Subflows and the like may not be in here anymore. Maybe they are in actions
 	for _, trigger := range newExecution.Workflow.Triggers {
-		if trigger.ID == parentNode {
-			selectedTrigger = trigger
-			for _, param := range trigger.Parameters {
+		if trigger.ID != parentNode {
+			continue
+		}
+
+		log.Printf("\n\n\nFound trigger: %s\n\n\n", trigger.ID)
+
+		selectedTrigger = trigger
+		for _, param := range trigger.Parameters {
+			if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+				isLooping = true
+			}
+
+			// Check for if wait for results is set
+			if param.Name == "check_result" {
+				if param.Value == "true" {
+					checkResult = true
+				} else {
+					checkResult = false
+				}
+			}
+		}
+
+		break
+	}
+
+
+	// Because we changed out how we handle mid-flow triggers
+	if len(selectedTrigger.ID) == 0 {
+		for _, action := range newExecution.Workflow.Actions {
+			if action.ID != parentNode {
+				continue
+			}
+
+			selectedTrigger = Trigger{
+				ID:    action.ID,
+				Label: action.Label,
+			}
+
+			foundResult.Action = action
+
+			for _, param := range action.Parameters {
 				if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 					isLooping = true
-					break
+				}
+
+				// Check for if wait for results is set
+				if param.Name == "check_result" {
+					if param.Value == "true" {
+						checkResult = true
+					} else {
+						checkResult = false
+					}
 				}
 			}
 
@@ -10000,27 +10054,11 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		}
 	}
 
-	// Because we changed out how we handle mid-flow triggers
-	if len(selectedTrigger.ID) == 0 {
-		for _, action := range newExecution.Workflow.Actions {
-			if action.ID == parentNode {
-				selectedTrigger = Trigger{
-					ID:    action.ID,
-					Label: action.Label,
-				}
+	// Checks if the variable is set properly
+	if !checkResult {
+		log.Printf("[DEBUG][%s] No check_result param found for subflow. Not mapping subflow result back to parent workflow. Trigger: %#v", subflowExecutionId, selectedTrigger.ID)
 
-				foundResult.Action = action
-
-				for _, param := range action.Parameters {
-					if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
-						isLooping = true
-						break
-					}
-				}
-
-				break
-			}
-		}
+		return nil
 	}
 
 	// IF the workflow is looping, the result is added in the backend to not
@@ -11524,6 +11562,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				} else
 			*/
 			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
+
+				// Check if source node has "Wait for Results" set to true
+
+
 				log.Printf("[DEBUG][%s] Found execution parent %s for workflow '%s' (%s)", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
 
 				err = updateExecutionParent(ctx, workflowExecution.ExecutionParent, valueToReturn, workflowExecution.ExecutionSourceAuth, workflowExecution.ExecutionSourceNode, workflowExecution.ExecutionId)
@@ -11623,7 +11665,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				// This is in case the list is not an actual list
 				if err != nil || len(subflowDataList) == 0 {
-					log.Printf("\n\nNOT sinkholed from subflow result: %s", err)
+					log.Printf("NOT sinkholed from subflow result: %s", err)
 					for resultIndex, result := range workflowExecution.Results {
 						if result.Action.ID == actionResult.Action.ID {
 							workflowExecution.Results[resultIndex] = actionResult
@@ -14106,29 +14148,29 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 			}
 
 			for _, trigger := range baseExecution.Workflow.Triggers {
-				if trigger.ID == result.Action.ID {
-					//log.Printf("Found SUBFLOW id: %s", trigger.ID)
-
-					for _, param := range trigger.Parameters {
-						if param.Name == "check_result" && param.Value == "true" {
-							//log.Printf("Found check as true!")
-
-							var subflowData SubflowData
-							err = json.Unmarshal([]byte(result.Result), &subflowData)
-							if err != nil {
-								log.Printf("Failed unmarshal in subflow check for %s: %s", result.Result, err)
-							} else if len(subflowData.Result) == 0 {
-								log.Printf("There is no result yet. Don't save?")
-							} else {
-								//log.Printf("There is a result: %s", result.Result)
-							}
-
-							break
-						}
-					}
-
-					break
+				if trigger.ID != result.Action.ID {
+					continue
 				}
+
+				for _, param := range trigger.Parameters {
+					if param.Name == "check_result" && param.Value == "true" {
+						//log.Printf("Found check as true!")
+
+						var subflowData SubflowData
+						err = json.Unmarshal([]byte(result.Result), &subflowData)
+						if err != nil {
+							log.Printf("Failed unmarshal in subflow check for %s: %s", result.Result, err)
+						} else if len(subflowData.Result) == 0 {
+							log.Printf("There is no result yet. Don't save?")
+						} else {
+							//log.Printf("There is a result: %s", result.Result)
+						}
+
+						break
+					}
+				}
+
+				break
 			}
 		}
 	}
@@ -14297,7 +14339,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 
 				// FIXME: MAY cause transaction issues.
 				if updateIndex >= 0 && resultIndex >= 0 {
-					log.Printf("[DEBUG] Should update index %d in resultIndex %d with new result %s", updateIndex, resultIndex, execution.Result)
+					log.Printf("\n\n\n[DEBUG] Should update index %d in resultIndex %d with new result %s\n\n\n", updateIndex, resultIndex, execution.Result)
 
 					// Again, get the result, just in case, and update that exact value instantly
 					newParentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
@@ -15360,14 +15402,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if sourceAuthOk {
 			workflowExecution.ExecutionSourceAuth = sourceAuth[0]
 		} else {
-			log.Printf("[DEBUG] Did NOT get source workflow auth")
+			//log.Printf("[DEBUG] Did NOT get source workflow auth")
 		}
 
 		sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
 		if sourceNodeOk {
 			workflowExecution.ExecutionSourceNode = sourceNode[0]
 		} else {
-			log.Printf("[DEBUG] Did NOT get source workflow node")
+			//log.Printf("[DEBUG] Did NOT get source workflow node")
 		}
 
 		//workflowExecution.ExecutionSource = "default"
@@ -15376,7 +15418,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			//log.Printf("Got source workflow %s", sourceWorkflow)
 			workflowExecution.ExecutionSource = sourceWorkflow[0]
 		} else {
-			log.Printf("[DEBUG] Did NOT get source workflow (real). Not critical, as it can be overwritten with reference execution matching.")
+			//log.Printf("[DEBUG] Did NOT get source workflow (real). Not critical, as it can be overwritten with reference execution matching.")
 		}
 
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
@@ -21563,6 +21605,14 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 	if err != nil {
 		//log.Printf("[WARNING] Failed unmarshaling subflow result. This could be due to it not being a list: %s", err)
 		return result, false
+	}
+
+	for _, param := range result.Action.Parameters {
+		if param.Name == "check_result" {
+			if param.Value == "false" {
+				return result, false
+			}
+		}
 	}
 
 	//log.Printf("\n\n\n[DEBUG] Got parent subflow result \n\n\n")
