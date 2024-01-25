@@ -3220,7 +3220,16 @@ func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 
 	res, err := req.Do(ctx, &project.Es)
 	if err != nil {
-		log.Printf("[ERROR] Error getting response from Opensearch (index ES): %s", err)
+		// Usually due to goroutines
+		if strings.Contains(err.Error(), "context deadline exceeded") {
+			res, err = req.Do(context.Background(), &project.Es)
+			if err != nil {
+				log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 2: %s", err)
+			}
+		} else {
+			log.Printf("[ERROR] Error getting response from Opensearch (index ES) - 1: %s", err)
+		}
+
 		return err
 	}
 
@@ -3546,6 +3555,8 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 	}
 
 	if project.DbType == "opensearch" {
+		log.Printf("[DEBUG] Deleting from index '%s' with item '%s' from opensearch", entity, value)
+
 		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(entity)), value)
 
 		if err != nil {
@@ -8070,7 +8081,12 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			if err == nil {
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status { 
-					go SetWorkflowExecution(ctx, *newexec, true)
+
+					if project.Environment == "cloud" {
+						go SetWorkflowExecution(ctx, *newexec, true)
+					} else {
+						SetWorkflowExecution(ctx, *newexec, false)
+					}
 				}
 
 				executions[execIndex] = *newexec
@@ -8320,7 +8336,12 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
-					go SetWorkflowExecution(ctx, *newexec, true)
+
+					if project.Environment == "cloud" {
+						go SetWorkflowExecution(ctx, *newexec, true)
+					} else {
+						SetWorkflowExecution(ctx, *newexec, true)
+					}
 				}
 
 				executions[execIndex] = *newexec
@@ -10870,7 +10891,12 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 				//log.Printf("[DEBUG] Got with status %s", newexec.Status)
 				// Set the execution as well in the database
 				if newexec.Status != execution.Status || len(newexec.Results) > len(execution.Results) {
-					go SetWorkflowExecution(ctx, *newexec, true)
+
+					if project.Environment == "cloud" {
+						go SetWorkflowExecution(ctx, *newexec, true)
+					} else {
+						SetWorkflowExecution(ctx, *newexec, true)
+					}
 				}
 
 				executions[execIndex] = *newexec

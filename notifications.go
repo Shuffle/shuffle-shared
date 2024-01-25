@@ -157,7 +157,7 @@ func HandleClearNotifications(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[AUDIT] Cleared all notifications for user %s (%s)", user.Username, user.Id)
+	log.Printf("[AUDIT] Cleared %d notifications for user %s (%s) in org %s (%s)", len(notifications), user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 	cacheKey := fmt.Sprintf("notifications_%s", user.ActiveOrg.Id)
 	DeleteCache(ctx, cacheKey)
 	cacheKey = fmt.Sprintf("notifications_%s", user.Id)
@@ -377,7 +377,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 			totalTimeElapsed := int64((cachedNotifications.LastUpdated - cachedNotifications.FirstUpdated)/60)
 
-			log.Printf("Time elasped since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
+			//log.Printf("[DEBUG] Time elapsed since first notification: %d for notification %s", totalTimeElapsed, notification.Id)
 
 			err = SetCache(ctx, cacheKey, cacheData, 1440)
 			if err != nil {
@@ -391,10 +391,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 			// Literally only starts on the 2nd, not otherwise
 			if cachedNotifications.Amount == 2 {
-				log.Printf("[DEBUG] Starting timer for %d minutes for relieving notificaions through %s notification",
-						bucketingTime, 
-						notification.Id,
-					)
+				log.Printf("[DEBUG] Starting timer for %d minutes for relieving notificaions through %s notification", bucketingTime, notification.Id)
+					
 				timeAfter := time.Duration(bucketingTime) * time.Minute
 				time.AfterFunc(timeAfter, func() {
 					// Read from cache again
@@ -447,10 +445,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 				return errors.New(
 					"Notification with id "+ notification.Id + " was the second bucketed notification. " + 
 					"It is responsible for relieving the bucket. " + 
-					"We have it's cache stored at: " + cacheKey,
+					"We have its cache stored at: " + cacheKey,
 				)
 			}
-			return errors.New("Notification with id"+ notification.Id + " won't be sent and is bucketed. We have it's cache stored at: " + cacheKey)
+			return errors.New("Notification with id"+ notification.Id + " won't be sent and is bucketed. We have its cache stored at: " + cacheKey)
 		}
 	}
 
@@ -481,7 +479,11 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	}
 
 	executionUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, workflowId)
-	client := &http.Client{}
+	//log.Printf("\n\n[DEBUG] Notification workflow: %s. APIKEY: %#v\n\n", executionUrl, userApikey)
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
 	req, err := http.NewRequest(
 		"POST",
 		executionUrl,
@@ -637,13 +639,15 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			//	continue
 			//}
 
-			// Added ignore as someone could want to never see a specific alert again due to e.g. expecting a 404 on purpose
-			if notification.Ignored { 
-				notification.Read = false
-			}
 
 			notification.Amount += 1
+			notification.Read = false
 			notification.ReferenceUrl = referenceUrl
+
+			// Added ignore as someone could want to never see a specific alert again due to e.g. expecting a 404 on purpose
+			if notification.Ignored { 
+				notification.Read = true 
+			}
 
 			err = SetNotification(ctx, notification)
 			if err != nil {
@@ -656,7 +660,9 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
 		if err != nil {
-			log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+			if !strings.Contains(err.Error(), "cache stored") {
+				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+			}
 		}
 
 		return nil

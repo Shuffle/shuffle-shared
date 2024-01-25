@@ -9717,6 +9717,66 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		loginData = string(newData)
 	}
 
+	// Verify if the user actually should be logged in.
+	// Example: If the user is removed from an org onprem, then they shouldn't be able to log back in
+	// On cloud, we just generate a new org for them on the fly
+	if project.Environment != "cloud" {
+
+		if userdata.ActiveOrg.Id == "" {
+			if len(userdata.Orgs) == 0 {
+				log.Printf("[ERROR] User %s (%s) has no orgs", userdata.Username, userdata.Id)
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io"}`))
+				return
+			}
+
+			userdata.ActiveOrg.Id = userdata.Orgs[0]
+		}
+
+		// Check activeorg if they have access to it first
+		found := false
+		foundOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+		if err == nil {
+			for _, foundUser := range foundOrg.Users {
+				if foundUser.Id == userdata.Id {
+					found = true
+					break
+				}
+			}
+		}
+
+		// Check if we need to move them over
+		if !found {
+			log.Printf("[DEBUG] Current active org for user %s (%s) not found. Checking other orgs", userdata.Username, userdata.Id)
+			for _, org := range userdata.Orgs {
+				// Verify if the user is in the org
+				foundOrg, err := GetOrg(ctx, org)
+				if err != nil {
+					log.Printf("[ERROR] Failed finding org %s: %s", org, err)
+					continue
+				}
+
+				for _, foundUser := range foundOrg.Users {
+					if foundUser.Id == userdata.Id {
+						found = true
+						break
+					}
+				}
+
+				if found {
+					break
+				}
+			}
+		}
+
+		if !found {
+			log.Printf("[ERROR] User %s (%s) has no orgs (2)", userdata.Username, userdata.Id)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io (2)"}`))
+			return
+		}
+	}
+
 	if len(userdata.Session) != 0 {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
@@ -12985,21 +13045,21 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 		cacheKey = strings.Trim(cacheKey, " ")
 	}
 
-	cacheKey = strings.Replace(cacheKey, "%20", " ", -1)
+	//cacheKey = strings.Replace(cacheKey, "%20", " ", -1)
 	cacheKey = strings.Trim(cacheKey, " ")
 	cacheId := fmt.Sprintf("%s_%s", orgId, cacheKey)
 
 	cacheData, err := GetCacheKey(ctx, cacheId)
 	if err != nil || cacheData.Key == "" {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (delete)", cacheId, orgId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get key. Does it exist?", "extra": "%s"}`, cacheData.Key)))
 		return
 	}
 
 	if cacheData.OrgId != user.ActiveOrg.Id {
 		log.Printf("[INFO] OrgId '%s' and '%s' don't match", cacheData.OrgId, user.ActiveOrg.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 		return
 	}
@@ -13150,9 +13210,12 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
+
+	log.Printf("\n\n[DEBUG] Attempting to delete cache key '%s' for org %s\n\n", tmpData.Key, tmpData.OrgId)
+
 	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete)", tmpData.Key, tmpData.OrgId)
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete). Does it exist?", tmpData.Key, tmpData.OrgId)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
 		return
 	}
