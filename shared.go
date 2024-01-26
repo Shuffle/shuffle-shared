@@ -13211,12 +13211,25 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
 
-	log.Printf("\n\n[DEBUG] Attempting to delete cache key '%s' for org %s\n\n", tmpData.Key, tmpData.OrgId)
+	log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 
 	if err != nil {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete). Does it exist?", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
+
+		result := ResultChecker{
+			Success: false,
+			Reason:  "Failed to get key. Does it exist?",
+			Extra: fmt.Sprintf("Attempted to delete key '%s'", tmpData.Key),
+		}
+
+		marshalled, err := json.Marshal(result)
+		if err != nil {
+			resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
+			return
+		}
+
+		resp.Write(marshalled)
 		return
 	}
 
@@ -13244,8 +13257,21 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, cacheId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, url.QueryEscape(cacheId)))
 
+	result := ResultChecker{
+		Success: true,
+		Reason:    fmt.Sprintf("Key '%s' deleted", tmpData.Key),
+	}
+
+	// Marshal
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
+	jsonResult, err := json.Marshal(result)
+	if err != nil {
+		log.Printf("[WARNING] Failed to marshal result: %s", err)
+		resp.Write([]byte(`{"success": true}`))
+		return
+	}
+
+	resp.Write([]byte(jsonResult))
 }
 
 func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
