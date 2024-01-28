@@ -9752,7 +9752,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 			newCacheKeys = append(newCacheKeys, hit.Source)
 		}
 
-		log.Printf("[INFO] Got %d cachekeys for org %s (es)", len(newCacheKeys), orgId)
+		//log.Printf("[INFO] Got %d cachekeys for org %s (es)", len(newCacheKeys), orgId)
 		cacheKeys = newCacheKeys
 	} else {
 
@@ -9825,7 +9825,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 
 		}
 
-		log.Printf("[INFO] Got %d cacheKeys for org %s (datastore)", len(cacheKeys), orgId)
+		//log.Printf("[INFO] Got %d cacheKeys for org %s (datastore)", len(cacheKeys), orgId)
 	}
 
 	// Sort by edited field
