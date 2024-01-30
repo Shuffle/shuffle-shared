@@ -2816,7 +2816,7 @@ func ArrayContains(visited []string, id string) bool {
 	return found
 }
 
-func GetWorkflowExecutionCount(resp http.ResponseWriter, request *http.Request) {
+func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -2849,9 +2849,71 @@ func GetWorkflowExecutionCount(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
+	// get workflow and verify that it belongs to user
 	ctx := GetContext(request)
-	workflowCount, err := GetWorkflowCount(ctx, fileId, user)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow %s : %s while getting runcount", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return 
+	}
 
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
+
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
+
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow run count)", user.Username, workflow.ID)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	// FIXME: This is not used yet
+
+	// Get the "start_time" and "end_time" query params
+	// They will be in this format: 2023-12-31T23:00:00.000Z
+	startTimeInt := time.Now().AddDate(-1, 0, 0)
+	endTimeInt := time.Now().AddDate(0, 0, 1)
+
+
+	startTime := request.URL.Query().Get("start_time")
+	endTime := request.URL.Query().Get("end_time")
+	if len(startTime) != 0 {
+		// Make starttime 1 year ago
+		startTimeInt, err = time.Parse(time.RFC3339, startTime)
+		if err != nil {
+			log.Printf("[WARNING] Failed parsing start time: %s", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed parsing start time"}`))
+			return
+		}
+	}
+
+	if len(endTime) != 0 {
+		// Make endtime today
+		endTimeInt, err = time.Parse(time.RFC3339, endTime)
+		if err != nil {
+			log.Printf("[WARNING] Failed parsing start time: %s", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed parsing start time"}`))
+			return
+		}
+
+	}
+
+	// Convert to unix timestamp
+	startTimeNew := startTimeInt.Unix()
+	endTimeNew := endTimeInt.Unix()
+
+	log.Printf("Start time: %#v, end time: %#v", startTimeNew, endTimeNew)
+
+	workflowCount, err := GetWorkflowRunCount(ctx, fileId, startTimeNew, endTimeNew)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflow count for %s", fileId)
 		if err.Error() == "Not authorized" {
@@ -7422,7 +7484,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 			executionValues, err := GetAppExecutionValues(ctx, parameterNames, org.Id, workflowExecution.Workflow.ID, value)
 			if err != nil {
-				log.Printf("[WARNING] Failed getting key %s: %s", dbKey, err)
+				log.Printf("[WARNING] Failed getting key %s: %s (1)", dbKey, err)
 				notFound = append(notFound, value)
 				//found = append(found, value)
 				continue
@@ -7449,7 +7511,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 
 			executionValues, err := GetAppExecutionValues(ctx, parameterNames, org.Id, workflowExecution.Workflow.ID, value)
 			if err != nil {
-				log.Printf("[WARNING] Failed getting key %s: %s", dbKey, err)
+				log.Printf("[WARNING] Failed getting key %s: %s (2)", dbKey, err)
 				notFound = append(notFound, value)
 				//found = append(found, value)
 				continue
@@ -11376,12 +11438,15 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			//log.Printf("\n\n[WARNING] Unmarshal success in workflow %s! Trying to check for success. Success: %#v\n\n", workflowExecution.Workflow.Name, resultCheck.Success)
 
 			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") && workflowExecution.Workflow.Hidden == false {
-				//log.Printf("\n\n[WARNING] Making notification for %s\n\n", workflowExecution.ExecutionOrg)
+				description := fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Failure Reason: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason)
+				if len(resultCheck.Reason) == 0 {
+					description = fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Check the workflow run for more details.", actionResult.Action.Label, workflowExecution.Workflow.Name)
+				}
 
 				err = CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Potential error in Workflow '%s'", workflowExecution.Workflow.Name),
-					fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Reason: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason),
+					description,
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 					workflowExecution.ExecutionOrg,
 					true,
@@ -12949,7 +13014,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	maxAmount := 20
+	maxAmount := 30
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
 		val, err := strconv.Atoi(top[0])
@@ -12985,7 +13050,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if err != nil {
-		log.Printf("[INFO] Failed getting keys for org %s: %s", org.Id, err)
+		log.Printf("[INFO] Failed getting cache key list for org %s: %s", org.Id, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return

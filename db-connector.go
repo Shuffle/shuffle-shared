@@ -2349,9 +2349,10 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 	return env, nil
 }
 
-func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
+func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64) (int, error) {
+	var err error
 	nameKey := "workflowexecution"
-	cacheKey := fmt.Sprintf("%s_count_%s", nameKey, id)
+	cacheKey := fmt.Sprintf("%s_count_%s_%s_%s", nameKey, id, strconv.FormatInt(start, 10), strconv.FormatInt(end, 10))
 
 	count := 0
 
@@ -2365,26 +2366,17 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 				return count, nil
 			}
 		}
+
 		log.Printf("[DEBUG] Failed getting count cache for workflow id %s: %s", id, err)
 	}
 
 	if project.DbType == "opensearch" {
 		return 0, errors.New("Not implemented")
 	} else {
-		// get workflow and verify that it belongs to user
-		workflow, err := GetWorkflow(ctx, id)
-		if err != nil {
-			log.Printf("[WARNING] Failed getting workflow %s : %s while getting count", id, err)
-			return 0, err
-		}
-
-		if (workflow.OrgId != user.ActiveOrg.Id && !user.SupportAccess) {
-			log.Printf("[WARNING] User %s tried to get workflow %s count for org %s", user.Username, id, workflow.OrgId)
-			return 0, errors.New("Not authorized")
-		}
-
 		// count WorkflowExecution where workflowId = id
-		query := datastore.NewQuery(nameKey).Filter("workflow_id =", strings.ToLower(id))
+		//query := datastore.NewQuery(nameKey).Filter("workflow_id =", strings.ToLower(id))
+
+		query := datastore.NewQuery(nameKey).Filter("workflow_id =", strings.ToLower(id)).Filter("started_at >=", start).Filter("started_at <=", end)
 		count, err = project.Dbclient.Count(ctx, query)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting count for workflow %s : %s", id, err)
@@ -2395,9 +2387,10 @@ func GetWorkflowCount(ctx context.Context, id string, user User) (int, error) {
 	// count int to []byte
 	countStr := strconv.Itoa(count)
 	countBytes := []byte(countStr)
-
 	if project.CacheDb {
-		err := SetCache(ctx, cacheKey, countBytes, 1)
+		log.Printf("[DEBUG] Setting cache count for workflow id %s count: %s", id, countStr)
+
+		err := SetCache(ctx, cacheKey, countBytes, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for workflow id %s count: %s", id, err)
 		}
@@ -9758,7 +9751,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 
 		// Query datastore with pages
 
-		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Limit(max)
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited").Limit(max)
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)
 			if err != nil {
@@ -9770,6 +9763,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 		}
 
 		// Skip page in query
+		errcnt := 0 
 		cursorStr := inputcursor
 		var err error
 		for {
@@ -9807,6 +9801,13 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
+				if errcnt == 0 && (strings.Contains(err.Error(), "no matching index") || strings.Contains(err.Error(), "not ready to serve")) {
+					log.Printf("[WARNING] No matching index for cache. Running without edit index.")
+					query = datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Limit(max)
+					errcnt += 1
+					continue
+				}
+
 				log.Printf("Cursorerror: %s", err)
 				break
 			} else {
