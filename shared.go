@@ -2885,6 +2885,14 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 	startTime := request.URL.Query().Get("start_time")
 	endTime := request.URL.Query().Get("end_time")
 	if len(startTime) != 0 {
+		// Check if url decode is necessary
+		if strings.Contains(startTime, "%") {
+			startTime, err = url.QueryUnescape(startTime)
+			if err != nil {
+				log.Printf("[WARNING] Failed url decoding start time '%s': %s", startTime, err)
+			}
+		}
+
 		// Make starttime 1 year ago
 		startTimeInt, err = time.Parse(time.RFC3339, startTime)
 		if err != nil {
@@ -2896,6 +2904,14 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	if len(endTime) != 0 {
+		// Check if url decode is necessary
+		if strings.Contains(endTime, "%") {
+			endTime, err = url.QueryUnescape(endTime)
+			if err != nil {
+				log.Printf("[WARNING] Failed url decoding end time '%s': %s", endTime, err)
+			}
+		}
+
 		// Make endtime today
 		endTimeInt, err = time.Parse(time.RFC3339, endTime)
 		if err != nil {
@@ -2911,7 +2927,7 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 	startTimeNew := startTimeInt.Unix()
 	endTimeNew := endTimeInt.Unix()
 
-	log.Printf("Start time: %#v, end time: %#v", startTimeNew, endTimeNew)
+	//log.Printf("Start time: %#v, end time: %#v", startTimeNew, endTimeNew)
 
 	workflowCount, err := GetWorkflowRunCount(ctx, fileId, startTimeNew, endTimeNew)
 	if err != nil {

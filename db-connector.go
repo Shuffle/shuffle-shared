@@ -2367,7 +2367,7 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 			}
 		}
 
-		log.Printf("[DEBUG] Failed getting count cache for workflow id %s: %s", id, err)
+		//log.Printf("[DEBUG] Failed getting count cache for workflow id %s: %s", id, err)
 	}
 
 	if project.DbType == "opensearch" {
@@ -2388,7 +2388,7 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 	countStr := strconv.Itoa(count)
 	countBytes := []byte(countStr)
 	if project.CacheDb {
-		log.Printf("[DEBUG] Setting cache count for workflow id %s count: %s", id, countStr)
+		//log.Printf("[DEBUG] Setting cache count for workflow id %s count: %s", id, countStr)
 
 		err := SetCache(ctx, cacheKey, countBytes, 1440)
 		if err != nil {
