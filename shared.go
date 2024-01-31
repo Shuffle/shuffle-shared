@@ -2853,7 +2853,7 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting workflow %s : %s while getting runcount", fileId, err)
+		log.Printf("[WARNING] Failed getting workflow %s while getting runcount: %s", fileId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return 
@@ -2861,10 +2861,10 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
+			log.Printf("[AUDIT] User %s is accessing workflow count for '%s' (%s) as %s (get count)", user.Username, workflow.Name, workflow.ID, user.Role)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow run count for %s", user.Username, workflow.ID)
 
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow run count)", user.Username, workflow.ID)
@@ -2878,9 +2878,13 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 
 	// Get the "start_time" and "end_time" query params
 	// They will be in this format: 2023-12-31T23:00:00.000Z
-	startTimeInt := time.Now().AddDate(-1, 0, 0)
+	// By default 30 days back -> 1 day in the future (with 00:00:00 timestamp)
+	startTimeInt := time.Now().AddDate(0, 0, -30)
 	endTimeInt := time.Now().AddDate(0, 0, 1)
 
+	// Normalize startTimeInt & endTimeInt to be at 00:00:00
+	startTimeInt = time.Date(startTimeInt.Year(), startTimeInt.Month(), startTimeInt.Day(), 0, 0, 0, 0, startTimeInt.Location())
+	endTimeInt = time.Date(endTimeInt.Year(), endTimeInt.Month(), endTimeInt.Day(), 0, 0, 0, 0, endTimeInt.Location())
 
 	startTime := request.URL.Query().Get("start_time")
 	endTime := request.URL.Query().Get("end_time")
