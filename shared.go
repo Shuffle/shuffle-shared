@@ -1319,7 +1319,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[AUDIT] Wrong user (%s) for workflow %s (set oauth2)", user.Username, workflow.ID)
 					resp.WriteHeader(403)
-					resp.Write([]byte(`{"success": false, "reason": "Your user can't set authentication for this workflow."}`))
+					resp.Write([]byte(`{"success": false, "reason": "Your user is not allowed to set authentication for this workflow in Shuffle."}`))
 					return
 				}
 			}
@@ -9451,23 +9451,35 @@ func GetRequestIp(r *http.Request) string {
 	// Check for the X-Real-IP header
 	realIP := r.Header.Get("X-Real-IP")
 	if realIP != "" {
+		if strings.Count(realIP, ":") == 1 {
+			return strings.Split(realIP, ":")[0]
+		}
+
 		return realIP
 	}
 
 	realIP = r.Header.Get("CF-Connecting-IP")
 	if realIP != "" {
+		if strings.Count(realIP, ":") == 1 {
+			return strings.Split(realIP, ":")[0]
+		}
+
 		return realIP
 	}
 
 	realIP = r.Header.Get("X-Appengine-User-Ip")
 	if realIP != "" {
+		if strings.Count(realIP, ":") == 1 {
+			return strings.Split(realIP, ":")[0]
+		}
+
 		return realIP
 	}
 
 	// Loop through and find headers with "IP" in them
 	for k, v := range r.Header {
 		if strings.Contains(strings.ToLower(k), "ip") {
-			log.Printf("[DEBUG] Found useful IP header %s: %s", k, v)
+			log.Printf("[ERROR] Found useful unhandled IP header %s: %s", k, v)
 		}
 	}
 
@@ -9753,7 +9765,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
 	//}
 
-	// Why does request.RemoteAddr usually turn into 127.0.0.1:<port>?
 	// This is a hack to get the real IP address
 	// https://stackoverflow.com/questions/27234861/golang-http-request-returns-127-0-0-1
 	userdata.LoginInfo = append(userdata.LoginInfo, LoginInfo{
@@ -10066,11 +10077,9 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 	}
 
 	resultUrl := fmt.Sprintf("%s/api/v1/streams/results", backendUrl)
-	//log.Printf("[DEBUG] ResultURL: %s", backendUrl)
 
 	topClient := GetExternalClient(backendUrl)
 	newExecution := WorkflowExecution{}
-
 	requestData := ActionResult{
 		Authorization: parentAuth,
 		ExecutionId:   executionParent,
@@ -15891,7 +15900,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					//if err == nil {
 					userinputResp.ClickInfo.Clicked = true
 					userinputResp.ClickInfo.Time = time.Now().Unix()
-					userinputResp.ClickInfo.IP = request.RemoteAddr
+					userinputResp.ClickInfo.IP = GetRequestIp(request)
 					userinputResp.ClickInfo.Note = ""
 
 					user, err := HandleApiAuthentication(nil, request)
