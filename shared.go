@@ -16162,6 +16162,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// curl 'http://localhost:5002/api/v1/workflows/{workflow_id}/run' -H 'app_auth: appname=auth_id;appname2=auth_id2'
 	allAuths := []AppAuthenticationStorage{}
 	if len(authHeader) > 0 {
+		log.Printf("[DEBUG] Found appauth header in request. Attempting to find matching auth with name/ID '%s'", authHeader)
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
 			if err != nil {
@@ -16279,6 +16280,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		//}
 	}
 
+	org := &Org{}
 	previousEnvironment := ""
 	for _, action := range workflowExecution.Workflow.Actions {
 		//action.LargeImage = ""
@@ -16292,11 +16294,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if (action.AppName == "Shuffle Tools" || action.AppName == "email") && action.Name == "send_email_shuffle" || action.Name == "send_sms_shuffle" {
 				for paramKey, param := range action.Parameters {
 					// Autoreplace in general, even if there is a key. Overwrite previous configs to ensure this becomes the norm. Frontend also matches.
-					if param.Name == "apikey" {
+					if param.Name != "apikey" {
 						//log.Printf("Autoreplacing apikey")
 
 						// This will be in cache after running once or twice AKA fast
-						org, err := GetOrg(ctx, workflowExecution.Workflow.OrgId)
+						org, err = GetOrg(ctx, workflowExecution.Workflow.OrgId)
 						if err != nil {
 							log.Printf("[ERROR] Error getting org in APIkey replacement: %s", err)
 							continue
@@ -17049,6 +17051,56 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	workflowExecution.Workflow.Triggers = newTriggers
+
+
+	// Checking authentication fields as they should now be filled in no matter where
+
+	if len(workflowExecution.ExecutionOrg) == 0 {
+		log.Printf("\n\n[ERROR] No org found for execution. This should not happen.\n\n")
+	}
+
+	if len(org.Id) == 0 {
+		org, err = GetOrg(ctx, workflowExecution.ExecutionOrg)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get org: %s", err)
+		}
+	}
+
+
+	if len(org.Defaults.KmsId) > 0 {
+		authFound := false
+		for _, auth := range allAuths {
+			if auth.Id != org.Defaults.KmsId {
+				continue
+			}
+
+			authFound = true 
+			break
+		}
+
+		if authFound { 
+			findKeys := []string{}
+			for _, action := range workflowExecution.Workflow.Actions {
+				for _, param := range action.Parameters {
+					if !strings.HasPrefix(strings.ToLower(param.Value), "kms.") {
+						continue
+					}
+
+					findKey := strings.Replace(param.Value, "shuffle_auth.", "", -1)
+					findKeys = append(findKeys, findKey)
+					log.Printf("\n\n[INFO] Found auth key: %s", findKey)
+				}
+			}
+
+			if len(findKeys) > 0 {
+				log.Printf("\n\n[INFO] Found %d auth keys to decrypt from KMS", len(findKeys))
+			}
+		} else {
+			log.Printf("[ERROR] Default KMS ID not found in organization. Will not be able to decrypt secrets.")
+		}
+	} else {
+		log.Printf("\n\n[DEBUG] No KMS authenticationID specified in org.Defaults.KmsId")
+	}
 
 	finished := ValidateFinished(ctx, extra, workflowExecution)
 	if finished {

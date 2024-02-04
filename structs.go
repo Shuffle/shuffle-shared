@@ -823,6 +823,8 @@ type Defaults struct {
 
 	NewsletterDisabled bool `json:"newsletter" datastore:"newsletter_disabled"`
 	WeeklyRecommendationsDisabled bool `json:"weekly_recommendations" datastore:"weekly_recommendations_disabled"`
+
+	KmsId string `json:"kms_id" datastore:"kms_id"`
 }
 
 type CacheKeyData struct {

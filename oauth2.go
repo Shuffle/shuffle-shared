@@ -3577,7 +3577,8 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
-	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %s", refreshData)
+
+	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %s. URL: %s", refreshData, tokenUrl)
 
 	req, err := http.NewRequest(
 		"POST",
@@ -3613,7 +3614,38 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	if newresp.StatusCode >= 300 {
 		// Printing on error to handle in future instances
 		log.Printf("[ERROR] Oauth2 application data for %s: %#v", tokenUrl, string(body))
-		return appAuth, errors.New(fmt.Sprintf("Bad status code when getting access token for token URL %s: %d. Message: %s", tokenUrl, newresp.StatusCode, body))
+
+		// Autocorrecting scopes -> audience
+		if strings.Contains(string(body), "error") && strings.Contains(string(body), "audience") && len(scope) > 0 {
+			log.Printf("[INFO] Oauth2 application auth: Autocorrecting scopes -> audience")
+
+			refreshData = fmt.Sprintf("grant_type=client_credentials")
+			if len(grantType) > 0 {
+				refreshData = fmt.Sprintf("grant_type=%s", grantType)
+			}
+
+			refreshData += fmt.Sprintf("&audience=%s", strings.Replace(scope, ",", " ", -1))
+			req.Body = ioutil.NopCloser(bytes.NewBuffer([]byte(refreshData)))
+			req.ContentLength = int64(len(refreshData))
+
+			newresp, err = client.Do(req)
+			if err != nil {
+				log.Printf("[ERROR] Oauth2 application auth (2): Failed to autocorrect scopes -> audience: %s", err)
+				return appAuth, err
+			}
+
+			defer newresp.Body.Close()
+			body, err = ioutil.ReadAll(newresp.Body)
+			if err != nil {
+				log.Printf("[ERROR] Oauth2 application auth (3): Failed to read response body: %s", err)
+				return appAuth, err
+			}
+		} 
+
+		// Takes care of both old and new request
+		if newresp.StatusCode >= 300 {
+			return appAuth, errors.New(fmt.Sprintf("Bad status code when getting access token for token URL %s: %d. Message: %s", tokenUrl, newresp.StatusCode, body))
+		}
 	}
 
 	if strings.Contains(string(body), "error") {
