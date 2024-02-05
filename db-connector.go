@@ -1527,6 +1527,41 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 	}
 
+	// Cleaning up values as they shouldn't exist anymore in actions
+	// after a result has been found for it. 
+	for resIndex, result := range finalWorkflowExecution.Results {
+		if result.Status != "FINISHED" && result.Status != "SUCCESS" && result.Status != "ABORTED" {
+			continue
+		}
+
+		cleaned := false
+		for paramIndex, param := range result.Action.Parameters {
+			if param.Configuration {
+				finalWorkflowExecution.Results[resIndex].Action.Parameters[paramIndex].Value = ""
+			}
+
+			finalWorkflowExecution.Results[resIndex].Action.Parameters[paramIndex].Example = ""
+			finalWorkflowExecution.Results[resIndex].Action.Parameters[paramIndex].Description = ""
+		}
+
+		if cleaned {
+			for actionIndex, action := range finalWorkflowExecution.Workflow.Actions {
+				if action.ID != result.Action.ID {
+					continue
+				}
+
+				for paramIndex, param := range action.Parameters {
+					if param.Configuration { 
+						finalWorkflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = ""
+					}
+
+					finalWorkflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Example = ""
+					finalWorkflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Description = ""
+				}
+			}
+		}
+	}
+
 
 	return finalWorkflowExecution, dbsave
 }

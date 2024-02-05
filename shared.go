@@ -7474,7 +7474,6 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Prepared for the future~
 	if len(tmpData.Values) != 1 {
 		log.Printf("[INFO] Filter data can only hande 1 value right now, not %d", len(tmpData.Values))
 		resp.WriteHeader(401)
@@ -13683,7 +13682,6 @@ func CheckHookAuth(request *http.Request, auth string) error {
 	return nil
 }
 
-// Fileid = the app to execute
 // Body = The action body received from the user to test.
 func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte) (WorkflowExecution, error) {
 	var action Action
@@ -13695,14 +13693,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		return workflowExecution, err
 	}
 
-	/*
-		if len(workflow.Name) > 0 || len(workflow.Owner) > 0 || len(workflow.OrgId) > 0 || len(workflow.Actions) != 1 {
-			log.Printf("[WARNING] Bad length for some characteristics in single execution of %s", fileId)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	*/
+	
 
 	if fileId != action.AppID {
 		log.Printf("[WARNING] Bad appid in single execution of App %s", fileId)
@@ -13744,109 +13735,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		newParams = append(newParams, param)
 	}
 
-	isOauth2 := false
-	if len(action.AuthenticationId) > 0 {
-		curAuth, err := GetWorkflowAppAuthDatastore(ctx, action.AuthenticationId)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting authentication with ID %s for org %s: %s", action.AuthenticationId, user.ActiveOrg.Id, err)
-			return workflowExecution, err
-		}
-
-		if curAuth.Type == "oauth2" {
-			isOauth2 = true
-
-			//for _, auth := range curAuth.Fields {
-			//	log.Printf("Oauth2 Field: %s", auth.Key)
-			//}
-		}
-
-		if user.ActiveOrg.Id != curAuth.OrgId {
-			log.Printf("[WARNING] User '%s' (%s) in org %s tried to use bad auth %s from org %s during execution", user.Username, user.Id, user.ActiveOrg.Id, action.AuthenticationId, curAuth.OrgId)
-			return workflowExecution, err
-		}
-
-		// Handle fixing of order for the fields
-
-		/*
-			lastAccesstoken := -1
-			lastRefreshtoken := -1
-			for cnt, param := range action.Parameters {
-				if param.Type == "access_token" {
-					lastAccesstoken = cnt
-				}
-
-				if param.Type == "refresh_token" {
-					lastRefreshtoken = cnt
-				}
-			}
-		*/
-
-		newFields := []AuthenticationStore{}
-		if curAuth.Encrypted {
-			for _, field := range curAuth.Fields {
-				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-				if err != nil {
-					log.Printf("[ERROR] Failed decryption (2) for %s: %s", field.Key, err)
-					break
-				}
-
-				if field.Key == "url" {
-					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
-					if strings.HasSuffix(string(newValue), "/") {
-						newValue = []byte(string(newValue)[0 : len(newValue)-1])
-					}
-				}
-
-				newParam := WorkflowAppActionParameter{
-					Name:  field.Key,
-					ID:    action.AuthenticationId,
-					Value: string(newValue),
-				}
-
-				field.Value = string(newValue)
-				newFields = append(newFields, field)
-				newParams = append(newParams, newParam)
-			}
-
-		} else {
-			newFields = curAuth.Fields
-			//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
-			//err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
-			//if err != nil {
-			//	log.Printf("[WARNING] Failed running encryption during execution: %s", err)
-			//}
-			for _, auth := range curAuth.Fields {
-
-				newParam := WorkflowAppActionParameter{
-					Name:  auth.Key,
-					ID:    action.AuthenticationId,
-					Value: auth.Value,
-				}
-
-				newParams = append(newParams, newParam)
-			}
-		}
-
-		if isOauth2 {
-			log.Printf("\n[INFO] OAUTH2: %s\n", curAuth.Type)
-			curAuth.Fields = newFields
-
-			newAuth, err := RunOauth2Request(ctx, user, *curAuth, true)
-			if err != nil {
-				log.Printf("[ERROR] Failed running single action oauth2 refresh request for org %s: %s", user.ActiveOrg.Id, err)
-			} else {
-				curAuth = &newAuth
-			}
-
-			// Fix params from here? Did access token get added properly?
-		}
-
-		// Rebuild params with the right data. This is to prevent issues on the frontend
-
-		action.Parameters = newParams
-	}
-
 	for _, param := range action.Parameters {
 		newName := GetValidParameters([]string{param.Name})
 		if len(newName) > 0 {
@@ -13873,53 +13761,26 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 	action.Parameters = newParams
 
-	if isOauth2 {
-
-		foundAction := WorkflowAppAction{}
-		for _, inner := range app.Actions {
-			//log.Printf("[INFO] Checking action %s vs %s", inner.Name, action.Name)
-			if inner.Name == action.Name {
-				foundAction = inner
-				break
-			}
-		}
-
-		if len(foundAction.Name) > 0 {
-			// Find the original and see if this matches?
-			// Seems wrong from Oauth2 :thinking:
-			newParams := []WorkflowAppActionParameter{}
-			for _, param := range action.Parameters {
-				//log.Printf("[DEBUG] Param: %s", param.Name)
-				found := false
-				for _, foundActionParam := range foundAction.Parameters {
-					if foundActionParam.Name == param.Name {
-						found = true
-						newParams = append(newParams, param)
-						break
-					}
-				}
-
-				if !found {
-					//log.Printf("[WARNING] Auth Param %s not found in action %s", param.Name, foundAction.Name)
-					if param.Name == "access_token" {
-						newParams = append(newParams, param)
-					}
-				}
-			}
-
-			action.Parameters = newParams
-		}
-
-		/*
-			for _, param := range action.Parameters {
-				log.Printf("[DEBUG] Param2: %s", param.Name)
-			}
-		*/
-	}
-
 	action.Sharing = app.Sharing
 	action.Public = app.Public
 	action.Generated = app.Generated
+
+	if project.Environment == "cloud" {
+		action.Environment = "cloud"
+	} else {
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
+		} 
+
+		for _, env := range environments {
+			if env.Default {
+				//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
+				action.Environment = env.Name
+				break
+			}
+		}
+	}
 
 	workflow := Workflow{
 		Actions: []Action{
@@ -13933,6 +13794,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 	//log.Printf("Sharing: %s, Public: %s, Generated: %s. Start: %s", action.Sharing, action.Public, action.Generated, workflow.Start)
 
+	/*
 	workflowExecution = WorkflowExecution{
 		Workflow:      workflow,
 		Start:         workflow.Start,
@@ -13943,6 +13805,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		Authorization: uuid.NewV4().String(),
 		Status:        "EXECUTING",
 	}
+	*/
 
 	if user.ActiveOrg.Id != "" {
 		//log.Printf("ACTIVEORG: %#v", user.ActiveOrg)
@@ -13950,6 +13813,20 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
+
+	// Make a fake request object as it's not necessary
+	badRequest := &http.Request{}
+
+	// Add fake queries to it
+	badRequest.URL, _ = url.Parse(fmt.Sprintf("http://localhost:3000/api/v1/workflows/%s/execute", workflow.ID))
+	badRequest.URL.RawQuery = fmt.Sprintf("")
+	badRequest.Method = "GET"
+
+	workflowExecution, _, errString, err := PrepareWorkflowExecution(ctx, workflow, badRequest, 10) 
+	if err != nil || len(errString) > 0 {
+		log.Printf("[ERROR] Failed preparing single execution (%s): %s", workflowExecution.ExecutionId, err)
+	}
+	//log.Printf("\n\n[INFO] Exec: %s\n\n", errString)
 
 	err = SetWorkflowExecution(ctx, workflowExecution, true)
 	if err != nil {
@@ -16072,7 +15949,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if workflowExecution.SubExecutionCount >= maxExecutionDepth {
-		return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Max subflow of %d reached"), err
+		return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Max subflow of %d reached", maxExecutionDepth), err
 	}
 
 	if workflowExecution.Priority == 0 {
@@ -17066,34 +16943,111 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	if len(org.Defaults.KmsId) == 0 {
+		if len(allAuths) == 0 {
+			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get auths during kms prep: %s", err)
+			}
+		}
+
+		for _, auth := range allAuths {
+			if strings.ToLower(auth.Label) == "kms shuffle storage" {
+				org.Defaults.KmsId = auth.Id
+				break
+			}
+		}
+	}
 
 	if len(org.Defaults.KmsId) > 0 {
-		authFound := false
+		if len(allAuths) == 0 {
+			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get auths during kms prep: %s", err)
+			}
+		}
+
+		foundAuth := AppAuthenticationStorage{}
 		for _, auth := range allAuths {
 			if auth.Id != org.Defaults.KmsId {
 				continue
 			}
 
-			authFound = true 
+			foundAuth = auth
 			break
 		}
 
-		if authFound { 
+		// Use the auth to decrypt
+		if foundAuth.Id == org.Defaults.KmsId {
 			findKeys := []string{}
 			for _, action := range workflowExecution.Workflow.Actions {
 				for _, param := range action.Parameters {
-					if !strings.HasPrefix(strings.ToLower(param.Value), "kms.") {
+					// Allow for both kms/ kms. and kms: as prefix
+					if !strings.HasPrefix(strings.ToLower(param.Value), "kms.") && !strings.HasPrefix(strings.ToLower(param.Value), "kms/") && !strings.HasPrefix(strings.ToLower(param.Value), "kms:") {
 						continue
 					}
 
-					findKey := strings.Replace(param.Value, "shuffle_auth.", "", -1)
-					findKeys = append(findKeys, findKey)
-					log.Printf("\n\n[INFO] Found auth key: %s", findKey)
+					//findKey := strings.Replace(param.Value, "shuffle_auth.", "", -1)
+					if !ArrayContains(findKeys, param.Value) {
+						findKeys = append(findKeys, param.Value)
+					}
 				}
 			}
 
+			// Should run all keys goroutines, then go find them again when all are done and replace
+			// Wtf is this garbage
 			if len(findKeys) > 0 {
 				log.Printf("\n\n[INFO] Found %d auth keys to decrypt from KMS", len(findKeys))
+
+				// Have to set the workflow exec in cache while running this so that access rights exist
+				foundValues := map[string]string{}
+				marshalledExec, err := json.Marshal(workflowExecution)
+				if err == nil {
+					cacheKey := fmt.Sprintf("workflowexecution_%s", workflowExecution.ExecutionId)
+					err = SetCache(ctx, cacheKey, marshalledExec, 1)
+					if err == nil {
+
+						// FIXME: Optimize this to run in parallel
+						// across multiple goroutines
+						for _, k := range findKeys {
+							decrypted, err := DecryptKMS(ctx, foundAuth, k, workflowExecution.Authorization, workflowExecution.ExecutionId)
+							if err == nil { 
+								foundValues[k] = decrypted
+							} else {
+								CreateOrgNotification(
+									ctx,
+									fmt.Sprintf("Failed to decrypt KMS key '%s'", k),
+									fmt.Sprintf("Failed to decrypt KMS key '%s'. Error: %s", k, err),
+									fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+									workflowExecution.ExecutionOrg,
+									true,
+								)
+							}
+						}
+					} else {
+						log.Printf("[ERROR] Failed to set workflow execution in cache: %s", err)
+					}
+				} else {
+					log.Printf("[ERROR] Failed to marshal workflow execution for cache: %s", err)
+				}
+
+
+				// Continue here
+				if len(foundValues) > 0 {
+					for actionIndex, action := range workflowExecution.Workflow.Actions {
+						for paramIndex, param := range action.Parameters {
+							if !strings.HasPrefix(strings.ToLower(param.Value), "kms.") && !strings.HasPrefix(strings.ToLower(param.Value), "kms/") && !strings.HasPrefix(strings.ToLower(param.Value), "kms:") {
+								continue
+							}
+
+							if val, ok := foundValues[param.Value]; ok {
+								//log.Printf("[INFO] Replacing value for %s with %s", param.Value, val)
+								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = val
+							}
+						}
+					}
+
+				}
 			}
 		} else {
 			log.Printf("[ERROR] Default KMS ID not found in organization. Will not be able to decrypt secrets.")
@@ -19290,12 +19244,48 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just here to verify that the user is logged in
+	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in run category action: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
-		return
+		// Look for "authorization" and "execution_id" queries
+		authorization := request.URL.Query().Get("authorization")
+		executionId := request.URL.Query().Get("execution_id")
+		if len(authorization) == 0 || len(executionId) == 0 {
+			log.Printf("[AUDIT] Api authentication failed in run category action: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+			return
+		}
+
+		log.Printf("[INFO] Got category action request with authorization and execution_id: %s, %s", authorization, executionId)
+		// 1. Get the executionId and check if it's valid
+		// 2. Check if authorization is valid
+		// 3. Check if the execution is FINISHED or not
+		exec, err := GetWorkflowExecution(ctx, executionId)
+		if err != nil {
+			log.Printf("[WARNING] Error with getting execution in run category action: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to get execution"}`))
+			return
+		}
+
+		if exec.Status != "EXECUTING" {
+			log.Printf("[WARNING] Execution is not executing in run category action: %s", exec.Status)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Execution is not executing. Can't modify."}`))
+			return
+		}
+
+		// 4. Check if the user is the owner of the execution
+		if exec.Authorization != authorization {
+			log.Printf("[WARNING] Authorization doesn't match in run category action: %s != %s", exec.Authorization, authorization)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Authorization doesn't match"}`))
+			return
+		}
+
+		user.Role = "admin"
+		user.ActiveOrg.Id = exec.ExecutionOrg
 	}
 
 	if user.Role == "org-reader" {
@@ -19329,7 +19319,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	ctx := GetContext(request)
 	threadId := value.WorkflowId
 	if len(value.WorkflowId) > 0 {
 		// Should maybe cache this based on the thread? Then reuse and connect?
@@ -19608,7 +19597,22 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		discoveredCategory = selectedApp.Categories[0]
 	}
 
+
 	if len(selectedCategory.Name) > 0 {
+		if len(selectedCategory.RequiredFields) == 0 {
+			for _, param := range selectedAction.Parameters {
+				if !param.Required {
+					continue
+				}
+
+				if param.Name == "url" {
+					continue
+				}
+
+				selectedCategory.RequiredFields[param.Name] = []string{param.Name}
+			}
+		}
+
 		log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
 	}
 	// Need translation here, now that we have the action
@@ -19665,7 +19669,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
     // Uses the thread to continue generating in the same workflow
 	foundWorkflow := &Workflow{}
 	newWorkflowId := uuid.NewV4().String()
-	if !strings.HasPrefix(value.WorkflowId, "thread") {
+	if len(value.WorkflowId) > 0 && !strings.HasPrefix(value.WorkflowId, "thread") {
 		newWorkflowId = value.WorkflowId
 
 		// Get the workflow
@@ -19865,7 +19869,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("\n\n[INFO] Adding workflow %s\n\n", newWorkflow.ID)
+	if !value.SkipWorkflow {
+		log.Printf("\n\n[INFO] Adding workflow %s\n\n", newWorkflow.ID)
+	}
 
 	/*
 	refUrl := ""
@@ -19898,8 +19904,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		step = int64(len(newWorkflow.Actions)+1)
 	}
 
-	log.Printf("[DEBUG] STEP: %#v", step)
-
 	secondAction := Action{
 		Name:        selectedAction.Name,
 		Label:       selectedAction.Name,
@@ -19925,10 +19929,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			X: 100000,
 		},
 	}
+
 	if step > 0 {
 		// Should find nearest neighor to the left, and then add a branch from it to this one
 		// If it's a GENERATED app, add a condition to the branch checking if the output status is < 300
-
 
 		nearestXNeighbor := Action{}
 		for _, action := range newWorkflow.Actions {
@@ -19945,7 +19949,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if nearestXNeighbor.ID != "" {
 
 			//Conditions    []Condition `json:"conditions" datastore: "conditions"`
-
 			newWorkflow.Branches = append(newWorkflow.Branches, Branch{
 				Label: "Validating",
 
@@ -19976,6 +19979,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if len(selectedAction.RequiredBodyFields) == 0 && len(selectedCategory.RequiredFields) > 0 {
+		// Check if the required fields are present
+		//selectedAction.RequiredBodyFields = selectedCategory.RequiredFields
+		for requiredField, _ := range selectedCategory.RequiredFields {
+			selectedAction.RequiredBodyFields = append(selectedAction.RequiredBodyFields, requiredField)
+		}
+	}
 
 	log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
 	missingFields = []string{}
@@ -20003,97 +20013,172 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		secondAction.Parameters = append(secondAction.Parameters, param)
 	}
 
-	formattedQueryFields := []string{}
-	for _, field := range value.Fields {
-		formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
-	}
-
-	formattedQuery := fmt.Sprintf("Usefields %s with app %s to '%s'", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
-
-	newQueryInput := QueryInput{
-		Query: formattedQuery,
-		OutputFormat: "action", 			// To run the action (?)
-		//OutputFormat: "action_parameters", 	// To get the action parameters back so we can run it manually
-
-		//Label: value.Label,
-		Category: value.Category,
-
-		AppId: 	  selectedApp.ID,
-		AppName: selectedApp.Name,
-		ActionName: selectedAction.Name,
-		Parameters: selectedAction.Parameters,
-	}
-
-	// JSON marshal and send it back in to /api/conversation with type "action"
-	marshalledBody, err := json.Marshal(newQueryInput)
-	if err != nil {
-		log.Printf("[WARNING] Failed marshalling action: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed marshalling action"}`))
-		return
-	}
-
-
 	// Send request to /api/v1/conversation with this data
 	streamUrl := fmt.Sprintf("https://shuffler.io")
 	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 		streamUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 	}
 
-	//streamUrl = "http://localhost:5002"
-	streamUrl = fmt.Sprintf("%s/api/v1/conversation", streamUrl)
-	client := &http.Client{
-		Timeout: 60 * time.Second,
+	client := GetExternalClient(streamUrl)
+	
+	// AI fallback mechanism to handle missing fields
+	// This is in case some fields are not sent in properly 
+	if len(missingFields) > 0 { 
+		formattedQueryFields := []string{}
+		for _, field := range value.Fields {
+			formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
+		}
+
+		formattedQuery := fmt.Sprintf("Usefields %s with app %s to '%s'", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
+
+		newQueryInput := QueryInput{
+			Query: formattedQuery,
+			OutputFormat: "action", 			// To run the action (?)
+			//OutputFormat: "action_parameters", 	// To get the action parameters back so we can run it manually
+
+			//Label: value.Label,
+			Category: value.Category,
+
+			AppId: 	  selectedApp.ID,
+			AppName: selectedApp.Name,
+			ActionName: selectedAction.Name,
+			Parameters: selectedAction.Parameters,
+		}
+
+		// JSON marshal and send it back in to /api/conversation with type "action"
+		marshalledBody, err := json.Marshal(newQueryInput)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling action: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed marshalling action"}`))
+			return
+		}
+
+
+
+		//streamUrl = "http://localhost:5002"
+		streamUrl = fmt.Sprintf("%s/api/v1/conversation", streamUrl)
+
+		// Check if "execution_id" & "authorization" queries exist
+		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
+			streamUrl = fmt.Sprintf("%s?execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+		}
+
+		req, err := http.NewRequest(
+			"POST",
+			streamUrl,
+			bytes.NewBuffer(marshalledBody),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error in new request for execute generated workflow: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed preparing new request. Contact support."}`)))
+			return
+		}
+
+		log.Printf("\n\nMISSINGFIELDS: %#v", missingFields)
+		log.Printf("\n\n[DEBUG] LOCAL AI REQUEST SENT TO %s\n\n", streamUrl)
+
+		req.Header.Add("Authorization", request.Header.Get("Authorization"))
+		newresp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[WARNING] Error running body for execute generated workflow: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running generated app. Contact support."}`)))
+			return
+		}
+
+		log.Printf("\n\n[DEBUG] LOCAL REQUEST RETURNED\n\n")
+
+		defer newresp.Body.Close()
+		responseBody, err := ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			log.Printf("[WARNING] Failed reading body for execute generated workflow: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
+			return
+		}
+
+		//log.Printf("[DEBUG] RESPONSE: %s", responseBody)
+
+		// Unmarshal responseBody back to secondAction
+		newSecondAction := Action{}
+		err = json.Unmarshal(responseBody, &newSecondAction)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed parsing app response. Contact support if this persists."}`)))
+			return
+		}
+
+		log.Printf("[DEBUG] Taking params and image from second action and adding to workflow")
+		secondAction.Parameters = newSecondAction.Parameters
+		secondAction.LargeImage = newSecondAction.LargeImage
 	}
 
-	req, err := http.NewRequest(
-		"POST",
-		streamUrl,
-		bytes.NewBuffer(marshalledBody),
-	)
-	if err != nil {
-		log.Printf("[WARNING] Error in new request for execute generated workflow: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed preparing new request. Contact support."}`)))
+	if value.SkipWorkflow {
+		log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic.")
+
+		if len(missingFields) > 0 {
+			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
+			return
+		}
+
+		// Preparing to run it properly
+		//log.Printf("[DEBUG] Preparing single action. AppID: %#v\nAuthenticationId: %s vs %s\n\n", secondAction.AppID, secondAction.AuthenticationId, value.AuthenticationId)
+
+		preparedAction, err := json.Marshal(secondAction)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling action in category run for app %s: %s", secondAction.AppID, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed marshalling action"}`)))
+			return
+		}
+
+		streamUrl = fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", streamUrl, secondAction.AppID)
+		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
+			streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+		} else if len(value.OrgId) > 0 {
+			streamUrl = fmt.Sprintf("%s&org_id=%s", streamUrl, value.OrgId)
+		}
+
+		req, err := http.NewRequest(
+			"POST",
+			streamUrl,
+			bytes.NewBuffer(preparedAction),
+		)
+		if err != nil {
+			log.Printf("[WARNING] Error in new request for execute generated app run: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed preparing new request. Contact support."}`)))
+			return
+		}
+
+		newresp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[WARNING] Error running body for execute generated app run: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running generated app. Contact support."}`)))
+			return
+		}
+
+		defer newresp.Body.Close()
+		apprunBody, err := ioutil.ReadAll(newresp.Body)
+		if err != nil {
+			log.Printf("[WARNING] Failed reading body for execute generated app run: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
+			return
+		}
+
+		//log.Printf("\n\n\n[DEBUG] Category App Run RESPONSE (%d): %s\n\n\n", newresp.StatusCode, apprunBody)
+		resp.WriteHeader(newresp.StatusCode)
+		resp.Write(apprunBody)
 		return
-	}
+	} 
 
-	log.Printf("\n\n[DEBUG] LOCAL REQUEST SENT\n\n")
-	req.Header.Add("Authorization", request.Header.Get("Authorization"))
-	newresp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[WARNING] Error running body for execute generated workflow: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running generated app. Contact support."}`)))
-		return
-	}
-
-	log.Printf("\n\n[DEBUG] LOCAL REQUEST RETURNED\n\n")
-
-	defer newresp.Body.Close()
-	responseBody, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		log.Printf("[WARNING] Failed reading body for execute generated workflow: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
-		return
-	}
-
-	//log.Printf("[DEBUG] RESPONSE: %s", responseBody)
-
-	// Unmarshal responseBody back to secondAction
-	newSecondAction := Action{}
-	err = json.Unmarshal(responseBody, &newSecondAction)
-	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed parsing app response. Contact support if this persists."}`)))
-		return
-	}
-
-	log.Printf("[DEBUG] Taking params and image from second action and adding to workflow")
-	secondAction.Parameters = newSecondAction.Parameters
-	secondAction.LargeImage = newSecondAction.LargeImage
 	newWorkflow.Start = secondAction.ID
 	newWorkflow.Actions = append(newWorkflow.Actions, secondAction)
 
@@ -20109,14 +20194,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	*
 	*/
 
-	/*
-	if len(missingFields) > 0 {
-		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
-		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
-		return
-	}
-	*/
 
 	// Add params and such of course
 
@@ -20283,7 +20360,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	streamUrl = fmt.Sprintf("%s/api/v1/workflows/%s/execute", streamUrl, newWorkflow.ID)
-	req, err = http.NewRequest(
+	req, err := http.NewRequest(
 		"POST",
 		streamUrl,
 		bytes.NewBuffer(newExecBody),
@@ -20296,7 +20373,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	req.Header.Add("Authorization", request.Header.Get("Authorization"))
-	newresp, err = client.Do(req)
+	newresp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[WARNING] Error running body for execute generated workflow: %s", err)
 		resp.WriteHeader(500)
