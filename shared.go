@@ -47,6 +47,7 @@ import (
 
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
+	"github.com/frikky/schemaless"
 )
 
 var project ShuffleStorage
@@ -13735,12 +13736,14 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		newParams = append(newParams, param)
 	}
 
+	// Auth is handled in PrepareWorkflowExec, so this may not be needed
 	for _, param := range action.Parameters {
 		newName := GetValidParameters([]string{param.Name})
 		if len(newName) > 0 {
 			param.Name = newName[0]
 		}
 
+		/*
 		if param.Required && len(param.Value) == 0 {
 			if param.Name == "username_basic" {
 				param.Name = "username"
@@ -13753,8 +13756,9 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 			value := fmt.Sprintf("Param %s can't be empty. Please fill all required parameters (orange outline). If you don't know the value, input space in the field.", param.Name)
 			log.Printf("[WARNING] During single exec: %s", value)
-			return workflowExecution, errors.New(value)
+			//return workflowExecution, errors.New(value)
 		}
+		*/
 
 		newParams = append(newParams, param)
 	}
@@ -16982,6 +16986,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			findKeys := []string{}
 			for _, action := range workflowExecution.Workflow.Actions {
 				for _, param := range action.Parameters {
+					if !param.Configuration {
+						continue
+					}
+
 					// Allow for both kms/ kms. and kms: as prefix
 					if !strings.HasPrefix(strings.ToLower(param.Value), "kms.") && !strings.HasPrefix(strings.ToLower(param.Value), "kms/") && !strings.HasPrefix(strings.ToLower(param.Value), "kms:") {
 						continue
@@ -16997,7 +17005,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// Should run all keys goroutines, then go find them again when all are done and replace
 			// Wtf is this garbage
 			if len(findKeys) > 0 {
-				log.Printf("\n\n[INFO] Found %d auth keys to decrypt from KMS", len(findKeys))
+				//log.Printf("[INFO] Found %d auth keys to decrypt from KMS", len(findKeys))
 
 				// Have to set the workflow exec in cache while running this so that access rights exist
 				foundValues := map[string]string{}
@@ -17036,6 +17044,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if len(foundValues) > 0 {
 					for actionIndex, action := range workflowExecution.Workflow.Actions {
 						for paramIndex, param := range action.Parameters {
+							if !param.Configuration {
+								continue
+							}
+
 							if !strings.HasPrefix(strings.ToLower(param.Value), "kms.") && !strings.HasPrefix(strings.ToLower(param.Value), "kms/") && !strings.HasPrefix(strings.ToLower(param.Value), "kms:") {
 								continue
 							}
@@ -19568,7 +19580,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if len(selectedApp.ID) == 0 {
 		log.Printf("[WARNING] Couldn't find app with ID or name '%s' active in org %s (%s)", value.AppName, user.ActiveOrg.Name, user.ActiveOrg.Id)
 		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an app with that name or ID %s"}`, value.AppName)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an app with the name or ID '%s'. Please make sure the app is already activated for your organization."}`, value.AppName)))
 		return
 	}
 
@@ -19613,7 +19625,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
+		//log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
 	}
 	// Need translation here, now that we have the action
 	// Should just do an app injection into the workflow?
@@ -20117,7 +20129,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if value.SkipWorkflow {
-		log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic.")
+		log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
 
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
@@ -20126,9 +20138,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Preparing to run it properly
-		//log.Printf("[DEBUG] Preparing single action. AppID: %#v\nAuthenticationId: %s vs %s\n\n", secondAction.AppID, secondAction.AuthenticationId, value.AuthenticationId)
-
+		//log.Printf("[DEBUG] App authentication: %#v", secondAction.AuthenticationId)
 		preparedAction, err := json.Marshal(secondAction)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling action in category run for app %s: %s", secondAction.AppID, err)
@@ -20138,22 +20148,33 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		streamUrl = fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", streamUrl, secondAction.AppID)
+
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
 			streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
-		} else if len(value.OrgId) > 0 {
+		} 
+
+		if len(value.OrgId) > 0 {
 			streamUrl = fmt.Sprintf("%s&org_id=%s", streamUrl, value.OrgId)
 		}
+
+		log.Printf("[DEBUG] Running app with URL: %s\n\n\n", streamUrl)
 
 		req, err := http.NewRequest(
 			"POST",
 			streamUrl,
 			bytes.NewBuffer(preparedAction),
 		)
+
 		if err != nil {
 			log.Printf("[WARNING] Error in new request for execute generated app run: %s", err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed preparing new request. Contact support."}`)))
 			return
+		}
+
+		if len(request.Header.Get("Authorization")) > 0 {
+			log.Printf("[DEBUG] Adding authorization header to request: %s", request.Header.Get("Authorization"))
+			req.Header.Add("Authorization", request.Header.Get("Authorization"))
 		}
 
 		newresp, err := client.Do(req)
@@ -20173,9 +20194,34 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		//log.Printf("\n\n\n[DEBUG] Category App Run RESPONSE (%d): %s\n\n\n", newresp.StatusCode, apprunBody)
-		resp.WriteHeader(newresp.StatusCode)
-		resp.Write(apprunBody)
+		// Input value to get raw output instead of translated
+		log.Printf("[DEBUG] SkipOutputTranslation: %t", value.SkipOutputTranslation)
+		if value.SkipOutputTranslation { 
+			resp.WriteHeader(202)
+			resp.Write(apprunBody)
+			return
+		}
+
+		marshalledBody, err := FindHttpBody(apprunBody)
+		if err != nil {
+			resp.WriteHeader(202)
+			resp.Write(apprunBody)
+			return 
+		}
+
+		// Unmarshal responseBody back to secondAction
+		schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody)
+		if err != nil {
+			log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
+			resp.WriteHeader(202)
+			resp.Write(apprunBody)
+			return
+		}
+
+		log.Printf("[DEBUG] Schemaless output: %s", string(schemalessOutput))
+		resp.WriteHeader(200)
+		resp.Write(schemalessOutput)
+
 		return
 	} 
 

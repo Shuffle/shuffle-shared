@@ -2397,7 +2397,7 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 			cacheData := []byte(cache.([]uint8))
 			count, err = strconv.Atoi(string(cacheData))
 			if err == nil {
-				log.Printf("[DEBUG] Got count %d from cache for workflow id %s", count, id)
+				//log.Printf("[DEBUG] Got count %d from cache for workflow id %s", count, id)
 				return count, nil
 			}
 		}
@@ -5258,7 +5258,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	
 
 	allApps = dedupedApps
 	for appIndex, app := range allApps {
@@ -5273,6 +5272,19 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				if param.Name == "body" {
 					allApps[appIndex].Actions[actionIndex].Parameters[paramIndex].Required = true
 					bodyIndex = paramIndex
+				}
+
+				if param.Name == "headers" {
+					// Make a newline between all headers based on knownHeaders
+					// or just rewrite because lol
+					if strings.Count(strings.ToLower(param.Value), "content-type") > 1 {
+						allApps[appIndex].Actions[actionIndex].Parameters[paramIndex].Value = "Content-Type=application/json\nAccept=application/json"
+					}
+
+
+					if strings.Contains(strings.ToLower(param.Value), "accept") && strings.Contains(strings.ToLower(param.Value), "application/json") && !strings.Contains(strings.ToLower(param.Value), "content-type") {
+						allApps[appIndex].Actions[actionIndex].Parameters[paramIndex].Value = fmt.Sprintf("%s\nContent-Type=application/json", param.Value)
+					}
 				}
 			}
 

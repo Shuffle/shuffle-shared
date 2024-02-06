@@ -172,7 +172,9 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		ActionName: action.Name,
 		AuthenticationId: auth.Id,
 		Fields: []Valuereplace{},
+
 		SkipWorkflow: true,
+		SkipOutputTranslation: true, // Manually done in the KMS case
 	}
 
 	if len(app.Categories) > 0 {
@@ -261,16 +263,12 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	return output, nil
 }
 
-// Translates the output of the KMS action to a usable format in the 
-// { "kms_key": "key", "kms_value": "value" } format
-func RunKmsTranslation(ctx context.Context, fullBody []byte) (string, error) {
-	// We need to parse the response from the KMS action
-	// 1. Find JUST the result data
+func FindHttpBody(fullBody []byte) ([]byte, error) {
 	kmsResponse := SubflowData{}
 	err := json.Unmarshal(fullBody, &kmsResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal KMS response (1): %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
 	// Make result into a body as well
@@ -278,21 +276,41 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte) (string, error) {
 	err = json.Unmarshal([]byte(kmsResponse.Result), httpOutput)
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal KMS response (2): %s", err)
-		return "", err
+		return []byte{}, err
 	}
 
 	if httpOutput.Status >= 300 {
 		log.Printf("[ERROR] KMS action failed with status: %d", httpOutput.Status)
-		return "", errors.New(fmt.Sprintf("KMS action failed with status: %d", httpOutput.Status))
+		return []byte{}, errors.New(fmt.Sprintf("KMS action failed with status: %d", httpOutput.Status))
 	}
 
 	marshalledBody, err := json.Marshal(httpOutput.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal KMS response body back to byte: %s", err)
+		return []byte{}, err
+	}
+
+	return marshalledBody, nil
+}
+
+// Translates the output of the KMS action to a usable format in the 
+// { "kms_key": "key", "kms_value": "value" } format
+func RunKmsTranslation(ctx context.Context, fullBody []byte) (string, error) {
+	// We need to parse the response from the KMS action
+	// 1. Find JUST the result data
+
+	marshalledBody, err := FindHttpBody(fullBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to find HTTP body in KMS response: %s", err)
 		return "", err
 	}
 
-	schemalessOutput := schemaless.Translate(ctx, "get_kms_key", marshalledBody)
+	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to translate KMS response: %s", err)
+		return "", err
+	}
+
 	var labeledResponse map[string]string
 	err = json.Unmarshal(schemalessOutput, &labeledResponse)
 	if err != nil {

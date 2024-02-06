@@ -3385,12 +3385,13 @@ type CategoryAction struct {
 
 	OrgId            string `json:"org_id"`
 	WorkflowId 		 string `json:"workflow_id"` // Forces it to use a specific workflow ID. This can be used to build multiple steps in the same workflow
-	SkipWorkflow bool   `json:"skip_workflow"` // If true, it will not put it in a workflow, but instead just execute it
 	AuthenticationId string `json:"authentication_id"`
 
 	Step 		int64 		    `json:"step"` 	// The step to use put it in a workflow if generated
 	Query 		string `json:"query,omitempty"` // Due to the API being built around programmatic, and then with LLMs, this was added to make context possible between nodes when using Atomic Actions
 	DryRun 		bool   `json:"dry_run"` 		// If true, it will not actually execute the action, but instead just build the workflow
+	SkipWorkflow bool   `json:"skip_workflow"` // If true, it will not put it in a workflow, but instead just execute it
+	SkipOutputTranslation bool `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
 }
 
 type LabelStruct struct {
