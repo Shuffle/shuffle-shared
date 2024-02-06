@@ -16947,6 +16947,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	// Clear out example & description fields 
+	for actionIndex, action := range workflowExecution.Workflow.Actions {
+		for paramIndex, _ := range action.Parameters {
+			workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Example = ""
+			workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Description = ""
+		}
+	}
+
 	if len(org.Defaults.KmsId) == 0 {
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
