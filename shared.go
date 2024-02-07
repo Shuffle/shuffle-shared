@@ -22225,3 +22225,46 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) er
 	return nil 
 }
 	
+func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string) error {
+	envs, err := GetEnvironments(ctx, org.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting environments for org: %s", err)
+		return err
+	}
+
+	if len(envs) > 10 {
+		envs = envs[:10]
+	}
+
+	// Should add to queues in the current org
+	for _, env := range envs {
+		if env.Archived {
+			continue
+		}
+
+		if strings.ToLower(env.Name) == "cloud" {
+			continue
+		}
+		
+		log.Printf("[DEBUG] Distributing app image %s to environment: %s\n\n", strings.Join(appnames, ", "), env.Name)
+
+		// Add to the queue
+		request := ExecutionRequest{
+			Type: "DOCKER_IMAGE_DOWNLOAD",
+			ExecutionId: uuid.NewV4().String(),
+			ExecutionArgument: strings.Join(appnames, ","),
+			Priority: 11,
+		}
+
+		parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), org.Id)
+		err = SetWorkflowQueue(ctx, request, parsedId)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+			continue
+		}
+
+		log.Printf("[DEBUG] Added image download to queue for env: %s", env.Name)
+	}
+
+	return nil
+}
