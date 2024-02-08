@@ -5703,8 +5703,6 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	env = strings.ReplaceAll(env, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
-	//log.Printf("[DEBUG] Adding to queue name %s", nameKey)
-
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(executionRequest)
@@ -5733,6 +5731,8 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 	id = strings.ReplaceAll(id, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", id)
 	executions := []ExecutionRequest{}
+
+	// workflowqueue-new-service-test_7e9b9007-5df2-4b47-bca5-c4d267ef2943
 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
