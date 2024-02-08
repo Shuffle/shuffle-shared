@@ -604,6 +604,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
+		log.Printf("[DEBUG] Found executions for org %s (%s): %d/%d", org.Name, org.Id, info.MonthlyAppExecutions, info.MonthlyAppExecutionsLimit)
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
 			org.SyncFeatures.AppExecutions.Limit = 10000
@@ -613,9 +614,11 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 			org.SyncFeatures.AppExecutions.Limit = 15000000000
 		}
 
+		log.Printf("[DEBUG] Org %s (%s) has values: org.LeadInfo.POV: %v, org.LeadInfo.Internal: %v", org.Name, org.Id, org.LeadInfo.POV, org.LeadInfo.Internal) 
+
 		// FIXME: When inside this, check if usage should be sent to the user
 		if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV || org.LeadInfo.Internal) {
-			return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this.", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit))
+			return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this for org %s (%s)", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit, org.Name, org.Id))
 		}
 
 		return org, nil
