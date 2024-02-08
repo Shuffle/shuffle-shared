@@ -604,7 +604,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
-		log.Printf("[DEBUG] Found executions for org %s (%s): %d/%d", org.Name, org.Id, info.MonthlyAppExecutions, info.MonthlyAppExecutionsLimit)
+		log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
 			org.SyncFeatures.AppExecutions.Limit = 10000
