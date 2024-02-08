@@ -12033,7 +12033,6 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 								"id": "%s_%s"
 							}`, itemSize, workflowExecution.ExecutionId, item.Action.ID)
 
-							log.Printf("[DEBUG][%s] Overwriting result for %s (%s) with %s", workflowExecution.ExecutionId, item.Action.Label, item.Action.ID, baseResult)
 						// Setting an arbitrary decisionpoint to get it
 						// Backend will use this ID + action ID to get the data back
 						//item.Result = fmt.Sprintf("EXECUTION=%s", workflowExecution.ExecutionId)
