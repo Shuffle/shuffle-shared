@@ -9305,7 +9305,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			exit := true
 
-			log.Printf("[INFO] Check published: %s", app.PublishedId)
+			log.Printf("[INFO] Check published app reference ID: %#v", app.PublishedId)
 			if len(app.PublishedId) > 0 {
 
 				// FIXME: is this privacy / vulnerability?
@@ -9817,7 +9817,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		if userdata.ActiveOrg.Id == "" {
 			if len(userdata.Orgs) == 0 {
-				log.Printf("[ERROR] User %s (%s) has no orgs", userdata.Username, userdata.Id)
+				log.Printf("[ERROR] User %s (%s) has no chosen org. ID: %s, Name: %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Id, userdata.ActiveOrg.Name)
 				resp.WriteHeader(400)
 				resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io"}`))
 				return
@@ -9830,10 +9830,20 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		found := false
 		foundOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
 		if err == nil {
+			log.Printf("[DEBUG] Found org %s for user %s (%s).", userdata.ActiveOrg.Id, userdata.Username, userdata.Id)
 			for _, foundUser := range foundOrg.Users {
 				if foundUser.Id == userdata.Id {
 					found = true
 					break
+				}
+			}
+
+			log.Printf("[DEBUG] Failed to find user %s (%s) in org %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Id)
+			if !found && len(foundOrg.Users) == 0 {
+				// Forcefully add the user back in there
+				err = fixOrgUsers(ctx, *foundOrg)
+				if err != nil {
+					log.Printf("[ERROR] Failed fixing org %s while re-adding a user: %s", foundOrg.Id, err)
 				}
 			}
 		}
@@ -22263,6 +22273,45 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 		}
 
 		log.Printf("[DEBUG] Added image download to queue for env: %s", env.Name)
+	}
+
+	return nil
+}
+
+
+func fixOrgUsers(ctx context.Context, foundOrg Org) error {
+	if project.Environment == "cloud" {
+		log.Printf("[DEBUG] Skipping fixOrgUsers for cloud")
+		return errors.New("Not updating cloud")
+	}
+
+	if len(foundOrg.Users) != 0 {
+		return errors.New("Org already has users")
+	}
+
+	users, countErr := GetAllUsers(ctx)
+	if countErr != nil {
+		log.Printf("[ERROR] Failed getting all users in auto fix org users: %s", countErr)
+		return countErr
+	}
+
+	log.Printf("[DEBUG] Found %d users to potentially add to org %s", len(users), foundOrg.Id)
+	for _, user := range users {
+		if !ArrayContains(user.Orgs, foundOrg.Id) {
+			continue
+		}
+
+		log.Printf("[DEBUG] Re-adding user %s (%s) to org %s (%s)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
+		user.Role = "admin"
+		foundOrg.Users = append(foundOrg.Users, user)
+	}
+
+
+	// Save the org
+	err := SetOrg(ctx, foundOrg, foundOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed saving org %s while readding a user: %s", foundOrg.Id, err)
+		return err
 	}
 
 	return nil

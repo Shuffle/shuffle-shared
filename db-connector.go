@@ -3525,6 +3525,10 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		data = *GetTutorials(ctx, data, false)
 	}
 
+	if len(data.Users) == 0 {
+		return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
+	}
+
 	// clear session_token and API_token for user
 	if project.DbType == "opensearch" {
 		b, err := json.Marshal(data)
