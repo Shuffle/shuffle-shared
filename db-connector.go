@@ -6830,7 +6830,8 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 
 				return *user, nil
 			} else {
-				return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
+				log.Printf("[WARNING] Bad cache for %s: %s", sessionId, err)
+				//return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
 			}
 		} else {
 		}
@@ -7053,7 +7054,8 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			if err == nil && len(hook.Id) > 0 {
 				return hook, nil
 			} else {
-				return hook, errors.New(fmt.Sprintf("Bad cache for %s", hookId))
+				log.Printf("[ERROR] Failed unmarshalling cache for hook: %s", err)
+				//return hook, errors.New(fmt.Sprintf("Bad cache for %s", hookId))
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
@@ -7121,8 +7123,8 @@ func SetHook(ctx context.Context, hook Hook) error {
 		log.Printf("[WARNING] Failed marshalling in setHook: %s", err)
 		return nil
 	}
-	hookId := strings.ToLower(hook.Id)
 
+	hookId := strings.ToLower(hook.Id)
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, hookId, hookData)
 		if err != nil {

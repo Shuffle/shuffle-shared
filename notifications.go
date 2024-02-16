@@ -276,6 +276,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	if notification.Ignored {
 		log.Printf("[DEBUG] Skipping notification workflow send for notification %s as it's ignored. WorkflowId: %#v", notification.Id, workflowId)
+		return nil
 	}
 
 	log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
@@ -751,6 +752,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			// Added ignore as someone could want to never see a specific alert again due to e.g. expecting a 404 on purpose
 			if notification.Ignored { 
 				notification.Read = true 
+
+				mainNotification.Ignored = true
 			}
 
 			err = SetNotification(ctx, notification)
@@ -762,10 +765,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 		}
 
-		err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
-		if err != nil {
-			if !strings.Contains(err.Error(), "cache stored") {
-				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+		if mainNotification.Ignored { 
+			log.Printf("[INFO] Ignored notification %s for %s", mainNotification.Title, mainNotification.UserId)
+		} else {
+			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
+			if err != nil {
+				if !strings.Contains(err.Error(), "cache stored") {
+					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+				}
 			}
 		}
 

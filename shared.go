@@ -15712,7 +15712,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 
-		if len(string(body)) < 50 {
+		if len(string(body)) < 75 && len(string(body)) > 1 {
 			log.Printf("[DEBUG][%s] Body: %s", workflowExecution.ExecutionId, string(body))
 		} else {
 			// Here for debug purposes
