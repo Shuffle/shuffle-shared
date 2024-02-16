@@ -90,6 +90,16 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	notification.ModifiedBy = user.Username
+
+	// Look for the "disabled" query in the url
+	if request.URL.Query().Get("disabled") == "true" {
+		notification.Ignored = true
+
+		//log.Printf("[AUDIT] Marked %s as ignored by user %s (%s)", notification.Id, user.Username, user.Id)
+	} else if request.URL.Query().Get("disabled") == "false" {
+		notification.Ignored = false
+	}
+
 	err = markNotificationRead(ctx, notification)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating notification %s (%s) to read: %s", notification.Title, notification.Id, err)
@@ -97,6 +107,7 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed to mark it as read"}`))
 		return
 	}
+
 
 	log.Printf("[AUDIT] Marked %s as read by user %s (%s)", notification.Id, user.Username, user.Id)
 
@@ -261,6 +272,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	if len(workflowId) < 10 {
 		return nil
+	}
+
+	if notification.Ignored {
+		log.Printf("[DEBUG] Skipping notification workflow send for notification %s as it's ignored. WorkflowId: %#v", notification.Id, workflowId)
 	}
 
 	log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
