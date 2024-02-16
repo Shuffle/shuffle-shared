@@ -259,10 +259,11 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	}
 	*/
 
-	log.Printf("[DEBUG] Sending notification to workflow with id: %s", workflowId)
 	if len(workflowId) < 10 {
 		return nil
 	}
+
+	log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
 
 
 	cachedNotifications := NotificationCached{}

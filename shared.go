@@ -1096,6 +1096,8 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 
 	ctx := GetContext(request)
+	org := &Org{}
+	originalAuth := &AppAuthenticationStorage{}
 	originalId := appAuth.Id
 	if len(appAuth.Id) == 0 {
 		// To not override, we should use an md5 based on the input fields + org to create the ID
@@ -1110,10 +1112,10 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		hasher.Write([]byte(fielddata))
 		appAuth.Id = hex.EncodeToString(hasher.Sum(nil))
 	} else {
-		auth, err := GetWorkflowAppAuthDatastore(ctx, appAuth.Id)
+		originalAuth, err = GetWorkflowAppAuthDatastore(ctx, appAuth.Id)
 		if err == nil {
 			// OrgId         string                `json:"org_id" datastore:"org_id"`
-			if auth.OrgId != user.ActiveOrg.Id {
+			if originalAuth.OrgId != user.ActiveOrg.Id {
 				log.Printf("[WARNING] User %s (%s) isn't a part of the right org during auth edit", user.Username, user.Id)
 				resp.WriteHeader(403)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": ":("}`)))
@@ -1127,7 +1129,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			if !auth.Active {
+			if !originalAuth.Active {
 
 				// Forcing it active
 				appAuth.Active = true
@@ -1140,89 +1142,91 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				*/
 			}
 
-			if auth.App.Name != appAuth.App.Name {
+			if originalAuth.App.Name != appAuth.App.Name {
 				log.Printf("[AUDIT] User %s (%s) tried to modify auth, but appname was wrong", user.Username, user.Id)
 				resp.WriteHeader(409)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad app configuration: need to specify correct name"}`)))
 				return
 			}
 
-			for fieldIndex, field := range appAuth.Fields {
-				if !strings.Contains(field.Value, "Secret. Replaced") {
-					continue
-				}
-
-				//log.Printf("Field '%s' has secret. Replace with the real value", field.Key)
-				for _, existingField := range auth.Fields {
-					if existingField.Key != field.Key {
+			if appAuth.Type != "oauth2" && appAuth.Type != "oauth" && appAuth.Type != "oauth2-app" {
+				for fieldIndex, field := range appAuth.Fields {
+					if !strings.Contains(field.Value, "Secret. Replaced") {
 						continue
 					}
 
-					//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
-
-					//field.Value = existingField.Value
-					appAuth.Fields[fieldIndex].Value = existingField.Value
-
-					if auth.Encrypted {
-						// Decrypt it here
-						parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
-						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
-						if err != nil {
-							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
-						} else {
-							//log.Printf("Decrypted value: %s", newValue)
-							appAuth.Fields[fieldIndex].Value = string(newValue)
-						}
-					}
-
-					break
-				}
-			}
-
-			if len(appAuth.Fields) == 0 {
-				appAuth.Fields = auth.Fields
-			}
-
-			// Decrypt with old label to ensure re-encryption with new label
-			for fieldIndex, field := range appAuth.Fields {
-
-				if len(field.Value) == 0 || strings.Contains(field.Value, "Secret. Replaced") {
-					for _, existingField := range auth.Fields {
+					//log.Printf("Field '%s' has secret. Replace with the real value", field.Key)
+					for _, existingField := range originalAuth.Fields {
 						if existingField.Key != field.Key {
 							continue
 						}
 
 						//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
 
-						// Decrypt it based on auth
-						parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
-						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
-						if err != nil {
-							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
-						} else {
-							//log.Printf("Decrypted value: %s", newValue)
-							appAuth.Fields[fieldIndex].Value = string(newValue)
-							field.Value = string(newValue)
+						//field.Value = existingField.Value
+						appAuth.Fields[fieldIndex].Value = existingField.Value
+
+						if originalAuth.Encrypted {
+							// Decrypt it here
+							parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
+							newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
+							if err != nil {
+								log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+							} else {
+								//log.Printf("Decrypted value: %s", newValue)
+								appAuth.Fields[fieldIndex].Value = string(newValue)
+							}
 						}
+
+						break
 					}
 				}
 
-
-				//log.Printf("Default value: %s", field.Value)
-
-				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
-				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-				if err != nil {
-					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
-				} else {
-					//log.Printf("Decrypted value: %s", newValue)
-					appAuth.Fields[fieldIndex].Value = string(newValue)
+				if len(appAuth.Fields) == 0 {
+					appAuth.Fields = originalAuth.Fields
 				}
-			}
 
-			// Setting this to ensure that any new config is encrypted anew
-			appAuth.Encrypted = false
-			//return
+				// Decrypt with old label to ensure re-encryption with new label
+				for fieldIndex, field := range appAuth.Fields {
+
+					if len(field.Value) == 0 || strings.Contains(field.Value, "Secret. Replaced") {
+						for _, existingField := range originalAuth.Fields {
+							if existingField.Key != field.Key {
+								continue
+							}
+
+							//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
+
+							// Decrypt it based on auth
+							parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
+							newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
+							if err != nil {
+								log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+							} else {
+								//log.Printf("Decrypted value: %s", newValue)
+								appAuth.Fields[fieldIndex].Value = string(newValue)
+								field.Value = string(newValue)
+							}
+						}
+					}
+
+
+					//log.Printf("Default value: %s", field.Value)
+
+					parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
+					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+					if err != nil {
+						log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+					} else {
+						//log.Printf("Decrypted value: %s", newValue)
+						appAuth.Fields[fieldIndex].Value = string(newValue)
+					}
+				}
+
+				// Setting this to ensure that any new config is encrypted anew
+				appAuth.Encrypted = false
+			} else {
+			}
 		} else {
 			// ID sometimes used in creation as well
 
@@ -1300,6 +1304,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Only in this one if NEW oauth2 auth
 	if appAuth.Type == "oauth2" && len(originalId) == 0 {
 		log.Printf("[DEBUG] OAUTH2 for workflow %s. User: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id)
 
@@ -1380,6 +1385,53 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		// Edgecases for oauth2 as they need reauth
 		if appAuth.Type == "oauth2" || appAuth.Type == "oauth2-app" {
+			for _, field := range appAuth.Fields {
+				if field.Key != "url" {
+					continue
+				}
+
+				if len(field.Value) == 0 {
+					log.Printf("[WARNING] Failed finding field 'url' in appauth fields for %s", appAuth.App.Name)
+
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Field can't be empty: url"}`))
+					return
+				}
+
+				// Trim
+				field.Value = strings.TrimSpace(field.Value)
+
+				// Valid: https://example.com
+				// Invalid: http://example.com/
+				// Invalid: example.com
+				if !strings.HasPrefix(field.Value, "http") || strings.HasSuffix(field.Value, "/") || !strings.Contains(field.Value, "://") || strings.Contains(field.Value, " ") || strings.Contains(field.Value, "\n") {
+				log.Printf("[WARNING] Invalid URL for field 'url' in appauth edit: %#v", field.Value) 
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Field must be a valid URL, and NOT end with /"}`))
+					return
+				}
+
+				found := false
+				for paramIndex, param := range originalAuth.Fields {
+					if param.Key != field.Key {
+						continue
+					}
+
+					// Encrypt the url field?
+					// Skipping for now as it's not as sensitive a field, and we may even add editing possibilities to it in the future.
+					found = true
+					log.Printf("[DEBUG] Replacing URL field in appauth for %s", appAuth.App.Name)
+					originalAuth.Fields[paramIndex].Value = field.Value
+				}
+
+				if !found {
+					log.Printf("[WARNING] Failed finding field '%s' in OAUTH2 appauth fields for %s", field.Key, appAuth.App.Name)
+					continue
+				} 
+
+			}
+
+			appAuth.Fields = originalAuth.Fields
 		} else {
 			// Check if the items are correct
 			for _, field := range appAuth.Fields {
@@ -1404,6 +1456,13 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	if len(appAuth.App.LargeImage) == 0 && len(app.LargeImage) > 0 {
 		appAuth.App.LargeImage = app.LargeImage
 	}
+
+	//log.Printf("\n\n[DEBUG] FIELDS: %d\n\n", len(appAuth.Fields))
+	//for _, field := range appAuth.Fields {
+	//	if field.Key == "url" {
+	//		log.Printf("[DEBUG] URL: %s", field.Value)
+	//	}
+	//}
 
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
@@ -1502,8 +1561,18 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	if appAuth.SuborgDistributed {
 		// Clear auth cache for all suborgs
-		for _, org := range user.ActiveOrg.ChildOrgs {
-			cacheKey := fmt.Sprintf("workflowappauth_%s", org.Id)
+
+		//nameKey := "workflowappauth"
+		//cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+		if len(org.Id) == 0 {
+			org, err = GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org for suborg auth clear: %s", err)
+			}
+		}
+
+		for _, childOrg := range org.ChildOrgs {
+			cacheKey := fmt.Sprintf("workflowappauth_%s", childOrg.Id)
 			DeleteCache(ctx, cacheKey)
 		}
 	}
