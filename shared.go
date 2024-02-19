@@ -19710,12 +19710,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedCategory.RequiredFields[param.Name] = []string{param.Name}
 			}
 		}
-
-		//log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
 	}
+
 	// Need translation here, now that we have the action
 	// Should just do an app injection into the workflow?
-
 	foundFields := 0
 	missingFields := []string{}
 	baseFields := []string{}
@@ -20280,7 +20278,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Input value to get raw output instead of translated
-		log.Printf("[DEBUG] SkipOutputTranslation: %t", value.SkipOutputTranslation)
 		if value.SkipOutputTranslation { 
 			resp.WriteHeader(202)
 			resp.Write(apprunBody)

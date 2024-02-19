@@ -7649,7 +7649,10 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-created_at").Limit(100)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-created_at").Limit(200)
+		if len(namespace) > 0 {
+			q = datastore.NewQuery(nameKey).Filter("namespace =", namespace).Filter("org_id =", orgId).Order("-created_at").Limit(200)
+		}
 
 		_, err := project.Dbclient.GetAll(ctx, q, &files)
 		if err != nil && len(files) == 0 {

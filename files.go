@@ -144,7 +144,6 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Shitty way to build it, but works before scale. Need ES search mechanism for namespaces
-
 	log.Printf("[INFO] Got %d files and %d namespace(s) for org %s", len(files), len(fileResponse.Namespaces), user.ActiveOrg.Id)
 	newBody, err := json.Marshal(fileResponse)
 	if err != nil {
@@ -469,7 +468,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
-	log.Printf("[INFO] User %s (%s) is trying to download files from namespace %#v", user.Username, user.Id, namespace)
+	log.Printf("[INFO] User %s (%s) is trying to get files from namespace %#v", user.Username, user.Id, namespace)
 
 	ctx := GetContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, namespace)
@@ -1016,7 +1015,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
-			log.Printf("Bad file authentication in create file: %s", err)
+			log.Printf("[WARNING] Bad file authentication in create file: %s", err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -1073,8 +1072,8 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	request.ParseMultipartForm(32 << 20)
 	parsedFile, _, err := request.FormFile("shuffle_file")
 	if err != nil {
-		log.Printf("[ERROR] Couldn't upload file: %s", err)
-		resp.WriteHeader(401)
+		log.Printf("[ERROR] Failed to upload file: '%s'", err)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed uploading file. Correct usage is: shuffle_file=@filepath"}`))
 		return
 	}
@@ -1276,6 +1275,10 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(curfile.OrgId) == 0 {
+		curfile.OrgId = user.ActiveOrg.Id
+	}
+
 	// Loads of validation below
 	if len(curfile.OrgId) == 0 {
 		log.Printf("[ERROR] Missing field during fileupload. Required: filename, org_id, workflow_id")
@@ -1365,8 +1368,8 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	if len(basepath) == 0 {
 		basepath = "files"
 	}
-	folderPath := fmt.Sprintf("%s/%s/%s", basepath, curfile.OrgId, curfile.WorkflowId)
 
+	folderPath := fmt.Sprintf("%s/%s/%s", basepath, curfile.OrgId, curfile.WorkflowId)
 	if project.Environment != "cloud" {
 		// Try to make the full file location
 		err = os.MkdirAll(folderPath, os.ModePerm)

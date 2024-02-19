@@ -247,7 +247,8 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		return "", err
 	}
 
-	output, err := RunKmsTranslation(ctx, body)
+	authConfig := fmt.Sprintf("%s,%s,,%s", baseUrl, authorization, optionalExecutionId)
+	output, err := RunKmsTranslation(ctx, body, authConfig)
 	if err != nil {
 		log.Printf("[ERROR] Failed to translate KMS response (1): %s", err)
 		return "", err
@@ -292,10 +293,9 @@ func FindHttpBody(fullBody []byte) ([]byte, error) {
 	return marshalledBody, nil
 }
 
-
 // Translates the output of the KMS action to a usable format in the 
 // { "kms_key": "key", "kms_value": "value" } format
-func RunKmsTranslation(ctx context.Context, fullBody []byte) (string, error) {
+func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig string) (string, error) {
 	// We need to parse the response from the KMS action
 	// 1. Find JUST the result data
 	marshalledBody, err := FindHttpBody(fullBody)
@@ -304,9 +304,8 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte) (string, error) {
 		return "", err
 	}
 
-	log.Printf("\n\nPRE TRANSLATE: %s\n\n", string(marshalledBody))
-	shuffleConfig := "http://localhost:5002,71f65bd2-6a6c-4364-acfa-ce2d3d65c449"
-	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, shuffleConfig)
+
+	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig)
 	if err != nil {
 		log.Printf("[ERROR] Failed to translate KMS response (2): %s", err)
 		return "", err
