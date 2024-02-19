@@ -492,7 +492,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 	for _, file := range files {
 		if file.Status != "active" {
-			log.Printf("[DEBUG] File %s (%s) is not active", file.Filename, file.Id)
+			//log.Printf("[DEBUG] File %s (%s) is not active", file.Filename, file.Id)
 			continue
 		}
 
@@ -508,6 +508,10 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				Name: file.Filename,
 				ID:   file.Id,
 				Type: file.Type,
+				UpdatedAt: file.UpdatedAt,
+				Md5Sum: file.Md5sum,
+				Status: file.Status,
+				FileSize: file.FileSize,
 			})
 		}
 	}
@@ -516,7 +520,6 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 	ids, idsok := request.URL.Query()["ids"]
 	if idsok {
-		log.Printf("[DEBUG] IDS: %#v", ids)
 		if ids[0] == "true" {
 			fileResponse.Success = true
 			fileResponse.Files = []File{}
@@ -544,7 +547,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		var filedata = []byte{}
 		if file.Encrypted {
 			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-				log.Printf("[WARNING] No namespace handler for cloud decryption!")
+				log.Printf("[ERROR] No namespace handler for cloud decryption!")
 			} else {
 				Openfile, err := os.Open(file.DownloadPath)
 				defer Openfile.Close() //Close after function return

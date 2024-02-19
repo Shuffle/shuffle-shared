@@ -2391,6 +2391,10 @@ type BaseFile struct {
 	Name string `json:"name"`
 	ID   string `json:"id"`
 	Type string `json:"type"`
+	UpdatedAt int64 `json:"updated_at"`
+	Md5Sum string `json:"md5_sum"`
+	Status string `json:"status"`
+	FileSize int64 `json:"filesize"`
 }
 
 type FileResponse struct {

@@ -20243,8 +20243,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			streamUrl = fmt.Sprintf("%s&org_id=%s", streamUrl, value.OrgId)
 		}
 
-		log.Printf("[DEBUG] Running app with URL: %s\n\n\n", streamUrl)
-
+		//log.Printf("[DEBUG] Running app with URL: %s", streamUrl)
 		req, err := http.NewRequest(
 			"POST",
 			streamUrl,
