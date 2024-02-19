@@ -3,6 +3,7 @@ package shuffle
 import (
 	"bytes"
 	"reflect"
+	"sort"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -2931,7 +2932,7 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow count for '%s' (%s) as %s (get count)", user.Username, workflow.Name, workflow.ID, user.Role)
+			//log.Printf("[AUDIT] User %s is accessing workflow count for '%s' (%s) as %s (get count) in org %s", user.Username, workflow.Name, workflow.ID, user.Role, user.ActiveOrg.Id)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow run count for %s", user.Username, workflow.ID)
@@ -14207,11 +14208,11 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		// FIXME: Scuffed readtime calc
 		// Average word length = 5. Space = 1. 5+1 = 6 avg.
 		// Words = *item.Size/6/250
 		//250 = average read time / minute
 		// Doubling this for bloat removal in Markdown~
-		// Should fix this lol
 		githubResp := GithubResp{
 			Name:         (*item.Name)[0 : len(*item.Name)-3],
 			Contributors: []GithubAuthor{},
@@ -18201,6 +18202,11 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 // Sorts an org list in order to make ChildOrgs appear under their parent org
 func SortOrgList(orgs []OrgMini) []OrgMini {
+	// Sort based on the name of the org first
+	sort.Slice(orgs, func(i, j int) bool {
+		return strings.ToLower(orgs[i].Name) < strings.ToLower(orgs[j].Name)
+	})
+
 	// Creates parentorg map
 	parentOrgs := map[string][]OrgMini{}
 	for _, org := range orgs {
@@ -18246,6 +18252,7 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 			}
 		}
 	}
+
 
 	// Adding orgs where parentorg is unavailable
 	// They should probably be under some "inactive" parentorg..
@@ -21555,7 +21562,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 				Description: "siem:default&&cases:default&&SIEM to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
 				Type:        "usecase",
 				Active:      true,
-				URL:         "/usecases?selected_object=SIEM to management",
+				URL:         "/usecases?selected_object=SIEM to ticket",
 				Severity:    3,
 			}, Priority{
 				Name:        "Suggested Usecase: Email management",

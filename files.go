@@ -6,7 +6,7 @@ package shuffle
 
 import (
 	"archive/zip"
-	//"bufio"
+	"encoding/base64"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -25,6 +25,7 @@ import (
 	"time"
 
 	uuid "github.com/satori/go.uuid"
+	"github.com/google/go-github/v28/github"
 )
 
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
@@ -135,7 +136,12 @@ func HandleGetFiles(resp http.ResponseWriter, request *http.Request) {
 		Files:      files,
 		Namespaces: []string{"default"},
 	}
+
 	for _, file := range files {
+		if file.Status != "active" {
+			continue
+		}
+
 		if file.Namespace != "" && file.Namespace != "default" {
 			if !ArrayContains(fileResponse.Namespaces, file.Namespace) {
 				fileResponse.Namespaces = append(fileResponse.Namespaces, file.Namespace)
@@ -425,6 +431,35 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename string) ([]*github.RepositoryContent, error) {
+	ctx := context.Background()
+	//client := github.NewClient(nil)
+	files := []*github.RepositoryContent{}
+
+	_, items, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting standard list for namespace %s: %s", path, err)
+		return files, err
+	}
+
+	if len(items) == 0 {
+		log.Printf("[WARNING] No items found in namespace %s", path)
+		return files, errors.New("No items found for namespace") 
+	}
+
+	if len(filename) == 0 {
+		return items, nil
+	}
+
+	for _, item := range items {
+		if len(filename) > 0 && strings.HasPrefix(*item.Name, filename) {
+			files = append(files, item)
+		}
+	}
+
+	return files, nil
+}
+
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -501,8 +536,9 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 		//log.Printf("File namespace: %s", file.Namespace)
 		if file.Namespace == namespace && file.OrgId == user.ActiveOrg.Id {
-			fileResponse.Files = append(fileResponse.Files, file)
 
+			// FIXME: This double control is silly
+			fileResponse.Files = append(fileResponse.Files, file)
 			fileResponse.List = append(fileResponse.List, BaseFile{
 				Name: file.Filename,
 				ID:   file.Id,
@@ -516,6 +552,111 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] Found %d (%d:%d) files for namespace %s", len(files), len(fileResponse.Files), len(fileResponse.List), namespace)
+
+	// Standards to load directly from Github if applicable
+	reservedCategoryNames := []string{
+		"translation_input",
+		"translation_output",
+		"translation_standards",
+
+		"detections",
+	}
+
+	// Dynamically loads special files directly from Github
+	// For now it's using Shuffle's repo for standards, but this could
+	// also be environment variables / input arguments
+	filename, filenameOk := request.URL.Query()["filename"]
+	if filenameOk && ArrayContains(reservedCategoryNames, namespace) {
+		log.Printf("\n\n\n[DEBUG] Found name '%s' with reserved category name: %s. Listlength: %d\n\n\n", filename[0], namespace, len(fileResponse.List))
+
+		// Load from Github repo https://github.com/Shuffle/standards
+		if len(fileResponse.List) == 0 {
+			client := github.NewClient(nil)
+			owner := "shuffle"
+			repo := "standards"
+
+			foundFiles, err := LoadStandardFromGithub(client, owner, repo, namespace, filename[0])
+			if err != nil {
+				log.Printf("[ERROR] Failed loading file %s in category %s from Github: %s", err)
+			} else {
+				log.Printf("[DEBUG] Found %d files in category %s for filename '%s'", len(foundFiles), namespace, filename[0])
+				for _, item := range foundFiles {
+					fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, *item.Path, nil)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting file %s: %s", *item.Path, err)
+						continue
+					}
+
+					// Get the bytes of the file
+					decoded, err := base64.StdEncoding.DecodeString(*fileContent.Content)
+					if err != nil {
+						log.Printf("[ERROR] Failed decoding standard file %s: %s", *item.Path, err)
+						continue
+					}
+
+					log.Printf("[DEBUG] Decoded file %s with content:\n%s", *item.Path, string(decoded))
+
+					timeNow := time.Now().Unix()
+					fileId := uuid.NewV4().String()
+	
+					folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
+					downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+					file := File{
+						Id:           fileId,
+						CreatedAt:    timeNow,
+						UpdatedAt:    timeNow,
+						Description:  "",
+						Status:       "active",
+						Filename:     *item.Name,
+						OrgId:        user.ActiveOrg.Id,
+						WorkflowId:   "global",
+						DownloadPath: downloadPath,
+						Subflows:     []string{},
+						StorageArea:  "local",
+						Namespace:    namespace,
+						Tags:         []string{
+							"standard",
+						},
+					}
+
+					if project.Environment == "cloud" {
+						file.StorageArea = "google_storage"
+					}
+
+					// Can be used for validation files for change
+					var buf bytes.Buffer
+					io.Copy(&buf, bytes.NewReader(decoded))
+					contents := buf.Bytes()
+					file.FileSize = int64(len(contents))
+					file.ContentType = http.DetectContentType(contents)
+					file.OriginalMd5sum = Md5sum(contents)
+
+					buf.Reset()
+
+					// Handle file encryption if an encryption key is set
+
+					parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+					fileId, err = uploadFile(ctx, &file, parsedKey, contents)
+					if err != nil {
+						log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
+						continue
+					}
+
+					log.Printf("[DEBUG] Uploaded file %s with ID %s in category %#v", file.Filename, fileId, namespace)
+
+					fileResponse.List = append(fileResponse.List, BaseFile{
+						Name: file.Filename,
+						ID:   fileId,
+						Type: file.Type,
+						UpdatedAt: file.UpdatedAt,
+						Md5Sum: file.Md5sum,
+						Status: file.Status,
+						FileSize: file.FileSize,
+					})
+				}
+			}
+		}
+	}
 
 	ids, idsok := request.URL.Query()["ids"]
 	if idsok {
@@ -1445,4 +1586,160 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, fileId)))
 
+}
+
+func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just need to be logged in
+	// FIXME - should have some permissions?
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in load files: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("Wrong user (%s) when downloading from github", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Downloading remotely requires admin"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Field1 & 2 can be a lot of things..
+	type tmpStruct struct {
+		URL    string `json:"url"`
+		Field1 string `json:"field_1"` // Username
+		Field2 string `json:"field_2"` // Password
+		Field3 string `json:"field_3"` // Branch
+		Path  string `json:"path"` 
+
+	}
+
+	var input tmpStruct
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Printf("Error with unmarshal tmpBody: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Find from the input.URL 
+	client := github.NewClient(nil)
+	urlSplit := strings.Split(input.URL, "/")
+	if len(urlSplit) < 5 {
+		log.Printf("[ERROR] Invalid URL when downloading: %s", input.URL)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	owner := ""
+	repo := ""
+	path := input.Path
+
+	for cnt, item := range urlSplit[3:] { 
+		if cnt == 0 {
+			owner = item
+		} else if cnt == 1 {
+			repo = item
+		}
+	}
+
+	log.Printf("[DEBUG] Loading standard from github: %s/%s/%s", owner, repo, path)
+
+	files, err := LoadStandardFromGithub(client, owner, repo, path, "") 
+	if err != nil {
+		log.Printf("[DEBUG] Failed to load standard from github: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(files) > 50 {
+		files = files[:50]
+	}
+
+	for _, item := range files {
+		fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, *item.Path, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting file %s: %s", *item.Path, err)
+			continue
+		}
+
+		// Get the bytes of the file
+		decoded, err := base64.StdEncoding.DecodeString(*fileContent.Content)
+		if err != nil {
+			log.Printf("[ERROR] Failed decoding standard file %s: %s", *item.Path, err)
+			continue
+		}
+
+		timeNow := time.Now().Unix()
+
+		// Get fileId based on decoded data as seed
+		fileId := uuid.NewV5(uuid.NamespaceOID, string(*item.Path)).String()
+		folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
+		downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+		file := File{
+			Id:           fileId,
+			CreatedAt:    timeNow,
+			UpdatedAt:    timeNow,
+			Description:  "",
+			Status:       "active",
+			Filename:     *item.Name,
+			OrgId:        user.ActiveOrg.Id,
+			WorkflowId:   "global",
+			DownloadPath: downloadPath,
+			Subflows:     []string{},
+			StorageArea:  "local",
+			Namespace:    path,
+			Tags:         []string{
+				"standard",
+			},
+		}
+
+		if project.Environment == "cloud" {
+			file.StorageArea = "google_storage"
+		}
+
+		// Can be used for validation files for change
+		var buf bytes.Buffer
+		io.Copy(&buf, bytes.NewReader(decoded))
+		contents := buf.Bytes()
+		file.FileSize = int64(len(contents))
+		file.ContentType = http.DetectContentType(contents)
+		file.OriginalMd5sum = Md5sum(contents)
+
+		buf.Reset()
+
+		// Handle file encryption if an encryption key is set
+
+		parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+		fileId, err = uploadFile(ctx, &file, parsedKey, contents)
+		if err != nil {
+			log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
+			continue
+		}
+
+		log.Printf("[DEBUG] Uploaded file %s with ID %s in category %#v", file.Filename, fileId, path)
+	}
+
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }

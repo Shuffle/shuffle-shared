@@ -3182,7 +3182,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	// How does this happen?
 	if len(curOrg.Id) == 0 {
 		curOrg.Id = id
-		return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID %s", curOrg.Id))
+		return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
 	newUsers := []User{}
@@ -7665,7 +7665,42 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 				log.Printf("[INFO] Failed loading SOME files - skipping: %s", err)
 			} else {
+				log.Printf("[ERROR] Failed loading files: %s", err)
 				return []File{}, err
+			}
+		}
+
+		// Finds extra namespaces in the db if none are specified
+		if len(namespace) == 0 {
+			foundNamespaces := []string{}
+			for _, f := range files {
+				if f.OrgId != orgId {
+					continue
+				}
+
+				if !ArrayContains(foundNamespaces, f.Namespace) {
+					foundNamespaces = append(foundNamespaces, f.Namespace)
+				}
+			}
+
+			var namespaceFiles []File
+			namespaceQuery := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("namespace !=", "").Limit(1000)
+			_, err = project.Dbclient.GetAll(ctx, namespaceQuery, &namespaceFiles)
+			if err != nil {
+				log.Printf("[ERROR] Failed loading namespace files: %s", err)
+				return files, nil 
+			}
+
+			for _, f := range namespaceFiles {
+				if f.OrgId != orgId {
+					continue
+				}
+
+				if !ArrayContains(foundNamespaces, f.Namespace) {
+					foundNamespaces = append(foundNamespaces, f.Namespace)
+
+					files = append(files, f)
+				}
 			}
 		}
 	}
