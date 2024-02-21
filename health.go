@@ -703,7 +703,7 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(healthChecksData)
 }
 
-func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string) error {
+func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string, orgId string) error {
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	if len(baseUrl) == 0 {
 		log.Printf("[DEBUG] Base url not set. Setting to default: for delete")
@@ -736,6 +736,7 @@ func deleteOpsWorkflow(workflowHealth WorkflowHealth, apiKey string) error {
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Org-Id", orgId)
 
 	// send the request
 	client := &http.Client{}
@@ -911,6 +912,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Org-Id", orgId)
 
 	// send the request
 	client := &http.Client{}
@@ -964,7 +966,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 
 	if workflowHealth.Create == true {
 		log.Printf("[DEBUG] Deleting created ops workflow")
-		err = deleteOpsWorkflow(workflowHealth, apiKey)
+		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed deleting workflow: %s", err)
 		} else {
@@ -988,6 +990,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 		// set the headers
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Org-Id", orgId)
 
 		// convert the body to JSON
 		reqBody := map[string]string{"execution_id": execution.ExecutionId, "authorization": os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")}
@@ -1283,6 +1286,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	// set the headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Org-Id", opsDashboardOrgId)
 
 	// convert the body to JSON
 	workflowDataJSON, err := json.Marshal(workflowData)
