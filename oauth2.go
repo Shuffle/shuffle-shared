@@ -3725,7 +3725,11 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
 			oauthUrl = field.Value
 		} else {
-			log.Printf("[INFO] Unparsed oauth2 field for auth ID %s: '%s' (not critical)", appAuth.Id, field.Key)
+			if field.Key == "url" { 
+				log.Printf("[INFO] Unparsed oauth2 field for auth ID %s: '%s' (not critical). Value: %#v", appAuth.Id, field.Key, field.Value)
+			} else {
+				log.Printf("[INFO] Unparsed oauth2 field for auth ID %s: '%s' (not critical)", appAuth.Id, field.Key)
+			}
 		}
 	}
 
@@ -3969,23 +3973,35 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if len(oauthUrl) > 0 {
-		log.Printf("[DEBUG] Appending Oauth2 API URL %s", oauthUrl)
-
-		newAuth := []AuthenticationStore{}
+		// Check if url already exists with a good value
+		validUrl := false
 		for _, item := range appAuth.Fields {
-			if item.Key == "url" || item.Key == "expiration" {
-				continue
+			if item.Key == "url" && len(item.Value) > 0 {
+				if strings.Contains(item.Value, "https://") || strings.Contains(item.Value, "http://") {
+					validUrl = true
+					break
+				}
 			}
-
-			newAuth = append(newAuth, item)
 		}
 
-		appAuth.Fields = newAuth
+		if !validUrl {
+			log.Printf("\n\n[DEBUG] Appending Oauth2 API URL %s\n\n", oauthUrl)
 
-		appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
-			Key:   "url",
-			Value: oauthUrl,
-		})
+			newAuth := []AuthenticationStore{}
+			for _, item := range appAuth.Fields {
+				if item.Key == "url" || item.Key == "expiration" {
+					continue
+				}
+
+				newAuth = append(newAuth, item)
+			}
+
+			appAuth.Fields = newAuth
+			appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
+				Key:   "url",
+				Value: oauthUrl,
+			})
+		}
 	} else {
 		log.Printf("[DEBUG] No app API URL to attach to Oauth2 auth?")
 	}

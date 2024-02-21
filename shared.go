@@ -3,6 +3,7 @@ package shuffle
 import (
 	"bytes"
 	"reflect"
+	"sort"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -1096,6 +1097,8 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 
 	ctx := GetContext(request)
+	org := &Org{}
+	originalAuth := &AppAuthenticationStorage{}
 	originalId := appAuth.Id
 	if len(appAuth.Id) == 0 {
 		// To not override, we should use an md5 based on the input fields + org to create the ID
@@ -1110,10 +1113,10 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		hasher.Write([]byte(fielddata))
 		appAuth.Id = hex.EncodeToString(hasher.Sum(nil))
 	} else {
-		auth, err := GetWorkflowAppAuthDatastore(ctx, appAuth.Id)
+		originalAuth, err = GetWorkflowAppAuthDatastore(ctx, appAuth.Id)
 		if err == nil {
 			// OrgId         string                `json:"org_id" datastore:"org_id"`
-			if auth.OrgId != user.ActiveOrg.Id {
+			if originalAuth.OrgId != user.ActiveOrg.Id {
 				log.Printf("[WARNING] User %s (%s) isn't a part of the right org during auth edit", user.Username, user.Id)
 				resp.WriteHeader(403)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": ":("}`)))
@@ -1127,7 +1130,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			if !auth.Active {
+			if !originalAuth.Active {
 
 				// Forcing it active
 				appAuth.Active = true
@@ -1140,89 +1143,91 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				*/
 			}
 
-			if auth.App.Name != appAuth.App.Name {
+			if originalAuth.App.Name != appAuth.App.Name {
 				log.Printf("[AUDIT] User %s (%s) tried to modify auth, but appname was wrong", user.Username, user.Id)
 				resp.WriteHeader(409)
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad app configuration: need to specify correct name"}`)))
 				return
 			}
 
-			for fieldIndex, field := range appAuth.Fields {
-				if !strings.Contains(field.Value, "Secret. Replaced") {
-					continue
-				}
-
-				//log.Printf("Field '%s' has secret. Replace with the real value", field.Key)
-				for _, existingField := range auth.Fields {
-					if existingField.Key != field.Key {
+			if appAuth.Type != "oauth2" && appAuth.Type != "oauth" && appAuth.Type != "oauth2-app" {
+				for fieldIndex, field := range appAuth.Fields {
+					if !strings.Contains(field.Value, "Secret. Replaced") {
 						continue
 					}
 
-					//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
-
-					//field.Value = existingField.Value
-					appAuth.Fields[fieldIndex].Value = existingField.Value
-
-					if auth.Encrypted {
-						// Decrypt it here
-						parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
-						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
-						if err != nil {
-							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
-						} else {
-							//log.Printf("Decrypted value: %s", newValue)
-							appAuth.Fields[fieldIndex].Value = string(newValue)
-						}
-					}
-
-					break
-				}
-			}
-
-			if len(appAuth.Fields) == 0 {
-				appAuth.Fields = auth.Fields
-			}
-
-			// Decrypt with old label to ensure re-encryption with new label
-			for fieldIndex, field := range appAuth.Fields {
-
-				if len(field.Value) == 0 || strings.Contains(field.Value, "Secret. Replaced") {
-					for _, existingField := range auth.Fields {
+					//log.Printf("Field '%s' has secret. Replace with the real value", field.Key)
+					for _, existingField := range originalAuth.Fields {
 						if existingField.Key != field.Key {
 							continue
 						}
 
 						//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
 
-						// Decrypt it based on auth
-						parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
-						newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
-						if err != nil {
-							log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
-						} else {
-							//log.Printf("Decrypted value: %s", newValue)
-							appAuth.Fields[fieldIndex].Value = string(newValue)
-							field.Value = string(newValue)
+						//field.Value = existingField.Value
+						appAuth.Fields[fieldIndex].Value = existingField.Value
+
+						if originalAuth.Encrypted {
+							// Decrypt it here
+							parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
+							newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
+							if err != nil {
+								log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+							} else {
+								//log.Printf("Decrypted value: %s", newValue)
+								appAuth.Fields[fieldIndex].Value = string(newValue)
+							}
 						}
+
+						break
 					}
 				}
 
-
-				//log.Printf("Default value: %s", field.Value)
-
-				parsedKey := fmt.Sprintf("%s_%d_%s_%s", auth.OrgId, auth.Created, auth.Label, field.Key)
-				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-				if err != nil {
-					log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
-				} else {
-					//log.Printf("Decrypted value: %s", newValue)
-					appAuth.Fields[fieldIndex].Value = string(newValue)
+				if len(appAuth.Fields) == 0 {
+					appAuth.Fields = originalAuth.Fields
 				}
-			}
 
-			// Setting this to ensure that any new config is encrypted anew
-			appAuth.Encrypted = false
-			//return
+				// Decrypt with old label to ensure re-encryption with new label
+				for fieldIndex, field := range appAuth.Fields {
+
+					if len(field.Value) == 0 || strings.Contains(field.Value, "Secret. Replaced") {
+						for _, existingField := range originalAuth.Fields {
+							if existingField.Key != field.Key {
+								continue
+							}
+
+							//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
+
+							// Decrypt it based on auth
+							parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
+							newValue, err := HandleKeyDecryption([]byte(existingField.Value), parsedKey)
+							if err != nil {
+								log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+							} else {
+								//log.Printf("Decrypted value: %s", newValue)
+								appAuth.Fields[fieldIndex].Value = string(newValue)
+								field.Value = string(newValue)
+							}
+						}
+					}
+
+
+					//log.Printf("Default value: %s", field.Value)
+
+					parsedKey := fmt.Sprintf("%s_%d_%s_%s", originalAuth.OrgId, originalAuth.Created, originalAuth.Label, field.Key)
+					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+					if err != nil {
+						log.Printf("[WARNING] Failed decrypting field %s: %s", field.Key, err)
+					} else {
+						//log.Printf("Decrypted value: %s", newValue)
+						appAuth.Fields[fieldIndex].Value = string(newValue)
+					}
+				}
+
+				// Setting this to ensure that any new config is encrypted anew
+				appAuth.Encrypted = false
+			} else {
+			}
 		} else {
 			// ID sometimes used in creation as well
 
@@ -1300,6 +1305,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Only in this one if NEW oauth2 auth
 	if appAuth.Type == "oauth2" && len(originalId) == 0 {
 		log.Printf("[DEBUG] OAUTH2 for workflow %s. User: %s (%s)", appAuth.ReferenceWorkflow, user.Username, user.Id)
 
@@ -1380,6 +1386,53 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		// Edgecases for oauth2 as they need reauth
 		if appAuth.Type == "oauth2" || appAuth.Type == "oauth2-app" {
+			for _, field := range appAuth.Fields {
+				if field.Key != "url" {
+					continue
+				}
+
+				if len(field.Value) == 0 {
+					log.Printf("[WARNING] Failed finding field 'url' in appauth fields for %s", appAuth.App.Name)
+
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Field can't be empty: url"}`))
+					return
+				}
+
+				// Trim
+				field.Value = strings.TrimSpace(field.Value)
+
+				// Valid: https://example.com
+				// Invalid: http://example.com/
+				// Invalid: example.com
+				if !strings.HasPrefix(field.Value, "http") || strings.HasSuffix(field.Value, "/") || !strings.Contains(field.Value, "://") || strings.Contains(field.Value, " ") || strings.Contains(field.Value, "\n") {
+				log.Printf("[WARNING] Invalid URL for field 'url' in appauth edit: %#v", field.Value) 
+					resp.WriteHeader(400)
+					resp.Write([]byte(`{"success": false, "reason": "Field must be a valid URL, and NOT end with /"}`))
+					return
+				}
+
+				found := false
+				for paramIndex, param := range originalAuth.Fields {
+					if param.Key != field.Key {
+						continue
+					}
+
+					// Encrypt the url field?
+					// Skipping for now as it's not as sensitive a field, and we may even add editing possibilities to it in the future.
+					found = true
+					log.Printf("[DEBUG] Replacing URL field in appauth for %s", appAuth.App.Name)
+					originalAuth.Fields[paramIndex].Value = field.Value
+				}
+
+				if !found {
+					log.Printf("[WARNING] Failed finding field '%s' in OAUTH2 appauth fields for %s", field.Key, appAuth.App.Name)
+					continue
+				} 
+
+			}
+
+			appAuth.Fields = originalAuth.Fields
 		} else {
 			// Check if the items are correct
 			for _, field := range appAuth.Fields {
@@ -1404,6 +1457,13 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	if len(appAuth.App.LargeImage) == 0 && len(app.LargeImage) > 0 {
 		appAuth.App.LargeImage = app.LargeImage
 	}
+
+	//log.Printf("\n\n[DEBUG] FIELDS: %d\n\n", len(appAuth.Fields))
+	//for _, field := range appAuth.Fields {
+	//	if field.Key == "url" {
+	//		log.Printf("[DEBUG] URL: %s", field.Value)
+	//	}
+	//}
 
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
@@ -1502,8 +1562,18 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	if appAuth.SuborgDistributed {
 		// Clear auth cache for all suborgs
-		for _, org := range user.ActiveOrg.ChildOrgs {
-			cacheKey := fmt.Sprintf("workflowappauth_%s", org.Id)
+
+		//nameKey := "workflowappauth"
+		//cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+		if len(org.Id) == 0 {
+			org, err = GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org for suborg auth clear: %s", err)
+			}
+		}
+
+		for _, childOrg := range org.ChildOrgs {
+			cacheKey := fmt.Sprintf("workflowappauth_%s", childOrg.Id)
 			DeleteCache(ctx, cacheKey)
 		}
 	}
@@ -2862,7 +2932,7 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow count for '%s' (%s) as %s (get count)", user.Username, workflow.Name, workflow.ID, user.Role)
+			//log.Printf("[AUDIT] User %s is accessing workflow count for '%s' (%s) as %s (get count) in org %s", user.Username, workflow.Name, workflow.ID, user.Role, user.ActiveOrg.Id)
 
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow run count for %s", user.Username, workflow.ID)
@@ -9305,7 +9375,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			exit := true
 
-			log.Printf("[INFO] Check published: %s", app.PublishedId)
+			log.Printf("[INFO] Check published app reference ID: %#v", app.PublishedId)
 			if len(app.PublishedId) > 0 {
 
 				// FIXME: is this privacy / vulnerability?
@@ -9817,7 +9887,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		if userdata.ActiveOrg.Id == "" {
 			if len(userdata.Orgs) == 0 {
-				log.Printf("[ERROR] User %s (%s) has no orgs", userdata.Username, userdata.Id)
+				log.Printf("[ERROR] User %s (%s) has no chosen org. ID: %s, Name: %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Id, userdata.ActiveOrg.Name)
 				resp.WriteHeader(400)
 				resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io"}`))
 				return
@@ -9830,10 +9900,20 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		found := false
 		foundOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
 		if err == nil {
+			log.Printf("[DEBUG] Found org %s for user %s (%s).", userdata.ActiveOrg.Id, userdata.Username, userdata.Id)
 			for _, foundUser := range foundOrg.Users {
 				if foundUser.Id == userdata.Id {
 					found = true
 					break
+				}
+			}
+
+			log.Printf("[DEBUG] Failed to find user %s (%s) in org %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Id)
+			if !found && len(foundOrg.Users) == 0 {
+				// Forcefully add the user back in there
+				err = fixOrgUsers(ctx, *foundOrg)
+				if err != nil {
+					log.Printf("[ERROR] Failed fixing org %s while re-adding a user: %s", foundOrg.Id, err)
 				}
 			}
 		}
@@ -14128,11 +14208,11 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		// FIXME: Scuffed readtime calc
 		// Average word length = 5. Space = 1. 5+1 = 6 avg.
 		// Words = *item.Size/6/250
 		//250 = average read time / minute
 		// Doubling this for bloat removal in Markdown~
-		// Should fix this lol
 		githubResp := GithubResp{
 			Name:         (*item.Name)[0 : len(*item.Name)-3],
 			Contributors: []GithubAuthor{},
@@ -15633,7 +15713,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 
-		if len(string(body)) < 50 {
+		if len(string(body)) < 75 && len(string(body)) > 1 {
 			log.Printf("[DEBUG][%s] Body: %s", workflowExecution.ExecutionId, string(body))
 		} else {
 			// Here for debug purposes
@@ -18122,6 +18202,11 @@ func GetPriorities(ctx context.Context, user User, org *Org) ([]Priority, error)
 
 // Sorts an org list in order to make ChildOrgs appear under their parent org
 func SortOrgList(orgs []OrgMini) []OrgMini {
+	// Sort based on the name of the org first
+	sort.Slice(orgs, func(i, j int) bool {
+		return strings.ToLower(orgs[i].Name) < strings.ToLower(orgs[j].Name)
+	})
+
 	// Creates parentorg map
 	parentOrgs := map[string][]OrgMini{}
 	for _, org := range orgs {
@@ -18167,6 +18252,7 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 			}
 		}
 	}
+
 
 	// Adding orgs where parentorg is unavailable
 	// They should probably be under some "inactive" parentorg..
@@ -19631,12 +19717,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedCategory.RequiredFields[param.Name] = []string{param.Name}
 			}
 		}
-
-		//log.Printf("[INFO] Got action: %#v. Required bodyfields: %#v", selectedAction.Name, selectedAction.RequiredBodyFields)
 	}
+
 	// Need translation here, now that we have the action
 	// Should just do an app injection into the workflow?
-
 	foundFields := 0
 	missingFields := []string{}
 	baseFields := []string{}
@@ -20164,8 +20248,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			streamUrl = fmt.Sprintf("%s&org_id=%s", streamUrl, value.OrgId)
 		}
 
-		log.Printf("[DEBUG] Running app with URL: %s\n\n\n", streamUrl)
-
+		//log.Printf("[DEBUG] Running app with URL: %s", streamUrl)
 		req, err := http.NewRequest(
 			"POST",
 			streamUrl,
@@ -20202,7 +20285,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Input value to get raw output instead of translated
-		log.Printf("[DEBUG] SkipOutputTranslation: %t", value.SkipOutputTranslation)
 		if value.SkipOutputTranslation { 
 			resp.WriteHeader(202)
 			resp.Write(apprunBody)
@@ -21480,7 +21562,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 				Description: "siem:default&&cases:default&&SIEM to ticket is a usecase that is very common in most organizations. It is a usecase that is very important to get right, as it is the most common way for attackers to get into your organization.",
 				Type:        "usecase",
 				Active:      true,
-				URL:         "/usecases?selected_object=SIEM to management",
+				URL:         "/usecases?selected_object=SIEM to ticket",
 				Severity:    3,
 			}, Priority{
 				Name:        "Suggested Usecase: Email management",
@@ -22263,6 +22345,45 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 		}
 
 		log.Printf("[DEBUG] Added image download to queue for env: %s", env.Name)
+	}
+
+	return nil
+}
+
+
+func fixOrgUsers(ctx context.Context, foundOrg Org) error {
+	if project.Environment == "cloud" {
+		log.Printf("[DEBUG] Skipping fixOrgUsers for cloud")
+		return errors.New("Not updating cloud")
+	}
+
+	if len(foundOrg.Users) != 0 {
+		return errors.New("Org already has users")
+	}
+
+	users, countErr := GetAllUsers(ctx)
+	if countErr != nil {
+		log.Printf("[ERROR] Failed getting all users in auto fix org users: %s", countErr)
+		return countErr
+	}
+
+	log.Printf("[DEBUG] Found %d users to potentially add to org %s", len(users), foundOrg.Id)
+	for _, user := range users {
+		if !ArrayContains(user.Orgs, foundOrg.Id) {
+			continue
+		}
+
+		log.Printf("[DEBUG] Re-adding user %s (%s) to org %s (%s)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
+		user.Role = "admin"
+		foundOrg.Users = append(foundOrg.Users, user)
+	}
+
+
+	// Save the org
+	err := SetOrg(ctx, foundOrg, foundOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed saving org %s while readding a user: %s", foundOrg.Id, err)
+		return err
 	}
 
 	return nil

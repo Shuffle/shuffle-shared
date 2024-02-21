@@ -90,6 +90,16 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	notification.ModifiedBy = user.Username
+
+	// Look for the "disabled" query in the url
+	if request.URL.Query().Get("disabled") == "true" {
+		notification.Ignored = true
+
+		//log.Printf("[AUDIT] Marked %s as ignored by user %s (%s)", notification.Id, user.Username, user.Id)
+	} else if request.URL.Query().Get("disabled") == "false" {
+		notification.Ignored = false
+	}
+
 	err = markNotificationRead(ctx, notification)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating notification %s (%s) to read: %s", notification.Title, notification.Id, err)
@@ -97,6 +107,7 @@ func HandleMarkAsRead(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed to mark it as read"}`))
 		return
 	}
+
 
 	log.Printf("[AUDIT] Marked %s as read by user %s (%s)", notification.Id, user.Username, user.Id)
 
@@ -259,10 +270,16 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	}
 	*/
 
-	log.Printf("[DEBUG] Sending notification to workflow with id: %s", workflowId)
 	if len(workflowId) < 10 {
 		return nil
 	}
+
+	if notification.Ignored {
+		log.Printf("[DEBUG] Skipping notification workflow send for notification %s as it's ignored. WorkflowId: %#v", notification.Id, workflowId)
+		return nil
+	}
+
+	log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
 
 
 	cachedNotifications := NotificationCached{}
@@ -735,6 +752,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			// Added ignore as someone could want to never see a specific alert again due to e.g. expecting a 404 on purpose
 			if notification.Ignored { 
 				notification.Read = true 
+
+				mainNotification.Ignored = true
 			}
 
 			err = SetNotification(ctx, notification)
@@ -746,10 +765,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			}
 		}
 
-		err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
-		if err != nil {
-			if !strings.Contains(err.Error(), "cache stored") {
-				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+		if mainNotification.Ignored { 
+			log.Printf("[INFO] Ignored notification %s for %s", mainNotification.Title, mainNotification.UserId)
+		} else {
+			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
+			if err != nil {
+				if !strings.Contains(err.Error(), "cache stored") {
+					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+				}
 			}
 		}
 

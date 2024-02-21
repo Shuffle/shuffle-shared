@@ -3182,7 +3182,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	// How does this happen?
 	if len(curOrg.Id) == 0 {
 		curOrg.Id = id
-		return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID %s", curOrg.Id))
+		return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
 	newUsers := []User{}
@@ -3523,6 +3523,10 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	data.Users = newUsers
 	if len(data.Tutorials) == 0 {
 		data = *GetTutorials(ctx, data, false)
+	}
+
+	if len(data.Users) == 0 {
+		return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
 	}
 
 	// clear session_token and API_token for user
@@ -6826,7 +6830,8 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 
 				return *user, nil
 			} else {
-				return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
+				log.Printf("[WARNING] Bad cache for %s: %s", sessionId, err)
+				//return *user, errors.New(fmt.Sprintf("Bad cache for %s", sessionId))
 			}
 		} else {
 		}
@@ -7049,7 +7054,8 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			if err == nil && len(hook.Id) > 0 {
 				return hook, nil
 			} else {
-				return hook, errors.New(fmt.Sprintf("Bad cache for %s", hookId))
+				log.Printf("[ERROR] Failed unmarshalling cache for hook: %s", err)
+				//return hook, errors.New(fmt.Sprintf("Bad cache for %s", hookId))
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
@@ -7117,8 +7123,8 @@ func SetHook(ctx context.Context, hook Hook) error {
 		log.Printf("[WARNING] Failed marshalling in setHook: %s", err)
 		return nil
 	}
-	hookId := strings.ToLower(hook.Id)
 
+	hookId := strings.ToLower(hook.Id)
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, hookId, hookData)
 		if err != nil {
@@ -7643,7 +7649,10 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 		}
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-created_at").Limit(100)
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Order("-created_at").Limit(200)
+		if len(namespace) > 0 {
+			q = datastore.NewQuery(nameKey).Filter("namespace =", namespace).Filter("org_id =", orgId).Order("-created_at").Limit(200)
+		}
 
 		_, err := project.Dbclient.GetAll(ctx, q, &files)
 		if err != nil && len(files) == 0 {
@@ -7656,7 +7665,42 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			} else if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 				log.Printf("[INFO] Failed loading SOME files - skipping: %s", err)
 			} else {
+				log.Printf("[ERROR] Failed loading files: %s", err)
 				return []File{}, err
+			}
+		}
+
+		// Finds extra namespaces in the db if none are specified
+		if len(namespace) == 0 {
+			foundNamespaces := []string{}
+			for _, f := range files {
+				if f.OrgId != orgId {
+					continue
+				}
+
+				if !ArrayContains(foundNamespaces, f.Namespace) {
+					foundNamespaces = append(foundNamespaces, f.Namespace)
+				}
+			}
+
+			var namespaceFiles []File
+			namespaceQuery := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("namespace !=", "").Limit(1000)
+			_, err = project.Dbclient.GetAll(ctx, namespaceQuery, &namespaceFiles)
+			if err != nil {
+				log.Printf("[ERROR] Failed loading namespace files: %s", err)
+				return files, nil 
+			}
+
+			for _, f := range namespaceFiles {
+				if f.OrgId != orgId {
+					continue
+				}
+
+				if !ArrayContains(foundNamespaces, f.Namespace) {
+					foundNamespaces = append(foundNamespaces, f.Namespace)
+
+					files = append(files, f)
+				}
 			}
 		}
 	}
