@@ -834,7 +834,7 @@ func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
 
 	for _, innerOrg := range user.Orgs {
 		if innerOrg == orgId {
-			 userFound = true
+			orgFound = true
 			 break
 		  }
 		}
