@@ -784,6 +784,89 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Checking if it's a special region. All user-specific requests should
+	// go through shuffler.io and not subdomains
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	var orgId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		orgId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		orgId = strings.Split(orgId, "?")[0]
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+    orgFound:=false
+
+	for _, innerOrg := range user.Orgs {
+		if innerOrg == orgId {
+			 userFound = true
+			 break
+		  }
+		}
+	if !orgFound {
+		  log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
+		  resp.WriteHeader(401)
+	      resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
+		  return
+	}
+
+	subOrgs , err = GetChildOrgs(ctx , orgId)
+
+	if err != nil {
+		log.Printf("[WARNING] Failed getting sub orgs: %s. Org ID: %s", err, orgId)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting sub orgs details"}`))
+		return
+	}
+
+	
+	orgJson, err := json.Marshal(subOrgs)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshal of sub orgs for Active org %s: %s. Requested by User: %s", user.ActiveOrg.Id, err, user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(orgJson)
+}
+
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
