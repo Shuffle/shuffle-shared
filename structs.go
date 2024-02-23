@@ -838,6 +838,7 @@ type CacheKeyData struct {
 	Edited        int64  `json:"edited" datastore:"Edited"`
 
 	FormattedKey string `json:"formatted_key,omitempty" datastore:"FormattedKey"`
+	PublicAuthorization string `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
 }
 
 type SyncConfig struct {

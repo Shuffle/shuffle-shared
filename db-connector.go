@@ -9209,7 +9209,10 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	cacheId = url.QueryEscape(cacheId)
 	cacheData.Authorization = ""
 
-	//log.Printf("Setting cache key: %s", cacheId)
+	if len(cacheData.PublicAuthorization) == 0 {
+		log.Printf("\n\n[INFO] Generating new public authorization\n\n")
+		cacheData.PublicAuthorization = uuid.NewV4().String()
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(cacheData)

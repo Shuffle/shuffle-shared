@@ -13283,7 +13283,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	var tmpData CacheKeyData
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling in GET value: %s", err)
+		log.Printf("[WARNING] Failed unmarshalling in DELETE cache value: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -13446,12 +13446,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
-		return
-	}
 
 	//for key, value := range data.Apps {
 	var fileId string
@@ -13467,90 +13461,191 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	var tmpData CacheKeyData
-	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling in GET value: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
 	}
 
-	if tmpData.OrgId != fileId {
-		log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
-		return
+	// Check if request method is POST
+	// 3 different auth mechanisms due to public exposing of this endpoint, and for use in workflows
+	query := request.URL.Query()
+	requireCacheAuth := false 
+	skipExecutionAuth := false 
+
+	var tmpData CacheKeyData
+	if request.Method == "POST" {
+		body, err := ioutil.ReadAll(request.Body)
+		if err != nil {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+			return
+		}
+
+		err = json.Unmarshal(body, &tmpData)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshalling in GET value: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if tmpData.OrgId != fileId {
+			log.Printf("[INFO] OrgId %s and %s don't match", tmpData.OrgId, fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
+			return
+		}
+	} else {
+		if len(location) <= 6 {
+			log.Printf("[ERROR] Cache Path too short: %d", len(location))
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if strings.Contains(location[6], "?") {
+			location[6] = strings.Split(location[6], "?")[0]
+		}
+
+		// urlescape
+		parsedCacheKey, err := url.QueryUnescape(location[6])
+		if err != nil {
+			log.Printf("[ERROR] Failed to unescape cache key: %s", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		tmpData = CacheKeyData{
+			OrgId: fileId,
+			Key: parsedCacheKey,
+		}
+
+		// Use normal user auth
+
+		user, err := HandleApiAuthentication(resp, request)
+		if err != nil {
+			log.Printf("[INFO] Failed to authenticate user in GET cache key: %s", err)
+			// Check if authorization query exists
+			if len(query.Get("authorization")) == 0 {
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "No authorization provided"}`))
+				return
+			}
+
+			requireCacheAuth = true
+			user.ActiveOrg.Id = fileId
+
+			//resp.WriteHeader(401)
+			//resp.Write([]byte(`{"success": false}`))
+			//return
+		}
+
+		if user.ActiveOrg.Id != fileId {
+			log.Printf("[INFO] OrgId %s and %s don't match", user.ActiveOrg.Id, fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
+			return
+		}
+
+		skipExecutionAuth = true
 	}
 
 	ctx := GetContext(request)
 
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
-		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		log.Printf("[INFO] Organization '%s' doesn't exist in get cache: %s", tmpData.OrgId, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
-	if err != nil {
-		log.Printf("[INFO] Failed getting the execution: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
-		return
-	}
-
-	// Allows for execution auth AND user auth
-	if workflowExecution.Authorization != tmpData.Authorization {
-		// Get the user?
-		user, err := HandleApiAuthentication(resp, request)
+	executionId := "" 
+	if !skipExecutionAuth {
+		workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 		if err != nil {
-			log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
+			log.Printf("[INFO] Failed getting the execution: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+			resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
 			return
-		} else {
-			if user.ActiveOrg.Id != org.Id {
-				log.Printf("[INFO] Execution auth %s and %s don't match (2)", workflowExecution.Authorization, tmpData.Authorization)
+		}
+
+		// Allows for execution auth AND user auth
+		if workflowExecution.Authorization != tmpData.Authorization {
+			// Get the user?
+			user, err := HandleApiAuthentication(resp, request)
+			if err != nil {
+				log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
 				return
+			} else {
+				if user.ActiveOrg.Id != org.Id {
+					log.Printf("[INFO] Execution auth %s and %s don't match (2)", workflowExecution.Authorization, tmpData.Authorization)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+					return
+				}
 			}
 		}
-	}
 
-	if workflowExecution.Status != "EXECUTING" {
-		log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
-		return
-	}
+		if workflowExecution.Status != "EXECUTING" {
+			log.Printf("[INFO] Workflow %s isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Workflow isn't executing"}`))
+			return
+		}
 
-	if workflowExecution.ExecutionOrg != org.Id {
-		log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
-		return
+		if workflowExecution.ExecutionOrg != org.Id {
+			log.Printf("[INFO] Org %s wasn't used to execute %s", org.Id, workflowExecution.ExecutionId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Bad organization specified"}`))
+			return
+		}
+
+		executionId = workflowExecution.ExecutionId
 	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
-
-	//log.Printf("\n\n[INFO] GET cache key '%s' for org %s. ERR: %s\n\n", tmpData.Key, tmpData.OrgId, err)
-
 	if err != nil {
-		log.Printf("[WARNING][%s] Failed to GET cache key %s for org %s (get)", workflowExecution.ExecutionId, tmpData.Key, tmpData.OrgId)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
+		log.Printf("[WARNING][%s] Failed to GET cache key %s for org %s (get)", executionId, tmpData.Key, tmpData.OrgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
 		return
+	}
+
+	if requireCacheAuth {
+		authQuery := query.Get("authorization") 
+
+		log.Printf("[INFO] Cache auth required for '%s'. Input auth: %s. Required auth: %#v", tmpData.Key, authQuery, cacheData.PublicAuthorization)
+		if cacheData.PublicAuthorization == "" || authQuery != cacheData.PublicAuthorization {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
+			return
+		}
 	}
 
 	cacheData.Success = true
 	cacheData.ExecutionId = ""
 	cacheData.Authorization = ""
 	cacheData.OrgId = ""
+
+	// Look for query param "type"
+	typeQuery := query.Get("type")
+
+	// Check for header accept
+	if typeQuery == "text" || typeQuery == "raw" || request.Header.Get("Accept") == "text/plain" {
+		resp.Header().Set("Content-Type", "text/plain")
+		resp.WriteHeader(200)
+		resp.Write([]byte(cacheData.Value))
+
+		return
+	}
+
+
+	
 
 	log.Printf("[INFO] Successfully GOT key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 	b, err := json.Marshal(cacheData)
