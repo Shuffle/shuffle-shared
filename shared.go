@@ -1421,7 +1421,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 					// Encrypt the url field?
 					// Skipping for now as it's not as sensitive a field, and we may even add editing possibilities to it in the future.
 					found = true
-					log.Printf("[DEBUG] Replacing URL field in appauth for %s", appAuth.App.Name)
+					log.Printf("[DEBUG] Replacing URL field in appauth for %s from %#v to %#v", appAuth.App.Name, originalAuth.Fields[paramIndex].Value, field.Value)
 					originalAuth.Fields[paramIndex].Value = field.Value
 				}
 
@@ -2799,11 +2799,6 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 
 func GetActionResult(ctx context.Context, workflowExecution WorkflowExecution, id string) (WorkflowExecution, ActionResult) {
 	// Get workflow execution to make sure we have the latest
-	//newWorkflowExecution, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-	//if err == nil && (len(newWorkflowExecution.Results) > len(workflowExecution.Results) || len(newWorkflowExecution.Results) == 0) {
-	//	workflowExecution = *newWorkflowExecution
-	//}
-
 	for _, actionResult := range workflowExecution.Results {
 		if actionResult.Action.ID != id {
 			continue
@@ -7509,7 +7504,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	org, err := GetOrg(ctx, tmpData.OrgId)
 	if err != nil {
 		log.Printf("[INFO] Organization %s doesn't exist: %s", tmpData.OrgId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7517,16 +7512,14 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionRef)
 	if err != nil {
 		log.Printf("[INFO] Couldn't find workflow execution: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "No permission to get execution"}`))
 		return
 	}
 
 	if workflowExecution.Authorization != tmpData.Authorization {
-		// Get the user?
-
 		log.Printf("[INFO] Execution auth %s and %s don't match", workflowExecution.Authorization, tmpData.Authorization)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "Auth doesn't match"}`))
 		return
 	}

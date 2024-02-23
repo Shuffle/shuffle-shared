@@ -1661,7 +1661,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	}
 
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && project.Environment != "cloud" {
-		return workflowExecution, nil
+		return workflowExecution, errors.New("ExecutionId doesn't exist in cache") 
 	}
 
 	if project.DbType == "opensearch" {
