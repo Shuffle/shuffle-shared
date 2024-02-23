@@ -830,41 +830,71 @@ func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
 		return
 	}
 
-    orgFound:=false
+	org, err := GetOrg(ctx, orgId)
 
-	for _, innerOrg := range user.Orgs {
-		if innerOrg == orgId {
-			orgFound = true
-			 break
-		  }
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", orgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+		return
+	}
+
+    userFound := false
+   
+	for _, inneruser := range org.Users {
+		if inneruser.Id == user.Id {
+			  userFound = true
+			}
 		}
-	if !orgFound {
+
+	if !userFound {
 		  log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
 		  resp.WriteHeader(401)
 	      resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 		  return
 	}
 
-	subOrgs , err := GetChildOrgs(ctx , orgId)
+	subOrgs := []OrgMini{}
+    for _, orgloop := range user.Orgs {
+		childorg, err := GetOrg(ctx, orgloop)
+		if err != nil {
+			continue
+		}
 
-	if err != nil {
-		log.Printf("[WARNING] Failed getting sub orgs: %s. Org ID: %s", err, orgId)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting sub orgs details"}`))
-		return
+		found := false
+		for _, userloop := range childorg.Users {
+			if userloop.Id == user.Id {
+				found = true
+			}
+		}
+
+		if !found {
+			continue
+		}
+
+		if childorg.CreatorOrg == org.Id {
+			subOrgs = append(subOrgs, OrgMini{
+				Id:         childorg.Id,
+				Name:       childorg.Name,
+				CreatorOrg: childorg.CreatorOrg,
+				Image:      childorg.Image,
+				RegionUrl:  childorg.RegionUrl,
+			})
+		}
 	}
 
-	
-	orgJson, err := json.Marshal(subOrgs)
+	orgjson, err := json.Marshal(subOrgs)
+
 	if err != nil {
-		log.Printf("[ERROR] Failed unmarshal of sub orgs for Active org %s: %s. Requested by User: %s", user.ActiveOrg.Id, err, user.Username)
+		log.Printf("[ERROR] Failed unmarshal of org %s (%s): %s", org.Name, org.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
 		return
 	}
 
 	resp.WriteHeader(200)
-	resp.Write(orgJson)
+	resp.Write(orgjson)
+
 }
 
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {

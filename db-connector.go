@@ -3306,25 +3306,6 @@ func GetFirstOrg(ctx context.Context) (*Org, error) {
 	return curOrg, nil
 }
 
-func GetChildOrgs(ctx context.Context, activeOrgID string) ([]OrgMini, error) {
-    ChildOrgs := []OrgMini{}
-
-    activeOrg, err := GetOrg(ctx, activeOrgID)
-    if err != nil {
-        return ChildOrgs, err
-    }
-
-    ChildOrgs = activeOrg.ChildOrgs
-
-    if len(ChildOrgs) == 0 {
-        log.Printf("[INFO] No sub-orgs found for the ID '%s'", activeOrgID)
-        return ChildOrgs, errors.New(fmt.Sprintf("sub orgs do not exist for the ID '%s'", activeOrgID))
-    }
-
-    return ChildOrgs, nil
-}
-
-
 func indexEs(ctx context.Context, nameKey, id string, bytes []byte) error {
 	//req := esapi.IndexRequest{
 	req := opensearchapi.IndexRequest{
