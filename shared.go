@@ -876,6 +876,7 @@ func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
 			subOrgs = append(subOrgs, OrgMini{
 				Id:         childorg.Id,
 				Name:       childorg.Name,
+				Role:       childorg.Role,
 				CreatorOrg: childorg.CreatorOrg,
 				Image:      childorg.Image,
 				RegionUrl:  childorg.RegionUrl,
