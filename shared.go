@@ -816,7 +816,7 @@ func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
 		orgId = location[4]
 	}
 
-	if strings.Contains(fileId, "?") {
+	if strings.Contains(orgId, "?") {
 		orgId = strings.Split(orgId, "?")[0]
 	}
 
@@ -845,7 +845,7 @@ func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
 		  return
 	}
 
-	subOrgs , err = GetChildOrgs(ctx , orgId)
+	subOrgs , err := GetChildOrgs(ctx , orgId)
 
 	if err != nil {
 		log.Printf("[WARNING] Failed getting sub orgs: %s. Org ID: %s", err, orgId)
