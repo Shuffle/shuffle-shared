@@ -9210,7 +9210,6 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	cacheData.Authorization = ""
 
 	if len(cacheData.PublicAuthorization) == 0 {
-		log.Printf("\n\n[INFO] Generating new public authorization\n\n")
 		cacheData.PublicAuthorization = uuid.NewV4().String()
 	}
 

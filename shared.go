@@ -13541,10 +13541,17 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if user.ActiveOrg.Id != fileId {
-			log.Printf("[INFO] OrgId %s and %s don't match", user.ActiveOrg.Id, fileId)
+			log.Printf("[INFO] OrgId %s and %s don't match in get cache key list. Checking cache auth", user.ActiveOrg.Id, fileId)
+
+			requireCacheAuth = true
+			user.ActiveOrg.Id = fileId
+
+
+			/*
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 			return
+			*/
 		}
 
 		skipExecutionAuth = true
@@ -13637,6 +13644,25 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	// Check for header accept
 	if typeQuery == "text" || typeQuery == "raw" || request.Header.Get("Accept") == "text/plain" {
+		if typeQuery == "text" {
+			// Check if the value is valid JSON or not
+
+			var newstring = ""
+			var jsonCheck []interface{}
+			// If it's valid JSON list, add all items to a string with newlines
+
+			err := json.Unmarshal([]byte(cacheData.Value), &jsonCheck)
+			if err == nil {
+				for _, item := range jsonCheck {
+					newstring += fmt.Sprintf("%v\n", item)
+				}
+			} 
+
+			if newstring != "" {
+				cacheData.Value = newstring
+			}
+		}
+
 		resp.Header().Set("Content-Type", "text/plain")
 		resp.WriteHeader(200)
 		resp.Write([]byte(cacheData.Value))
@@ -15639,6 +15665,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	makeNew := true
+	parentExecution := &WorkflowExecution{}
 	start, startok := request.URL.Query()["start"]
 	if request.Method == "POST" {
 		body, err := ioutil.ReadAll(request.Body)
@@ -15690,7 +15717,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			sourceExecution = referenceExecution
 		}
 
-		parentExecution := &WorkflowExecution{}
 		if sourceExecutionOk {
 			//log.Printf("[INFO] Got source execution%s", sourceExecution)
 			workflowExecution.ExecutionParent = sourceExecution[0]
@@ -17243,10 +17269,24 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("\n\n[DEBUG] No KMS authenticationID specified in org.Defaults.KmsId")
 	}
 
+	// Handles org setting for subflows
+	if len(workflowExecution.Workflow.ExecutingOrg.Name) == 0 {
+		// Maybe should be set from the parentorg?
+	
+		if parentExecution.Workflow.ExecutingOrg.Id != "" {
+			workflowExecution.Workflow.ExecutingOrg = parentExecution.Workflow.ExecutingOrg
+		} else {
+			//log.Printf("[ERROR] Execution org name is empty, but should be filled in. This is a bug. Execution org: %+v", workflowExecution.ExecutionOrg)
+			workflowExecution.Workflow.ExecutingOrg.Name = org.Name
+			workflowExecution.Workflow.ExecutingOrg.Name = org.Id
+		}
+	}
+
 	finished := ValidateFinished(ctx, extra, workflowExecution)
 	if finished {
 		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
 	}
+
 
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
