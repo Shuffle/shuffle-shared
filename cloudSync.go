@@ -590,6 +590,9 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 // Returns an error if the users' org is over quota
 func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	log.Printf("[DEBUG] Validating usage of org %#v", orgId)
+	if len(orgId) == 0 {
+		return nil, errors.New("Org ID is empty")
+	}
 
 	org, err := GetOrg(ctx, orgId)
 	if err != nil {

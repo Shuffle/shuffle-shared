@@ -14,6 +14,15 @@ type AppContext struct {
 	Example string `json:"example,omitempty" datastore:"example,noindex"`
 }
 
+type PipelineRequest struct {
+	Name	   	string `json:"name"`
+	Command		string `json:"command"`
+	Environment string `json:"environment"`
+
+	PipelineId 	string `json:"pipeline_id"`
+	TriggerId	string `json:"trigger_id"`
+}
+
 type QueryInput struct {
 	// Required
 	Query string `json:"query"`

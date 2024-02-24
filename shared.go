@@ -2003,65 +2003,77 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+
 	cleanAll := false
 	deleteAll, ok := request.URL.Query()["deleteall"]
+
 	if ok {
 		if deleteAll[0] == "true" {
 			cleanAll = true
 
-			if project.Environment != "cloud" {
-				log.Printf("[DEBUG] Deleting and aborting ALL executions for this environment and org %s!", user.ActiveOrg.Id)
+			log.Printf("[DEBUG] Deleting and aborting ALL executions for this environment and org %s!", user.ActiveOrg.Id)
 
-				env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
+			env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
+				return
+			}
+
+			if env.OrgId != user.ActiveOrg.Id {
+				log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
+				return
+			}
+
+			// If here, it should DEFINITELY clean up all executions
+			// Runs on 10.000 workflows max
+			maxAmount := 1000
+			queueName := env.Name
+			if project.Environment == "cloud" {
+				queueName = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), user.ActiveOrg.Id)
+			}
+
+			for i := 0; i < 10; i++ {
+				executionRequests, err := GetWorkflowQueue(ctx, queueName, maxAmount)
+				log.Printf("[DEBUG] Got %d item(s) from queue %s to be deleted", len(executionRequests.Data), queueName)
 				if err != nil {
-					log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
-					return
+					log.Printf("[WARNING] Jumping out of workflowqueue delete handler: %s", err)
+					break
 				}
 
-				if env.OrgId != user.ActiveOrg.Id {
-					log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
-					return
+				if len(executionRequests.Data) == 0 {
+					//log.Printf("[DEBUG] No more executions in queue. Stopping")
+					break
 				}
 
-				// If here, it should DEFINITELY clean up all executions
-				// Runs on 10.000 workflows max
-				maxAmount := 1000
-				for i := 0; i < 10; i++ {
-					executionRequests, err := GetWorkflowQueue(ctx, env.Name, maxAmount)
-					if err != nil {
-						log.Printf("[WARNING] Jumping out of workflowqueue delete handler: %s", err)
-						break
-					}
-
-					if len(executionRequests.Data) == 0 {
-						break
-					}
-
-					ids := []string{}
-					for _, execution := range executionRequests.Data {
+				ids := []string{}
+				for _, execution := range executionRequests.Data {
+					if project.Environment != "cloud" {
 						if !ArrayContains(execution.Environments, env.Name) {
 							continue
 						}
-
-						ids = append(ids, execution.ExecutionId)
 					}
 
-					parsedId := fmt.Sprintf("workflowqueue-%s", strings.ToLower(env.Name))
-					err = DeleteKeys(ctx, parsedId, ids)
-					if err != nil {
-						log.Printf("[ERROR] Failed deleting %d execution keys for org %s during force stop: %s", len(ids), env.Name, err)
-					} else {
-						log.Printf("[INFO] Deleted %d keys from org %s during force stop", len(ids), parsedId)
-					}
+					ids = append(ids, execution.ExecutionId)
+				}
 
-					if len(executionRequests.Data) != maxAmount {
-						log.Printf("[DEBUG] Less than 1000 in queue. Not querying more")
-						break
-					}
+				log.Printf("[DEBUG] Deleting %d execution keys for org %s", len(ids), env.Name)
+
+				parsedId := fmt.Sprintf("workflowqueue-%s", queueName)
+
+				err = DeleteKeys(ctx, parsedId, ids)
+				if err != nil {
+					log.Printf("[ERROR] Failed deleting %d execution keys for org %s during force stop: %s", len(ids), env.Name, err)
+				} else {
+					log.Printf("[INFO] Deleted %d keys from org %s during force stop", len(ids), parsedId)
+				}
+
+				if len(executionRequests.Data) != maxAmount {
+					log.Printf("[DEBUG] Less than 1000 in queue. Stopping search requests")
+					break
 				}
 			}
 		}
@@ -13524,9 +13536,9 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 		user, err := HandleApiAuthentication(resp, request)
 		if err != nil {
-			log.Printf("[INFO] Failed to authenticate user in GET cache key: %s", err)
 			// Check if authorization query exists
 			if len(query.Get("authorization")) == 0 {
+				log.Printf("[INFO] Failed to authenticate user in GET cache key: %s", err)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false, "reason": "No authorization provided"}`))
 				return
@@ -13534,10 +13546,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 			requireCacheAuth = true
 			user.ActiveOrg.Id = fileId
-
-			//resp.WriteHeader(401)
-			//resp.Write([]byte(`{"success": false}`))
-			//return
 		}
 
 		if user.ActiveOrg.Id != fileId {
@@ -13667,6 +13675,69 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(200)
 		resp.Write([]byte(cacheData.Value))
 
+		return
+	} else if typeQuery == "json" {
+		resp.Header().Set("Content-Type", "application/json")
+
+		//validate if it's json or not
+		isValidJson := false
+		cacheData.Value = strings.Trim(cacheData.Value, " ")
+		if strings.HasPrefix(cacheData.Value, "{") && strings.HasSuffix(cacheData.Value, "}") || strings.HasPrefix(cacheData.Value, "[") && strings.HasSuffix(cacheData.Value, "]") {
+			// Check if it's a list of JSON
+			listMarshalled := []interface{}{}
+			err := json.Unmarshal([]byte(cacheData.Value), &listMarshalled)
+			if err == nil {
+				isValidJson = true
+
+				outputBody, err := json.MarshalIndent(listMarshalled, "", "  ")
+				if err == nil {
+					cacheData.Value = string(outputBody)
+				}
+			} else {
+				objectMarshalled := map[string]interface{}{}
+				err := json.Unmarshal([]byte(cacheData.Value), &objectMarshalled)
+				if err == nil {
+					isValidJson = true
+
+					outputBody, err := json.MarshalIndent(objectMarshalled, "", "  ")	
+					if err == nil {
+						cacheData.Value = string(outputBody)
+					}
+				} else {
+					//log.Printf("[INFO] Cache key %s for org %s isn't valid JSON: '%s'", tmpData.Key, tmpData.OrgId, cacheData.Value)
+					isValidJson = false
+				}
+			}
+		} 
+
+		if !isValidJson {
+			jsonlist := []string{}
+			if strings.Contains(cacheData.Value, "\n") {
+				if strings.Count(cacheData.Value, "\n") == 1 {
+					if strings.Contains(cacheData.Value, ",") {
+						jsonlist = strings.Split(cacheData.Value, ",")
+					} else {
+						jsonlist = strings.Split(cacheData.Value, "\n")
+					}
+				} else {
+					jsonlist = strings.Split(cacheData.Value, "\n")
+				}
+			} 
+
+
+			parsedJsonlist, err := json.MarshalIndent(jsonlist, "", "  ")
+			if err != nil {
+				log.Printf("[WARNING] Failed to parse JSON list for key %s for org %s", tmpData.Key, tmpData.OrgId)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to parse JSON list"}`))
+				return
+			}
+
+			cacheData.Value = string(parsedJsonlist)
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(cacheData.Value))
 		return
 	}
 
@@ -17277,6 +17348,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			workflowExecution.Workflow.ExecutingOrg = parentExecution.Workflow.ExecutingOrg
 		} else {
 			//log.Printf("[ERROR] Execution org name is empty, but should be filled in. This is a bug. Execution org: %+v", workflowExecution.ExecutionOrg)
+
 			workflowExecution.Workflow.ExecutingOrg.Name = org.Name
 			workflowExecution.Workflow.ExecutingOrg.Name = org.Id
 		}
