@@ -51,7 +51,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	log.Printf("[AUDIT] User %s in org %s (%s) is creating a new pipeline with command '%s' in environment '%s'", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, pipeline.Command, pipeline.Environment)
+	log.Printf("[AUDIT] User %s in org %s (%s) is creating a new pipeline with command '%s' in environment '%s'", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, pipeline.Type, pipeline.Environment)
 
 	if len(pipeline.Name) < 1 {
 		log.Printf("[WARNING] Name is required for new pipelines")
@@ -106,16 +106,16 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 
 	matchingCommand := ""
 	for _, command := range availableCommands {
-		if strings.HasPrefix(strings.ToLower(pipeline.Command), command) {
+		if strings.HasPrefix(strings.ToLower(pipeline.Type), command) {
 			matchingCommand = command
 			break
 		}
 	}
 
-	if len(matchingCommand) == 0 || len(pipeline.Command) <= len(matchingCommand)+1 {
-		log.Printf("[WARNING] Command '%s' is not available", pipeline.Command)
+	if len(matchingCommand) == 0 {
+		log.Printf("[WARNING] Command Type '%s' is not available for %s (%s)", pipeline.Type, user.ActiveOrg.Name, user.ActiveOrg.Id)
 		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Command '%s' is not available"}`, pipeline.Command)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Command type '%s' is not available"}`, pipeline.Type)))
 		return
 	}
 
@@ -126,7 +126,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	// Look for PIPELINE_ command that exists in the queue already
 	parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
 
-	startCommand := strings.ToUpper(strings.Split(pipeline.Command, " ")[0])
+	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
 	existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
 	for _, queue := range existingQueue.Data {
@@ -144,6 +144,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	execRequest := ExecutionRequest{
 		Type: formattedType,
 		ExecutionId: uuid.NewV4().String(),
+		ExecutionSource: pipeline.Name,
 		ExecutionArgument: pipeline.Command,
 		Priority: 11,
 	}

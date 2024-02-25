@@ -16,6 +16,7 @@ type AppContext struct {
 
 type PipelineRequest struct {
 	Name	   	string `json:"name"`
+	Type 		string `json:"type"`
 	Command		string `json:"command"`
 	Environment string `json:"environment"`
 
