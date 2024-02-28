@@ -589,7 +589,6 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 
 // Returns an error if the users' org is over quota
 func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
-	log.Printf("[DEBUG] Validating usage of org %#v", orgId)
 	if len(orgId) == 0 {
 		return nil, errors.New("Org ID is empty")
 	}
@@ -601,13 +600,13 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	// Allows parent & childorgs to run as much as they want. No limitations
 	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
+		//log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
 		return org, nil
 	}
 
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
-		log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
+		//log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
 			org.SyncFeatures.AppExecutions.Limit = 10000
@@ -617,7 +616,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 			org.SyncFeatures.AppExecutions.Limit = 15000000000
 		}
 
-		log.Printf("[DEBUG] Org %s (%s) has values: org.LeadInfo.POV: %v, org.LeadInfo.Internal: %v", org.Name, org.Id, org.LeadInfo.POV, org.LeadInfo.Internal) 
+		//log.Printf("[DEBUG] Org %s (%s) has values: org.LeadInfo.POV: %v, org.LeadInfo.Internal: %v", org.Name, org.Id, org.LeadInfo.POV, org.LeadInfo.Internal) 
 
 		// FIXME: When inside this, check if usage should be sent to the user
 		if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV || org.LeadInfo.Internal) {
@@ -626,7 +625,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 		return org, nil
 	} else {
-		log.Printf("[WARNING] Failed finding executions for org %s (%s)", org.Name, org.Id)
+		//log.Printf("[WARNING] Failed finding executions for org %s (%s)", org.Name, org.Id)
 	}
 
 	return org, nil

@@ -16545,7 +16545,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
-						log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+						//log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
 						setField = false
 						//fieldLength = 0
 						break
@@ -16639,7 +16639,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey) 
 						if err != nil {
 							if field.Key != "access_key" && field.Key != "access_token" {
-								log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+								//log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
 							}
 							continue
 						}

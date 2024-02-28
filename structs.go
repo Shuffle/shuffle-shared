@@ -165,6 +165,7 @@ type WorkflowApp struct {
 	CompanyURL               string              `json:"company_url" datastore:"company_url" required:false yaml:"company_url"`
 
 	Contributors []string `json:"contributors" datastore:"contributors"`
+	RevisionId string `json:"revision_id" datastore:"revision_id"`
 }
 
 type AppVersion struct {

@@ -6429,6 +6429,65 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 	return workflows, nil
 }
 
+func SetAppRevision(ctx context.Context, app WorkflowApp) error {
+	nameKey := "app_revisions"
+	timeNow := int64(time.Now().Unix())
+	app.Edited = timeNow
+	if app.Created == 0 {
+		app.Created = timeNow
+	}
+
+	actionNames := ""
+	for actionIndex, action := range app.Actions {
+		actionNames += fmt.Sprintf("%s-", action.Name)
+
+		app.Actions[actionIndex].Description = ""
+		app.Actions[actionIndex].Example = ""
+		app.Actions[actionIndex].ExampleResponse = ""
+		app.Actions[actionIndex].LargeImage = ""
+		app.Actions[actionIndex].Parameters = []WorkflowAppActionParameter{}
+
+	}
+
+
+	appHashString := fmt.Sprintf("%s_%s_%s", app.Name, app.ID, actionNames) 
+	hasher := md5.New()
+	hasher.Write([]byte(appHashString))
+	appHash := hex.EncodeToString(hasher.Sum(nil))
+	app.RevisionId = appHash 
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(app)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set app revision: %s", err)
+		return nil
+	}
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, app.RevisionId, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, app.RevisionId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &app); err != nil {
+			log.Printf("[WARNING] Error adding app revision: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, app.RevisionId)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for set app revision '%s': %s", cacheKey, err)
+		}
+
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, app.ID))
+	}
+
+	return nil
+}
+
 func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	nameKey := "workflow_revisions"
 	timeNow := int64(time.Now().Unix())
