@@ -6410,11 +6410,21 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		item.Orgs = []string{}
 		item.EthInfo = EthInfo{}
 
+		item.Authentication = []UserAuth{}
+		item.Executions = ExecutionInfo{}
+		item.Limits = UserLimits{}
+		item.PrivateApps = []WorkflowApp{}
+		item.MFA = MFAInfo{}
+
+		if !user.SupportAccess {
+			item.LoginInfo = []LoginInfo{}
+		}
+
 		// Will get from cache 2nd time so this is fine.
 		if user.Id == item.Id {
 			item.Orgs = user.Orgs
 			item.Active = user.Active
-			item.MFA = user.MFA
+			//item.MFA = user.MFA
 		} else {
 			foundUser, err := GetUser(ctx, item.Id)
 			if err == nil {
@@ -6437,7 +6447,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 				//log.Printf("[DEBUG] Added %d org(s) for user %s (%s) - get users", len(allOrgs), foundUser.Username, foundUser.Id)
 
-				item.MFA = foundUser.MFA
+				//item.MFA = foundUser.MFA
 				item.Verified = foundUser.Verified
 				item.Active = foundUser.Active
 				item.Orgs = allOrgs
@@ -7763,6 +7773,14 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Add instantswap of backend
+	// This could in theory be built out open source as well
+	regionUrl := ""
+	if project.Environment == "cloud" && user.SupportAccess {
+		regionUrl = "https://shuffler.io"
+		foundOrg = true
+	}
+
 	if !foundOrg || tmpData.OrgId != fileId {
 		log.Printf("[WARNING] User swap to the org \"%s\" - access denied", tmpData.OrgId)
 		resp.WriteHeader(403)
@@ -7778,12 +7796,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Add instantswap of backend
-	// This could in theory be built out open source as well
-	regionUrl := ""
-	if project.Environment == "cloud" {
-		regionUrl = "https://shuffler.io"
-	}
 
 	if project.Environment == "cloud" && len(org.RegionUrl) > 0 && !strings.Contains(org.RegionUrl, "\"") {
 		regionUrl = org.RegionUrl
