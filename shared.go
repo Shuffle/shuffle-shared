@@ -2507,12 +2507,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	// Loop headers
 	if len(apikey) > 0 {
 		if !strings.HasPrefix(apikey, "Bearer ") {
-
-			//location := strings.Split(request.URL.String(), "/")
-			if !strings.Contains(request.URL.String(), "/execute") {
-				log.Printf("[WARNING] Apikey doesn't start with bearer")
-			}
-
 			return User{}, errors.New("No bearer token for authorization header")
 		}
 
@@ -10220,8 +10214,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		return err
 	}
 
-	//log.Printf("[DEBUG] Parent execution results length: %d", len(newExecution.Results))
-
 	foundResult := ActionResult{}
 	for _, result := range newExecution.Results {
 		if result.Action.ID == parentNode {
@@ -10235,10 +10227,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 	// Validating parent node
 	checkResult := false
-
-	log.Printf("[DEBUG] Parent workflow triggers: %d. Parentnode: %s. Parentworkflow: %s", len(newExecution.Workflow.Triggers), parentNode, newExecution.Workflow.ID)
-
-
 	// Subflows and the like may not be in here anymore. Maybe they are in actions
 	for _, trigger := range newExecution.Workflow.Triggers {
 		if trigger.ID != parentNode {
@@ -13754,10 +13742,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
-	
-
-	log.Printf("[INFO] Successfully GOT key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 	b, err := json.Marshal(cacheData)
 	if err != nil {
 		log.Printf("[WARNING] Failed to GET cache key %s for org %s", tmpData.Key, tmpData.OrgId)
@@ -16713,7 +16697,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						if err == nil {
 							//log.Printf("Checking expiration vs timenow: %d %d. Err: %s", timeNow, int64(val)+120, err)
 							if timeNow >= int64(val)+120 {
-								log.Printf("[DEBUG] Should run refresh of Oauth2 for authentication ID '%s'!!", curAuth.Id)
 								runRefresh = true
 							}
 
@@ -17347,10 +17330,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 		} else {
-			log.Printf("[ERROR] Default KMS ID not found in organization. Will not be able to decrypt secrets.")
+			//log.Printf("[ERROR] Default KMS ID not found in organization. Will not be able to decrypt secrets.")
 		}
-	} else {
-		log.Printf("\n\n[DEBUG] No KMS authenticationID specified in org.Defaults.KmsId")
 	}
 
 	// Handles org setting for subflows
@@ -19031,7 +19012,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 			}
 
-			//log.Printf("[DEBUG] Should execute %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
 			if branchesFound == parentFinished {
 				action.Environment = environment
 				action.AppName = "shuffle-subflow"
@@ -19308,8 +19288,8 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		}
 
 		// Verify if parents are done
+		//log.Printf("[INFO][%s] Should execute %s:%s (%s) with label %s", workflowExecution.ExecutionId, action.AppName, action.AppVersion, action.ID, action.Label)
 
-		log.Printf("[INFO][%s] Should execute %s:%s (%s) with label %s", workflowExecution.ExecutionId, action.AppName, action.AppVersion, action.ID, action.Label)
 		relevantActions = append(relevantActions, action)
 	}
 

@@ -69,14 +69,12 @@ func getRunner(classname string) string {
 	return fmt.Sprintf(`
 # Run the actual thing after we've checked params
 def run(request):
-	print(request.data)
 	try:
 		action = request.get_json(force=True)
 	except:
 		return f'Error parsing JSON'
 
 	if action == None:
-		print("Returning because no action defined")
 		return f'No JSON detected'
 
 	#authorization_key = action.get("authorization")
@@ -89,7 +87,6 @@ def run(request):
 	return f'Action ran!'
 
 	`, classname)
-	//asyncio.run(%s.run(action=action))
 }
 
 // Could use some kind of linting system too for this, but meh
@@ -847,8 +844,8 @@ func main() {
 		bucketName = os.Args[5]
 	}
 
-	appname := "shuffle-tools"
-	appversion := "1.2.0"
+	appname := "http"
+	appversion := "1.1.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

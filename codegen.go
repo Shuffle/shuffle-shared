@@ -1532,15 +1532,12 @@ func GetRunnerGCP(classname string) string {
 	return fmt.Sprintf(`
 # Run the actual thing after we've checked params
 def run(request):
-	#print(request.data)
 	try:
 		action = request.get_json(force=True)
 	except:
 		return f'Error parsing JSON'
 
-	#print(f'ACTION: {action}')
 	if action == None:
-		print("Returning because no action defined")
 		return f'No JSON detected'
 
 	#authorization_key = action.get("authorization")

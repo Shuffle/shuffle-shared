@@ -6706,6 +6706,26 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	workflowappauth.Edited = timeNow
 	workflowappauth.App.Actions = []WorkflowAppAction{}
 
+	if len(workflowappauth.Fields) > 15 {
+		newfields := []AuthenticationStore{}
+
+		// Rebuilds all fields
+		expirationAdded := false
+		for _, field := range workflowappauth.Fields {
+			if strings.ToLower(field.Key) == "expiration" {
+				if expirationAdded {
+					continue
+				}
+
+				expirationAdded = true 
+			}
+
+			newfields = append(newfields, field)
+		}
+
+		workflowappauth.Fields = newfields
+	}
+
 	// Will ALWAYS encrypt the values when it's not done already
 	// This makes it so just re-saving the auth will encrypt them (next run)
 
@@ -6756,9 +6776,6 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
 			log.Printf("[ERROR] Error adding workflow app AUTH %s (%s) with %d fields: %s", workflowappauth.Label, workflowappauth.Id, len(workflowappauth.Fields), err)
-			for _, field := range workflowappauth.Fields {
-				log.Printf("FIELD: %s: %d", field.Key, len(field.Value))
-			}
 
 			return err
 		}
