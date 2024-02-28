@@ -163,6 +163,8 @@ type WorkflowApp struct {
 	Blogpost                 string              `json:"blogpost" yaml:"blogpost" datastore:"blogpost"`
 	Video                    string              `json:"video" yaml:"video" datastore:"video"`
 	CompanyURL               string              `json:"company_url" datastore:"company_url" required:false yaml:"company_url"`
+
+	Contributors []string `json:"contributors" datastore:"contributors"`
 }
 
 type AppVersion struct {

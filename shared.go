@@ -7086,6 +7086,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// FIXME: Add a way to check if the user is a part of the 
 	if !orgFound && !userInfo.SupportAccess {
 		log.Printf("[AUDIT] User %s (%s) is admin, but can't delete users outside their own org.", userInfo.Username, userInfo.Id)
 		resp.WriteHeader(401)
