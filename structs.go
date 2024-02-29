@@ -789,7 +789,11 @@ type Org struct {
 	CloudSyncActive   bool                  `json:"cloud_sync_active" datastore:"CloudSyncActive"`
 	SyncConfig        SyncConfig            `json:"sync_config" datastore:"sync_config"`
 	SyncFeatures      SyncFeatures          `json:"sync_features,omitempty" datastore:"sync_features"`
+
+	SubscriptionUserId string `json:"subscription_user_id" datastore:"subscription_user_id"`
 	Subscriptions     []PaymentSubscription `json:"subscriptions" datastore:"subscriptions"`
+
+
 	SyncUsage         SyncUsage             `json:"sync_usage" datastore:"sync_usage"`
 	Created           int64                 `json:"created" datastore:"created"`
 	Edited            int64                 `json:"edited" datastore:"edited"`
@@ -2335,6 +2339,9 @@ type HandleInfo struct {
 	Support            bool            `json:"support"`
 	Tutorials          []Tutorial      `json:"tutorials"`
 	OrgStatus 		   []string 	   `json:"org_status"`
+
+	HasCardAvailable   bool 		   `json:"has_card_available"`
+	ActivatedPayasyougo bool    	   `json:"activated_pay_as_you_go"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`

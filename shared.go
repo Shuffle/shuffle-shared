@@ -8118,10 +8118,13 @@ func getSignatureSample(org Org) PaymentSubscription {
 
 	parsedEula := GetOnpremPaidEula() 
 	if (org.LeadInfo.Customer || org.LeadInfo.POV || len(org.ManagerOrgs) > 0) && !org.LeadInfo.OpenSource {
+		return PaymentSubscription{}
+
 		name := "App execution units - default"
 		if len(org.ManagerOrgs) > 0 {
 			name = "Suborg access - default"
 		}
+
 
 		return PaymentSubscription{
 			Active:           true,
@@ -11446,7 +11449,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			skippedCount := len(skippedBranches)
 
-			log.Printf("[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
+			//log.Printf("[DEBUG][%s] Found %d branch(es) for %s. %d skipped. If equal, make the node skipped. SKIPPED: %s", workflowExecution.ExecutionId, foundCount, foundAction.Label, skippedCount, skippedBranches)
 			if foundCount == skippedCount {
 				found := false
 				for _, res := range workflowExecution.Results {
@@ -11506,7 +11509,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						}
 					}
 
-					log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", foundAction.Label, foundAction.AppName, streamUrl)
+					//log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", foundAction.Label, foundAction.AppName, streamUrl)
 					
 					req, err := http.NewRequest(
 						"POST",
@@ -18937,7 +18940,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			parentlen = len(parents[nextAction])
 		}
 
-		log.Printf("[DEBUG][%s] Running %s (%s) with %d parents. Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
+		//log.Printf("[DEBUG][%s] Running %s (%s) with %d parents. Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
 
 		if project.Environment != "cloud" {
 			branchesFound := 0
@@ -19874,7 +19877,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		availableLabels = append(availableLabels, "Webhook")
 
 		if len(selectedAction.Name) == 0 {
-			log.Printf("\n\n[DEBUG] Due to webhook in app %s (%s), we don't need an action. Should not return\n\n", selectedApp.Name, selectedApp.ID)
+			//log.Printf("\n\n[DEBUG] Due to webhook in app %s (%s), we don't need an action. Should not return\n\n", selectedApp.Name, selectedApp.ID)
 		}
 	}
 

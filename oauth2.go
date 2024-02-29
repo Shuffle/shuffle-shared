@@ -3654,7 +3654,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		return appAuth, err
 	}
 
-	log.Printf("[DEBUG] Oauth2 data for %s: %d", tokenUrl, newresp.StatusCode)
+	//log.Printf("[DEBUG] Oauth2 data for %s: %d", tokenUrl, newresp.StatusCode)
 	// Check if access_token is in data
 	foundToken := ""
 	if _, ok := data["access_token"]; !ok {
@@ -3711,13 +3711,11 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 			requestData.RedirectUri = field.Value
 		} else if field.Key == "refresh_uri" || field.Key == "refresh_url" {
-			//log.Printf("[DEBUG] Got refresh URL %s", field.Value)
 			refreshUrl = field.Value
 		} else if field.Key == "refresh_token" {
-			log.Printf("[DEBUG] Got refresh token %s", field.Value)
+			//log.Printf("[DEBUG] Got refresh token %s", field.Value)
 			refreshToken = field.Value
 		} else if field.Key == "oauth_url" {
-			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
 			oauthUrl = field.Value
 		} else {
 			if field.Key == "url" { 
@@ -3734,7 +3732,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	}
 
-	log.Printf("[DEBUG] Making request with auth %s to %s for Oauth2 token. User: '%s' ('%s')", appAuth.Id, url, user.Username, user.Id)
+	//log.Printf("[DEBUG] Making request with auth %s to %s for Oauth2 token. User: '%s' ('%s')", appAuth.Id, url, user.Username, user.Id)
 	//log.Printf("[DEBUG] Verbose Requestdata: Sending request to %#v with requestdata %#v", url, requestData)
 	if len(url) == 0 {
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
@@ -3855,7 +3853,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		if newresp.StatusCode >= 300 {
 			// Printing on error to handle in future instances
-			log.Printf("[ERROR] Oauth2 data for %s: %#v", requestRefreshUrl, newresp)
+			//log.Printf("[ERROR] Oauth2 data for %s: %#v", requestRefreshUrl, newresp)
 			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh for URL (refresh) %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 
