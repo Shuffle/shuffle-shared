@@ -1661,7 +1661,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	}
 
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && project.Environment != "cloud" {
-		return workflowExecution, errors.New("ExecutionId doesn't exist in cache") 
+		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
 	}
 
 	if project.DbType == "opensearch" {
@@ -6449,12 +6449,11 @@ func SetAppRevision(ctx context.Context, app WorkflowApp) error {
 
 	}
 
-
-	appHashString := fmt.Sprintf("%s_%s_%s", app.Name, app.ID, actionNames) 
+	appHashString := fmt.Sprintf("%s_%s_%s", app.Name, app.ID, actionNames)
 	hasher := md5.New()
 	hasher.Write([]byte(appHashString))
 	appHash := hex.EncodeToString(hasher.Sum(nil))
-	app.RevisionId = appHash 
+	app.RevisionId = appHash
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(app)
@@ -6707,13 +6706,14 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	workflowappauth.App.Actions = []WorkflowAppAction{}
 
 	if len(workflowappauth.Fields) > 15 {
+		log.Printf("[WARNING][%s] Too many fields for app auth: %d", id, len(workflowappauth.Fields))
 		newfields := []AuthenticationStore{}
 
 		// Rebuilds all fields
 		addedFields := []string{}
 
 		// Run loop backwards due to ordering, as to take last version of all parts
-		for i := len(workflowappauth.Fields)-1; i >= 0; i-- {
+		for i := len(workflowappauth.Fields) - 1; i >= 0; i-- {
 			field := workflowappauth.Fields[i]
 			if ArrayContains(addedFields, field.Key) {
 				continue
@@ -6724,6 +6724,8 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 		}
 
 		workflowappauth.Fields = newfields
+
+		log.Printf("[INFO][%s] Reduced fields for app auth to %d", id, len(workflowappauth.Fields))
 	}
 
 	// Will ALWAYS encrypt the values when it's not done already
@@ -7764,7 +7766,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			_, err = project.Dbclient.GetAll(ctx, namespaceQuery, &namespaceFiles)
 			if err != nil {
 				log.Printf("[ERROR] Failed loading namespace files: %s", err)
-				return files, nil 
+				return files, nil
 			}
 
 			for _, f := range namespaceFiles {
