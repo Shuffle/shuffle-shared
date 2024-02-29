@@ -6719,6 +6719,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 				continue
 			}
 
+			addedFields = append(addedFields, field.Key)
 			newfields = append(newfields, field)
 		}
 
