@@ -1458,12 +1458,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		appAuth.App.LargeImage = app.LargeImage
 	}
 
-	//log.Printf("\n\n[DEBUG] FIELDS: %d\n\n", len(appAuth.Fields))
-	//for _, field := range appAuth.Fields {
-	//	if field.Key == "url" {
-	//		log.Printf("[DEBUG] URL: %s", field.Value)
-	//	}
-	//}
 
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
@@ -16784,7 +16778,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						// Does the oauth2 replacement
 						newParams = []WorkflowAppActionParameter{}
 						for _, param := range newAuth.Fields {
-							//log.Printf("FIELD: %s", param.Key, param.Value)
 							if param.Key != "url" && param.Key != "access_token" {
 								//log.Printf("Skipping key %s (2)", param.Key)
 								continue
@@ -20375,8 +20368,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("\n\nMISSINGFIELDS: %#v", missingFields)
-		log.Printf("\n\n[DEBUG] LOCAL AI REQUEST SENT TO %s\n\n", streamUrl)
+		log.Printf("MISSINGFIELDS: %#v", missingFields)
+		log.Printf("[DEBUG] LOCAL AI REQUEST SENT TO %s", streamUrl)
 
 		req.Header.Add("Authorization", request.Header.Get("Authorization"))
 		newresp, err := client.Do(req)

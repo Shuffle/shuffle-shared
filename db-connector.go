@@ -6710,14 +6710,13 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 		newfields := []AuthenticationStore{}
 
 		// Rebuilds all fields
-		expirationAdded := false
-		for _, field := range workflowappauth.Fields {
-			if strings.ToLower(field.Key) == "expiration" {
-				if expirationAdded {
-					continue
-				}
+		addedFields := []string{}
 
-				expirationAdded = true 
+		// Run loop backwards due to ordering, as to take last version of all parts
+		for i := len(workflowappauth.Fields)-1; i >= 0; i-- {
+			field := workflowappauth.Fields[i]
+			if ArrayContains(addedFields, field.Key) {
+				continue
 			}
 
 			newfields = append(newfields, field)
