@@ -839,6 +839,121 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	return functionname, data
 }
 
+func AddNewEndPoint ()  WorkflowAppAction {
+
+	parameters := []WorkflowAppActionParameter{}
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "method",
+		Description:   "The http method to use",
+		Multiline:     false,
+		Required:      true,
+		Example:       "GET , POST",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "headers",
+		Description:   "Headers to use",
+		Multiline:     true,
+		Required:      false,
+		Example:       "Content-Type: application/json",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "base_url",
+		Description:   "the base part of your url ",
+		Multiline:     false ,
+		Required:      true ,
+		Example:       "https://api.example.com",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "path",
+		Description:   "the path to add to the base url",
+		Multiline:     false,
+		Required:      false,
+		Example:       "users/details/profile/settings",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "username",
+		Description:   "username for basic auth",
+		Multiline:     false,
+		Required:      false,
+		Example:       "example_99",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "password",
+		Description:   "password for the basic auth",
+		Multiline:     false,
+		Required:      false,
+		Example:       "******",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "verify",
+		Description:   "",
+		Multiline:     false,
+		Required:      false,
+		Example:       "True",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "queries",
+		Description:   "queries to be included in the url",
+		Multiline:     true,
+		Required:      false,
+		Example: "user_id: 123\ncategory: tech",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "req_body",
+		Description:   "the path to add to the base url",
+		Multiline:     true,
+		Required:      false,
+		Example:      '{"username": "example_user","email": "user@example.com"}',
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	action := WorkflowAppAction{
+		Description: "add a new endpoint for your app",
+		Name:        "New_Endpoint",
+		NodeType:    "action",
+		Parameters:  parameters,
+	}
+
+	return action
+
+}
+
+
 func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, WorkflowApp, []string, error) {
 	api := WorkflowApp{}
 	//log.Printf("%#v", swagger.Info)
@@ -1363,6 +1478,9 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			api.Actions = append(api.Actions, action)
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
+
+		action : = AddNewEndPoint()
+		api.Actions = append(api.Actions, action)
 
 		// Has to be here because its used differently above.
 		// FIXING this is done during export instead?
