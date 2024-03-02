@@ -936,7 +936,7 @@ func AddNewEndPoint ()  WorkflowAppAction {
 		Description:   "the path to add to the base url",
 		Multiline:     true,
 		Required:      false,
-		Example:      '{"username": "example_user","email": "user@example.com"}',
+		Example:      `{"username": "example_user", "email": "user@example.com"}`,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1479,7 +1479,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 
-		action : = AddNewEndPoint()
+		action := AddNewEndPoint()
 		api.Actions = append(api.Actions, action)
 
 		// Has to be here because its used differently above.
