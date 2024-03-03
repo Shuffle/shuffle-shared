@@ -841,8 +841,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 func NewEndPointPythonCode () string{
 
-		pythonCode := `
-	def fix_url(self, url):
+		pythonCode := `    def fix_url(self, url):
 		if "hhttp" in url:
 			url = url.replace("hhttp", "http")
 	
@@ -859,90 +858,90 @@ func NewEndPointPythonCode () string{
 	
 		return url
 	
-	def checkverify(self, verify):
-		if str(verify).lower().strip() == "false":
-			return False
-		elif verify == None:
-			return False
-		elif verify:
-			return True
-		elif not verify:
-			return False
-		else:
-			return True 
+	    def checkverify(self, verify):
+		  if str(verify).lower().strip() == "false":
+			  return False
+		  elif verify == None:
+			  return False
+		  elif verify:
+			  return True
+		  elif not verify:
+			  return False
+		  else:
+			  return True 
 	
-	def is_valid_method(self, method):
-		valid_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
-		method = method.upper()
+	    def is_valid_method(self, method):
+		    valid_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+		    method = method.upper()
 	
-		if method in valid_methods:
-			return method
-		else:
-			raise ValueError(f"Invalid HTTP method: {method}")
+		    if method in valid_methods:
+			   return method
+		    else:
+			   raise ValueError(f"Invalid HTTP method: {method}")
 	
-	def parse_content(self, headers):
-		parsed_headers = {}
-		if headers:
-			split_headers = headers.split("\n") 
-			self.logger.info(split_headers)
-			for header in split_headers:
-				if ":" in header:
-					splititem = ":"
-				elif "=" in header:
-					splititem = "="
-				else:
-					self.logger.info("Skipping header %s as its invalid" % header)
-					continue
+	    def parse_content(self, headers):
+		     parsed_headers = {}
+		     if headers:
+			     split_headers = headers.split("\n") 
+			     self.logger.info(split_headers)
+			     for header in split_headers:
+				    if ":" in header:
+					    splititem = ":"
+				    elif "=" in header:
+					    splititem = "="
+				    else:
+					    self.logger.info("Skipping header %s as its invalid" % header)
+					    continue
 	
-				splitheader = header.split(splititem)
-				if len(splitheader) >= 2:
-					parsed_headers[splitheader[0].strip()] = splititem.join(splitheader[1:]).strip()
-				else:
-					self.logger.info("Skipping header %s with split %s cus only one item" % (header, splititem))
-					continue
+				    splitheader = header.split(splititem)
+				    if len(splitheader) >= 2:
+					    parsed_headers[splitheader[0].strip()] = splititem.join(splitheader[1:]).strip()
+				    else:
+					    self.logger.info("Skipping header %s with split %s cus only one item" % (header, splititem))
+					    continue
 	
-		return parsed_headers
+		     return parsed_headers
 	
-	def new_endpoint(self, method="", headers="", base_url="", path="", username="", password="", verify=True, queries="", req_body=""):
-		url = self.fix_url(base_url)
+	    def new_endpoint(self, method="", headers="", base_url="", path="", username="", password="", verify=True, queries="", req_body=""):
+		       url = self.fix_url(base_url)
 	
-		try: 
-			method = self.is_valid_method(method)
-		except ValueError as e:
-			self.logger.error(e)
-			return {"error": str(e)} 
+		      try: 
+			       method = self.is_valid_method(method)
+		      except ValueError as e:
+			      self.logger.error(e)
+			      return {"error": str(e)} 
 	
-		if path:
-			url += '/' + path
+		     if path:
+			   url += '/' + path
 	
-		parsed_headers = self.parse_content(headers)
-		parsed_queries = self.parse_content(queries)
+		     parsed_headers = self.parse_content(headers)
+		     parsed_queries = self.parse_content(queries)
 	
-		verify = self.checkverify(verify)
+		     verify = self.checkverify(verify)
 	
-		if isinstance(req_body, dict):
-			try:
-				req_body = json.dumps(req_body)
-			except json.JSONDecodeError as e:
-				self.logger.error(f"error : {e}")
-				return {"error: Invalid JSON format for request body"}
+		     if isinstance(req_body, dict):
+			    try:
+				    req_body = json.dumps(req_body)
+			    except json.JSONDecodeError as e:
+				    self.logger.error(f"error : {e}")
+				    return {"error: Invalid JSON format for request body"}
 			
-		auth = None
-		if username or password:      
-			if "Authorization" in headers:
-				pass
-			else: 
-				auth = requests.auth.HTTPBasicAuth(username, password)
+		     auth = None
+		     if username or password:      
+			     if "Authorization" in headers:
+				     pass
+			     else: 
+				     auth = requests.auth.HTTPBasicAuth(username, password)
 	
-		try:
-			response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=req_body, auth=auth, verify=verify)
-			response.raise_for_status()
-			return response.json()
+		     try:
+			     response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=req_body, auth=auth, verify=verify)
+			     response.raise_for_status()
+			     return response.json()
 	
-		except requests.RequestException as e:
-			self.logger.error(f"Request failed: {e}")
-			return {"error": f"Request failed: {e}"}
-	`
+		     except requests.RequestException as e:
+			     self.logger.error(f"Request failed: {e}")
+			     return {"error": f"Request failed: {e}"}
+		`
 		return pythonCode
 	
 }
