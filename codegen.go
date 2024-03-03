@@ -2,7 +2,6 @@ package shuffle
 
 import (
 	"archive/zip"
-	"sort"
 	"bytes"
 	"context"
 	"crypto/md5"
@@ -14,11 +13,13 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
 	"cloud.google.com/go/storage"
 	"github.com/frikky/kin-openapi/openapi3"
+
 	//"github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
 )
@@ -839,9 +840,118 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	return functionname, data
 }
 
-func AddNewEndPoint ()  WorkflowAppAction {
+func NewEndPointPythonCode () string{
+
+		pythonCode := `
+	def fix_url(self, url):
+		if "hhttp" in url:
+			url = url.replace("hhttp", "http")
+	
+		if "http:/" in url and not "http://" in url:
+			url = url.replace("http:/", "http://", -1)
+		if "https:/" in url and not "https://" in url:
+			url = url.replace("https:/", "https://", -1)
+		if "http:///" in url:
+			url = url.replace("http:///", "http://", -1)
+		if "https:///" in url:
+			url = url.replace("https:///", "https://", -1)
+		if not "http://" in url and not "http" in url:
+			url = f"http://{url}" 
+	
+		return url
+	
+	def checkverify(self, verify):
+		if str(verify).lower().strip() == "false":
+			return False
+		elif verify == None:
+			return False
+		elif verify:
+			return True
+		elif not verify:
+			return False
+		else:
+			return True 
+	
+	def is_valid_method(self, method):
+		valid_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+		method = method.upper()
+	
+		if method in valid_methods:
+			return method
+		else:
+			raise ValueError(f"Invalid HTTP method: {method}")
+	
+	def parse_content(self, headers):
+		parsed_headers = {}
+		if headers:
+			split_headers = headers.split("\n") 
+			self.logger.info(split_headers)
+			for header in split_headers:
+				if ":" in header:
+					splititem = ":"
+				elif "=" in header:
+					splititem = "="
+				else:
+					self.logger.info("Skipping header %s as its invalid" % header)
+					continue
+	
+				splitheader = header.split(splititem)
+				if len(splitheader) >= 2:
+					parsed_headers[splitheader[0].strip()] = splititem.join(splitheader[1:]).strip()
+				else:
+					self.logger.info("Skipping header %s with split %s cus only one item" % (header, splititem))
+					continue
+	
+		return parsed_headers
+	
+	def new_endpoint(self, method="", headers="", base_url="", path="", username="", password="", verify=True, queries="", req_body=""):
+		url = self.fix_url(base_url)
+	
+		try: 
+			method = self.is_valid_method(method)
+		except ValueError as e:
+			self.logger.error(e)
+			return {"error": str(e)} 
+	
+		if path:
+			url += '/' + path
+	
+		parsed_headers = self.parse_content(headers)
+		parsed_queries = self.parse_content(queries)
+	
+		verify = self.checkverify(verify)
+	
+		if isinstance(req_body, dict):
+			try:
+				req_body = json.dumps(req_body)
+			except json.JSONDecodeError as e:
+				self.logger.error(f"error : {e}")
+				return {"error: Invalid JSON format for request body"}
+			
+		auth = None
+		if username or password:      
+			if "Authorization" in headers:
+				pass
+			else: 
+				auth = requests.auth.HTTPBasicAuth(username, password)
+	
+		try:
+			response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=req_body, auth=auth, verify=verify)
+			response.raise_for_status()
+			return response.json()
+	
+		except requests.RequestException as e:
+			self.logger.error(f"Request failed: {e}")
+			return {"error": f"Request failed: {e}"}
+	`
+		return pythonCode
+	
+}
+
+func AddNewEndPoint ()  (WorkflowAppAction , string) {
 
 	parameters := []WorkflowAppActionParameter{}
+    pyCode := NewEndPointPythonCode()
 
 	parameters = append(parameters, WorkflowAppActionParameter{
 		Name:          "method",
@@ -859,7 +969,7 @@ func AddNewEndPoint ()  WorkflowAppAction {
 		Description:   "Headers to use",
 		Multiline:     true,
 		Required:      false,
-		Example:       "Content-Type: application/json",
+		Example:       "Content-Type:application/json\nAccept:application/json",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -925,7 +1035,7 @@ func AddNewEndPoint ()  WorkflowAppAction {
 		Description:   "queries to be included in the url",
 		Multiline:     true,
 		Required:      false,
-		Example: "user_id: 123\ncategory: tech",
+		Example: "user_id:123\ncategory:tech",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -944,12 +1054,13 @@ func AddNewEndPoint ()  WorkflowAppAction {
 
 	action := WorkflowAppAction{
 		Description: "add a new endpoint for your app",
-		Name:        "New_Endpoint",
+		Name:        "new_endpoint",
 		NodeType:    "action",
+		Environment: "Shuffle",
 		Parameters:  parameters,
 	}
 
-	return action
+	return action , pyCode
 
 }
 
@@ -1434,7 +1545,11 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			Type: "string",
 		},
 	})
-
+    
+	action, curCode := AddNewEndPoint()
+	api.Actions = append(api.Actions, action)
+	pythonFunctions = append(pythonFunctions, curCode)
+	
 	// Fixing parameters with :
 	newExtraParams := []WorkflowAppActionParameter{}
 	newOptionalParams := []WorkflowAppActionParameter{}
@@ -1497,8 +1612,6 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 
-		action := AddNewEndPoint()
-		api.Actions = append(api.Actions, action)
 
 		// Has to be here because its used differently above.
 		// FIXING this is done during export instead?
