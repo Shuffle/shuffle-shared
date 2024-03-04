@@ -969,7 +969,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     true,
 		Required:      false,
 		Example:       "Content-Type:application/json\nAccept:application/json",
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -993,7 +992,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "users/details/profile/settings",
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1005,7 +1003,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "example_99",
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1017,7 +1014,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "******",
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1029,7 +1025,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "True",
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1041,7 +1036,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     true,
 		Required:      false,
 		Example: "user_id:123\ncategory:tech",
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1053,7 +1047,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     true,
 		Required:      false,
 		Example:      `{"username": "example_user", "email": "user@example.com"}`,
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
