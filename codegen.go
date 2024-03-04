@@ -840,8 +840,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 }
 
 func NewEndPointPythonCode () string{
-
-		pythonCode := `    def fix_url(self, url):
+	pythonCode := `		def fix_url(self, url):
 		if "hhttp" in url:
 			url = url.replace("hhttp", "http")
 	
@@ -903,11 +902,11 @@ func NewEndPointPythonCode () string{
 		     return parsed_headers
 	
 	    def new_endpoint(self, method="", headers="", base_url="", path="", username="", password="", verify=True, queries="", req_body=""):
-		       url = self.fix_url(base_url)
+		     url = self.fix_url(base_url)
 	
-		      try: 
+		     try: 
 			       method = self.is_valid_method(method)
-		      except ValueError as e:
+		     except ValueError as e:
 			      self.logger.error(e)
 			      return {"error": str(e)} 
 	
@@ -956,7 +955,8 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Description:   "The http method to use",
 		Multiline:     false,
 		Required:      true,
-		Example:       "GET , POST",
+		Example:       "GET , POST PUT ...",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -968,6 +968,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     true,
 		Required:      false,
 		Example:       "Content-Type:application/json\nAccept:application/json",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -979,6 +980,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false ,
 		Required:      true ,
 		Example:       "https://api.example.com",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -990,6 +992,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "users/details/profile/settings",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1001,6 +1004,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "example_99",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1012,6 +1016,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "******",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1023,6 +1028,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     false,
 		Required:      false,
 		Example:       "True",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1034,6 +1040,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     true,
 		Required:      false,
 		Example: "user_id:123\ncategory:tech",
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1045,6 +1052,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     true,
 		Required:      false,
 		Example:      `{"username": "example_user", "email": "user@example.com"}`,
+		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1057,6 +1065,8 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Environment: "Shuffle",
 		Parameters:  parameters,
 	}
+
+	action.Returns.Schema.Type = "string"
 
 	return action , pyCode
 
