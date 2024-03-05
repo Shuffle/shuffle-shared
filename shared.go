@@ -9286,16 +9286,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully got app %s", fileId)
 
 	app.ReferenceUrl = ""
-
-	for _, action := range app.Actions {
-		if !strings.Contains(action.Name, "create_alert") {
-			continue
-		}
-
-		log.Printf("\n\n[DEBUG] Got action %s with %d params\n\n", action.Name, len(action.Parameters))
-		break
-	}
-
 	type AppParser struct {
 		Success bool   `json:"success"`
 		OpenAPI []byte `json:"openapi"`
