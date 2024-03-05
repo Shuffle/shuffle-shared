@@ -197,7 +197,6 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 			continue
 		}
 
-		//log.Printf("[DEBUG] Email %s has attachments!!", email.ID)
 		list, err := GetOutlookAttachmentList(outlookClient, email.ID)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting attachments for email ID %s", email.ID)
@@ -257,7 +256,6 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 				continue
 			}
 
-			log.Printf("[DEBUG] Added fileId %s to email msg %s", fileId, email.ID)
 			email.FileIds = append(email.FileIds, fileId)
 		}
 
@@ -515,7 +513,6 @@ func HandleNewGmailRegister(resp http.ResponseWriter, request *http.Request) {
 		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
 	}
 
-	log.Printf("[DEBUG] GMAIL Redirect URI: %s", url)
 	ctx := GetContext(request)
 	_, accessToken, err := GetGmailClient(ctx, code, OauthToken{}, url)
 	if err != nil {
@@ -739,7 +736,6 @@ func HandleNewOutlookRegister(resp http.ResponseWriter, request *http.Request) {
 		url = fmt.Sprintf("https://%s%s", request.Host, request.URL.EscapedPath())
 	}
 
-	log.Printf("[DEBUG] REDIRECT URI: %s", url)
 	ctx := GetContext(request)
 	_, accessToken, err := GetOutlookClient(ctx, code, OauthToken{}, url)
 	if err != nil {
@@ -1698,7 +1694,6 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Successfully set up cloud (Hybrid) action trigger")
 		}
 	} else {
-		log.Printf("[DEBUG] Should configure a running Office365 environment for CLOUD")
 
 		hook := Hook{
 			Id:        trigger.Id,
@@ -1736,7 +1731,6 @@ func HandleCreateOutlookSub(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//log.Printf("[DEBUG] NOTIFICATION URL OUTLOOK TRIGGER: %s", notificationURL)
 	curSubscriptions, err := getOutlookSubscriptions(outlookClient)
 	if err == nil {
 		for _, sub := range curSubscriptions.Value {
@@ -3531,6 +3525,8 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	grantType := "client_credentials"
 	username := ""
 	password := ""
+
+	log.Printf("[DEBUG] Got %d auth fields (%s)", len(appAuth.Fields), appAuth.Id)
 	for _, field := range appAuth.Fields {
 		if field.Key == "client_secret" {
 			clientSecret = field.Value
@@ -3547,7 +3543,6 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		} else if field.Key == "password" {
 			password = field.Value
 		} else {
-			log.Printf("[INFO] AUTH %s Unparsed oauth2 field '%s' (not critical)", appAuth.Id, field.Key)
 		}
 	}
 
@@ -3659,7 +3654,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		return appAuth, err
 	}
 
-	log.Printf("[DEBUG] Oauth2 data for %s: %d", tokenUrl, newresp.StatusCode)
+	//log.Printf("[DEBUG] Oauth2 data for %s: %d", tokenUrl, newresp.StatusCode)
 	// Check if access_token is in data
 	foundToken := ""
 	if _, ok := data["access_token"]; !ok {
@@ -3716,19 +3711,15 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 			requestData.RedirectUri = field.Value
 		} else if field.Key == "refresh_uri" || field.Key == "refresh_url" {
-			//log.Printf("[DEBUG] Got refresh URL %s", field.Value)
 			refreshUrl = field.Value
 		} else if field.Key == "refresh_token" {
-			log.Printf("[DEBUG] Got refresh token %s", field.Value)
+			//log.Printf("[DEBUG] Got refresh token %s", field.Value)
 			refreshToken = field.Value
 		} else if field.Key == "oauth_url" {
-			//log.Printf("[DEBUG] Got Oauth2 URL %s", field.Value)
 			oauthUrl = field.Value
 		} else {
 			if field.Key == "url" { 
-				log.Printf("[INFO] Unparsed oauth2 field for auth ID %s: '%s' (not critical). Value: %#v", appAuth.Id, field.Key, field.Value)
 			} else {
-				log.Printf("[INFO] Unparsed oauth2 field for auth ID %s: '%s' (not critical)", appAuth.Id, field.Key)
 			}
 		}
 	}
@@ -3741,7 +3732,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		}
 	}
 
-	log.Printf("[DEBUG] Making request with auth %s to %s for Oauth2 token. User: '%s' ('%s')", appAuth.Id, url, user.Username, user.Id)
+	//log.Printf("[DEBUG] Making request with auth %s to %s for Oauth2 token. User: '%s' ('%s')", appAuth.Id, url, user.Username, user.Id)
 	//log.Printf("[DEBUG] Verbose Requestdata: Sending request to %#v with requestdata %#v", url, requestData)
 	if len(url) == 0 {
 		return appAuth, errors.New("No authentication URL provided in Oauth2 request")
@@ -3862,7 +3853,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		if newresp.StatusCode >= 300 {
 			// Printing on error to handle in future instances
-			log.Printf("[ERROR] Oauth2 data for %s: %#v", requestRefreshUrl, newresp)
+			//log.Printf("[ERROR] Oauth2 data for %s: %#v", requestRefreshUrl, newresp)
 			return appAuth, errors.New(fmt.Sprintf("Bad status code in refresh for URL (refresh) %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 

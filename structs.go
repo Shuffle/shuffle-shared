@@ -14,6 +14,16 @@ type AppContext struct {
 	Example string `json:"example,omitempty" datastore:"example,noindex"`
 }
 
+type PipelineRequest struct {
+	Name	   	string `json:"name"`
+	Type 		string `json:"type"`
+	Command		string `json:"command"`
+	Environment string `json:"environment"`
+
+	PipelineId 	string `json:"pipeline_id"`
+	TriggerId	string `json:"trigger_id"`
+}
+
 type QueryInput struct {
 	// Required
 	Query string `json:"query"`
@@ -153,6 +163,9 @@ type WorkflowApp struct {
 	Blogpost                 string              `json:"blogpost" yaml:"blogpost" datastore:"blogpost"`
 	Video                    string              `json:"video" yaml:"video" datastore:"video"`
 	CompanyURL               string              `json:"company_url" datastore:"company_url" required:false yaml:"company_url"`
+
+	Contributors []string `json:"contributors" datastore:"contributors"`
+	RevisionId string `json:"revision_id" datastore:"revision_id"`
 }
 
 type AppVersion struct {
@@ -776,7 +789,11 @@ type Org struct {
 	CloudSyncActive   bool                  `json:"cloud_sync_active" datastore:"CloudSyncActive"`
 	SyncConfig        SyncConfig            `json:"sync_config" datastore:"sync_config"`
 	SyncFeatures      SyncFeatures          `json:"sync_features,omitempty" datastore:"sync_features"`
+
+	SubscriptionUserId string `json:"subscription_user_id" datastore:"subscription_user_id"`
 	Subscriptions     []PaymentSubscription `json:"subscriptions" datastore:"subscriptions"`
+
+
 	SyncUsage         SyncUsage             `json:"sync_usage" datastore:"sync_usage"`
 	Created           int64                 `json:"created" datastore:"created"`
 	Edited            int64                 `json:"edited" datastore:"edited"`
@@ -838,6 +855,7 @@ type CacheKeyData struct {
 	Edited        int64  `json:"edited" datastore:"Edited"`
 
 	FormattedKey string `json:"formatted_key,omitempty" datastore:"FormattedKey"`
+	PublicAuthorization string `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
 }
 
 type SyncConfig struct {
@@ -2321,6 +2339,9 @@ type HandleInfo struct {
 	Support            bool            `json:"support"`
 	Tutorials          []Tutorial      `json:"tutorials"`
 	OrgStatus 		   []string 	   `json:"org_status"`
+
+	HasCardAvailable   bool 		   `json:"has_card_available"`
+	ActivatedPayasyougo bool    	   `json:"activated_pay_as_you_go"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`

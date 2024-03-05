@@ -1661,7 +1661,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	}
 
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && project.Environment != "cloud" {
-		return workflowExecution, nil
+		return workflowExecution, errors.New("ExecutionId doesn't exist in cache")
 	}
 
 	if project.DbType == "opensearch" {
@@ -6429,6 +6429,57 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 	return workflows, nil
 }
 
+func SetAppRevision(ctx context.Context, app WorkflowApp) error {
+	nameKey := "app_revisions"
+	timeNow := int64(time.Now().Unix())
+	app.Edited = timeNow
+	if app.Created == 0 {
+		app.Created = timeNow
+	}
+
+	actionNames := ""
+	for _, action := range app.Actions {
+		actionNames += fmt.Sprintf("%s-", action.Name)
+	}
+
+	appHashString := fmt.Sprintf("%s_%s_%s", app.Name, app.ID, actionNames)
+	hasher := md5.New()
+	hasher.Write([]byte(appHashString))
+	appHash := hex.EncodeToString(hasher.Sum(nil))
+	app.RevisionId = appHash
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(app)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set app revision: %s", err)
+		return nil
+	}
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, app.RevisionId, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, app.RevisionId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &app); err != nil {
+			log.Printf("[WARNING] Error adding app revision: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, app.RevisionId)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for set app revision '%s': %s", cacheKey, err)
+		}
+
+		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, app.ID))
+	}
+
+	return nil
+}
+
 func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 	nameKey := "workflow_revisions"
 	timeNow := int64(time.Now().Unix())
@@ -6647,6 +6698,29 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	workflowappauth.Edited = timeNow
 	workflowappauth.App.Actions = []WorkflowAppAction{}
 
+	if len(workflowappauth.Fields) > 15 {
+		log.Printf("[WARNING][%s] Too many fields for app auth: %d", id, len(workflowappauth.Fields))
+		newfields := []AuthenticationStore{}
+
+		// Rebuilds all fields
+		addedFields := []string{}
+
+		// Run loop backwards due to ordering, as to take last version of all parts
+		for i := len(workflowappauth.Fields) - 1; i >= 0; i-- {
+			field := workflowappauth.Fields[i]
+			if ArrayContains(addedFields, field.Key) {
+				continue
+			}
+
+			addedFields = append(addedFields, field.Key)
+			newfields = append(newfields, field)
+		}
+
+		workflowappauth.Fields = newfields
+
+		log.Printf("[INFO][%s] Reduced fields for app auth to %d", id, len(workflowappauth.Fields))
+	}
+
 	// Will ALWAYS encrypt the values when it's not done already
 	// This makes it so just re-saving the auth will encrypt them (next run)
 
@@ -6697,9 +6771,6 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowappauth); err != nil {
 			log.Printf("[ERROR] Error adding workflow app AUTH %s (%s) with %d fields: %s", workflowappauth.Label, workflowappauth.Id, len(workflowappauth.Fields), err)
-			for _, field := range workflowappauth.Fields {
-				log.Printf("FIELD: %s: %d", field.Key, len(field.Value))
-			}
 
 			return err
 		}
@@ -7688,7 +7759,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			_, err = project.Dbclient.GetAll(ctx, namespaceQuery, &namespaceFiles)
 			if err != nil {
 				log.Printf("[ERROR] Failed loading namespace files: %s", err)
-				return files, nil 
+				return files, nil
 			}
 
 			for _, f := range namespaceFiles {
@@ -9204,12 +9275,13 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheId = cacheId[0:127]
 	}
 
-	// ensures it works in workflows properly
 	// URL encode
 	cacheId = url.QueryEscape(cacheId)
 	cacheData.Authorization = ""
 
-	//log.Printf("Setting cache key: %s", cacheId)
+	if len(cacheData.PublicAuthorization) == 0 {
+		cacheData.PublicAuthorization = uuid.NewV4().String()
+	}
 
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(cacheData)
