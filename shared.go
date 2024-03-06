@@ -784,7 +784,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
-func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
+func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	cors := HandleCors(resp, request)
 	if cors {
@@ -822,7 +822,7 @@ func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
 
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
-	
+
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
 		resp.WriteHeader(401)
@@ -839,23 +839,23 @@ func HandleGetSubOrg(resp http.ResponseWriter , request *http.Request) {
 		return
 	}
 
-    userFound := false
-   
+	userFound := false
+
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
-			  userFound = true
-			}
+			userFound = true
 		}
+	}
 
 	if !userFound {
-		  log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
-		  resp.WriteHeader(401)
-	      resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
-		  return
+		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
+		return
 	}
 
 	subOrgs := []OrgMini{}
-    for _, orgloop := range user.Orgs {
+	for _, orgloop := range user.Orgs {
 		childorg, err := GetOrg(ctx, orgloop)
 		if err != nil {
 			continue
