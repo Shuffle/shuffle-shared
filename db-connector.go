@@ -3483,8 +3483,8 @@ func propagateOrg(org Org) error {
 		return errors.New("no ID provided for org")
 	}
 
-	if len(propagateUrl) == 0 {
-		return errors.New("no PROPAGATE_URL provided")
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
 	}
 
 	log.Printf("[INFO] Asking %s to propagate org %s", propagateUrl, org.Id)
@@ -3516,7 +3516,7 @@ func propagateOrg(org Org) error {
 
 	// Check the response
 	if resp.StatusCode != 200 {
-		log.Printf("[WARNING] Error in propagation: %s with body: %s for org %s", resp.Status, resp.Body, org.Id)
+		log.Printf("[WARNING] Error in propagation: %s for org %s", resp.Status, org.Id)
 		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
 	}
 
@@ -3528,8 +3528,8 @@ func propagateUser(user User) error {
 		return errors.New("no ID provided for user")
 	}
 
-	if len(propagateUrl) == 0 {
-		return errors.New("no PROPAGATE_URL provided")
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
 	}
 
 	log.Printf("[INFO] Asking %s to propagate user %s", propagateUrl, user.Id)
@@ -3562,7 +3562,7 @@ func propagateUser(user User) error {
 
 	// Check the response
 	if resp.StatusCode != 200 {
-		log.Printf("[WARNING] Error in propagation: %s with body: %s for user %s", resp.Status, resp.Body, user.Id)
+		log.Printf("[WARNING] Error in propagation: %s for user %s", resp.Status, user.Id)
 		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
 	}
 
