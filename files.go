@@ -559,6 +559,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		"translation_output",
 		"translation_standards",
 
+		"translation_ai_queries", 
 		"detections",
 	}
 
@@ -567,7 +568,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	// also be environment variables / input arguments
 	filename, filenameOk := request.URL.Query()["filename"]
 	if filenameOk && ArrayContains(reservedCategoryNames, namespace) {
-		log.Printf("\n\n\n[DEBUG] Found name '%s' with reserved category name: %s. Listlength: %d\n\n\n", filename[0], namespace, len(fileResponse.List))
+		log.Printf("[DEBUG] Found name '%s' with reserved category name: %s. Listlength: %d", filename[0], namespace, len(fileResponse.List))
 
 		// Load from Github repo https://github.com/Shuffle/standards
 		if len(fileResponse.List) == 0 {
@@ -577,7 +578,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 
 			foundFiles, err := LoadStandardFromGithub(client, owner, repo, namespace, filename[0])
 			if err != nil {
-				log.Printf("[ERROR] Failed loading file %s in category %s from Github: %s", err)
+				log.Printf("[ERROR] Failed loading file %s in category %s from Github: %s", filename[0], namespace, err)
 			} else {
 				log.Printf("[DEBUG] Found %d files in category %s for filename '%s'", len(foundFiles), namespace, filename[0])
 				for _, item := range foundFiles {
@@ -714,9 +715,10 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				if len(file.ReferenceFileId) > 0 {
 					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
 				}
+
 				data, err := HandleKeyDecryption(allText, passphrase)
 				if err != nil {
-					log.Printf("[ERROR] Failed decrypting file: %s", err)
+					log.Printf("[ERROR] Failed decrypting file (3): %s", err)
 				} else {
 					log.Printf("[DEBUG] File size reduced from %d to %d after decryption (1)", len(allText), len(data))
 					allText = []byte(data)
@@ -858,7 +860,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	downloadPath := file.DownloadPath
 
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		log.Printf("[AUDIT] %s (%s) downloaded file %s from google storage", user.Username, user.Id, file.Id)
+		log.Printf("[AUDIT] %s (%s) downloaded file '%s' (%s) from google storage. Namespace: %s", user.Username, user.Id, file.Filename, file.Id, file.Namespace)
 
 		bucket := project.StorageClient.Bucket(orgFileBucket)
 		obj := bucket.Object(file.DownloadPath)
@@ -902,12 +904,21 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-			if len(file.ReferenceFileId) > 0 {
-				passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
-			}
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
-				log.Printf("[ERROR] Failed decrypting file: %s", err)
+
+				// Reference File Id only used as fallback
+				if len(file.ReferenceFileId) > 0 {
+					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+					data, err = HandleKeyDecryption(allText, passphrase)
+					if err != nil {
+						log.Printf("[ERROR] Failed decrypting file (4): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
+					}
+
+				} else {
+					log.Printf("[ERROR] Failed decrypting file (1): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
+				}
+
 			} else {
 				log.Printf("[DEBUG] File size reduced from %d to %d after decryption (2)", len(allText), len(data))
 				allText = []byte(data)
@@ -981,12 +992,18 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 		if file.Encrypted {
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-			if len(file.ReferenceFileId) > 0 {
-				passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
-			}
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
-				log.Printf("[ERROR] Failed decrypting file: %s", err)
+				if len(file.ReferenceFileId) > 0 {
+					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+					data, err = HandleKeyDecryption(allText, passphrase)
+					if err != nil {
+						log.Printf("[ERROR] Failed decrypting file (5): %s", err)
+					}
+				} else {
+					log.Printf("[ERROR] Failed decrypting file (2): %s", err)
+				}
+
 			} else {
 				log.Printf("[DEBUG] File size reduced from %d to %d after decryption (3)", len(allText), len(data))
 				allText = []byte(data)
