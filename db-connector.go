@@ -6559,15 +6559,8 @@ func SetAppRevision(ctx context.Context, app WorkflowApp) error {
 	}
 
 	actionNames := ""
-	for actionIndex, action := range app.Actions {
+	for _, action := range app.Actions {
 		actionNames += fmt.Sprintf("%s-", action.Name)
-
-		app.Actions[actionIndex].Description = ""
-		app.Actions[actionIndex].Example = ""
-		app.Actions[actionIndex].ExampleResponse = ""
-		app.Actions[actionIndex].LargeImage = ""
-		app.Actions[actionIndex].Parameters = []WorkflowAppActionParameter{}
-
 	}
 
 	appHashString := fmt.Sprintf("%s_%s_%s", app.Name, app.ID, actionNames)
@@ -9403,7 +9396,6 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheId = cacheId[0:127]
 	}
 
-	// ensures it works in workflows properly
 	// URL encode
 	cacheId = url.QueryEscape(cacheId)
 	cacheData.Authorization = ""

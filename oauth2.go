@@ -3513,9 +3513,6 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
-	client := &http.Client{
-		Transport: transport,
-	}
 
 	clientId := ""
 	clientSecret := ""
@@ -3574,6 +3571,8 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 
 
 	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %s. URL: %s", refreshData, tokenUrl)
+
+	client := GetExternalClient(tokenUrl)
 
 	req, err := http.NewRequest(
 		"POST",
@@ -3682,9 +3681,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 10
 	transport.Proxy = nil
-	client := &http.Client{
-		Transport: transport,
-	}
+
 
 	requestData := DataToSend{
 		GrantType: "authorization_code",
@@ -3774,6 +3771,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	if len(refreshToken) == 0 && refresh {
 		refresh = false
 	}
+
+	client := GetExternalClient(url)
 
 	respBody := []byte{}
 	if !refresh {
