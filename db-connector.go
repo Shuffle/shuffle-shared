@@ -49,6 +49,8 @@ var requestCache = cache.New(60*time.Minute, 60*time.Minute)
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
 var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
+var propagateUrl = os.Getenv("SHUFFLE_PROPAGATE_URL")
+var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
@@ -3481,7 +3483,6 @@ func propagateOrg(org Org) error {
 		return errors.New("no ID provided for org")
 	}
 
-	propagateUrl := os.Getenv("PROPAGATE_URL")
 	if len(propagateUrl) == 0 {
 		return errors.New("no PROPAGATE_URL provided")
 	}
@@ -3502,7 +3503,7 @@ func propagateOrg(org Org) error {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", os.Getenv("PROPAGATE_TOKEN"))
+	req.Header.Set("Authorization", propagateToken)
 
 	// Send the request via a client
 	client := &http.Client{}
@@ -3527,7 +3528,6 @@ func propagateUser(user User) error {
 		return errors.New("no ID provided for user")
 	}
 
-	propagateUrl := os.Getenv("PROPAGATE_URL")
 	if len(propagateUrl) == 0 {
 		return errors.New("no PROPAGATE_URL provided")
 	}
@@ -3548,7 +3548,7 @@ func propagateUser(user User) error {
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", os.Getenv("PROPAGATE_TOKEN"))
+	req.Header.Set("Authorization", propagateToken)
 
 	// Send the request via a client
 	client := &http.Client{}
