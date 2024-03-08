@@ -3776,8 +3776,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	respBody := []byte{}
 	if !refresh {
-		//log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
-		log.Printf("[DEBUG] AUTH %s Ran NORMAL oauth2 (no refresh_token) for URL %s.", appAuth.Id, refreshUrl)
+		log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
+		//log.Printf("[DEBUG] AUTH %s Ran NORMAL oauth2 (no refresh_token) for URL %s.", appAuth.Id, refreshUrl)
 		req, err := http.NewRequest(
 			"POST",
 			url,

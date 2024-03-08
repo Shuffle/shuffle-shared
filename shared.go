@@ -7082,13 +7082,6 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// OLD: Invert. No user deletion.
-	//if foundUser.Active {
-	//	foundUser.Active = false
-	//} else {
-	//	foundUser.Active = true
-	//}
-
 	// NEW
 	neworgs := []string{}
 	for _, orgid := range foundUser.Orgs {
@@ -12036,7 +12029,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					log.Printf("[DEBUG] len(executionArgument) is %d for execution Id %s", len(workflowExecution.ExecutionArgument), workflowExecution.ExecutionId)
 
 					fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, actionId)
-					log.Printf("[DEBUG] Saving value of %s to storage path %s", actionId, fullParsedPath)
+					//log.Printf("[DEBUG] Saving value of %s to storage path %s", actionId, fullParsedPath)
 					bucket := project.StorageClient.Bucket(bucketName)
 					obj := bucket.Object(fullParsedPath)
 					w := obj.NewWriter(ctx)
@@ -12067,7 +12060,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 				for _, item := range workflowExecution.Results {
 					//log.Printf("[DEBUG] Result length is %d for execution Id %s (%s)", len(item.Result), workflowExecution.ExecutionId, saveLocationInfo)
 					if len(item.Result) > maxSize {
-						log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
+						//log.Printf("[WARNING][%s](%s) result length is larger than maxSize for %s (%d)", workflowExecution.ExecutionId, saveLocationInfo, item.Action.Label, len(item.Result))
 
 						itemSize := len(item.Result)
 						baseResult := fmt.Sprintf(`{
@@ -12082,10 +12075,10 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 						// 2. If it doesn't exist, add it
 						_, err := getExecutionFileValue(ctx, workflowExecution, item)
 						if err == nil {
-							log.Printf("[DEBUG] Found execution locally for %s. Not saving another.", item.Action.Label)
+							//log.Printf("[DEBUG][%s] Found execution file locally for '%s'. Not saving another.", workflowExecution.ExecutionId, item.Action.Label)
 						} else {
 							fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, item.Action.ID)
-							log.Printf("[DEBUG] (1) Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
+							//log.Printf("[DEBUG] (1) Saving value of %s to storage path %s", item.Action.ID, fullParsedPath)
 							bucket := project.StorageClient.Bucket(bucketName)
 							obj := bucket.Object(fullParsedPath)
 							w := obj.NewWriter(ctx)
@@ -12158,10 +12151,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 					}
 				}
 			}
-
-			//log.Printf("[DEBUG] Execution size now: %d for %s where executionArgument is %d and results is %d", len(tmpJson), workflowExecution.ExecutionId, len(workflowExecution.ExecutionArgument), len(workflowExecution.Results))
 		}
 	}
+
 
 	return workflowExecution, dbSave
 }
@@ -21852,6 +21844,7 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
+
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
