@@ -49,6 +49,8 @@ var requestCache = cache.New(60*time.Minute, 60*time.Minute)
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
 var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
+var propagateUrl = os.Getenv("SHUFFLE_PROPAGATE_URL")
+var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
@@ -3496,6 +3498,97 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	return &org
 }
 
+func propagateOrg(org Org) error {
+	if len(org.Id) == 0 {
+		return errors.New("no ID provided for org")
+	}
+
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
+	}
+
+	log.Printf("[INFO] Asking %s to propagate org %s", propagateUrl, org.Id)
+
+	data := map[string]string{"mode": "org", "orgId": org.Id}
+
+	reqBody, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", propagateUrl, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", propagateToken)
+
+	// Send the request via a client
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Check the response
+	if resp.StatusCode != 200 {
+		log.Printf("[WARNING] Error in propagation: %s for org %s", resp.Status, org.Id)
+		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
+	}
+
+	return nil
+}
+
+func propagateUser(user User) error {
+	if len(user.Id) == 0 {
+		return errors.New("no ID provided for user")
+	}
+
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
+	}
+
+	log.Printf("[INFO] Asking %s to propagate user %s", propagateUrl, user.Id)
+
+	data := map[string]string{"mode": "user", "userId": user.Id}
+
+	reqBody, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", propagateUrl, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", propagateToken)
+
+	// Send the request via a client
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Check the response
+	if resp.StatusCode != 200 {
+		log.Printf("[WARNING] Error in propagation: %s for user %s", resp.Status, user.Id)
+		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
+	}
+
+	return nil
+}
+
 func SetOrg(ctx context.Context, data Org, id string) error {
 	if len(id) == 0 {
 		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
@@ -3566,6 +3659,16 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
 			log.Println(err)
 			return err
+		}
+
+		if data.Region != "" && data.Region != "europe-west2" && gceProject == "shuffler" {
+			go func() {
+				log.Printf("[INFO] Propagating org %s", data.Id)
+				err := propagateOrg(data)
+				if err != nil {
+					log.Printf("[WARNING] Failed propagating org %s: %s", data.Id, err)
+				}
+			}()
 		}
 	}
 
@@ -4465,6 +4568,24 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			log.Printf("[WARNING] Error updating user: %s", err)
 			return err
 		}
+
+		userOrgId := user.ActiveOrg.Id
+		userOrg, err := GetOrg(ctx, userOrgId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org %s in SetUser: %s", userOrgId, err)
+			return err
+		}
+
+		if userOrg.Region != "" && userOrg.Region != "europe-west2" && gceProject == "shuffler" {
+			go func() {
+				log.Printf("[INFO] Updating user %s in org %s with region %s", user.Username, userOrg.Name, userOrg.Region)
+				err = propagateUser(*user)
+				if err != nil {
+					log.Printf("[WARNING] Failed propagating user %s to region %s: %s", user.Username, userOrg.Region, err)
+				}
+			}()
+		}
+
 	}
 
 	DeleteCache(ctx, user.ApiKey)
