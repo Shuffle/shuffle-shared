@@ -1564,7 +1564,10 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	}
 
 	// Update WorkflowExecution.Result to be correct
-	if finalWorkflowExecution.Status == "FINISHED" || finalWorkflowExecution.Status == "ABORTED" { 
+	if finalWorkflowExecution.Status == "ABORTED" {
+		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
+	} else  if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED"  { 
+		//log.Printf("\n\n[DEBUG] Finding new response value\n\n")
 		lastResult := ""
 		lastCompleted := int64(-1)
 		for _, result := range finalWorkflowExecution.Results {
