@@ -12412,7 +12412,7 @@ func GetExecutionbody(body []byte) string {
 	}
 
 	if !strings.HasPrefix(parsedBody, "{") && !strings.HasPrefix(parsedBody, "[") && strings.Contains(parsedBody, "=") {
-		log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML)", parsedBody)
+		//log.Printf("[DEBUG] Trying to make string %s to json (skipping if XML, doing queries & k:v)", parsedBody)
 
 		// Dumb XML handler
 		if strings.HasPrefix(strings.TrimSpace(parsedBody), "<") && strings.HasSuffix(strings.TrimSpace(parsedBody), ">") {
@@ -13808,11 +13808,6 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		workflowExecution.Authorization = uuid.NewV4().String()
 	}
 
-	// Allows for execution auth AND user auth
-
-	log.Printf("[INFO] AUTH1: %s, AUTH2: %s", workflowExecution.Authorization, tmpData.Authorization)
-
-
 	if workflowExecution.Authorization != tmpData.Authorization || len(tmpData.Authorization) == 0 || len(workflowExecution.Authorization) == 0 {
 
 		// Get the user?
@@ -13863,9 +13858,9 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	err = SetCacheKey(ctx, tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
+		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "Failed to set data"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed to set data. Please try again, or contact support@shuffler.io"}`))
 		return
 	}
 

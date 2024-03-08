@@ -3722,7 +3722,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if len(requestData.ClientSecret) == 0 && len(requestData.ClientId) > 0 {
-		log.Printf("[INFO] Should query db for secret based on ID %s", requestData.ClientId)
 		oauth2data, err := GetHostedOAuth(ctx, requestData.ClientId)
 		if err == nil && len(oauth2data.ClientSecret) > 0 {
 			requestData.ClientSecret = oauth2data.ClientSecret
@@ -3776,8 +3775,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	respBody := []byte{}
 	if !refresh {
-		log.Printf("[DEBUG] Ran NORMAL oauth2 for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
-		//log.Printf("[DEBUG] AUTH %s Ran NORMAL oauth2 (no refresh_token) for URL %s.", appAuth.Id, refreshUrl)
 		req, err := http.NewRequest(
 			"POST",
 			url,
@@ -3812,8 +3809,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 			return appAuth, errors.New(fmt.Sprintf("Bad status code for URL (NOT refresh) %s: %d. Message: %s", url, newresp.StatusCode, respBody))
 		}
 	} else {
-		//log.Printf("[DEBUG] Ran refresh for URL %s. Fields: %#v", refreshUrl, appAuth.Fields)
-		log.Printf("[DEBUG] AUTH %s Ran refresh for URL %s.", appAuth.Id, refreshUrl)
+		//log.Printf("[DEBUG] AUTH %s Ran refresh for URL %s.", appAuth.Id, refreshUrl)
 
 		if len(refreshToken) == 0 {
 			log.Printf("[ERROR] No refresh token acquired for %s", refreshUrl)
@@ -3839,8 +3835,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		if err != nil {
 			return appAuth, err
 		}
-
-		log.Printf("[DEBUG] Refresh Response for %s: %d", requestRefreshUrl, newresp.StatusCode)
 
 		defer newresp.Body.Close()
 		body, err := ioutil.ReadAll(newresp.Body)
