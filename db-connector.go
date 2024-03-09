@@ -5628,9 +5628,9 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 }
 
 func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
-    wrapper := []WorkflowApp{}
+	wrapper := []WorkflowApp{}
 	var err error
-	
+
 	cacheKey := fmt.Sprintf("userapps-sorted-%d", 1000)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -5640,9 +5640,9 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			if err == nil {
 				return wrapper, nil
 			}
-		} 
+		}
 	}
-	
+
 	userApps := []WorkflowApp{}
 	indexName := "workflowapp"
 	if project.DbType == "opensearch" {
@@ -5722,28 +5722,28 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 				innerApp := WorkflowApp{}
 				_, err := it.Next(&innerApp)
 				if err != nil {
-						break
+					break
 				}
 				userApps = append(userApps, innerApp)
-	         }
-			 if err != iterator.Done {
+			}
+			if err != iterator.Done {
 				log.Printf("[ERROR] Failed fetching results: %v", err)
-			 }
-			 // Get the cursor for the next page of results.
-			 nextCursor, err := it.Cursor()
-			 if err != nil {
-				 log.Printf("Cursor error: %s", err)
-				 break
-			 } else {
-				 nextStr := fmt.Sprintf("%s", nextCursor)
-				 if cursorStr == nextStr {
-					 // Break the loop if the cursor is the same as the previous one
-					 break
-				 }
-		 
-				 cursorStr = nextStr
-				 query = query.Start(nextCursor)
-			 }
+			}
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursor error: %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					// Break the loop if the cursor is the same as the previous one
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
 		}
 	}
 	if project.CacheDb {
@@ -5757,7 +5757,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			log.Printf("[WARNING] Failed marshalling execution: %s", err)
 		}
 	}
-		 
+
 	return userApps, nil
 }
 
