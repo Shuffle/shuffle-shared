@@ -2732,6 +2732,70 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
+func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := context.Background()
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in get all apps - this does NOT require auth in the cloud.: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	workflowapps, err := GetUserApps(ctx, user.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps (getworkflowapps): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	/*filteredApps := workflowapps[:0]
+	for _, app := range workflowapps {
+		if app.Owner == user.Id {
+			filteredApps = append(filteredApps, app)
+		} else if app.Contributors != nil {
+			for _, contributor := range app.Contributors {
+				if contributor == user.Id {
+					filteredApps = append(filteredApps, app)
+				}
+			}
+		}
+	}
+
+	if len(user.PrivateApps) > 0 {
+		for _, item := range user.PrivateApps {
+			found := false
+			for _, app := range filteredApps {
+				if item.ID == app.ID || !(item.Owner == user.Id) {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				filteredApps = append(filteredApps, item)
+			}
+		}
+	}*/
+
+	newbody, err := json.Marshal(workflowapps)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling all newapps: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflow apps"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newbody)
+}
+
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
