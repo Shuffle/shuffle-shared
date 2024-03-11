@@ -319,10 +319,13 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig string) 
 	}
 
 	// We need to check if the response is in the format we expect
+	/*
+	// Without key IS ok.
 	if _, ok := labeledResponse["kms_key"]; !ok {
 		log.Printf("[ERROR] KMS response does not contain the key 'kms_key'")
 		return "", errors.New("KMS response does not contain the key 'kms_key'")
 	}
+	*/
 
 	if _, ok := labeledResponse["kms_value"]; !ok {
 		log.Printf("[ERROR] KMS response does not contain the key 'kms_value'")

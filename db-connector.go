@@ -49,10 +49,15 @@ var requestCache = cache.New(60*time.Minute, 60*time.Minute)
 var memcached = os.Getenv("SHUFFLE_MEMCACHED")
 var mc = gomemcache.New(memcached)
 var gceProject = os.Getenv("SHUFFLE_GCEPROJECT")
+var propagateUrl = os.Getenv("SHUFFLE_PROPAGATE_URL")
+var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
-//var maxCacheSize = 2000000
+// Dumps data from cache to DB for every 5 action (old was 25)
+// var dumpInterval = 0x19
+// var dumpInterval = 0x1
+var dumpInterval = 0xA
 
 type ShuffleStorage struct {
 	GceProject    string
@@ -78,10 +83,6 @@ func GetESIndexPrefix(index string) string {
 	return index
 }
 
-// Dumps data from cache to DB for every 5 action (old was 25)
-// var dumpInterval = 0x19
-// var dumpInterval = 0x1
-var dumpInterval = 0x5
 
 // 1. Check list if there is a record for yesterday
 // 2. If there isn't, set it and clear out the daily records
@@ -989,10 +990,12 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		//log.Printf("[INFO] Successfully saved new execution %s. Timestamp: %d!", workflowExecution.ExecutionId, workflowExecution.StartedAt)
 	} else {
-		//log.Printf("[DEBUG][%s] compressing Workflow Execution with status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+
+		// Compresses and removes unecessary things
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
 
-		//log.Printf("[DEBUG][%s] Saving compressed Workflow Execution with status: %s", workflowExecution.ExecutionId, workflowExecution.Status)
+		// Setting to nothing as this is realtime calculated anyway
+		workflowExecution.Result = ""
 
 		// Print 1 out of X times as a debug mode
 		if rand.Intn(20) == 1 {
@@ -1001,13 +1004,16 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 		key := datastore.NameKey(nameKey, strings.ToLower(workflowExecution.ExecutionId), nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
-			log.Printf("[ERROR] Problem adding workflow_execution to datastore: %s", err)
 			if strings.Contains(fmt.Sprintf("%s", err), "context deadline exceeded") {
-				log.Printf("[ERROR] Context deadline exceeded. Retrying...")
+				log.Printf("[ERROR][%s] Context deadline exceeded. Retrying...", workflowExecution.ExecutionId)
 				ctx := context.Background()
 				if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
 					log.Printf("[ERROR] Workflow execution Error number 1: %s", err)
 				}
+			} else if strings.Contains(fmt.Sprintf("%s", err), "context canceled") {
+				log.Printf("[ERROR][%s] Context canceled, most likely with manual timeout: %s", workflowExecution.ExecutionId, err)
+			} else {
+				log.Printf("[ERROR][%s] Problem adding workflow_execution to datastore: %s", workflowExecution.ExecutionId, err)
 			}
 
 			// Has to do with certain data coming back in parameters where it shouldn't, causing saving to be impossible
@@ -1557,6 +1563,29 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 	}
 
+	// Update WorkflowExecution.Result to be correct
+	if finalWorkflowExecution.Status == "ABORTED" {
+		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
+	} else  if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED"  { 
+		//log.Printf("\n\n[DEBUG] Finding new response value\n\n")
+		lastResult := ""
+		lastCompleted := int64(-1)
+		for _, result := range finalWorkflowExecution.Results {
+			if result.Status == "SUCCESS" && result.CompletedAt > lastCompleted {
+				lastResult = result.Result
+				lastCompleted = result.CompletedAt
+			}
+		}
+
+		if len(lastResult) > 0 {
+			finalWorkflowExecution.Result = lastResult
+		} else {
+			if len(finalWorkflowExecution.Result) == 0 && len(finalWorkflowExecution.Workflow.DefaultReturnValue) > 0 {
+				finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
+			}
+		}
+	}
+
 	return finalWorkflowExecution, dbsave
 }
 
@@ -1627,19 +1656,17 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 					newValue, err := getExecutionFileValue(ctx, *workflowExecution, *baseArgument)
 					if err != nil {
-						log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (3)", err)
+						log.Printf("[DEBUG][%s] Failed to parse in execution file value for exec argument: %s (3)", workflowExecution.ExecutionId, err)
 					} else {
-						log.Printf("[DEBUG] Found a new value to parse with exec argument")
+						log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
 						workflowExecution.ExecutionArgument = newValue
 					}
 				}
 
 				for valueIndex, value := range workflowExecution.Results {
 					if strings.Contains(value.Result, "Result too large to handle") {
-						//log.Printf("[DEBUG] Found prefix %s to be replaced (1)", value.Result)
 						newValue, err := getExecutionFileValue(ctx, *workflowExecution, value)
 						if err != nil {
-							//log.Printf("[DEBUG] Failed to parse result in execution file value %s (1)", err)
 							continue
 						}
 
@@ -1651,7 +1678,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 				newexec, _ := Fixexecution(ctx, *workflowExecution)
 				workflowExecution = &newexec
 
-				//log.Printf("[DEBUG][%s] Returned execution from cache with %d results", id, len(workflowExecution.Results))
 				return workflowExecution, nil
 			} else {
 				//log.Printf("[WARNING] Failed getting workflowexecution: %s", err)
@@ -1667,7 +1693,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	if project.DbType == "opensearch" {
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			log.Printf("[WARNING][%s] Error for %s: %s", workflowExecution.ExecutionId, cacheKey, err)
 			return workflowExecution, err
 		}
 
@@ -1688,7 +1714,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			return workflowExecution, err
 		}
 
-		//log.Printf("[DEBUG] Found execution %s from ES with %d results. Actions: %d", id, len(wrapped.Source.Results), len(wrapped.Source.Workflow.Actions))
 		workflowExecution = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
@@ -3476,6 +3501,97 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	return &org
 }
 
+func propagateOrg(org Org) error {
+	if len(org.Id) == 0 {
+		return errors.New("no ID provided for org")
+	}
+
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
+	}
+
+	log.Printf("[INFO] Asking %s to propagate org %s", propagateUrl, org.Id)
+
+	data := map[string]string{"mode": "org", "orgId": org.Id}
+
+	reqBody, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", propagateUrl, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", propagateToken)
+
+	// Send the request via a client
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Check the response
+	if resp.StatusCode != 200 {
+		log.Printf("[WARNING] Error in propagation: %s for org %s", resp.Status, org.Id)
+		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
+	}
+
+	return nil
+}
+
+func propagateUser(user User) error {
+	if len(user.Id) == 0 {
+		return errors.New("no ID provided for user")
+	}
+
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
+	}
+
+	log.Printf("[INFO] Asking %s to propagate user %s", propagateUrl, user.Id)
+
+	data := map[string]string{"mode": "user", "userId": user.Id}
+
+	reqBody, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequest("POST", propagateUrl, bytes.NewBuffer(reqBody))
+	if err != nil {
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", propagateToken)
+
+	// Send the request via a client
+	client := &http.Client{}
+	resp, err := client.Do(req)
+
+	if err != nil {
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Check the response
+	if resp.StatusCode != 200 {
+		log.Printf("[WARNING] Error in propagation: %s for user %s", resp.Status, user.Id)
+		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
+	}
+
+	return nil
+}
+
 func SetOrg(ctx context.Context, data Org, id string) error {
 	if len(id) == 0 {
 		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
@@ -3546,6 +3662,16 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		if _, err := project.Dbclient.Put(ctx, k, &data); err != nil {
 			log.Println(err)
 			return err
+		}
+
+		if data.Region != "" && data.Region != "europe-west2" && gceProject == "shuffler" {
+			go func() {
+				log.Printf("[INFO] Propagating org %s", data.Id)
+				err := propagateOrg(data)
+				if err != nil {
+					log.Printf("[WARNING] Failed propagating org %s: %s", data.Id, err)
+				}
+			}()
 		}
 	}
 
@@ -4445,6 +4571,24 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			log.Printf("[WARNING] Error updating user: %s", err)
 			return err
 		}
+
+		userOrgId := user.ActiveOrg.Id
+		userOrg, err := GetOrg(ctx, userOrgId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org %s in SetUser: %s", userOrgId, err)
+			return err
+		}
+
+		if userOrg.Region != "" && userOrg.Region != "europe-west2" && gceProject == "shuffler" {
+			go func() {
+				log.Printf("[INFO] Updating user %s in org %s with region %s", user.Username, userOrg.Name, userOrg.Region)
+				err = propagateUser(*user)
+				if err != nil {
+					log.Printf("[WARNING] Failed propagating user %s to region %s: %s", user.Username, userOrg.Region, err)
+				}
+			}()
+		}
+
 	}
 
 	DeleteCache(ctx, user.ApiKey)
@@ -6698,8 +6842,8 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	workflowappauth.Edited = timeNow
 	workflowappauth.App.Actions = []WorkflowAppAction{}
 
-	if len(workflowappauth.Fields) > 15 {
-		log.Printf("[WARNING][%s] Too many fields for app auth: %d", id, len(workflowappauth.Fields))
+	if len(workflowappauth.Fields) > 20 {
+		//log.Printf("[WARNING][%s] Too many fields for app auth: %d", id, len(workflowappauth.Fields))
 		newfields := []AuthenticationStore{}
 
 		// Rebuilds all fields
@@ -6718,7 +6862,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 
 		workflowappauth.Fields = newfields
 
-		log.Printf("[INFO][%s] Reduced fields for app auth to %d", id, len(workflowappauth.Fields))
+		log.Printf("[INFO][%s] Reduced auth fields for app auth to %d", id, len(workflowappauth.Fields))
 	}
 
 	// Will ALWAYS encrypt the values when it's not done already
