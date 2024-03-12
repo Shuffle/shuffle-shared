@@ -840,14 +840,33 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	userFound := false
-
+	parentUser := false
+	parent := Org{}
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
 			userFound = true
+			break
+		}
+	}
+    var err error
+	if org.CreatorOrg != "" {
+		parent, err = GetOrg(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting parent org '%s': %s", org.CreatorOrg, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting parent org details"}`))
+			return
+		}
+
+		for _, inneruser := range parent.Users {
+			if inneruser.Id == user.Id {
+				parentUser = true
+				break
+			}
 		}
 	}
 
-	if !userFound {
+	if !userFound && !parentUser && !user.SupportAccess == false {
 		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
@@ -855,46 +874,70 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	subOrgs := []OrgMini{}
-	for _, orgloop := range user.Orgs {
+	parentOrg := OrgMini{}
+	isSupportOrAdmin := user.SupportAccess == true || user.Role == "admin"
+	for _, orgloop := range org.ChildOrgs {
 		childorg, err := GetOrg(ctx, orgloop)
 		if err != nil {
 			continue
 		}
 
 		found := false
-		for _, userloop := range childorg.Users {
-			if userloop.Id == user.Id {
-				found = true
+		if !isSupportOrAdmin {
+			for _, userloop := range childorg.Users {
+				if userloop.Id == user.Id {
+					found = true
+					break
+				}
 			}
 		}
 
-		if !found {
+		if !found && !isSupportOrAdmin {
 			continue
 		}
 
-		if childorg.CreatorOrg == org.Id {
-			subOrgs = append(subOrgs, OrgMini{
-				Id:         childorg.Id,
-				Name:       childorg.Name,
-				Role:       childorg.Role,
-				CreatorOrg: childorg.CreatorOrg,
-				Image:      childorg.Image,
-				RegionUrl:  childorg.RegionUrl,
-			})
-		}
+		subOrgs = append(subOrgs, OrgMini{
+			Id:         childorg.Id,
+			Name:       childorg.Name,
+			Role:       childorg.Role,
+			CreatorOrg: childorg.CreatorOrg,
+			Image:      childorg.Image,
+			RegionUrl:  childorg.RegionUrl,
+		})
 	}
 
-	orgjson, err := json.Marshal(subOrgs)
+	if org.CreatorOrg != "" && (parentUser || user.SupportAccess == true) {
+		parentOrg = OrgMini{
+			Id:         parent.Id,
+			Name:       parent.Name,
+			Role:       parent.Role,
+			CreatorOrg: parent.CreatorOrg,
+			Image:      parent.Image,
+			RegionUrl:  parent.RegionUrl,
+		}
 
+	}
+
+	subOrgJSON, err := json.Marshal(subOrgs)
 	if err != nil {
-		log.Printf("[ERROR] Failed unmarshal of org %s (%s): %s", org.Name, org.Id, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking"}`)))
+		log.Printf("[ERROR] Failed to marshal suborgs: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed marshaling suborgs"}`))
 		return
 	}
 
+	parentOrgJSON, err := json.Marshal(parentOrg)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal parent org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed marshaling parent org details"}`))
+		return
+	}
+
+	finalResponse := fmt.Sprintf(`{"subOrgs":%s, "parentOrg":%s}`, subOrgJSON, parentOrgJSON)
+
 	resp.WriteHeader(200)
-	resp.Write(orgjson)
+	resp.Write(finalResponse)
 
 }
 
