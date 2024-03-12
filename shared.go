@@ -922,7 +922,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		"parentOrg": parentOrg,
 	}
 
-	if len(parentOrg.Id) == 0 {
+	if len(parentOrg.Id) == 0 || !parentUser{
 		data["parentOrg"] = nil 
 	}
 
