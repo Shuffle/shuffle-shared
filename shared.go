@@ -922,6 +922,10 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		"parentOrg": parentOrg,
 	}
 
+	if len(parentOrg.Id) == 0 {
+		data["parentOrg"] = nil 
+	}
+
 	finalResponse, err := json.Marshal(data)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal JSON response: %s", err)
