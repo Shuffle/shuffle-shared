@@ -917,26 +917,23 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	}
 
-	subOrgJSON, err := json.Marshal(subOrgs)
+	data := map[string]interface{}{
+		"subOrgs":   subOrgs,
+		"parentOrg": parentOrg,
+	}
+
+	finalResponse, err := json.Marshal(data)
 	if err != nil {
-		log.Printf("[ERROR] Failed to marshal suborgs: %s", err)
+		log.Printf("[ERROR] Failed to marshal JSON response: %s", err)
 		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed marshaling suborgs"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed marshaling JSON response"}`))
 		return
 	}
 
-	parentOrgJSON, err := json.Marshal(parentOrg)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal parent org: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed marshaling parent org details"}`))
-		return
-	}
-
-	finalResponse := fmt.Sprintf(`{"subOrgs":%s, "parentOrg":%s}`, subOrgJSON, parentOrgJSON)
-
+	resp.Header().Set("Content-Type", "application/json")
 	resp.WriteHeader(200)
-	resp.Write([]byte(finalResponse))
+	resp.Write(finalResponse)
+
 }
 
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {
