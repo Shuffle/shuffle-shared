@@ -819,7 +819,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	if strings.Contains(orgId, "?") {
 		orgId = strings.Split(orgId, "?")[0]
 	}
-
+	var err error
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
 
@@ -841,14 +841,13 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	userFound := false
 	parentUser := false
-	parent := Org{}
+	var parent *Org
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
 			userFound = true
 			break
 		}
 	}
-    var err error
 	if org.CreatorOrg != "" {
 		parent, err = GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
@@ -866,7 +865,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if !userFound && !parentUser && !user.SupportAccess == false {
+	if !userFound && !parentUser && !user.SupportAccess {
 		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
@@ -875,9 +874,9 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	subOrgs := []OrgMini{}
 	parentOrg := OrgMini{}
-	isSupportOrAdmin := user.SupportAccess == true || user.Role == "admin"
+	isSupportOrAdmin := user.SupportAccess || user.Role == "admin"
 	for _, orgloop := range org.ChildOrgs {
-		childorg, err := GetOrg(ctx, orgloop)
+		childorg, err := GetOrg(ctx, orgloop.Id)
 		if err != nil {
 			continue
 		}
@@ -906,7 +905,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		})
 	}
 
-	if org.CreatorOrg != "" && (parentUser || user.SupportAccess == true) {
+	if org.CreatorOrg != "" && (parentUser || user.SupportAccess) {
 		parentOrg = OrgMini{
 			Id:         parent.Id,
 			Name:       parent.Name,
@@ -937,8 +936,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	finalResponse := fmt.Sprintf(`{"subOrgs":%s, "parentOrg":%s}`, subOrgJSON, parentOrgJSON)
 
 	resp.WriteHeader(200)
-	resp.Write(finalResponse)
-
+	resp.Write([]byte(finalResponse))
 }
 
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {
