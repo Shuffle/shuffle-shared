@@ -882,7 +882,6 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				continue
 			}
-
 			subOrgs = append(subOrgs, OrgMini{
 				Id:         childorg.Id,
 				Name:       childorg.Name,
@@ -896,6 +895,16 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		for _, orgloop := range user.Orgs {
 			childorg, err := GetOrg(ctx, orgloop)
 			if err != nil {
+				continue
+			}
+			found := false
+			for _, userloop := range childorg.Users {
+				if userloop.Id == user.Id {
+					found = true
+				}
+			}
+	
+			if !found {
 				continue
 			}
 
@@ -945,7 +954,6 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(finalResponse)
 
 }
-
 
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
