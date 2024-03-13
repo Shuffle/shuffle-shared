@@ -840,7 +840,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	userFound := false
-	parentUser := false  // to check if the user belongs to the parent
+	parentUser := false // to check if the user belongs to the parent
 	var parent *Org
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
@@ -875,27 +875,14 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	subOrgs := []OrgMini{}
 	parentOrg := OrgMini{}
 	isSupportOrAdmin := user.SupportAccess || user.Role == "admin"
-	for _, orgloop := range user.Orgs {
-		childorg, err := GetOrg(ctx, orgloop)
-		if err != nil {
-			continue
-		}
 
-		found := false
-		if !isSupportOrAdmin {
-			for _, userloop := range childorg.Users {
-				if user.Id == userloop.Id {
-					found = true
-					break
-				}
+	if isSupportOrAdmin {
+		for _, orgloop := range org.ChildOrgs {
+			childorg, err := GetOrg(ctx, orgloop.Id)
+			if err != nil {
+				continue
 			}
-		}
 
-		if !found && !isSupportOrAdmin {
-			continue
-		}
-
-		if childorg.CreatorOrg == org.Id {
 			subOrgs = append(subOrgs, OrgMini{
 				Id:         childorg.Id,
 				Name:       childorg.Name,
@@ -905,8 +892,25 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 				RegionUrl:  childorg.RegionUrl,
 			})
 		}
-	}
+	} else {
+		for _, orgloop := range user.Orgs {
+			childorg, err := GetOrg(ctx, orgloop)
+			if err != nil {
+				continue
+			}
 
+			if childorg.CreatorOrg == org.Id {
+				subOrgs = append(subOrgs, OrgMini{
+					Id:         childorg.Id,
+					Name:       childorg.Name,
+					Role:       childorg.Role,
+					CreatorOrg: childorg.CreatorOrg,
+					Image:      childorg.Image,
+					RegionUrl:  childorg.RegionUrl,
+				})
+			}
+		}
+	}
 	if org.CreatorOrg != "" && (parentUser || user.SupportAccess) {
 		parentOrg = OrgMini{
 			Id:         parent.Id,
@@ -924,8 +928,8 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		"parentOrg": parentOrg,
 	}
 
-	if len(parentOrg.Id) == 0 || !parentUser{
-		data["parentOrg"] = nil 
+	if len(parentOrg.Id) == 0 || !parentUser {
+		data["parentOrg"] = nil
 	}
 
 	finalResponse, err := json.Marshal(data)
@@ -941,6 +945,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(finalResponse)
 
 }
+
 
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
