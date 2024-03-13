@@ -840,7 +840,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	userFound := false
-	parentUser := false
+	parentUser := false  // to check if the user belongs to the parent
 	var parent *Org
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
@@ -875,8 +875,8 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	subOrgs := []OrgMini{}
 	parentOrg := OrgMini{}
 	isSupportOrAdmin := user.SupportAccess || user.Role == "admin"
-	for _, orgloop := range org.ChildOrgs {
-		childorg, err := GetOrg(ctx, orgloop.Id)
+	for _, orgloop := range user.Orgs {
+		childorg, err := GetOrg(ctx, orgloop)
 		if err != nil {
 			continue
 		}
@@ -884,7 +884,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		found := false
 		if !isSupportOrAdmin {
 			for _, userloop := range childorg.Users {
-				if userloop.Id == user.Id {
+				if user.Id == userloop.Id {
 					found = true
 					break
 				}
@@ -895,14 +895,16 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		subOrgs = append(subOrgs, OrgMini{
-			Id:         childorg.Id,
-			Name:       childorg.Name,
-			Role:       childorg.Role,
-			CreatorOrg: childorg.CreatorOrg,
-			Image:      childorg.Image,
-			RegionUrl:  childorg.RegionUrl,
-		})
+		if childorg.CreatorOrg == org.Id {
+			subOrgs = append(subOrgs, OrgMini{
+				Id:         childorg.Id,
+				Name:       childorg.Name,
+				Role:       childorg.Role,
+				CreatorOrg: childorg.CreatorOrg,
+				Image:      childorg.Image,
+				RegionUrl:  childorg.RegionUrl,
+			})
+		}
 	}
 
 	if org.CreatorOrg != "" && (parentUser || user.SupportAccess) {
