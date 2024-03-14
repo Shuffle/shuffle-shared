@@ -5631,7 +5631,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 	wrapper := []WorkflowApp{}
 	var err error
 
-	cacheKey := fmt.Sprintf("userapps-sorted-%d", 1000)
+	cacheKey := fmt.Sprintf("userapps-%d", userId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -5663,8 +5663,9 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 							},
 						},
 						{
-							"terms": map[string]interface{}{
-								"contributors": []string{userId},
+						  "match": map[string]interface{}{
+							"contributors": userId,
+						  }
 							},
 						},
 					},
