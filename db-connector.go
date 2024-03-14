@@ -5631,7 +5631,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 	wrapper := []WorkflowApp{}
 	var err error
 
-	cacheKey := fmt.Sprintf("userapps-%d", userId)
+	cacheKey := fmt.Sprintf("userapps-%s", userId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -5665,14 +5665,13 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 						{
 						  "match": map[string]interface{}{
 							"contributors": userId,
-						  }
+						  },
 							},
 						},
 					},
 					"minimum_should_match": 1,
 				},
-			},
-		}
+			}		
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
