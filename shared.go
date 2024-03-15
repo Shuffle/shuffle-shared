@@ -784,6 +784,177 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Checking if it's a special region. All user-specific requests should
+	// go through shuffler.io and not subdomains
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	var orgId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		orgId = location[4]
+	}
+
+	if strings.Contains(orgId, "?") {
+		orgId = strings.Split(orgId, "?")[0]
+	}
+	var err error
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	org, err := GetOrg(ctx, orgId)
+
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", orgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+		return
+	}
+
+	userFound := false
+	parentUser := false // to check if the user belongs to the parent
+	var parent *Org
+	for _, inneruser := range org.Users {
+		if inneruser.Id == user.Id {
+			userFound = true
+			break
+		}
+	}
+	if org.CreatorOrg != "" {
+		parent, err = GetOrg(ctx, org.CreatorOrg)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting parent org '%s': %s", org.CreatorOrg, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting parent org details"}`))
+			return
+		}
+
+		for _, inneruser := range parent.Users {
+			if inneruser.Id == user.Id {
+				parentUser = true
+				break
+			}
+		}
+	}
+
+	if !userFound && !parentUser && !user.SupportAccess {
+		log.Printf("[ERROR] User '%s' (%s) isn't a part of org %s (get)", user.Username, user.Id, orgId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
+		return
+	}
+
+	subOrgs := []OrgMini{}
+	parentOrg := OrgMini{}
+	isSupportOrAdmin := user.SupportAccess || user.Role == "admin"
+
+	if isSupportOrAdmin {
+		for _, orgloop := range org.ChildOrgs {
+			childorg, err := GetOrg(ctx, orgloop.Id)
+			if err != nil {
+				continue
+			}
+			subOrgs = append(subOrgs, OrgMini{
+				Id:         childorg.Id,
+				Name:       childorg.Name,
+				Role:       childorg.Role,
+				CreatorOrg: childorg.CreatorOrg,
+				Image:      childorg.Image,
+				RegionUrl:  childorg.RegionUrl,
+			})
+		}
+	} else {
+		for _, orgloop := range user.Orgs {
+			childorg, err := GetOrg(ctx, orgloop)
+			if err != nil {
+				continue
+			}
+			found := false
+			for _, userloop := range childorg.Users {
+				if userloop.Id == user.Id {
+					found = true
+				}
+			}
+	
+			if !found {
+				continue
+			}
+
+			if childorg.CreatorOrg == org.Id {
+				subOrgs = append(subOrgs, OrgMini{
+					Id:         childorg.Id,
+					Name:       childorg.Name,
+					Role:       childorg.Role,
+					CreatorOrg: childorg.CreatorOrg,
+					Image:      childorg.Image,
+					RegionUrl:  childorg.RegionUrl,
+				})
+			}
+		}
+	}
+	if org.CreatorOrg != "" && (parentUser || user.SupportAccess) {
+		parentOrg = OrgMini{
+			Id:         parent.Id,
+			Name:       parent.Name,
+			Role:       parent.Role,
+			CreatorOrg: parent.CreatorOrg,
+			Image:      parent.Image,
+			RegionUrl:  parent.RegionUrl,
+		}
+
+	}
+
+	data := map[string]interface{}{
+		"subOrgs":   subOrgs,
+		"parentOrg": parentOrg,
+	}
+
+	if len(parentOrg.Id) == 0 || !parentUser {
+		data["parentOrg"] = nil
+	}
+
+	finalResponse, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal JSON response: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed marshaling JSON response"}`))
+		return
+	}
+
+	resp.Header().Set("Content-Type", "application/json")
+	resp.WriteHeader(200)
+	resp.Write(finalResponse)
+
+}
+
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
