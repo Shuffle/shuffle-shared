@@ -6133,7 +6133,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if workflow.OrgId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] NOT Editing workflow to be owned by org %s. Instead just editing. Original org: %s", user.ActiveOrg.Id, workflow.OrgId)
 
-
 		/*
 		workflow.OrgId = user.ActiveOrg.Id
 		workflow.ExecutingOrg = user.ActiveOrg
@@ -6147,8 +6146,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Only happens if the workflow is public and being edited
 	if correctUser {
 		workflow.Public = true
-
-		// FIXME: This is a bit hacky. Should be done in a better way.
 
 		// Should save it in Algolia too?
 		_, err = handleAlgoliaWorkflowUpdate(ctx, workflow)
@@ -7032,17 +7029,22 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Check workflow.Sharing == private / public / org  too
+	isOwner := false
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		// Added org-reader as the user should be able to read everything in an org
 		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 		if workflow.OrgId == user.ActiveOrg.Id {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as the org is same (get workflow)", user.Username, workflow.ID)
+	
+			isOwner = true 
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+
+			isOwner = true 
 		} else {
 			log.Printf("[AUDIT] Wrong user %s (%s) for workflow '%s' (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, user.Id, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
@@ -7152,6 +7154,16 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if workflow.Public {
+		workflow.ExecutingOrg = OrgMini{}
+		workflow.Org = []OrgMini{}
+		workflow.OrgId = ""
+
+		if !isOwner {
+			workflow.PreviouslySaved = false
+			workflow.ID = ""
+		}
+	}
 
 	body, err := json.Marshal(workflow)
 	if err != nil {
@@ -17368,6 +17380,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	// A way to set default config for kmsid if it's not set
 	if len(org.Defaults.KmsId) == 0 {
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
@@ -17377,13 +17390,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		for _, auth := range allAuths {
-			if strings.ToLower(auth.Label) == "kms shuffle storage" {
+			if strings.TrimSpace(strings.ToLower(auth.Label)) == "kms shuffle storage" {
 				org.Defaults.KmsId = auth.Id
 				break
 			}
 		}
 	}
 
+	log.Printf("\n\n[DEBUG] Found KMS ID: %#v\n\n", org.Defaults.KmsId)
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
@@ -19090,7 +19104,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			parentlen = len(parents[nextAction])
 		}
 
-		//log.Printf("[DEBUG][%s] Running %s (%s) with %d parents. Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
+		//log.Printf("[DEBUG][%s] Running %s (%s) with %d parent(s). Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
 
 		if project.Environment != "cloud" {
 			branchesFound := 0
@@ -19137,7 +19151,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			}
 
 			if branchesFound != parentFinished {
-				log.Printf("[WARNING] Skipping execution of %s (%s) due to unfinished parents (%d/%d). Orig parentlen: %d", action.Label, nextAction, parentFinished, branchesFound, parentlen)
+				log.Printf("[WARNING][%s] Skipping execution of %s (%s) due to unfinished parents (%d/%d). Orig parentlen: %d", workflowExecution.ExecutionId, action.Label, nextAction, parentFinished, branchesFound, parentlen)
 				continue
 			}
 		}
@@ -22005,14 +22019,14 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 		// Added org-reader as the user should be able to read everything in an org
 		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow revisions)", user.Username, workflow.ID)
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
 
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow revisions). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -22338,7 +22352,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 		if user.Id != workflow.Owner || len(user.Id) == 0 {
 			// Added org-reader as the user should be able to read everything in an org
 			if workflow.OrgId == user.ActiveOrg.Id {
-				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (workflow run search)", user.Username, workflow.ID)
 			} else if workflow.Public {
 				log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 
@@ -22346,7 +22360,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 			} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 				log.Printf("[AUDIT] Letting verified support admin %s access workflow run debug search for %s", user.Username, workflow.ID)
 			} else {
-				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (workflow run search). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return

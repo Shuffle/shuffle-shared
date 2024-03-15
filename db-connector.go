@@ -1563,7 +1563,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 	}
 
-	// Update WorkflowExecution.Result to be correct
+	// Update WorkflowExecution.Result to be correct, as to return correct for:
+	// - Subflows with wait for response
+	// - Webhooks v2 with for response
 	if finalWorkflowExecution.Status == "ABORTED" {
 		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
 	} else  if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED"  { 
