@@ -5746,6 +5746,140 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 	return allApps, innerApp
 }
 
+func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
+	wrapper := []WorkflowApp{}
+	var err error
+
+	cacheKey := fmt.Sprintf("userapps-%s", userId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &wrapper)
+			if err == nil {
+				return wrapper, nil
+			}
+		}
+	}
+
+	userApps := []WorkflowApp{}
+	indexName := "workflowapp"
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						{
+							"match": map[string]interface{}{
+								"owner": userId,
+							},
+						},
+						{
+						  "match": map[string]interface{}{
+							"contributors": userId,
+						  },
+							},
+						},
+					},
+					"minimum_should_match": 1,
+				},
+			}		
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
+			return []WorkflowApp{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(indexName))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(false),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
+			return []WorkflowApp{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return []WorkflowApp{}, err
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []WorkflowApp{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []WorkflowApp{}, err
+		}
+
+		wrapped := AppSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return []WorkflowApp{}, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			innerApp := hit.Source
+			userApps = append(userApps, innerApp)
+		}
+	} else {
+		cursorStr := ""
+		query := datastore.NewQuery(indexName).Filter("owner =", userId).Filter("contributors IN", []string{userId}).Order("-edited")
+		for {
+			it := project.Dbclient.Run(ctx, query)
+			for {
+				innerApp := WorkflowApp{}
+				_, err := it.Next(&innerApp)
+				if err != nil {
+					break
+				}
+				userApps = append(userApps, innerApp)
+			}
+			if err != iterator.Done {
+				log.Printf("[ERROR] Failed fetching results: %v", err)
+			}
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursor error: %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					// Break the loop if the cursor is the same as the previous one
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+	if project.CacheDb {
+		data, err := json.Marshal(userApps)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating cache for execution: %s", err)
+			}
+		} else {
+			log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		}
+	}
+
+	return userApps, nil
+}
+
 func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowApp, error) {
 	var allApps []WorkflowApp
 	var err error
