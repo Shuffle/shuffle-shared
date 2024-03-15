@@ -2903,6 +2903,42 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	return User{}, errors.New("Missing authentication")
 }
 
+func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := context.Background()
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in get user apps - this does NOT require auth in the cloud.: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	userapps, err := GetUserApps(ctx, user.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps (userapps): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	newbody, err := json.Marshal(userapps)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling user apps: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflow apps"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newbody)
+}
+
+
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
