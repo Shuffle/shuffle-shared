@@ -648,9 +648,12 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
-	ctx := GetContext(request)
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
 
-	//log.Printf("[DEBUG] request URL query:", request.URL.Query())
+	ctx := GetContext(request)
 
 	limit := request.URL.Query().Get("limit")
 	before := request.URL.Query().Get("before")
@@ -669,14 +672,13 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 		beforeInt = 0
 	}
 
+	// Default to 90 days
 	afterInt, err := strconv.Atoi(after)
 	if err != nil {
-		//log.Printf("[ERROR] Failed converting after to int: %s", err)
-		afterInt = 0
+		afterInt = int(time.Now().AddDate(0, 0, -90).Unix())
 	}
 
 	healthChecks, err := GetPlatformHealth(ctx, afterInt, beforeInt, limitInt)
-
 	if err != nil && strings.Contains(err.Error(), "Bad statuscode: 404") && project.Environment == "onprem" {
 		log.Printf("[WARNING] Failed getting platform health from database: %s. Probably because no workflowexecutions have been done",err)
 		resp.WriteHeader(200)

@@ -6284,7 +6284,22 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int) ([]HealthCheckDB, error) {
 	nameKey := "platform_health"
 	// sort by "updated", and get the first one
+
 	health := []HealthCheckDB{}
+	cacheKey := fmt.Sprintf("%s-%d-%d-%d", nameKey, beforeTimestamp, afterTimestamp, limit)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &health)
+			if err == nil {
+				return health, nil
+			} else {
+				//log.Printf("[WARNING] Failed collection: %s", err)
+			}
+		} else {
+		}
+	}
 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -6409,6 +6424,19 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 		if err != nil {
 			log.Printf("[WARNING] Error getting latest platform health: %s", err)
 			return health, err
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(health)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling health: %s", err)
+			return health, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating health cache: %s", err)
 		}
 	}
 
