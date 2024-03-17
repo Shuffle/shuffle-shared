@@ -841,7 +841,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 }
 
 func NewEndPointPythonCode () string{
-	pythonCode := `		def fix_url(self, url):
+	pythonCode := `		
+	def fix_url(self, url):
 		if "hhttp" in url:
 			url = url.replace("hhttp", "http")
 	
@@ -956,8 +957,20 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Description:   "The http method to use",
 		Multiline:     false,
 		Required:      true,
-		Example:       "GET , POST PUT ...",
 		Configuration: true,
+		Example:       "GET , POST PUT ...",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+	
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "base_url",
+		Description:   "the base part of your url ",
+		Multiline:     false ,
+		Required:      true ,
+		Configuration: true,
+		Example:       "https://api.example.com",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -969,18 +982,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Multiline:     true,
 		Required:      false,
 		Example:       "Content-Type:application/json\nAccept:application/json",
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
-
-	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "base_url",
-		Description:   "the base part of your url ",
-		Multiline:     false ,
-		Required:      true ,
-		Example:       "https://api.example.com",
-		Configuration: true,
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1548,9 +1549,6 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		},
 	})
     
-	action, curCode := AddNewEndPoint()
-	api.Actions = append(api.Actions, action)
-	pythonFunctions = append(pythonFunctions, curCode)
 	
 	// Fixing parameters with :
 	newExtraParams := []WorkflowAppActionParameter{}
@@ -1625,6 +1623,10 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		//log.Printf("NEWPATH: %s", actualPath)
 		//newPaths[actualPath] = path
 	}
+
+	action, curCode := AddNewEndPoint()
+	api.Actions = append(api.Actions, action)
+	pythonFunctions = append(pythonFunctions, curCode)
 
 	return swagger, api, pythonFunctions, nil
 }
