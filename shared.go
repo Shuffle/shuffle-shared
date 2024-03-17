@@ -16163,7 +16163,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		// Ensuring it works even if startpoint isn't defined
-		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 {
+		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 && len(execution.ExecutionArgument) == 0 {
+			// Check if "execution_argument" in body
 			execution.ExecutionArgument = string(body)
 		}
 
@@ -16456,8 +16457,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Don't override workflow defaults
 	}
-
-
 
 	if workflowExecution.SubExecutionCount == 0 {
 		workflowExecution.SubExecutionCount = 1
