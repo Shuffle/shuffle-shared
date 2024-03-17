@@ -1116,6 +1116,13 @@ type Comment struct {
 	} `json:"position"`
 }
 
+type InputQuestion struct {
+	Name string `json:"name" datastore:"name,noindex"`
+	Value string `json:"value" datastore:"value,noindex"`
+	Required bool `json:"required" datastore:"required"`
+	Deleted bool `json:"deleted" datastore:"deleted"`
+}
+
 type Workflow struct {
 	Actions        []Action   `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch   `json:"branches" datastore:"branches,noindex"`
@@ -1161,6 +1168,8 @@ type Workflow struct {
 	RevisionId   string     `json:"revision_id" yaml:"revision_id"`
 	Subflows     []Workflow `json:"subflows,omitempty" yaml:"subflows"`
 	UsecaseIds   []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
+	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
+
 	Blogpost     string     `json:"blogpost" yaml:"blogpost"`
 	Video        string     `json:"video" yaml:"video"`
 	Status       string     `json:"status" datastore:"status"`
