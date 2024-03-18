@@ -3736,7 +3736,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	if len(requestData.Resource) == 0 {
 		if strings.Contains(url, "microsoft") {
-			log.Printf("[DEBUG] Should look to add add resource to the query data for URL %s. Resource: %#v", url, requestData.Resource)
+			//log.Printf("[DEBUG] Should look to add add resource to the query data for URL %s. Resource: %#v", url, requestData.Resource)
 			foundScope := ""
 			for _, scope := range strings.Split(requestData.Scope, " ") {
 				if strings.Contains(string(scope), "https://") {

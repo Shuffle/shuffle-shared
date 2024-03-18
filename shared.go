@@ -5894,7 +5894,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						foundErr := fmt.Sprintf("Action %s (%s) requires authentication (2)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
-							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s\n\n", foundErr)
+							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
 							//continue
 						}
@@ -17494,7 +17494,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-	log.Printf("\n\n[DEBUG] Found KMS ID: %#v\n\n", org.Defaults.KmsId)
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
