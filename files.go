@@ -720,7 +720,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[ERROR] Failed decrypting file (3): %s", err)
 				} else {
-					log.Printf("[DEBUG] File size reduced from %d to %d after decryption (1)", len(allText), len(data))
+					log.Printf("[DEBUG] File size of %s reduced from %d to %d after decryption (1)", file.Id, len(allText), len(data))
 					allText = []byte(data)
 				}
 
@@ -1250,7 +1250,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	var buf bytes.Buffer
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
-	//log.Printf("\n\nFILE: %s\n\n", contents)
+	log.Printf("\n\n\n\n\nFILE: '''\n%s\n'''\n\n\n\n", contents)
 	//log.Printf("File content: %s\n%x", string(contents))
 
 	file.FileSize = int64(len(contents))
