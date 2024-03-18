@@ -22866,7 +22866,6 @@ func IsLicensed(ctx context.Context, org Org) bool {
 		}
 
 		if env.Licensed {
-			log.Printf("[DEBUG] Found licensed: %s", env.Name)
 			return true
 		}
 	}

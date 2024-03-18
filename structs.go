@@ -531,6 +531,7 @@ type User struct {
 	// Tracking logins and such
 	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
 	PersonalInfo PersonalInfo `datastore:"personal_info" json:"personal_info"`
+	Regions 	[]string `datastore:"regions" json:"regions"`
 }
 
 type EthInfo struct {

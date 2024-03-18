@@ -4690,23 +4690,24 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			return err
 		}
 
-		userOrgId := user.ActiveOrg.Id
-		if updateOrg {
-			userOrg, err := GetOrg(ctx, userOrgId)
-			if err != nil {
-				log.Printf("[WARNING] Failed getting org '%s' in SetUser: %s", userOrgId, err)
-				return err
-			}
+		//if updateOrg {
+		//userOrgId := user.ActiveOrg.Id
+		//userOrg, err := GetOrg(ctx, userOrgId)
+		//if err != nil {
+		//	log.Printf("[WARNING] Failed getting org '%s' in SetUser: %s", userOrgId, err)
+		//	return err
+		//}
+		// if userOrg.Region != "" && userOrg.Region != "europe-west2" && gceProject == "shuffler" {
+		log.Printf("\n\n\nREGIONS: %#v\n\n\n", user.Regions)
 
-			if userOrg.Region != "" && userOrg.Region != "europe-west2" && gceProject == "shuffler" {
-				go func() {
-					log.Printf("[INFO] Updating user %s in org %s with region %s", user.Username, userOrg.Name, userOrg.Region)
-					err = propagateUser(*user)
-					if err != nil {
-						log.Printf("[WARNING] Failed propagating user %s to region %s: %s", user.Username, userOrg.Region, err)
-					}
-				}()
-			}
+		if len(user.Regions) > 1 {
+			go func() {
+				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+				err = propagateUser(*user)
+				if err != nil {
+					log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
+				}
+			}()
 		}
 	}
 
