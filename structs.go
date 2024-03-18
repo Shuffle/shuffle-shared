@@ -2353,8 +2353,9 @@ type HandleInfo struct {
 	Tutorials          []Tutorial      `json:"tutorials"`
 	OrgStatus 		   []string 	   `json:"org_status"`
 
-	HasCardAvailable   bool 		   `json:"has_card_available"`
-	ActivatedPayasyougo bool    	   `json:"activated_pay_as_you_go"`
+	HasCardAvailable   bool 		   `json:"has_card_available,omitempty"`
+	ActivatedPayasyougo bool    	   `json:"activated_pay_as_you_go,omitempty"`
+	Licensed 		   bool			   `json:"licensed"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`

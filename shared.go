@@ -2670,18 +2670,20 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Resets ips and such within 90 seconds
+	// Here as well as in db-connector due to cache handling
 	timenow := time.Now().Unix()
 	for envIndex, env := range newEnvironments {
 		if newEnvironments[envIndex].Type == "onprem" {
 			if env.Checkin > 0 && timenow-env.Checkin > 90 {
 				newEnvironments[envIndex].RunningIp = ""
+				newEnvironments[envIndex].Licensed = false
 			}
 		}
 	}
 
 	newjson, err := json.Marshal(newEnvironments)
 	if err != nil {
-		log.Printf("Failed unmarshal: %s", err)
+		log.Printf("[DEBUG] Failed unmarshal: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environments"}`)))
 		return
@@ -22843,4 +22845,32 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 	}
 
 	return nil
+}
+
+func IsLicensed(ctx context.Context, org Org) bool {
+	if len(org.SubscriptionUserId) == 0 {
+		return false
+	}
+	//if len(org.Subscriptions) > 0 {
+	//	return true
+	//}
+
+	environments, err := GetEnvironments(ctx, org.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting environments for org %s: %s", org.Id, err)
+		return false
+	}
+
+	for _, env := range environments {
+		if env.Archived {
+			continue
+		}
+
+		if env.Licensed {
+			log.Printf("[DEBUG] Found licensed: %s", env.Name)
+			return true
+		}
+	}
+
+	return false
 }

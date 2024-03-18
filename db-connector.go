@@ -5094,11 +5094,12 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	}
 
 	// Fixing environment return search problems
+	timenow := time.Now().Unix()
 	for envIndex, env := range environments {
 		if env.Name == "Cloud" {
 			environments[envIndex].Type = "cloud"
 			environments[envIndex].RunType = "cloud"
-			environments[envIndex].Licensed = true
+
 		} else if env.Name == "Shuffle" {
 			environments[envIndex].Type = "onprem"
 
@@ -5112,6 +5113,13 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 
 			if env.RunType == "" {
 				environments[envIndex].RunType = "docker"
+			}
+		}
+
+		if environments[envIndex].Type == "onprem" {
+			if env.Checkin > 0 && timenow-env.Checkin > 90 {
+				environments[envIndex].RunningIp = ""
+				environments[envIndex].Licensed = false
 			}
 		}
 	}
