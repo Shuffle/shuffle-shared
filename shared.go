@@ -885,7 +885,9 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	childorgs, err := GetAllChildOrgs(ctx, parentOrg.Id) 
 	if err != nil || len(childorgs) == 0 {
-		log.Printf("[ERROR] Failed getting child orgs for %s. Got %d: %s", parentOrg.Id, len(childorgs), err)
+		if len(childorgs) != 0 { 
+			log.Printf("[ERROR] Failed getting child orgs for %s. Got %d: %s", parentOrg.Id, len(childorgs), err)
+		}
 	} else {
 		parentOrg.ChildOrgs = []OrgMini{}
 		for _, childorg := range childorgs {
@@ -2664,6 +2666,16 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 
 
 			newEnvironments = append(newEnvironments, environment)
+		}
+	}
+
+	// Resets ips and such within 90 seconds
+	timenow := time.Now().Unix()
+	for envIndex, env := range newEnvironments {
+		if newEnvironments[envIndex].Type == "onprem" {
+			if env.Checkin > 0 && timenow-env.Checkin > 90 {
+				newEnvironments[envIndex].RunningIp = ""
+			}
 		}
 	}
 

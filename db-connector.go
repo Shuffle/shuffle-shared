@@ -5097,8 +5097,22 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	for envIndex, env := range environments {
 		if env.Name == "Cloud" {
 			environments[envIndex].Type = "cloud"
+			environments[envIndex].RunType = "cloud"
+			environments[envIndex].Licensed = true
 		} else if env.Name == "Shuffle" {
 			environments[envIndex].Type = "onprem"
+
+			if env.RunType == "" {
+				environments[envIndex].RunType = "docker"
+			}
+		} else {
+			if environments[envIndex].Type == "" {
+				environments[envIndex].Type = "onprem"
+			}
+
+			if env.RunType == "" {
+				environments[envIndex].RunType = "docker"
+			}
 		}
 	}
 
@@ -7240,7 +7254,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	} else {
 		k := datastore.NameKey(nameKey, env.Id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, env); err != nil {
-			log.Println(err)
+			log.Printf("[ERROR] Failed to update environment %s: %s", env.Id, err)
 			return err
 		}
 	}
