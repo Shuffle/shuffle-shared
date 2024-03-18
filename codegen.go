@@ -939,7 +939,7 @@ func NewEndPointPythonCode () string{
             self.logger.error(e)
             return {"error": str(e)}
 
-		if path and not path.startswith('/'):
+        if path and not path.startswith('/'):
 		    path = '/' + path
 
 	    url += path
