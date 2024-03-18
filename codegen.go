@@ -904,72 +904,75 @@ func NewEndPointPythonCode () string{
 		
     def parse_queries(self, queries):
 		parsed_queries = {}
-
+	
 		if not queries:
 			return parsed_queries
-
+	
 		cleaned_queries = queries.strip()
-
+	
 		if not cleaned_queries:
 			return parsed_queries
-
+	
 		cleaned_queries = " ".join(cleaned_queries.split())
 		splitted_queries = cleaned_queries.split("&")
 		self.logger.info(splitted_queries)
 		for query in splitted_queries:
-
+	
 			if "=" not in query:
 				self.logger.info("Skipping as there is no = in the query")
 				continue
 			key, value = query.split("=")
 			if not key.strip() or not value.strip():
-				self.logger.info("Skipping because either key or value is not present in query")
+				self.logger.info(
+					"Skipping because either key or value is not present in query"
+				)
 				continue
 			parsed_queries[key.strip()] = value.strip()
-
-		return parsed_queries
+	
+		return parsed_queries	
 
     def new_endpoint(self, method="", base_url="", headers="", queries="", path="", username="", password="", verify=False, req_body=""):
-        url = self.fix_url(base_url)
+		url = self.fix_url(base_url)
+	
+		try:
+			method = self.is_valid_method(method)
+		except ValueError as e:
+			self.logger.error(e)
+			return {"error": str(e)}
+	
+		if path and not path.startswith('/'):
+			path = '/' + path
+	
+		url += path
+	
+		parsed_headers = self.parse_headers(headers)
+		parsed_queries = self.parse_queries(queries)
+	
+		verify = self.checkverify(verify)
+	
+		if isinstance(req_body, dict):
+			try:
+				req_body = json.dumps(req_body)
+			except json.JSONDecodeError as e:
+				self.logger.error(f"error : {e}")
+				return {"error: Invalid JSON format for request body"}
+	
+		auth = None
+		if username or password:
+			if "Authorization" in headers:
+				pass
+			else:
+				auth = requests.auth.HTTPBasicAuth(username, password)
+	
+		try:
+			response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=req_body, auth=auth, verify=verify)
+			response.raise_for_status()
+			return response.json()
+	
+		except requests.RequestException as e:
+			self.logger.error(f"Request failed: {e}")
+			return {"error": f"Request failed: {e}"}
 
-        try:
-            method = self.is_valid_method(method)
-        except ValueError as e:
-            self.logger.error(e)
-            return {"error": str(e)}
-
-        if path and not path.startswith('/'):
-		    path = '/' + path
-
-	    url += path
-
-        parsed_headers = self.parse_headers(headers)
-        parsed_queries = self.parse_queries(queries)
-
-        verify = self.checkverify(verify)
-
-        if isinstance(req_body, dict):
-            try:
-                req_body = json.dumps(req_body)
-            except json.JSONDecodeError as e:
-                self.logger.error(f"error : {e}")
-                return {"error: Invalid JSON format for request body"}
-
-        auth = None
-        if username or password:
-            if "Authorization" in headers:
-                pass
-            else:
-                auth = requests.auth.HTTPBasicAuth(username, password)
-
-        try:
-            response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=req_body, auth=auth, verify=verify)
-            response.raise_for_status()
-            return response.json()
-
-        except requests.RequestException as e:
-            self.logger.error(f"Request failed: {e}")
-            return {"error": f"Request failed: {e}"}
 		`
 		return pythonCode
 	
