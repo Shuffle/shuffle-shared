@@ -415,7 +415,11 @@ type Environment struct {
 	Checkin    int64  `json:"checkin" datastore:"checkin"`
 	RunningIp  string `json:"running_ip" datastore:"running_ip"`
 	Auth       string `json:"auth" datastore:"auth"`
-	Queue	  int `json:"queue" datastore:"queue"`
+	Queue	   int 	  `json:"queue" datastore:"queue"`
+
+	Licensed   bool   `json:"licensed" datastore:"licensed"`
+	RunType    string `json:"run_type" datastore:"run_type"`
+
 }
 
 // Saves some data, not sure what to have here lol
@@ -1116,6 +1120,13 @@ type Comment struct {
 	} `json:"position"`
 }
 
+type InputQuestion struct {
+	Name string `json:"name" datastore:"name,noindex"`
+	Value string `json:"value" datastore:"value,noindex"`
+	Required bool `json:"required" datastore:"required"`
+	Deleted bool `json:"deleted" datastore:"deleted"`
+}
+
 type Workflow struct {
 	Actions        []Action   `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch   `json:"branches" datastore:"branches,noindex"`
@@ -1161,6 +1172,8 @@ type Workflow struct {
 	RevisionId   string     `json:"revision_id" yaml:"revision_id"`
 	Subflows     []Workflow `json:"subflows,omitempty" yaml:"subflows"`
 	UsecaseIds   []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
+	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
+
 	Blogpost     string     `json:"blogpost" yaml:"blogpost"`
 	Video        string     `json:"video" yaml:"video"`
 	Status       string     `json:"status" datastore:"status"`
@@ -2340,8 +2353,9 @@ type HandleInfo struct {
 	Tutorials          []Tutorial      `json:"tutorials"`
 	OrgStatus 		   []string 	   `json:"org_status"`
 
-	HasCardAvailable   bool 		   `json:"has_card_available"`
-	ActivatedPayasyougo bool    	   `json:"activated_pay_as_you_go"`
+	HasCardAvailable   bool 		   `json:"has_card_available,omitempty"`
+	ActivatedPayasyougo bool    	   `json:"activated_pay_as_you_go,omitempty"`
+	Licensed 		   bool			   `json:"licensed"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`

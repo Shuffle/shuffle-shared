@@ -1563,7 +1563,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 	}
 
-	// Update WorkflowExecution.Result to be correct
+	// Update WorkflowExecution.Result to be correct, as to return correct for:
+	// - Subflows with wait for response
+	// - Webhooks v2 with for response
 	if finalWorkflowExecution.Status == "ABORTED" {
 		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
 	} else  if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED"  { 
@@ -2529,6 +2531,122 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 	return count, nil
 }
 
+
+func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
+	orgs := []Org{}
+	nameKey := "Organizations"
+
+	cacheKey := fmt.Sprintf("%s_childorgs", nameKey, orgId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &orgs)
+			if err == nil && len(orgs) > 0 {
+				return orgs, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"creator_org": orgId,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return orgs, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
+			return orgs, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return orgs, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return orgs, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return orgs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return orgs, err
+		}
+
+		wrapped := OrgSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return orgs, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.CreatorOrg != orgId {
+				continue
+			}
+
+			orgs = append(orgs, hit.Source)
+		}
+	} else {
+		// Cloud database
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(1000)
+
+		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
+		if err != nil {
+			return orgs, err
+		}
+	}
+
+	if project.CacheDb && len(orgs) > 0 {
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(orgs)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getchildorgs: %s", err)
+			return orgs, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getworkflow '%s': %s", cacheKey, err)
+		}
+	}
+
+	return orgs, nil
+}
+
 func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	workflow := &Workflow{}
 	nameKey := "workflow"
@@ -2959,7 +3077,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 		}
 
 		if len(workflow.OrgId) == 0 && len(workflow.Owner) == 0 {
-			log.Printf("[WARNING] Workflow %s has no org or owner", workflow.ID)
+			log.Printf("[ERROR] Workflow %s has no org or owner", workflow.ID)
 			continue
 		}
 
@@ -4530,7 +4648,7 @@ func GetUser(ctx context.Context, username string) (*User, error) {
 }
 
 func SetUser(ctx context.Context, user *User, updateOrg bool) error {
-	log.Printf("[INFO] Updating a user (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
+	log.Printf("[INFO] Updating user %s (%s) that has the role %s with %d apps and %d orgs. Org updater: %t", user.Username, user.Id, user.Role, len(user.PrivateApps), len(user.Orgs), updateOrg)
 	parsedKey := user.Id
 
 	DeleteCache(ctx, user.ApiKey)
@@ -4573,22 +4691,23 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		}
 
 		userOrgId := user.ActiveOrg.Id
-		userOrg, err := GetOrg(ctx, userOrgId)
-		if err != nil {
-			log.Printf("[WARNING] Failed getting org %s in SetUser: %s", userOrgId, err)
-			return err
-		}
+		if updateOrg {
+			userOrg, err := GetOrg(ctx, userOrgId)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org '%s' in SetUser: %s", userOrgId, err)
+				return err
+			}
 
-		if userOrg.Region != "" && userOrg.Region != "europe-west2" && gceProject == "shuffler" {
-			go func() {
-				log.Printf("[INFO] Updating user %s in org %s with region %s", user.Username, userOrg.Name, userOrg.Region)
-				err = propagateUser(*user)
-				if err != nil {
-					log.Printf("[WARNING] Failed propagating user %s to region %s: %s", user.Username, userOrg.Region, err)
-				}
-			}()
+			if userOrg.Region != "" && userOrg.Region != "europe-west2" && gceProject == "shuffler" {
+				go func() {
+					log.Printf("[INFO] Updating user %s in org %s with region %s", user.Username, userOrg.Name, userOrg.Region)
+					err = propagateUser(*user)
+					if err != nil {
+						log.Printf("[WARNING] Failed propagating user %s to region %s: %s", user.Username, userOrg.Region, err)
+					}
+				}()
+			}
 		}
-
 	}
 
 	DeleteCache(ctx, user.ApiKey)
@@ -4975,11 +5094,33 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 	}
 
 	// Fixing environment return search problems
+	timenow := time.Now().Unix()
 	for envIndex, env := range environments {
 		if env.Name == "Cloud" {
 			environments[envIndex].Type = "cloud"
+			environments[envIndex].RunType = "cloud"
+
 		} else if env.Name == "Shuffle" {
 			environments[envIndex].Type = "onprem"
+
+			if env.RunType == "" {
+				environments[envIndex].RunType = "docker"
+			}
+		} else {
+			if environments[envIndex].Type == "" {
+				environments[envIndex].Type = "onprem"
+			}
+
+			if env.RunType == "" {
+				environments[envIndex].RunType = "docker"
+			}
+		}
+
+		if environments[envIndex].Type == "onprem" {
+			if env.Checkin > 0 && timenow-env.Checkin > 90 {
+				environments[envIndex].RunningIp = ""
+				environments[envIndex].Licensed = false
+			}
 		}
 	}
 
@@ -5627,6 +5768,140 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 	return allApps, innerApp
 }
 
+func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
+	wrapper := []WorkflowApp{}
+	var err error
+
+	cacheKey := fmt.Sprintf("userapps-%s", userId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &wrapper)
+			if err == nil {
+				return wrapper, nil
+			}
+		}
+	}
+
+	userApps := []WorkflowApp{}
+	indexName := "workflowapp"
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"should": []map[string]interface{}{
+						{
+							"match": map[string]interface{}{
+								"owner": userId,
+							},
+						},
+						{
+						  "match": map[string]interface{}{
+							"contributors": userId,
+						  },
+							},
+						},
+					},
+					"minimum_should_match": 1,
+				},
+			}		
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
+			return []WorkflowApp{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(indexName))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(false),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get apps): %s", err)
+			return []WorkflowApp{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return []WorkflowApp{}, err
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []WorkflowApp{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []WorkflowApp{}, err
+		}
+
+		wrapped := AppSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return []WorkflowApp{}, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			innerApp := hit.Source
+			userApps = append(userApps, innerApp)
+		}
+	} else {
+		cursorStr := ""
+		query := datastore.NewQuery(indexName).Filter("owner =", userId).Filter("contributors IN", []string{userId}).Order("-edited")
+		for {
+			it := project.Dbclient.Run(ctx, query)
+			for {
+				innerApp := WorkflowApp{}
+				_, err := it.Next(&innerApp)
+				if err != nil {
+					break
+				}
+				userApps = append(userApps, innerApp)
+			}
+			if err != iterator.Done {
+				log.Printf("[ERROR] Failed fetching results: %v", err)
+			}
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursor error: %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					// Break the loop if the cursor is the same as the previous one
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+	if project.CacheDb {
+		data, err := json.Marshal(userApps)
+		if err == nil {
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating cache for execution: %s", err)
+			}
+		} else {
+			log.Printf("[WARNING] Failed marshalling execution: %s", err)
+		}
+	}
+
+	return userApps, nil
+}
+
 func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowApp, error) {
 	var allApps []WorkflowApp
 	var err error
@@ -6031,7 +6306,22 @@ func SetNewValue(ctx context.Context, newvalue NewValue) error {
 func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int) ([]HealthCheckDB, error) {
 	nameKey := "platform_health"
 	// sort by "updated", and get the first one
+
 	health := []HealthCheckDB{}
+	cacheKey := fmt.Sprintf("%s-%d-%d-%d", nameKey, beforeTimestamp, afterTimestamp, limit)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &health)
+			if err == nil {
+				return health, nil
+			} else {
+				//log.Printf("[WARNING] Failed collection: %s", err)
+			}
+		} else {
+		}
+	}
 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -6156,6 +6446,19 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 		if err != nil {
 			log.Printf("[WARNING] Error getting latest platform health: %s", err)
 			return health, err
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(health)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling health: %s", err)
+			return health, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating health cache: %s", err)
 		}
 	}
 
@@ -6959,7 +7262,7 @@ func SetEnvironment(ctx context.Context, env *Environment) error {
 	} else {
 		k := datastore.NameKey(nameKey, env.Id, nil)
 		if _, err := project.Dbclient.Put(ctx, k, env); err != nil {
-			log.Println(err)
+			log.Printf("[ERROR] Failed to update environment %s: %s", env.Id, err)
 			return err
 		}
 	}

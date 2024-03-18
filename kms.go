@@ -92,6 +92,9 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	// seeing as it has to start with kms(./:), we can remove the first element
 	keys = keys[1:]
 
+	log.Printf("[INFO] Looking to decrypt KMS key '%s' with %d parts", key, len(keys))
+
+
 	// 1. Prepare to make sure we have all we need (org, project, app, key)
 	// 2. Decrypt the key
 	// 3. Return the decrypted key
@@ -110,7 +113,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		return "", err
 	}
 
-	log.Printf("[DEBUG] Got app %s with %d actions", app.ID, len(app.Actions))
+	log.Printf("[DEBUG] Got app %s (%s) with %d actions for KMS auth", app.Name, app.ID, len(app.Actions))
 	action := WorkflowAppAction{}
 	for _, curaction := range app.Actions {
 		if len(curaction.CategoryLabel) == 0 {
@@ -134,9 +137,14 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		break
 	}
 
-	log.Printf("[DEBUG] Found action '%s' for handling KMS decryption", action.Label)
+	log.Printf("[DEBUG] Found action '%s' in app '%s' (%s) for handling KMS decryption", action.Name, app.Name, app.ID)
 	requiredParams := []string{}
 	for _, param := range action.Parameters {
+		// Skip configurations, as they are handled with Auth
+		if param.Configuration {
+			continue
+		}
+
 		if !param.Required {
 			continue
 		}
@@ -148,16 +156,36 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		requiredParams = append(requiredParams, param.Name)
 	}
 
-	log.Printf("[DEBUG] Required params for action %s: %s", action.Label, strings.Join(requiredParams, ", "))
+	log.Printf("[DEBUG] Required params for action %s in app %s (%s): %s", action.Name, app.Name, app.ID, strings.Join(requiredParams, ", "))
 	if len(requiredParams) == 0 {
 		return "", errors.New(fmt.Sprintf("No required parameters found for action %s", action.Label))
 	}
 
 	// Now we need to map the required params to the keys. Order?
 	// If we have a key like "kms/org/project/app/key", we can map the required params to the keys
+
+	// If the keys are a path or something, we just throw them all in there without caring about keys <=> requiredParams 
 	if len(keys) != len(requiredParams) {
 		log.Printf("[ERROR] KMS: %#v and %#v are not the same length (%d vs %d)\n\n", keys, requiredParams, len(keys), len(requiredParams))
-		return "", errors.New(fmt.Sprintf("Key %s and %s are not the same length. This may lead to grabbing the wrong KMS auth key.", strings.Join(keys, ","), strings.Join(requiredParams, ",")))
+
+		if len(keys) < len(requiredParams) {
+			return "", errors.New(fmt.Sprintf("Key %s and %s are not the same length. This may lead to grabbing the wrong KMS auth key.", strings.Join(keys, ","), strings.Join(requiredParams, ",")))
+		}
+
+		// Inject all extra keys into the last key by joining at length
+
+		newkeys := []string{}
+		for kIndex, key := range keys {
+			if kIndex == len(requiredParams) - 1 {
+				newkeys = append(newkeys, strings.Join(keys[kIndex:], "/"))
+				break
+			}
+
+			newkeys = append(newkeys, key)
+		}
+
+		log.Printf("[DEBUG] %d vs %d", len(newkeys), len(requiredParams))
+		keys = newkeys
 	}
 
 	// Should prep to send request to the action

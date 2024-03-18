@@ -803,6 +803,15 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
 	var orgId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -819,19 +828,8 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	if strings.Contains(orgId, "?") {
 		orgId = strings.Split(orgId, "?")[0]
 	}
-	var err error
-	ctx := GetContext(request)
-	user, err := HandleApiAuthentication(resp, request)
-
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
 
 	org, err := GetOrg(ctx, orgId)
-
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org '%s': %s", orgId, err)
 		resp.WriteHeader(500)
@@ -841,27 +839,37 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 
 	userFound := false
 	parentUser := false // to check if the user belongs to the parent
-	var parent *Org
 	for _, inneruser := range org.Users {
 		if inneruser.Id == user.Id {
 			userFound = true
 			break
 		}
 	}
+
+	parentOrg := &Org{}
+	isParentAdmin := false
 	if org.CreatorOrg != "" {
-		parent, err = GetOrg(ctx, org.CreatorOrg)
+		parentOrg, err = GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting parent org '%s': %s", org.CreatorOrg, err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "Failed getting parent org details"}`))
 			return
 		}
+	
+	} else {
+		parentOrg = org
+	}
 
-		for _, inneruser := range parent.Users {
-			if inneruser.Id == user.Id {
-				parentUser = true
-				break
+	for _, inneruser := range parentOrg.Users {
+		if inneruser.Id == user.Id {
+			parentUser = true
+
+			if inneruser.Role == "admin" {
+				isParentAdmin = true 
 			}
+
+			break
 		}
 	}
 
@@ -872,12 +880,31 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	subOrgs := []OrgMini{}
-	parentOrg := OrgMini{}
-	isSupportOrAdmin := user.SupportAccess || user.Role == "admin"
 
+	isSupportOrAdmin := user.SupportAccess || isParentAdmin
+
+	childorgs, err := GetAllChildOrgs(ctx, parentOrg.Id) 
+	if err != nil || len(childorgs) == 0 {
+		if len(childorgs) != 0 { 
+			log.Printf("[ERROR] Failed getting child orgs for %s. Got %d: %s", parentOrg.Id, len(childorgs), err)
+		}
+	} else {
+		parentOrg.ChildOrgs = []OrgMini{}
+		for _, childorg := range childorgs {
+			parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
+				Id:         childorg.Id,
+				Name:       childorg.Name,
+				Role:       childorg.Role,
+				CreatorOrg: childorg.CreatorOrg,
+				Image:      childorg.Image,
+				RegionUrl:  childorg.RegionUrl,
+			})
+		}
+	}
+
+	subOrgs := []OrgMini{}
 	if isSupportOrAdmin {
-		for _, orgloop := range org.ChildOrgs {
+		for _, orgloop := range parentOrg.ChildOrgs {
 			childorg, err := GetOrg(ctx, orgloop.Id)
 			if err != nil {
 				continue
@@ -892,10 +919,21 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 				RegionUrl:  childorg.RegionUrl,
 			})
 		}
+
 	} else {
 		for _, orgloop := range user.Orgs {
 			childorg, err := GetOrg(ctx, orgloop)
 			if err != nil {
+				continue
+			}
+			found := false
+			for _, userloop := range childorg.Users {
+				if userloop.Id == user.Id {
+					found = true
+				}
+			}
+	
+			if !found {
 				continue
 			}
 
@@ -911,21 +949,22 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
-	if org.CreatorOrg != "" && (parentUser || user.SupportAccess) {
-		parentOrg = OrgMini{
-			Id:         parent.Id,
-			Name:       parent.Name,
-			Role:       parent.Role,
-			CreatorOrg: parent.CreatorOrg,
-			Image:      parent.Image,
-			RegionUrl:  parent.RegionUrl,
-		}
 
+	returnParent := OrgMini{}
+	//if parentOrg.CreatorOrg != "" && (parentUser || user.SupportAccess) {
+	returnParent = OrgMini{
+		Id:         parentOrg.Id,
+		Name:       parentOrg.Name,
+		Role:       parentOrg.Role,
+		CreatorOrg: parentOrg.CreatorOrg,
+		Image:      parentOrg.Image,
+		RegionUrl:  parentOrg.RegionUrl,
 	}
+	//}
 
 	data := map[string]interface{}{
 		"subOrgs":   subOrgs,
-		"parentOrg": parentOrg,
+		"parentOrg": returnParent,
 	}
 
 	if len(parentOrg.Id) == 0 || !parentUser {
@@ -945,7 +984,6 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(finalResponse)
 
 }
-
 
 func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -2631,9 +2669,21 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Resets ips and such within 90 seconds
+	// Here as well as in db-connector due to cache handling
+	timenow := time.Now().Unix()
+	for envIndex, env := range newEnvironments {
+		if newEnvironments[envIndex].Type == "onprem" {
+			if env.Checkin > 0 && timenow-env.Checkin > 90 {
+				newEnvironments[envIndex].RunningIp = ""
+				newEnvironments[envIndex].Licensed = false
+			}
+		}
+	}
+
 	newjson, err := json.Marshal(newEnvironments)
 	if err != nil {
-		log.Printf("Failed unmarshal: %s", err)
+		log.Printf("[DEBUG] Failed unmarshal: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking environments"}`)))
 		return
@@ -2894,6 +2944,42 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	// Key = apikey
 	return User{}, errors.New("Missing authentication")
 }
+
+func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := context.Background()
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in get user apps - this does NOT require auth in the cloud.: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	userapps, err := GetUserApps(ctx, user.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting apps (userapps): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	newbody, err := json.Marshal(userapps)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling user apps: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflow apps"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newbody)
+}
+
 
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -6125,7 +6211,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if workflow.OrgId != user.ActiveOrg.Id {
 		log.Printf("[WARNING] NOT Editing workflow to be owned by org %s. Instead just editing. Original org: %s", user.ActiveOrg.Id, workflow.OrgId)
 
-
 		/*
 		workflow.OrgId = user.ActiveOrg.Id
 		workflow.ExecutingOrg = user.ActiveOrg
@@ -6139,8 +6224,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Only happens if the workflow is public and being edited
 	if correctUser {
 		workflow.Public = true
-
-		// FIXME: This is a bit hacky. Should be done in a better way.
 
 		// Should save it in Algolia too?
 		_, err = handleAlgoliaWorkflowUpdate(ctx, workflow)
@@ -6551,7 +6634,8 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			item = *foundUser
 		}
 
-		if item.Username != user.Username && (len(item.Orgs) > 1 || item.Role == "admin") {
+		//&& (len(item.Orgs) > 1 || item.Role == "admin") {
+		if item.Id != user.Id {
 			item.ApiKey = ""
 		}
 
@@ -7024,17 +7108,22 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Check workflow.Sharing == private / public / org  too
+	isOwner := false
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		// Added org-reader as the user should be able to read everything in an org
 		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 		if workflow.OrgId == user.ActiveOrg.Id {
 			log.Printf("[AUDIT] User %s is accessing workflow %s as the org is same (get workflow)", user.Username, workflow.ID)
+	
+			isOwner = true 
 		} else if workflow.Public {
 			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+
+			isOwner = true 
 		} else {
 			log.Printf("[AUDIT] Wrong user %s (%s) for workflow '%s' (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, user.Id, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
@@ -7144,6 +7233,16 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if workflow.Public {
+		workflow.ExecutingOrg = OrgMini{}
+		workflow.Org = []OrgMini{}
+		workflow.OrgId = ""
+
+		if !isOwner {
+			workflow.PreviouslySaved = false
+			workflow.ID = ""
+		}
+	}
 
 	body, err := json.Marshal(workflow)
 	if err != nil {
@@ -7183,7 +7282,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if userInfo.Role != "admin" {
-		log.Printf("Wrong user (%s) when deleting - must be admin", userInfo.Username)
+		log.Printf("[DEBUG] Wrong user (%s) when deleting - must be admin", userInfo.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Must be admin"}`))
 		return
@@ -7225,6 +7324,13 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+
+	// Overwrite incase the user is in the same org
+	// This could be a way to jump into someone elses organisation if the user already has the correct org name without correct name.
+	if foundUser.ActiveOrg.Id == "" && foundUser.ActiveOrg.Name == userInfo.ActiveOrg.Name && len(foundUser.Orgs) == 0 {
+		foundUser.ActiveOrg.Id = string(userInfo.ActiveOrg.Id)
+	}
+
 	orgFound := false
 	if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
 		orgFound = true
@@ -7261,14 +7367,18 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if foundUser.ActiveOrg.Id == userInfo.ActiveOrg.Id {
-		log.Printf("[ERROR] User %s (%s) doesn't have an org anymore after being deleted. Give them one (NOT SET UP)", foundUser.Username, foundUser.Id)
 		foundUser.ActiveOrg.Id = ""
+		foundUser.ActiveOrg.Name = ""
 	}
 
 	foundUser.Orgs = neworgs
+	if len(foundUser.Orgs) == 0 {
+		log.Printf("[INFO] User %s (%s) doesn't have an org anymore after being deleted. This will be generated when they log in next time", foundUser.Username, foundUser.Id)
+	}
+
 	err = SetUser(ctx, foundUser, false)
 	if err != nil {
-		log.Printf("[WARNING] Failed removing user %s (%s) from org %s", foundUser.Username, foundUser.Id, orgFound)
+		log.Printf("[WARNING] Failed removing user %s (%s) from org %s: %s", foundUser.Username, foundUser.Id, userInfo.ActiveOrg.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
@@ -7276,7 +7386,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 
 	org, err := GetOrg(ctx, userInfo.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("[DEBUG] Failed getting org %s in delete user: %s", userInfo.ActiveOrg.Id, err)
+		log.Printf("[ERROR] Failed getting org '%s' in delete user: %s", userInfo.ActiveOrg.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
@@ -7916,6 +8026,13 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			foundOrg = true
 			break
 		}
+	}
+
+	if user.ActiveOrg.Id == fileId {
+		log.Printf("[WARNING] User swap to the org \"%s\" - already in the org", tmpData.OrgId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "You are already in that organisation"}`))
+		return
 	}
 
 	// Add instantswap of backend
@@ -9865,7 +9982,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
-			if len(org.SSOConfig.SSOEntrypoint) > 0 || len(org.SSOConfig.OpenIdAuthorization) > 0 {
+			// has to contain http(s)
+			if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
 				baseSSOUrl := org.SSOConfig.SSOEntrypoint
 				redirectKey := "SSO_REDIRECT"
 				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
@@ -16059,7 +16177,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		// Ensuring it works even if startpoint isn't defined
-		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 {
+		if execution.Start == "" && len(body) > 0 && len(execution.ExecutionSource) == 0 && len(execution.ExecutionArgument) == 0 {
+			// Check if "execution_argument" in body
 			execution.ExecutionArgument = string(body)
 		}
 
@@ -16352,8 +16471,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Don't override workflow defaults
 	}
-
-
 
 	if workflowExecution.SubExecutionCount == 0 {
 		workflowExecution.SubExecutionCount = 1
@@ -17360,6 +17477,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	// A way to set default config for kmsid if it's not set
 	if len(org.Defaults.KmsId) == 0 {
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
@@ -17369,13 +17487,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		for _, auth := range allAuths {
-			if strings.ToLower(auth.Label) == "kms shuffle storage" {
+			if strings.TrimSpace(strings.ToLower(auth.Label)) == "kms shuffle storage" {
 				org.Defaults.KmsId = auth.Id
 				break
 			}
 		}
 	}
 
+	log.Printf("\n\n[DEBUG] Found KMS ID: %#v\n\n", org.Defaults.KmsId)
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
@@ -19082,7 +19201,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			parentlen = len(parents[nextAction])
 		}
 
-		//log.Printf("[DEBUG][%s] Running %s (%s) with %d parents. Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
+		//log.Printf("[DEBUG][%s] Running %s (%s) with %d parent(s). Names: %#v", workflowExecution.ExecutionId, action.Label, nextAction, parentlen, fixedNames)
 
 		if project.Environment != "cloud" {
 			branchesFound := 0
@@ -19129,7 +19248,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			}
 
 			if branchesFound != parentFinished {
-				log.Printf("[WARNING] Skipping execution of %s (%s) due to unfinished parents (%d/%d). Orig parentlen: %d", action.Label, nextAction, parentFinished, branchesFound, parentlen)
+				log.Printf("[WARNING][%s] Skipping execution of %s (%s) due to unfinished parents (%d/%d). Orig parentlen: %d", workflowExecution.ExecutionId, action.Label, nextAction, parentFinished, branchesFound, parentlen)
 				continue
 			}
 		}
@@ -21997,14 +22116,14 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 		// Added org-reader as the user should be able to read everything in an org
 		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow revisions)", user.Username, workflow.ID)
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
 
 		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow revisions). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -22330,7 +22449,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 		if user.Id != workflow.Owner || len(user.Id) == 0 {
 			// Added org-reader as the user should be able to read everything in an org
 			if workflow.OrgId == user.ActiveOrg.Id {
-				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow)", user.Username, workflow.ID)
+				log.Printf("[AUDIT] User %s is accessing workflow %s as admin (workflow run search)", user.Username, workflow.ID)
 			} else if workflow.Public {
 				log.Printf("[AUDIT] Letting user %s access workflow %s because it's public", user.Username, workflow.ID)
 
@@ -22338,7 +22457,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 			} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 				log.Printf("[AUDIT] Letting verified support admin %s access workflow run debug search for %s", user.Username, workflow.ID)
 			} else {
-				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+				log.Printf("[AUDIT] Wrong user (%s) for workflow %s (workflow run search). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
@@ -22726,4 +22845,32 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 	}
 
 	return nil
+}
+
+func IsLicensed(ctx context.Context, org Org) bool {
+	if len(org.SubscriptionUserId) == 0 {
+		return false
+	}
+	//if len(org.Subscriptions) > 0 {
+	//	return true
+	//}
+
+	environments, err := GetEnvironments(ctx, org.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting environments for org %s: %s", org.Id, err)
+		return false
+	}
+
+	for _, env := range environments {
+		if env.Archived {
+			continue
+		}
+
+		if env.Licensed {
+			log.Printf("[DEBUG] Found licensed: %s", env.Name)
+			return true
+		}
+	}
+
+	return false
 }
