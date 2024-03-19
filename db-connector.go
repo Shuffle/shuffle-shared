@@ -8396,6 +8396,93 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 	return schedules, nil
 }
 
+func GetAllTriggers(ctx context.Context, orgId string) ([]Trigger, error) {
+	triggers := []Trigger{}
+
+	nameKey := "workflow"
+	if project.DbType == "opensearch"{
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": orgId,
+				},
+				"_source": []string{"triggers"},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("Error encoding query: %s", err)
+			return triggers, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get schedules): %s", err)
+			return triggers, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return triggers, nil
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return triggers, err
+			} else {
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return triggers, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return triggers, err
+		}
+
+		wrapped := TriggerSearchWrapper{}
+
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return triggers, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			// Iterate over each trigger in the current hit's source
+			for _, trigger := range hit.Source.Triggers {
+				// Append the trigger to the final triggers list
+				triggers = append(triggers, trigger)
+			}
+		}
+
+		return triggers, err
+
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Project("triggers")
+		_, err := project.Dbclient.GetAll(ctx, q, &triggers)
+		if err != nil && len(triggers) == 0 {
+			return triggers, err
+		}
+	}
+	return triggers, nil
+
+}
+
 func GetTriggerAuth(ctx context.Context, id string) (*TriggerAuth, error) {
 	nameKey := "trigger_auth"
 
