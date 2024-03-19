@@ -11140,7 +11140,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if actionResult.Action.AppName == "shuffle-subflow" {
 
 		// Verifying if the userinput should be sent properly or not
-		if actionResult.Action.Name == "run_userinput" {
+		if actionResult.Action.Name == "run_userinput" && actionResult.Status != "SKIPPED" {
 			//log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
 			actionResult.Status = "WAITING"
 			actionResult.CompletedAt = time.Now().Unix() * 1000
@@ -11168,13 +11168,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 					setWorkflow := false
 					if strings.ToLower(actionResult.Action.Environment) != "cloud" {
-						log.Printf("[DEBUG] NOT in Cloud environment. Should set local value of user input?")
-
 						if project.Environment == "worker" {
 							log.Printf("\n\n\n[DEBUG] NOT modifying workflow based on User Input as we are in worker\n\n\n")
 						} else {
-							log.Printf("[DEBUG] We are in backend. Means we should modify the workflow based on User Input?")
-
 							// Find the waiting node and change it to this result
 							workflowExecution.Status = "WAITING"
 							workflowExecution.Results = append(workflowExecution.Results, actionResult)
@@ -16357,8 +16353,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					result.CompletedAt = int64(time.Now().Unix())*1000
 					log.Printf("\n\n[INFO][%s] Setting result to %s\n\n", oldExecution.ExecutionId, result.Action.Label)
+
+					sendSelfRequest := false
 					if answer[0] == "false" {
 						result.Status = "SKIPPED"
+						sendSelfRequest = true 
 					} else {
 						result.Status = "SUCCESS"
 					}
@@ -16410,11 +16409,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								if err != nil {
 									log.Printf("[ERROR] Failed re-adding User Input execution to db: %s", err)
 								}
-
 							}
+						} 
 
-						} else { 
-							log.Printf("[DEBUG][%s] Sending User Input result to self because we are on cloud without custom environments", result.ExecutionId)
+						log.Printf("\n\n\n[DEBUG][%s] SelfReq: %t, Env: %s\n\n\n", result.ExecutionId, sendSelfRequest, result.Action.Environment)
+						if sendSelfRequest || strings.ToLower(result.Action.Environment) == "cloud" {
+							log.Printf("[DEBUG][%s] Sending User Input result to self because we are on cloud env/action is skipped", result.ExecutionId)
 
 							backendUrl := os.Getenv("BASE_URL")
 							if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {

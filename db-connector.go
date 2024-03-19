@@ -10872,21 +10872,21 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
 	// Print 1/5 times to
 	// Should find it if it doesn't exist
-	if extra == -1 {
-		extra = 0
-		for _, trigger := range workflowExecution.Workflow.Triggers {
-			if trigger.Name == "User Input" || trigger.AppName == "User Input" || trigger.Name == "Shuffle Workflow" || trigger.AppName == "Shuffle Workflow" {
+	//if extra == -1 {
+	extra = 0
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.Name == "User Input" || trigger.AppName == "User Input" || trigger.Name == "Shuffle Workflow" || trigger.AppName == "Shuffle Workflow" {
 
-				extra += 1
-			}
-		}
-
-		for _, action := range workflowExecution.Workflow.Actions {
-			if action.AppName == "User Input" || action.AppName == "Shuffle Workflow" {
-				extra += 1
-			}
+			extra += 1
 		}
 	}
+
+	for _, action := range workflowExecution.Workflow.Actions {
+		if action.AppName == "User Input" || action.AppName == "Shuffle Workflow" {
+			extra += 1
+		}
+	}
+	//}
 
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
