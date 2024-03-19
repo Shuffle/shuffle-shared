@@ -10875,16 +10875,23 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 	if extra == -1 {
 		extra = 0
 		for _, trigger := range workflowExecution.Workflow.Triggers {
-			if trigger.Name == "User Input" && trigger.AppName == "User Input" {
+			if trigger.Name == "User Input" || trigger.AppName == "User Input" || trigger.Name == "Shuffle Workflow" || trigger.AppName == "Shuffle Workflow" {
+
+				extra += 1
+			}
+		}
+
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.AppName == "User Input" || action.AppName == "Shuffle Workflow" {
 				extra += 1
 			}
 		}
 	}
 
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
-	if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
-		log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
-	}
+	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
+	log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	//}
 
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
@@ -10957,7 +10964,16 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			RunIOCFinder(ctx, workflowExecution)
 
 			comparisonTime := workflowExecution.CompletedAt - workflowExecution.StartedAt
-			if comparisonTime > 600 {
+
+			userInput := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.AppName == "User Input" {
+					userInput = true
+				}
+			}
+
+
+			if comparisonTime > 600 && !userInput {
 				// FIXME: Check if there are any actions with delays?
 
 				err := CreateOrgNotification(

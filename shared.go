@@ -10558,7 +10558,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 	// Checks if the variable is set properly
 	if !checkResult {
-		log.Printf("[DEBUG][%s] No check_result param found for subflow. Not mapping subflow result back to parent workflow. Trigger: %#v", subflowExecutionId, selectedTrigger.ID)
+		//log.Printf("[DEBUG][%s] No check_result param found for subflow. Not mapping subflow result back to parent workflow. Trigger: %#v", subflowExecutionId, selectedTrigger.ID)
 
 		return nil
 	}
@@ -11143,6 +11143,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if actionResult.Action.Name == "run_userinput" {
 			//log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
 			actionResult.Status = "WAITING"
+			actionResult.CompletedAt = time.Now().Unix() * 1000
 
 			if strings.Contains(actionResult.Result, "\"success\":") {
 				//log.Printf("Found success in result. Now verifying if the workflow should just continue or not")
@@ -11155,8 +11156,40 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
 				if err == nil && subflowData.Success == false {
 					log.Printf("[INFO][%s] Userinput subflow failed. Should abort workflow or continue execution by default?", actionResult.ExecutionId)
+
 				} else {
-					log.Printf("[INFO][%s] Userinput subflow succeeded. Should continue execution by default? Value: %s", actionResult.ExecutionId, actionResult.Result)
+					log.Printf("\n\n[INFO][%s] Userinput subflow succeeded. Should continue execution by default? Value: %s\n\n", actionResult.ExecutionId, actionResult.Result)
+
+					// FIXME:
+					// 1. What should happen on cloud?
+					// 2. What should happen if on backend with NON cloud env?
+					// 3. What should happen if inside Worker?
+					// 4. What if Swarm?
+
+					setWorkflow := false
+					if strings.ToLower(actionResult.Action.Environment) != "cloud" {
+						log.Printf("[DEBUG] NOT in Cloud environment. Should set local value of user input?")
+
+						if project.Environment == "worker" {
+							log.Printf("\n\n\n[DEBUG] NOT modifying workflow based on User Input as we are in worker\n\n\n")
+						} else {
+							log.Printf("[DEBUG] We are in backend. Means we should modify the workflow based on User Input?")
+
+							// Find the waiting node and change it to this result
+							workflowExecution.Status = "WAITING"
+							workflowExecution.Results = append(workflowExecution.Results, actionResult)
+
+							setWorkflow = true
+						}
+					}
+
+					if setWorkflow {
+						// Set with database saving 
+						err = SetWorkflowExecution(ctx, workflowExecution, true)
+						if err != nil {
+							log.Printf("[ERROR][%s] Failed setting workflow execution during user input return onprem~: %s", workflowExecution.ExecutionId, err)
+						}
+					}
 
 					if strings.Contains(actionResult.Result, "\"execution_id\":") && strings.Contains(actionResult.Result, "\"authorization\":") {
 						log.Printf("\n\n[DEBUG][%s] Found execution_id and authorization in result. Now verifying if the workflow should just continue or not\n\n", actionResult.ExecutionId)
@@ -16301,7 +16334,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					err = json.Unmarshal([]byte(result.Result), &userinputResp)
 					// Error here should just be warnings
 					if err != nil {
-						log.Printf("[DEBUG][%s] Failed unmarshalling userinput (not critical): %s", result.ExecutionId, err)
+						log.Printf("[ERROR][%s] Failed unmarshalling userinput (not critical): %s", result.ExecutionId, err)
 					}
 
 					//if err == nil {
@@ -16322,8 +16355,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						result.Result = string(b)
 					}
 
-					result.CompletedAt = int64(time.Now().Unix())
-					log.Printf("[INFO][%s] Setting result to %s", oldExecution.ExecutionId, result.Action.Label)
+					result.CompletedAt = int64(time.Now().Unix())*1000
+					log.Printf("\n\n[INFO][%s] Setting result to %s\n\n", oldExecution.ExecutionId, result.Action.Label)
 					if answer[0] == "false" {
 						result.Status = "SKIPPED"
 					} else {
@@ -16333,50 +16366,91 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					// Should send result to self?
 					fullMarshal, err := json.Marshal(result)
 					if err == nil {
-						// Should set  cache for it
 						actionCacheId := fmt.Sprintf("%s_%s_result", result.ExecutionId, result.Action.ID)
 						err = SetCache(ctx, actionCacheId, fullMarshal, 35)
 						if err != nil {
 							log.Printf("[ERROR] Failed setting cache for action result %s: %s", actionCacheId, err)
 						}
 
-						// Should send result to self?
-						//log.Printf("[DEBUG][%s] Sending result to self: %s", result.ExecutionId, string(fullMarshal))
-						log.Printf("[DEBUG][%s] Sending result to self", result.ExecutionId)
+						// FIXME: Should send result to self?
+						// Maybe that is ONLY if on cloud?
+						if strings.ToLower(result.Action.Environment) != "cloud" {
+							log.Printf("[DEBUG][%s] SETTING user input result, and re-adding it to queue IF not in worker. Environment: %s", result.ExecutionId, result.Action.Environment)
+							if project.Environment == "worker" {
+								log.Printf("\n\n[DEBUG][%s] Worker user input restart. What do? Should we ever reach this point?\n\n")
+							} else {
 
-						backendUrl := os.Getenv("BASE_URL")
-						if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-							backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+								log.Printf("[DEBUG][%s] Re-adding user input execution to db & queue after re-setting result back", result.ExecutionId)
+								oldExecution.Status = "EXECUTING"
+
+								for newresIndex, newres := range oldExecution.Results {
+									if newres.Action.ID == result.Action.ID {
+										oldExecution.Results[newresIndex] = result
+										break
+									}
+								}
+
+								err = SetWorkflowExecution(ctx, *oldExecution, true)
+								if err != nil {
+									log.Printf("[ERROR] Failed setting workflow execution actionresult in execution: %s", err)
+								}
+
+								// Should re-add to queue
+								executionRequest := ExecutionRequest{
+									ExecutionId:   oldExecution.ExecutionId,
+									WorkflowId:    oldExecution.Workflow.ID,
+									Authorization: oldExecution.Authorization,
+									Environments:  []string{result.Action.Environment},
+								}
+
+								// Increase priority on User Input catch-ups 
+								executionRequest.Priority = 11
+								parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(result.Action.Environment, " ", "-"), "_", "-")), oldExecution.ExecutionOrg)
+								err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
+								if err != nil {
+									log.Printf("[ERROR] Failed re-adding User Input execution to db: %s", err)
+								}
+
+							}
+
+						} else { 
+							log.Printf("[DEBUG][%s] Sending User Input result to self because we are on cloud without custom environments", result.ExecutionId)
+
+							backendUrl := os.Getenv("BASE_URL")
+							if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+								backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+							}
+
+							if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+								backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+							}
+
+							topClient := &http.Client{
+								Transport: &http.Transport{
+									Proxy: nil,
+								},
+							}
+							streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
+							req, err := http.NewRequest(
+								"POST",
+								streamUrl,
+								bytes.NewBuffer([]byte(fullMarshal)),
+							)
+
+							if err != nil {
+								log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
+								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
+							}
+
+							newresp, err := topClient.Do(req)
+							if err != nil {
+								log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
+								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
+							}
+
+							defer newresp.Body.Close()
 						}
-
-						if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-							backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-						}
-
-						topClient := &http.Client{
-							Transport: &http.Transport{
-								Proxy: nil,
-							},
-						}
-						streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
-						req, err := http.NewRequest(
-							"POST",
-							streamUrl,
-							bytes.NewBuffer([]byte(fullMarshal)),
-						)
-
-						if err != nil {
-							log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
-							return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
-						}
-
-						newresp, err := topClient.Do(req)
-						if err != nil {
-							log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
-							return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
-						}
-
-						defer newresp.Body.Close()
+							
 						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action skipped", oldExecution.ExecutionId), errors.New("User Input: Execution action skipped!")
 					}
 
@@ -16398,6 +16472,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			} else {
 				log.Printf("[WARNING][%s] No job to rerun for user input as a WAITING node was not found", oldExecution.ExecutionId)
+
+				return WorkflowExecution{}, ExecInfo{}, "", errors.New("Already Clicked")
 			}
 
 			//if err != nil {
@@ -19399,10 +19475,13 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						ExecutionId:   workflowExecution.ExecutionId,
 						Authorization: workflowExecution.Authorization,
 						Result:        "{\"success\": true, \"reason\": \"WAITING FOR USER INPUT\"}",
-						StartedAt:     timeNow,
-						CompletedAt:   0,
+						StartedAt:     (timeNow+3)*1000,
+						CompletedAt:   (timeNow+3)*1000,
 						Status:        "WAITING",
 					}
+
+					// old: 1710863749000
+					// new: 1710863808000
 
 					workflowExecution.Results = append(workflowExecution.Results, result)
 					workflowExecution.Status = "WAITING"
