@@ -1030,6 +1030,8 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				} else {
 					log.Printf("[DEBUG] Set up Oauth2 config for app %s during generation", api.Name)
 					api.Authentication.Type = "oauth2"
+
+
 					api.Authentication.RedirectUri = parsed.AuthorizationCode.AuthorizationUrl
 					api.Authentication.TokenUri = parsed.AuthorizationCode.TokenUrl
 					api.Authentication.RefreshUri = parsed.AuthorizationCode.RefreshUrl
@@ -1050,8 +1052,10 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 				}
 
 				// November 2023: password & client_credentials
+				// Fix mar 2024: set type to oauth2-app 
 				if len(newValue) > 0 {
 					api.Authentication.GrantType = newValue
+					api.Authentication.Type = "oauth2-app"
 				}
 
 				log.Printf("[DEBUG] Got special app build grant type: %s", newValue)
