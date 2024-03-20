@@ -5185,7 +5185,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	maxLen := 200
-	queryLimit := 50
+	queryLimit := 25 
 	cursorStr := ""
 
 	allApps = user.PrivateApps
@@ -5207,7 +5207,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		go SetOrg(ctx, *org, org.Id)
 	}
 
-	//log.Printf("ACTIVE APPS: %d", len(org.ActiveApps))
 
 	if len(user.PrivateApps) > 0 && orgErr == nil {
 		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
@@ -5249,7 +5248,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 	nameKey := "workflowapp"
 	var err error
-	if user.ActiveOrg.Id != "" && user.ActiveOrg.Id != "2e7b6a08-b63b-4fc2-bd70-718091509db1" {
+	if user.ActiveOrg.Id != "" {
 		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
 		//log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
 		for {
@@ -5260,7 +5259,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						//log.Printf("[WARNING] Error in reference_org load: %s.", err)
+						log.Printf("[ERROR] Error in reference_org load: %s.", err)
 						continue
 					}
 
@@ -5272,9 +5271,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					continue
 				}
 
-				if orgErr == nil && !ArrayContains(org.ActiveApps, innerApp.ID) {
-					continue
-				}
+				//if orgErr == nil && !ArrayContains(org.ActiveApps, innerApp.ID) {
+				//	continue
+				//}
 
 				if len(innerApp.Actions) == 0 {
 					//log.Printf("[INFO] App %s (%s) doesn't have actions (1) - check filepath", innerApp.Name, innerApp.ID)
@@ -5314,6 +5313,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
+
 	// Find public apps
 
 	appsAdded := []string{}
@@ -5335,6 +5335,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[DEBUG] Failed getting cache for PUBLIC apps: %s", err)
 		}
 	}
+
 
 	// May be better to just list all, then set to true?
 	// Is this the slow one?
@@ -5440,12 +5441,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
+
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	// Instead loading in all public apps which is shared between all orgs
 	// This should make the request fast for everyone except that one
 	// person who loads it first (or keeps it in cache?)
 	if orgErr == nil && len(org.ActiveApps) > 0 {
-		//log.Printf("[INFO] Should append ORG APPS: %s", org.ActiveApps)
 
 		allKeys := []*datastore.Key{}
 		for _, appId := range org.ActiveApps {
@@ -5559,6 +5560,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		allApps = append(allApps, newApps...)
 	}
 
+
 	// Deduplicate (e.g. multiple gmail)
 	dedupedApps := []WorkflowApp{}
 	for _, app := range allApps {
@@ -5582,6 +5584,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			continue
 		}
 
+
+
 		//log.Printf("[INFO] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, replaceIndex)
 		// If owner of dedup, don't change
 		/*
@@ -5590,6 +5594,16 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				continue
 			}
 		*/
+
+		// Check if one is referenceOrg not
+		if dedupedApps[replaceIndex].ReferenceOrg == user.ActiveOrg.Id {
+			continue
+		}
+
+		if app.ReferenceOrg == user.ActiveOrg.Id {
+			dedupedApps[replaceIndex] = app
+			continue
+		}
 
 		if app.Edited > dedupedApps[replaceIndex].Edited {
 			//log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
@@ -5605,6 +5619,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	allApps = dedupedApps
+
 	for appIndex, app := range allApps {
 		for actionIndex, action := range app.Actions {
 			lastRequiredIndex := -1
@@ -5641,6 +5656,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
+
 	// Also prioritize most used ones from app-framework on top?
 	slice.Sort(allApps[:], func(i, j int) bool {
 		return allApps[i].Edited > allApps[j].Edited
@@ -5662,6 +5678,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
+
 
 	return allApps, nil
 }
@@ -10959,19 +10976,26 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
 	// Print 1/5 times to
 	// Should find it if it doesn't exist
-	if extra == -1 {
-		extra = 0
-		for _, trigger := range workflowExecution.Workflow.Triggers {
-			if trigger.Name == "User Input" && trigger.AppName == "User Input" {
-				extra += 1
-			}
+	//if extra == -1 {
+	extra = 0
+	for _, trigger := range workflowExecution.Workflow.Triggers {
+		if trigger.Name == "User Input" || trigger.AppName == "User Input" || trigger.Name == "Shuffle Workflow" || trigger.AppName == "Shuffle Workflow" {
+
+			extra += 1
 		}
 	}
 
-	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
-	if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
-		log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	for _, action := range workflowExecution.Workflow.Actions {
+		if action.AppName == "User Input" || action.AppName == "Shuffle Workflow" {
+			extra += 1
+		}
 	}
+	//}
+
+	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
+	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
+	log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	//}
 
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
@@ -11044,7 +11068,16 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			RunIOCFinder(ctx, workflowExecution)
 
 			comparisonTime := workflowExecution.CompletedAt - workflowExecution.StartedAt
-			if comparisonTime > 600 {
+
+			userInput := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.AppName == "User Input" {
+					userInput = true
+				}
+			}
+
+
+			if comparisonTime > 600 && !userInput {
 				// FIXME: Check if there are any actions with delays?
 
 				err := CreateOrgNotification(

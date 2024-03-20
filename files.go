@@ -858,7 +858,6 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 	// Fixme: More auth: org and workflow!
 	downloadPath := file.DownloadPath
-
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
 		log.Printf("[AUDIT] %s (%s) downloaded file '%s' (%s) from google storage. Namespace: %s", user.Username, user.Id, file.Filename, file.Id, file.Namespace)
 
@@ -906,7 +905,6 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
-
 				// Reference File Id only used as fallback
 				if len(file.ReferenceFileId) > 0 {
 					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
@@ -915,6 +913,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 						log.Printf("[ERROR] Failed decrypting file (4): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
 					}
 
+					allText = []byte(data)
 				} else {
 					log.Printf("[ERROR] Failed decrypting file (1): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
 				}
@@ -1000,6 +999,8 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 					if err != nil {
 						log.Printf("[ERROR] Failed decrypting file (5): %s", err)
 					}
+
+					allText = []byte(data)
 				} else {
 					log.Printf("[ERROR] Failed decrypting file (2): %s", err)
 				}
