@@ -8440,7 +8440,7 @@ func GetAllTriggers(ctx context.Context, orgId string) ([]Trigger, error) {
 			project.Es.Search.WithTrackTotalHits(true),
 		)
 		if err != nil {
-			log.Printf("[ERROR] Error getting response from Opensearch (get schedules): %s", err)
+			log.Printf("[ERROR] Error getting response from Opensearch (get triggers): %s", err)
 			return triggers, err
 		}
 

@@ -3842,6 +3842,49 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("Should set %s
 }
 
+func HandleGetAllTriggers(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get schedules: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success":false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	triggers, err := GetAllTriggers(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] failed getting triggers: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success":false ,"reason": "Cannot get the triggers"}`))
+		return
+	}
+
+	newjson, err := json.Marshal(triggers)
+	if err != nil {
+		log.Printf("Failed unmarshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed unpacking environments"}`))
+		return
+	}
+	
+	resp.WriteHeader(200)
+	resp.Write(newjson)
+
+}
+
 func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
