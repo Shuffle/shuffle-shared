@@ -5595,6 +5595,16 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		*/
 
+		// Check if one is referenceOrg not
+		if dedupedApps[replaceIndex].ReferenceOrg == user.ActiveOrg.Id {
+			continue
+		}
+
+		if app.ReferenceOrg == user.ActiveOrg.Id {
+			dedupedApps[replaceIndex] = app
+			continue
+		}
+
 		if app.Edited > dedupedApps[replaceIndex].Edited {
 			//log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
 			dedupedApps[replaceIndex] = app
