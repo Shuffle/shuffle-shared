@@ -8425,9 +8425,9 @@ func GetAllTriggers(ctx context.Context, orgId string) ([]Trigger, error) {
 				"match": map[string]interface{}{
 					"org_id": orgId,
 				},
-				"_source": []string{"triggers"},
 			},
-		}
+			"_source": "triggers",
+		}			
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("Error encoding query: %s", err)
 			return triggers, err
