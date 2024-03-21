@@ -4722,6 +4722,50 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	return nil
 }
 
+func DeleteUsersAccount(ctx context.Context, user *User, username string) error {
+	parsedKey := strings.ToLower(username)
+	cacheKey := fmt.Sprintf("user_%s", parsedKey)
+
+	nameKey := "Users"
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(nameKey)), parsedKey)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return err
+		}
+		defer res.Body.Close()
+
+		log.Printf("Response from OpenSearch deletion: StatusCode=%d", res.StatusCode)
+
+		if res.StatusCode == 404 {
+			return errors.New("User doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return err
+		}
+
+		wrapped := UserWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, username, nil)
+		err := project.Dbclient.Delete(ctx, key)
+		if err != nil {
+			log.Printf("[Error] deleting from %s from %s: %s", nameKey, parsedKey, err)
+		}
+	}
+
+	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+
+	return nil
+}
+
 func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
 	// FIXME - this doesn't work
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))

@@ -7286,7 +7286,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if userInfo.Role != "admin" {
+	if userInfo.Role != "admin" && userInfo.Role != "user" && !userInfo.SupportAccess {
 		log.Printf("[DEBUG] Wrong user (%s) when deleting - must be admin", userInfo.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Must be admin"}`))
@@ -7328,7 +7328,6 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
 	}
-
 
 	// Overwrite incase the user is in the same org
 	// This could be a way to jump into someone elses organisation if the user already has the correct org name without correct name.
@@ -7419,6 +7418,115 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
+}
+
+func DeleteUserWrapper(resp http.ResponseWriter, request *http.Request) error {
+	DeleteUser(resp, request)
+
+	return nil
+}
+
+func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	userInfo, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in delete user: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "API authentication fail"}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var userId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		userId = location[4]
+	}
+
+	ctx := GetContext(request)
+	userId, err := url.QueryUnescape(userId)
+	if err != nil {
+		log.Printf("[WARNING] Failed decoding user %s: %s", userId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	foundUser, err := GetUser(ctx, userId)
+	if err != nil {
+		log.Printf("[WARNING] Can't find user %s (delete user): %s", userId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't find user with uername: %v"}`, userInfo.Username)))
+		return
+	}
+
+	log.Printf("userinfo.username is : %v and foundUser.userNameis : %v", userInfo.Username, foundUser.Username)
+
+	if !userInfo.SupportAccess && userInfo.Username != foundUser.Username {
+		log.Printf("Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
+		return
+	}
+
+	var requestBody struct {
+		Password string `json:"password"`
+	}
+
+	if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+		http.Error(resp, "Failed to parse request body", http.StatusBadRequest)
+		return
+	}
+
+	password := requestBody.Password
+
+	err = bcrypt.CompareHashAndPassword([]byte(foundUser.Password), []byte(password))
+	if err != nil {
+		// Passwords don't match
+		log.Printf("wrong passowrd ")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Password is incorrect"}`))
+		return
+	}
+
+	err = DeleteUsersAccount(ctx, foundUser, userId)
+	if err != nil {
+		log.Printf("[Error] Can't Delete User with User name: %v and Id: %v", foundUser.Username, foundUser.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason":"Can't Delete User with Username: %v}`, userInfo.Username)))
+		return
+	}
+
+	err = DeleteUserWrapper(resp, request)
+	if err != nil {
+		log.Printf("[Error] User account has been deleted but Can't Delete user account from Organization with User name : %v , Id : %v  and Organization Id : %v", foundUser.Username, foundUser.Id, foundUser.ActiveOrg.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false", "reason": "User account is deleted but can't delete from organization's User.}`)))
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+
 }
 
 // Only used for onprem :/
