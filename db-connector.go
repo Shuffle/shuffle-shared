@@ -10019,7 +10019,9 @@ func GetEsConfig() *opensearch.Client {
 
 	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
 	if len(password) == 0 {
-		password = "admin"
+		// New password that is set by default. 
+		// Security Audit points to changing this during onboarding.
+		password = "StrongShufflePassword321!"
 	}
 
 	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)
