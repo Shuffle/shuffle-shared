@@ -5935,10 +5935,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 
 								// Some internal reserves
-								if (
-									(strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") ||
-									(action.Name == "filter_list" && param.Name == "field") 
-								{
+								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
 									// Do nothing
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
