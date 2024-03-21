@@ -2095,10 +2095,23 @@ type TriggerSearchWrapper struct {
 			ID     string  `json:"_id"`
 			Score  float64 `json:"_score"`
 			Source struct {
+				ID string `json:"id"`
 				Triggers []Trigger `json:"triggers"`
 			} `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
+}
+
+type TriggerWithID struct {
+	ID      string  `json:"id"`
+	Trigger Trigger `json:"trigger"`
+}
+
+type AllTriggersWrapper struct {
+	Emails     []TriggerWithID `json:"email"`
+	WebHooks   []TriggerWithID `json:"webhook"`
+	SubFlows   []TriggerWithID `json:"subflow"`
+	UserInputs []TriggerWithID `json:"user_input"`
 }
 
 // Used for Gmail triggers using Pubsub

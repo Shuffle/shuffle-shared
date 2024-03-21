@@ -8413,11 +8413,11 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 	return schedules, nil
 }
 
-func GetAllTriggers(ctx context.Context, orgId string) ([]Trigger, error) {
-	triggers := []Trigger{}
+func GetAllTriggers(ctx context.Context, orgId string) ([]TriggerWithID, error) {
+	triggerWithIDs := []TriggerWithID{}
 
 	nameKey := "workflow"
-	if project.DbType == "opensearch"{
+	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
 			"size": 1000,
@@ -8427,10 +8427,10 @@ func GetAllTriggers(ctx context.Context, orgId string) ([]Trigger, error) {
 				},
 			},
 			"_source": []string{"id", "triggers"},
-		}			
+		}
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("Error encoding query: %s", err)
-			return triggers, err
+			return triggerWithIDs, err
 		}
 
 		res, err := project.Es.Search(
@@ -8441,19 +8441,19 @@ func GetAllTriggers(ctx context.Context, orgId string) ([]Trigger, error) {
 		)
 		if err != nil {
 			log.Printf("[ERROR] Error getting response from Opensearch (get triggers): %s", err)
-			return triggers, err
+			return triggerWithIDs, err
 		}
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return triggers, nil
+			return triggerWithIDs, nil
 		}
 
 		if res.IsError() {
 			var e map[string]interface{}
 			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
 				log.Printf("[WARNING] Error parsing the response body: %s", err)
-				return triggers, err
+				return triggerWithIDs, err
 			} else {
 				log.Printf("[%s] %s: %s",
 					res.Status(),
@@ -8464,39 +8464,45 @@ func GetAllTriggers(ctx context.Context, orgId string) ([]Trigger, error) {
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return triggers, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return triggerWithIDs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			return triggers, err
+			return triggerWithIDs, err
 		}
 
 		wrapped := TriggerSearchWrapper{}
-
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
-			return triggers, err
+			return triggerWithIDs, err
 		}
 
 		for _, hit := range wrapped.Hits.Hits {
-			// Iterate over each trigger in the current hit's source
-			for _, trigger := range hit.Source.Triggers {
-				// Append the trigger to the final triggers list
-				triggers = append(triggers, trigger)
+			if len(hit.Source.Triggers) <= 0 {
+				continue
 			}
+			for _, innerTrigger := range hit.Source.Triggers {
+				triggerWithID := TriggerWithID{
+					ID:      hit.Source.ID,
+					Trigger: innerTrigger,
+				}
+				triggerWithIDs = append(triggerWithIDs, triggerWithID)
+
+			}
+
 		}
 
-		return triggers, err
+		return triggerWithIDs, err
 
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Project("triggers")
-		_, err := project.Dbclient.GetAll(ctx, q, &triggers)
-		if err != nil && len(triggers) == 0 {
-			return triggers, err
+		_, err := project.Dbclient.GetAll(ctx, q, &triggerWithIDs)
+		if err != nil && len(triggerWithIDs) == 0 {
+			return triggerWithIDs, err
 		}
 	}
-	return triggers, nil
+	return triggerWithIDs, nil
 
 }
 

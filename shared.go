@@ -3864,7 +3864,7 @@ func HandleGetAllTriggers(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	triggers, err := GetAllTriggers(ctx, user.ActiveOrg.Id)
+	triggersWithIds, err := GetAllTriggers(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] failed getting triggers: %s", err)
 		resp.WriteHeader(401)
@@ -3872,14 +3872,44 @@ func HandleGetAllTriggers(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	newjson, err := json.Marshal(triggers)
+	// this is our struct to store all the seperated triggers
+	allTriggersWrapper := AllTriggersWrapper{}
+
+	for _, inner := range triggersWithIds {
+		// clean triggers to only include neccessary fields
+		cleanedTrigger := Trigger{
+			Label:       inner.Trigger.Label,
+			Environment: inner.Trigger.Environment,
+			Status:      inner.Trigger.Status,
+			TriggerType: inner.Trigger.TriggerType,
+		}
+
+		triggerWithID := TriggerWithID{
+			ID:      inner.ID,
+			Trigger: cleanedTrigger,
+		}
+
+		// seperate each trigger  based on its trigger type
+		switch inner.Trigger.TriggerType {
+		case "EMAIL":
+			allTriggersWrapper.Emails = append(allTriggersWrapper.Emails, triggerWithID)
+		case "WEBHOOK":
+			allTriggersWrapper.WebHooks = append(allTriggersWrapper.WebHooks, triggerWithID)
+		case "SUBFLOW":
+			allTriggersWrapper.SubFlows = append(allTriggersWrapper.SubFlows, triggerWithID)
+		case "USERINPUT":
+			allTriggersWrapper.UserInputs = append(allTriggersWrapper.UserInputs, triggerWithID)
+		}
+	}
+
+	newjson, err := json.Marshal(allTriggersWrapper)
 	if err != nil {
 		log.Printf("Failed unmarshal: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed unpacking environments"}`))
 		return
 	}
-	
+
 	resp.WriteHeader(200)
 	resp.Write(newjson)
 
