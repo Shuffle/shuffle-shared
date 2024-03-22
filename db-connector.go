@@ -8483,6 +8483,10 @@ func GetAllTriggers(ctx context.Context, orgId string) ([]TriggerWithID, error) 
 				continue
 			}
 			for _, innerTrigger := range hit.Source.Triggers {
+
+				if innerTrigger.Status != "running" {
+					continue 
+				}
 				triggerWithID := TriggerWithID{
 					ID:      hit.Source.ID,
 					Trigger: innerTrigger,
@@ -8496,7 +8500,7 @@ func GetAllTriggers(ctx context.Context, orgId string) ([]TriggerWithID, error) 
 		return triggerWithIDs, err
 
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Project("triggers")
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Project("id", "triggers")
 		_, err := project.Dbclient.GetAll(ctx, q, &triggerWithIDs)
 		if err != nil && len(triggerWithIDs) == 0 {
 			return triggerWithIDs, err
