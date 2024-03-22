@@ -3679,7 +3679,7 @@ func propagateUser(user User, delete bool) error {
 
 	data := map[string]string{"mode": "user", "userId": user.Id}
 	if delete {
-		data["delete"] = "true"
+		data["type"] = "delete"
 	}
 
 	reqBody, err := json.Marshal(data)
@@ -4706,7 +4706,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			if userOrg.Region != "" && userOrg.Region != "europe-west2" && gceProject == "shuffler" {
 				go func() {
 					log.Printf("[INFO] Updating user %s in org %s with region %s", user.Username, userOrg.Name, userOrg.Region)
-					err = propagateUser(*user)
+					err = propagateUser(*user, false)
 					if err != nil {
 						log.Printf("[WARNING] Failed propagating user %s to region %s: %s", user.Username, userOrg.Region, err)
 					}
