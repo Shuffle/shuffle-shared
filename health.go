@@ -675,7 +675,7 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	// Default to 90 days
 	afterInt, err := strconv.Atoi(after)
 	if err != nil {
-		afterInt = int(time.Now().AddDate(0, 0, -90).Unix())
+		afterInt = int(time.Now().AddDate(0, 0, -30).Unix())
 	}
 
 	healthChecks, err := GetPlatformHealth(ctx, afterInt, beforeInt, limitInt)
@@ -693,7 +693,30 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	healthChecksData, err := json.Marshal(healthChecks)
+	executionIds := request.URL.Query().Get("execution_id")
+	if len(executionIds) > 0 {
+		allIds := []string{}
+		if strings.Contains(executionIds, ",") {
+			allIds = strings.Split(executionIds, ",")
+		} else {
+			allIds = append(allIds, executionIds)
+		}
+
+		log.Printf("[DEBUG] Getting platform health for execution ids: %s", allIds)
+
+		newHealthChecks := []HealthCheckDB{}
+		for _, item := range healthChecks {
+			if ArrayContains(allIds, item.Workflows.ExecutionId) {
+				newHealthChecks = append(newHealthChecks, item)
+			}
+		}
+
+		if len(newHealthChecks) > 0 {
+			healthChecks = newHealthChecks
+		}
+	}
+
+	healthChecksData, err := json.MarshalIndent(healthChecks, "", "  ")
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
 		resp.WriteHeader(500)

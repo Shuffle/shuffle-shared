@@ -720,7 +720,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[ERROR] Failed decrypting file (3): %s", err)
 				} else {
-					log.Printf("[DEBUG] File size reduced from %d to %d after decryption (1)", len(allText), len(data))
+					log.Printf("[DEBUG] File size of %s reduced from %d to %d after decryption (1)", file.Id, len(allText), len(data))
 					allText = []byte(data)
 				}
 
@@ -858,7 +858,6 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 
 	// Fixme: More auth: org and workflow!
 	downloadPath := file.DownloadPath
-
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
 		log.Printf("[AUDIT] %s (%s) downloaded file '%s' (%s) from google storage. Namespace: %s", user.Username, user.Id, file.Filename, file.Id, file.Namespace)
 
@@ -906,7 +905,6 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
-
 				// Reference File Id only used as fallback
 				if len(file.ReferenceFileId) > 0 {
 					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
@@ -915,6 +913,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 						log.Printf("[ERROR] Failed decrypting file (4): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
 					}
 
+					allText = []byte(data)
 				} else {
 					log.Printf("[ERROR] Failed decrypting file (1): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
 				}
@@ -1000,6 +999,8 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 					if err != nil {
 						log.Printf("[ERROR] Failed decrypting file (5): %s", err)
 					}
+
+					allText = []byte(data)
 				} else {
 					log.Printf("[ERROR] Failed decrypting file (2): %s", err)
 				}
@@ -1250,7 +1251,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	var buf bytes.Buffer
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
-	//log.Printf("\n\nFILE: %s\n\n", contents)
+	log.Printf("\n\n\n\n\nFILE: '''\n%s\n'''\n\n\n\n", contents)
 	//log.Printf("File content: %s\n%x", string(contents))
 
 	file.FileSize = int64(len(contents))
