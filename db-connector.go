@@ -71,6 +71,8 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
+
+
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
 // Shuffle instance
@@ -3664,7 +3666,7 @@ func propagateOrg(org Org) error {
 	return nil
 }
 
-func propagateUser(user User) error {
+func propagateUser(user User, delete bool) error {
 	if len(user.Id) == 0 {
 		return errors.New("no ID provided for user")
 	}
@@ -3676,6 +3678,9 @@ func propagateUser(user User) error {
 	log.Printf("[INFO] Asking %s to propagate user %s", propagateUrl, user.Id)
 
 	data := map[string]string{"mode": "user", "userId": user.Id}
+	if delete {
+		data["delete"] = "true"
+	}
 
 	reqBody, err := json.Marshal(data)
 	if err != nil {
