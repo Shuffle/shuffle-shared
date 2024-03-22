@@ -2,8 +2,6 @@ package shuffle
 
 import (
 	"bytes"
-	"reflect"
-	"sort"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -14,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
+	"sort"
 
 	"gopkg.in/yaml.v3"
 
@@ -46,9 +46,9 @@ import (
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
 
+	"github.com/frikky/schemaless"
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
-	"github.com/frikky/schemaless"
 )
 
 var project ShuffleStorage
@@ -62,8 +62,6 @@ func RequestMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
-
-
 
 var sandboxProject = "shuffle-sandbox-337810"
 
@@ -772,7 +770,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.LeadInfo = LeadInfo{}
 	}
 
-
 	newjson, err := json.Marshal(org)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshal of org %s (%s): %s", org.Name, org.Id, err)
@@ -880,7 +877,6 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 		return
 	}
-
 
 	isSupportOrAdmin := user.SupportAccess || isParentAdmin
 
@@ -1042,7 +1038,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 			Value:   c.Value,
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
-			Path: "/",
+			Path:    "/",
 		}
 		if project.Environment == "cloud" {
 			newCookie.Domain = ".shuffler.io"
@@ -1061,7 +1057,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 			Value:   "",
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
-			Path: "/",
+			Path:    "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -1300,7 +1296,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[AUDIT] Setting new app authentication for app %s with user %s (%s) in org %s (%s)", appAuth.App.Name, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
-
 	ctx := GetContext(request)
 	org := &Org{}
 	originalAuth := &AppAuthenticationStorage{}
@@ -1415,7 +1410,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 							}
 						}
 					}
-
 
 					//log.Printf("Default value: %s", field.Value)
 
@@ -1664,7 +1658,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		appAuth.App.LargeImage = app.LargeImage
 	}
 
-
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
 	err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
@@ -1699,7 +1692,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Assigned auth everywhere")
 		}
 	}
-
 
 	// Set it as the default app in the org as it's the "latest" of it's kind.
 	// This just means adding it to the app framework if a category exists
@@ -2203,7 +2195,6 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	cleanAll := false
 	deleteAll, ok := request.URL.Query()["deleteall"]
 
@@ -2662,13 +2653,12 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					// Skipping as this comes up over and over
 					log.Printf("[ERROR] (2) Failed reading body for workflowqueue: %s", err)
-				}  else {
+				} else {
 					environment.Queue = len(executionRequests.Data)
 				}
 
 				//log.Printf("[DEBUG] Got %d executions for env %s", len(executionRequests.Data), environment.Name)
 			}
-
 
 			newEnvironments = append(newEnvironments, environment)
 		}
@@ -2839,7 +2829,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			Value:   sessionToken,
 			Expires: time.Now().Add(-100 * time.Hour),
 			MaxAge:  -1,
-			Path: "/",
+			Path:    "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -2893,7 +2883,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				Value:   sessionToken,
 				Expires: time.Now().Add(-100 * time.Hour),
 				MaxAge:  -1,
-				Path: "/",
+				Path:    "/",
 			}
 
 			if project.Environment == "cloud" {
@@ -2984,7 +2974,6 @@ func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(newbody)
 }
-
 
 func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -3100,11 +3089,11 @@ func GetAction(workflowExecution WorkflowExecution, id, environment string) Acti
 	for _, trigger := range workflowExecution.Workflow.Triggers {
 		if trigger.ID == id {
 			return Action{
-				ID:          trigger.ID,
-				AppName:     trigger.AppName,
-				Name:        trigger.AppName,
-				Environment: environment,
-				Label:       trigger.Label,
+				ID:             trigger.ID,
+				AppName:        trigger.AppName,
+				Name:           trigger.AppName,
+				Environment:    environment,
+				Label:          trigger.Label,
 				ExecutionDelay: trigger.ExecutionDelay,
 			}
 			log.Printf("[DEBUG] Found trigger to be ran as app (?): %s!", trigger)
@@ -3350,7 +3339,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
 	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
 
 	if len(workflowExecutions) == 0 {
@@ -3574,8 +3562,8 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newReturn := ExecutionReturn{
-		Success: true,
-		Cursor: newCursor,
+		Success:    true,
+		Cursor:     newCursor,
 		Executions: workflowExecutions,
 	}
 
@@ -3921,7 +3909,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	// NEVER allow the user to set all the data themselves
 	type newUserStruct struct {
-		UserId      string   `json:"user_id"`
+		UserId string `json:"user_id"`
 
 		Tutorial    string   `json:"tutorial" datastore:"tutorial"`
 		Firstname   string   `json:"firstname"`
@@ -3980,7 +3968,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	if !orgFound {
 		isSelf := false
 		if project.Environment == "cloud" && len(foundUser.Id) == 32 {
-			isSelf = CheckCreatorSelfPermission(ctx, userInfo, *foundUser, &AlgoliaSearchCreator{ObjectID: foundUser.Id, IsOrg: true,})
+			isSelf = CheckCreatorSelfPermission(ctx, userInfo, *foundUser, &AlgoliaSearchCreator{ObjectID: foundUser.Id, IsOrg: true})
 		}
 
 		if (!isSelf || len(foundUser.Id) != 32) && !userInfo.SupportAccess {
@@ -5053,7 +5041,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.Status = "test"
 	}
 
-
 	workflow.Subflows = []Workflow{}
 	if len(workflow.DefaultReturnValue) > 0 && len(workflow.DefaultReturnValue) < 200 {
 		log.Printf("[INFO] Set default return value to on failure to (%s): %s", workflow.ID, workflow.DefaultReturnValue)
@@ -5077,7 +5064,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.ExecutingOrg.Id = workflow.OrgId
 		workflow.ExecutingOrg.Name = ""
 	}
-
 
 	newActions := []Action{}
 	allNodes := []string{}
@@ -5933,7 +5919,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 									}
 								}
 
-
 								// Some internal reserves
 								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") {
 								} else {
@@ -6178,7 +6163,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	auth, authOk := request.URL.Query()["set_auth"]
 	if authOk && len(auth) > 0 && auth[0] == "true" {
 		for actionIndex, action := range workflow.Actions {
@@ -6238,8 +6222,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[DEBUG] User %s (%s) updated their public workflow %s (%s)", user.Username, user.Id, workflow.Name, workflow.ID)
 		}
 	}
-
-
 
 	workflow.UpdatedBy = user.Username
 	err = SetWorkflow(ctx, workflow, workflow.ID)
@@ -6308,7 +6290,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 	}
-
 
 	type returnData struct {
 		Success bool     `json:"success"`
@@ -7267,16 +7248,16 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// if project.Environment == "cloud" {
+	// 	// Checking if it's a special region. All user-specific requests should
+	// 	// go through shuffler.io and not subdomains
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
@@ -7285,6 +7266,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+	log.Printf("user role is : %v and support access is: %v", userInfo.Role, userInfo.SupportAccess)
 
 	if userInfo.Role != "admin" {
 		log.Printf("[DEBUG] Wrong user (%s) when deleting - must be admin", userInfo.Username)
@@ -7314,12 +7296,12 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if userId == userInfo.Id {
-		log.Printf("[WARNING] Can't change activation of your own user %s (%s)", userInfo.Username, userInfo.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change activation of your own user"}`)))
-		return
-	}
+	// if userId == userInfo.Id {
+	// 	log.Printf("[WARNING] Can't change activation of your own user %s (%s)", userInfo.Username, userInfo.Id)
+	// 	resp.WriteHeader(401)
+	// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change activation of your own user"}`)))
+	// 	return
+	// }
 
 	foundUser, err := GetUser(ctx, userId)
 	if err != nil {
@@ -7388,6 +7370,8 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// log.Printf("user active organization is %v: ", userInfo)
+
 	org, err := GetOrg(ctx, userInfo.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting org '%s' in delete user: %s", userInfo.ActiveOrg.Id, err)
@@ -7426,16 +7410,17 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+
+	// if project.Environment == "cloud" {
+	// 	// Checking if it's a special region. All user-specific requests should
+	// 	// go through shuffler.io and not subdomains
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
@@ -7473,8 +7458,6 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't find user with uername: %v"}`, userInfo.Username)))
 		return
 	}
-
-	log.Printf("userinfo.username is : %v and foundUser.userNameis : %v", userInfo.Username, foundUser.Username)
 
 	if !userInfo.SupportAccess && userInfo.Username != foundUser.Username {
 		log.Printf("Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
@@ -8247,7 +8230,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
 	if project.Environment == "cloud" && len(org.RegionUrl) > 0 && !strings.Contains(org.RegionUrl, "\"") {
 		regionUrl = org.RegionUrl
 	}
@@ -8291,7 +8273,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		Name:    "session_token",
 		Value:   user.Session,
 		Expires: expiration,
-		Path: "/",
+		Path:    "/",
 	}
 
 	if project.Environment == "cloud" {
@@ -8386,9 +8368,9 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type ReturnData struct {
-		OrgId string `json:"org_id" datastore:"org_id"`
+		OrgId   string `json:"org_id" datastore:"org_id"`
 		OrgName string `json:"org_name" datastore:"org_name"`
-		Name  string `json:"name" datastore:"name"`
+		Name    string `json:"name" datastore:"name"`
 	}
 
 	var tmpData ReturnData
@@ -8490,7 +8472,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 		// FIXME: Should this be here? Makes things slow~
 		// Should only append apps owned by the parentorg itself
-		ActiveApps:      newApps,
+		ActiveApps: newApps,
 	}
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
@@ -8583,7 +8565,6 @@ func getSignatureSample(org Org) PaymentSubscription {
 			name = "Suborg access - default"
 		}
 
-
 		return PaymentSubscription{
 			Active:           true,
 			Startdate:        int64(time.Now().Unix()),
@@ -8596,13 +8577,13 @@ func getSignatureSample(org Org) PaymentSubscription {
 			Level:            "1",
 			Reference:        "TBD",
 			Limit:            100000,
-			Features:         []string{
+			Features: []string{
 				"Custom Contract features",
 				"Multi-Tenant & Multi-Region",
 			},
 
-			EulaSigned:       true,
-			Eula:             parsedEula,
+			EulaSigned: true,
+			Eula:       parsedEula,
 		}
 	} else if (org.LeadInfo.Customer || org.LeadInfo.POV) && org.LeadInfo.OpenSource {
 		name := "Open Source Scale Units"
@@ -8636,8 +8617,8 @@ func getSignatureSample(org Org) PaymentSubscription {
 			Limit:            1,
 			Features:         features,
 
-			EulaSigned:       org.EulaSigned,
-			Eula:             parsedEula,
+			EulaSigned: org.EulaSigned,
+			Eula:       parsedEula,
 		}
 	}
 
@@ -8696,7 +8677,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		SSOConfig   SSOConfig `json:"sso_config" datastore:"sso_config"`
 		LeadInfo    []string  `json:"lead_info" datastore:"lead_info"`
 
-		CreatorConfig string `json:"creator_config" datastore:"creator_config"`
+		CreatorConfig string              `json:"creator_config" datastore:"creator_config"`
 		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
 
 		SyncFeatures SyncFeatures `json:"sync_features" datastore:"sync_features"`
@@ -8934,7 +8915,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 			org.CreatorId = creatorId
 			parsedCreatorUser := User{
-				Id: creatorId,
+				Id:       creatorId,
 				Username: org.Name,
 			}
 
@@ -10064,7 +10045,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
 	// Gets a struct of Username, password
 	data, err := ParseLoginParameters(resp, request)
 	if err != nil {
@@ -10316,7 +10296,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		Timestamp: time.Now().Unix(),
 	})
 
-
 	tutorialsFinished := []Tutorial{}
 	for _, tutorial := range userdata.PersonalInfo.Tutorials {
 		tutorialsFinished = append(tutorialsFinished, Tutorial{
@@ -10432,7 +10411,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Name:    "session_token",
 			Value:   userdata.Session,
 			Expires: expiration,
-			Path: "/",
+			Path:    "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -10492,7 +10471,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Name:    "session_token",
 			Value:   sessionToken,
 			Expires: expiration,
-			Path: "/",
+			Path:    "/",
 		}
 
 		if project.Environment == "cloud" {
@@ -10714,7 +10693,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		break
 	}
 
-
 	// Because we changed out how we handle mid-flow triggers
 	if len(selectedTrigger.ID) == 0 {
 		for _, action := range newExecution.Workflow.Actions {
@@ -10932,12 +10910,12 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			if len(foundResult.Action.ID) == 0 {
 				log.Printf("\n\n[INFO] Couldn't find the result? Data: %s\n\n", string(resultData))
 				parsedAction := Action{
-					Label:       selectedTrigger.Label,
-					ID:          parentNode,
-					Name:        "run_subflow",
-					AppName:     "shuffle-subflow",
-					AppVersion:  "1.1.0",
-					Environment: selectedTrigger.Environment,
+					Label:          selectedTrigger.Label,
+					ID:             parentNode,
+					Name:           "run_subflow",
+					AppName:        "shuffle-subflow",
+					AppVersion:     "1.1.0",
+					Environment:    selectedTrigger.Environment,
 					ExecutionDelay: selectedTrigger.ExecutionDelay,
 				}
 
@@ -11097,7 +11075,6 @@ func ResendActionResult(actionData []byte, retries int64) {
 		}
 	}
 
-
 	if len(backendUrl) == 0 {
 		backendUrl = "http://localhost:5001"
 	}
@@ -11178,19 +11155,19 @@ func FixActionResultOutput(actionResult ActionResult) ActionResult {
 
 	// Check length of result timestamp
 	if len(strconv.FormatInt(actionResult.StartedAt, 10)) == 10 {
-		actionResult.StartedAt = actionResult.StartedAt*1000 
+		actionResult.StartedAt = actionResult.StartedAt * 1000
 	}
 
 	if len(strconv.FormatInt(actionResult.CompletedAt, 10)) == 10 {
-		actionResult.CompletedAt = actionResult.CompletedAt*1000
+		actionResult.CompletedAt = actionResult.CompletedAt * 1000
 	}
 
 	if len(strconv.FormatInt(actionResult.StartedAt, 10)) == 19 {
-		actionResult.StartedAt = actionResult.StartedAt/1000000
+		actionResult.StartedAt = actionResult.StartedAt / 1000000
 	}
 
 	if len(strconv.FormatInt(actionResult.CompletedAt, 10)) == 19 {
-		actionResult.CompletedAt = actionResult.CompletedAt/1000000
+		actionResult.CompletedAt = actionResult.CompletedAt / 1000000
 	}
 
 	//log.Printf("[DEBUG] Fixed LEN: %d, %d", len(strconv.FormatInt(actionResult.StartedAt, 10)), len(strconv.FormatInt(actionResult.CompletedAt, 10)))
@@ -11231,7 +11208,6 @@ func runTranslation(ctx context.Context, standard string, inputBody string) {
 	log.Printf("\n\n\nOUTPUT: %s\n\n\n", string(body))
 }
 
-
 func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 	return
 
@@ -11259,7 +11235,6 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 		log.Printf("[DEBUG] Did NOT find status in action result: %s", actionResult.Result)
 		return
 	}
-
 
 	log.Printf("\n\n[DEBUG] Running execution translation for app '%s' with action '%s' towards standardized data\n\n", actionResult.Action.AppName, actionResult.Action.Name)
 
@@ -11561,12 +11536,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if workflowExecution.Workflow.Configuration.SkipNotifications == false && actionResult.Status == "SUCCESS" && strings.Contains(actionResult.Result, "\"success\":") && strings.Contains(actionResult.Result, "\"status\":") {
 		type resultMapping struct {
 			Success bool `json:"success"`
-			Status  int `json:"status"`
+			Status  int  `json:"status"`
 		}
 
 		var mapping resultMapping
 		err := json.Unmarshal([]byte(actionResult.Result), &mapping)
-		if err == nil && mapping.Success == true && mapping.Status >= 300{
+		if err == nil && mapping.Success == true && mapping.Status >= 300 {
 			//log.Printf("\n\n[DEBUG] Setting status to failure as it's a success with status code %d\n\n", mapping.Status)
 
 			parsedDescription := fmt.Sprintf("Bad status code in action %s: %d. This shows up if status is >= 300", actionResult.Action.Name, mapping.Status)
@@ -11599,7 +11574,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 	}
-
 
 	actionResult.Action = Action{
 		AppName:           actionResult.Action.AppName,
@@ -11984,14 +11958,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						log.Printf("[DEBUG] OPTIMIZED: %s, PORT: %s", os.Getenv("SHUFFLE_OPTIMIZED"), os.Getenv("WORKER_PORT"))
 						if os.Getenv("SHUFFLE_OPTIMIZED") == "true" && len(os.Getenv("WORKER_PORT")) > 0 {
 							streamUrl = fmt.Sprintf("http://localhost:%s/api/v1/streams", os.Getenv("WORKER_PORT"))
-						} else if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker")  {
+						} else if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
 							streamUrl = fmt.Sprintf("http://localhost:33333/api/v1/streams")
 
 						} else {
 							// Does this fuck it up? This should only run
 							// if the worker is NON OPTIMIZED. Problem:
 							// The worker needs to talk back to itself.
-							if len(os.Getenv("BASE_URL")) > 0  {
+							if len(os.Getenv("BASE_URL")) > 0 {
 								streamUrl = fmt.Sprintf("%s/api/v1/streams", os.Getenv("BASE_URL"))
 							}
 						}
@@ -12118,7 +12092,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 			log.Printf("[INFO][%s] Updating %s (%s) in workflow from %s to %s", workflowExecution.ExecutionId, actionResult.Action.Name, actionResult.Action.ID, workflowExecution.Results[outerindex].Status, actionResult.Status)
 
-			if (workflowExecution.Results[outerindex].Status != actionResult.Status) {
+			if workflowExecution.Results[outerindex].Status != actionResult.Status {
 				dbSave = true
 			}
 
@@ -12290,7 +12264,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			if len(workflowExecution.ExecutionParent) > 0 && len(workflowExecution.ExecutionSourceAuth) > 0 && len(workflowExecution.ExecutionSourceNode) > 0 {
 
 				// Check if source node has "Wait for Results" set to true
-
 
 				log.Printf("[DEBUG][%s] Found execution parent %s for workflow '%s' (%s)", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID)
 
@@ -12601,7 +12574,6 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 							}
 						}
 
-
 						item.Result = fmt.Sprintf(`{
 								"success": false,
 								"reason": "Result too large to handle (https://github.com/frikky/shuffle/issues/171).",
@@ -12655,7 +12627,6 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 			}
 		}
 	}
-
 
 	return workflowExecution, dbSave
 }
@@ -12763,7 +12734,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	app, err := GetApp(ctx, fileId, user, false)
 	if err != nil {
 		appName := request.URL.Query().Get("app_name")
@@ -12869,7 +12839,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		log.Printf("[DEBUG] App %s (%s) deactivated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
 	}
-
 
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
@@ -13872,10 +13841,8 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-
 		selectedOrg = user.ActiveOrg.Id
 	}
-
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
@@ -13890,7 +13857,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		result := ResultChecker{
 			Success: false,
 			Reason:  "Failed to get key. Does it exist?",
-			Extra: fmt.Sprintf("Attempted to delete key '%s'", tmpData.Key),
+			Extra:   fmt.Sprintf("Attempted to delete key '%s'", tmpData.Key),
 		}
 
 		marshalled, err := json.Marshal(result)
@@ -13910,7 +13877,6 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete)", tmpData.Key, tmpData.OrgId)
 	}
 
-
 	if len(cacheData.WorkflowId) > 0 {
 		escapedKey := url.QueryEscape(tmpData.Key)
 
@@ -13929,7 +13895,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 
 	result := ResultChecker{
 		Success: true,
-		Reason:    fmt.Sprintf("Key '%s' deleted", tmpData.Key),
+		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
 	}
 
 	// Marshal
@@ -13949,7 +13915,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
-
 
 	//for key, value := range data.Apps {
 	var fileId string
@@ -14021,7 +13986,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 		tmpData = CacheKeyData{
 			OrgId: fileId,
-			Key: parsedCacheKey,
+			Key:   parsedCacheKey,
 		}
 
 		// Use normal user auth
@@ -14045,7 +14010,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 			requireCacheAuth = true
 			user.ActiveOrg.Id = fileId
-
 
 			/*
 				resp.WriteHeader(401)
@@ -14215,7 +14179,6 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 					jsonlist = strings.Split(cacheData.Value, "\n")
 				}
 			}
-
 
 			parsedJsonlist, err := json.MarshalIndent(jsonlist, "", "  ")
 			if err != nil {
@@ -14440,8 +14403,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		log.Printf("[WARNING] Failed action single execution unmarshaling: %s", err)
 		return workflowExecution, err
 	}
-
-	
 
 	if fileId != action.AppID {
 		log.Printf("[WARNING] Bad appid in single execution of App %s", fileId)
@@ -14818,7 +14779,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	result.Success = true
 	result.Meta = githubResp
 
-
 	result.Reason = string(body)
 	b, err := json.Marshal(result)
 	if err != nil {
@@ -15035,7 +14995,6 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 		log.Printf("[INFO][%s] Set workflowexecution based on new worker (>0.8.53) for workflow %s. Actions: %d, Triggers: %d, Results: %d, Status: %s", execution.ExecutionId, execution.WorkflowId, len(execution.Workflow.Actions), len(execution.Workflow.Triggers), len(execution.Results), execution.Status)
 		executionSet = true
 
-
 		if execution.Status == "FINISHED" || execution.Status == "ABORTED" {
 			log.Printf("[INFO][%s] Execution is finished or aborted. Incrementing cache", execution.ExecutionId)
 
@@ -15090,7 +15049,6 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 	//log.Printf("IS IT SUBFLOW?")
 	if len(execution.ExecutionParent) > 0 && execution.Status != "EXECUTING" && (project.Environment == "onprem" || project.Environment == "cloud") {
 
-
 		parentExecution, err := GetWorkflowExecution(ctx, execution.ExecutionParent)
 		if err == nil {
 			//log.Printf("[DEBUG] Got parent execution: %s", parentExecution.ExecutionId)
@@ -15104,7 +15062,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 					parentExecution.Workflow.Triggers = append(parentExecution.Workflow.Triggers, Trigger{
 						AppName:    action.AppName,
 						Parameters: action.Parameters,
-						ID:		 action.ID,
+						ID:         action.ID,
 					})
 				}
 			}
@@ -15522,7 +15480,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-					Path: "/",
+					Path:    "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -15581,7 +15539,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-					Path: "/",
+					Path:    "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -15676,7 +15634,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		Name:    "session_token",
 		Value:   sessionToken,
 		Expires: expiration,
-		Path: "/",
+		Path:    "/",
 	}
 
 	if project.Environment == "cloud" {
@@ -15940,7 +15898,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-					Path: "/",
+					Path:    "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -16007,7 +15965,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					Name:    "session_token",
 					Value:   sessionToken,
 					Expires: expiration,
-					Path: "/",
+					Path:    "/",
 				}
 
 				if project.Environment == "cloud" {
@@ -16103,7 +16061,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		Name:    "session_token",
 		Value:   sessionToken,
 		Expires: expiration,
-		Path: "/",
+		Path:    "/",
 	}
 
 	if project.Environment == "cloud" {
@@ -16545,7 +16503,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						result.Result = string(b)
 					}
 
-					result.CompletedAt = int64(time.Now().Unix())*1000
+					result.CompletedAt = int64(time.Now().Unix()) * 1000
 					log.Printf("\n\n[INFO][%s] Setting result to %s\n\n", oldExecution.ExecutionId, result.Action.Label)
 
 					sendSelfRequest := false
@@ -16846,7 +16804,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		appAuthSplit := strings.Split(authHeader, ";")
-		for _, authitem:= range appAuthSplit {
+		for _, authitem := range appAuthSplit {
 			authitemSplit := strings.Split(authitem, "=")
 			if len(authitemSplit) != 2 {
 				continue
@@ -16858,7 +16816,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			authFound := false
 			for _, auth := range allAuths {
-				if auth.Id == authId || strings.ReplaceAll(auth.Label, " ", "_")  == authId {
+				if auth.Id == authId || strings.ReplaceAll(auth.Label, " ", "_") == authId {
 					authFound = true
 					authId = auth.Id
 				}
@@ -17147,10 +17105,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 				}
 
-
 				if !setAuth {
 					for fieldIndex, field := range curAuth.Fields {
-
 
 						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 						decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
@@ -17190,7 +17146,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 						// Abort the workflow due to auth being bad
 						return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), nil
-
 
 					} else {
 						// Resets the params and overwrites with the relevant fields
@@ -17274,7 +17229,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 							// Adding so it can be used to fail the auth naturally with Outlook
 							newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
-								Key:  "access_token",
+								Key:   "access_token",
 								Value: "FAILURE_REFRESH",
 							})
 
@@ -17725,7 +17680,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	workflowExecution.Workflow.Triggers = newTriggers
 
-
 	// Checking authentication fields as they should now be filled in no matter where
 
 	if len(workflowExecution.ExecutionOrg) == 0 {
@@ -17840,7 +17794,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					log.Printf("[ERROR] Failed to marshal workflow execution for cache: %s", err)
 				}
 
-
 				// Continue here
 				if len(foundValues) > 0 {
 					for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -17885,7 +17838,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	if finished {
 		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
 	}
-
 
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
@@ -18514,9 +18466,6 @@ func (fw *flushWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-
-
-
 func UpdateUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -18980,7 +18929,6 @@ func SortOrgList(orgs []OrgMini) []OrgMini {
 		}
 	}
 
-
 	// Adding orgs where parentorg is unavailable
 	// They should probably be under some "inactive" parentorg..
 	newOrgs = append(newOrgs, noParentOrg...)
@@ -19406,7 +19354,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				} else {
 					// Should check if it's actually RAN at all?
 					// This is not necessary anymore as the cache is used previously, and this won't be any different
-					
 
 					//Look for ABORT/FAILURE?
 					//parentId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, parent)
@@ -19669,8 +19616,8 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 						ExecutionId:   workflowExecution.ExecutionId,
 						Authorization: workflowExecution.Authorization,
 						Result:        "{\"success\": true, \"reason\": \"WAITING FOR USER INPUT\"}",
-						StartedAt:     (timeNow+3)*1000,
-						CompletedAt:   (timeNow+3)*1000,
+						StartedAt:     (timeNow + 3) * 1000,
+						CompletedAt:   (timeNow + 3) * 1000,
 						Status:        "WAITING",
 					}
 
@@ -19777,7 +19724,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 					// If sms/email, it should be setting the apikey based on the org
 					syncApikey := workflowExecution.Authorization
-					if project.Environment != "cloud" && project.Environment != "worker"{
+					if project.Environment != "cloud" && project.Environment != "worker" {
 						org, err := GetOrg(ctx, workflowExecution.ExecutionOrg)
 						if err == nil {
 							log.Printf("[DEBUG] Got syncconfig key: %s", org.SyncConfig.Apikey)
@@ -20148,7 +20095,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if len(value.Query) > 0 {
 		// Check if app authentication. If so, check if intent is to actually authenticate, or find the actual intent
-		if value.Label == "authenticate_app" && !strings.Contains(strings.ToLower(value.Query), "auth"){
+		if value.Label == "authenticate_app" && !strings.Contains(strings.ToLower(value.Query), "auth") {
 			log.Printf("[INFO] Got authenticate app request. Does the intent %#v match auth?", value.Query)
 		}
 	}
@@ -20178,7 +20125,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		value.Category = "email"
 		value.AppName = ""
 	}
-
 
 	foundIndex := -1
 	labelIndex := -1
@@ -20228,7 +20174,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	foundCategory := Category{}
 	if foundAppType == "cases" {
 		foundCategory = org.SecurityFramework.Cases
-	}  else if foundAppType == "communication" {
+	} else if foundAppType == "communication" {
 		foundCategory = org.SecurityFramework.Communication
 	} else if foundAppType == "assets" {
 		foundCategory = org.SecurityFramework.Assets
@@ -20252,10 +20198,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] No category found AND no app name set in category action for user %s (%s). Returning", user.Username, user.Id)
 
 		structuredFeedback := StructuredCategoryAction{
-			Success: false,
-			Action: "select_category",
+			Success:  false,
+			Action:   "select_category",
 			Category: foundAppType,
-			Reason: fmt.Sprintf("Help us set up an app in the '%s' category for you first", foundAppType),
+			Reason:   fmt.Sprintf("Help us set up an app in the '%s' category for you first", foundAppType),
 		}
 
 		jsonBytes, err := json.Marshal(structuredFeedback)
@@ -20431,7 +20377,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		discoveredCategory = selectedApp.Categories[0]
 	}
 
-
 	if len(selectedCategory.Name) > 0 {
 		if len(selectedCategory.RequiredFields) == 0 {
 			for _, param := range selectedAction.Parameters {
@@ -20526,13 +20471,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newWorkflow := Workflow{
-		ID:        newWorkflowId,
-		Name:      workflowName,
+		ID:          newWorkflowId,
+		Name:        workflowName,
 		Description: fmt.Sprintf("Category action: %s. This is a workflow generated and ran by ShuffleGPT. More here: https://shuffler.io/chat", selectedAction.Name),
-		Generated: true,
-		Hidden:    true,
-		Start:     startId,
-		OrgId:     user.ActiveOrg.Id,
+		Generated:   true,
+		Hidden:      true,
+		Start:       startId,
+		OrgId:       user.ActiveOrg.Id,
 	}
 
 	if len(foundWorkflow.ID) > 0 {
@@ -20633,10 +20578,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		selectedApp.ChildIds = []string{}
 		selectedApp.SmallImage = ""
 		structuredFeedback := StructuredCategoryAction{
-			Success: false,
-			Action: "app_authentication",
+			Success:  false,
+			Action:   "app_authentication",
 			Category: discoveredCategory,
-			Reason: fmt.Sprintf("Help us set up app '%s' for you first. If you want to skip this, fill in empty fields and submit it.", selectedApp.Name),
+			Reason:   fmt.Sprintf("Help us set up app '%s' for you first. If you want to skip this, fill in empty fields and submit it.", selectedApp.Name),
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -20671,16 +20616,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-
 		selectedApp.Actions = []WorkflowAppAction{}
 		//selectedApp.Authentication = Authentication{}
 		selectedApp.ChildIds = []string{}
 		selectedApp.SmallImage = ""
 		structuredFeedback := StructuredCategoryAction{
-			Success: ifSuccess,
-			Action: "app_authentication",
+			Success:  ifSuccess,
+			Action:   "app_authentication",
 			Category: discoveredCategory,
-			Reason: reason,
+			Reason:   reason,
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -20733,7 +20677,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if value.Step >= 1 {
 		step = value.Step
 	} else {
-		step = int64(len(newWorkflow.Actions)+1)
+		step = int64(len(newWorkflow.Actions) + 1)
 	}
 
 	secondAction := Action{
@@ -20747,7 +20691,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		ID:          uuid.NewV4().String(),
 		Parameters:  []WorkflowAppActionParameter{},
 		Position: Position{
-			X: 0.0+float64(step*300.0),
+			X: 0.0 + float64(step*300.0),
 			Y: 100.0,
 		},
 		AuthenticationId: foundAuthenticationId,
@@ -20784,25 +20728,25 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			newWorkflow.Branches = append(newWorkflow.Branches, Branch{
 				Label: "Validating",
 
-				SourceID: nearestXNeighbor.ID,
+				SourceID:      nearestXNeighbor.ID,
 				DestinationID: secondAction.ID,
-				ID: uuid.NewV4().String(),
+				ID:            uuid.NewV4().String(),
 
 				Conditions: []Condition{
 					Condition{
 						Source: WorkflowAppActionParameter{
-							Name: "source",
-							Value: fmt.Sprintf("$%s.status", strings.ReplaceAll(nearestXNeighbor.Label, " ", "_")),
+							Name:    "source",
+							Value:   fmt.Sprintf("$%s.status", strings.ReplaceAll(nearestXNeighbor.Label, " ", "_")),
 							Variant: "STATIC_VALUE",
 						},
 						Condition: WorkflowAppActionParameter{
-							Name: "condition",
-							Value: "less than",	
+							Name:    "condition",
+							Value:   "less than",
 							Variant: "STATIC_VALUE",
 						},
 						Destination: WorkflowAppActionParameter{
-							Name: "destination",
-							Value: "300",
+							Name:    "destination",
+							Value:   "300",
 							Variant: "STATIC_VALUE",
 						},
 					},
@@ -20864,15 +20808,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		formattedQuery := fmt.Sprintf("Usefields %s with app %s to '%s'", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
 
 		newQueryInput := QueryInput{
-			Query: formattedQuery,
-			OutputFormat: "action", 			// To run the action (?)
+			Query:        formattedQuery,
+			OutputFormat: "action", // To run the action (?)
 			//OutputFormat: "action_parameters", 	// To get the action parameters back so we can run it manually
 
 			//Label: value.Label,
 			Category: value.Category,
 
-			AppId: 	  selectedApp.ID,
-			AppName: selectedApp.Name,
+			AppId:      selectedApp.ID,
+			AppName:    selectedApp.Name,
 			ActionName: selectedAction.Name,
 			Parameters: selectedAction.Parameters,
 		}
@@ -20885,8 +20829,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Failed marshalling action"}`))
 			return
 		}
-
-
 
 		//streamUrl = "http://localhost:5002"
 		streamUrl = fmt.Sprintf("%s/api/v1/conversation", streamUrl)
@@ -21058,7 +21000,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	*
 	 */
 
-
 	// Add params and such of course
 
 	// Set workflow in cache only?
@@ -21079,21 +21020,21 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if triggersFound == 0 {
 
 			decidedTrigger := Trigger{
-				Name: "Schedule",
-				Status: "uninitialized",
+				Name:        "Schedule",
+				Status:      "uninitialized",
 				TriggerType: "SCHEDULE",
-				IsValid: true,
-				Label: "Scheduler",
+				IsValid:     true,
+				Label:       "Scheduler",
 			}
 
 			if strings.Contains(strings.ToLower(strings.Join(selectedApp.ReferenceInfo.Triggers, ",")), "webhook") {
 				// Add a schedule trigger
 				decidedTrigger = Trigger{
-					Name: "Webhook",
-					Status: "uninitialized",
+					Name:        "Webhook",
+					Status:      "uninitialized",
 					TriggerType: "WEBHOOK",
-					IsValid: true,
-					Label: "Webhook",
+					IsValid:     true,
+					Label:       "Webhook",
 				}
 			} else {
 				// Check if it's CRUD (Read)
@@ -21112,18 +21053,18 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				Y: startNode.Position.Y,
 			}
 			decidedTrigger.AppAssociation = WorkflowApp{
-				Name: selectedApp.Name,
+				Name:       selectedApp.Name,
 				AppVersion: selectedApp.AppVersion,
-				ID: selectedApp.ID,
+				ID:         selectedApp.ID,
 				LargeImage: selectedApp.LargeImage,
 			}
 
 			newWorkflow.Triggers = append(newWorkflow.Triggers, decidedTrigger)
 			// Add a branch from trigger to startnode
 			newWorkflow.Branches = append(newWorkflow.Branches, Branch{
-				SourceID: decidedTrigger.ID,
+				SourceID:      decidedTrigger.ID,
 				DestinationID: startNode.ID,
-				ID: uuid.NewV4().String(),
+				ID:            uuid.NewV4().String(),
 			})
 
 			log.Printf("[DEBUG] Added trigger to the generated workflow")
@@ -21134,7 +21075,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Failed setting workflow during category run: %s", err)
 	}
-
 
 	/*
 		workflowBytes, err := json.Marshal(newWorkflow)
@@ -21200,7 +21140,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		return
 	}
-
 
 	// FIXME: Make dynamic? AKA input itself is what controls the workflow?
 	// E.g. for the "body", instead of having to know it's "body" we just have to know it's "input" and dynamically fill in based on execution args
@@ -21271,12 +21210,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedApp.LargeImage = ""
 	selectedApp.Actions = []WorkflowAppAction{}
 	structuredFeedback := StructuredCategoryAction{
-		Success: true,
-		WorkflowId: newWorkflow.ID,
+		Success:     true,
+		WorkflowId:  newWorkflow.ID,
 		ExecutionId: workflowExecution.ExecutionId,
-		Action: "done",
-		Category: discoveredCategory,
-		Reason: "Analyze Result for details",
+		Action:      "done",
+		Category:    discoveredCategory,
+		Reason:      "Analyze Result for details",
 
 		Result: returnBody.Result,
 	}
@@ -21422,7 +21361,6 @@ func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking categories. Please try again."}`)))
 		return
 	}
-
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
@@ -21637,7 +21575,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 			}
 		}
 
-		if len(inputAction.CategoryLabel) ==  0 {
+		if len(inputAction.CategoryLabel) == 0 {
 			//log.Printf("No labels for action %s in app %s", inputAction.Name, inputAction.AppName)
 			continue
 		}
@@ -21695,17 +21633,17 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 				recommendation := Recommendations{}
 				if foundAppType == "tools" {
 					recommendation = Recommendations{
-						AppName: "Shuffle Tools",
-						AppAction: outgoing.Name,
+						AppName:    "Shuffle Tools",
+						AppAction:  outgoing.Name,
 						AppVersion: "1.2.0",
-						AppId: "bc78f35c6c6351b07a09b7aed5d29652",
+						AppId:      "bc78f35c6c6351b07a09b7aed5d29652",
 					}
 				} else if categoryname == "subflow" {
 					recommendation = Recommendations{
-						AppName: "Shuffle Subflow",
+						AppName:    "Shuffle Subflow",
 						AppVersion: "1.1.0",
-						AppAction: "subflow",
-						AppId: "a891257fcf905c2d256ce5674282864c",
+						AppAction:  "subflow",
+						AppId:      "a891257fcf905c2d256ce5674282864c",
 					}
 				} else {
 					log.Printf("[DEBUG] Found app category %s for category %s", foundAppType, categoryname)
@@ -21713,7 +21651,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 
 					if foundAppType == "cases" {
 						foundCategory = org.SecurityFramework.Cases
-					}  else if foundAppType == "communication" {
+					} else if foundAppType == "communication" {
 						foundCategory = org.SecurityFramework.Communication
 					} else if foundAppType == "assets" {
 						foundCategory = org.SecurityFramework.Assets
@@ -21730,7 +21668,6 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 					} else {
 						//foundCategory = org.SecurityFramework.Other
 					}
-
 
 					if foundCategory.Name == "" {
 						log.Printf("[ERROR] No app found for category %s", categoryname)
@@ -21763,8 +21700,8 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 					}
 
 					recommendation = Recommendations{
-						AppName: foundCategory.Name,
-						AppId: foundCategory.ID,
+						AppName:   foundCategory.Name,
+						AppId:     foundCategory.ID,
 						AppAction: foundAction.Name,
 					}
 				}
@@ -21878,7 +21815,6 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	//	log.Printf("[WARNING] Amount of suggestions is too high: %d", amount)
 	//	return org, orgUpdated
 	//}
-
 
 	// 1. Suggest based on usecases
 	// 2. Suggest public workflows (cloud)
@@ -22060,7 +21996,6 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 		usecasesAdded += 1
 	}
 
-
 	var usecases UsecaseLinks
 	err = json.Unmarshal([]byte(GetUsecaseData()), &usecases)
 	if err != nil {
@@ -22227,13 +22162,13 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 					orgUpdated = true
 
 					usecasesAdded += 1
-					if (usecasesAdded >= 3) {
+					if usecasesAdded >= 3 {
 						break
 					}
 				}
 			}
 
-			if innerUpdate && usecasesAdded >= 3{
+			if innerUpdate && usecasesAdded >= 3 {
 				break
 			}
 		}
@@ -22277,12 +22212,11 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 		}
 	}
 
-
 	//if usecasesAdded <= 3 {
 	//	return GetWorkflowSuggestions(ctx, user, org, orgUpdated, amount+1)
 	//}
 
-	if usecasesAdded < 3{
+	if usecasesAdded < 3 {
 		//log.Printf("\n\n[DEBUG] Should generate priorities for org %s (%s) based on purely numbers\n\n", org.Name, org.Id)
 
 		newPrios := []Priority{
@@ -22503,7 +22437,6 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Org is not a suborg"}`))
 		return
 	}
-
 
 	// Get workflows
 	user.ActiveOrg.Id = org.Id
@@ -22753,7 +22686,7 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 	parsedRuns := []WorkflowExecution{}
 	for _, run := range runs {
 		if run.ExecutionOrg != user.ActiveOrg.Id {
-			if !user.SupportAccess{
+			if !user.SupportAccess {
 				continue
 			}
 		}
@@ -22764,8 +22697,8 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 	runs = parsedRuns
 	workflowSearchResult := WorkflowSearchResult{
 		Success: true,
-		Runs:   runs,
-		Cursor: cursor,
+		Runs:    runs,
+		Cursor:  cursor,
 	}
 
 	respBody, err := json.Marshal(workflowSearchResult)
@@ -22778,7 +22711,6 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 
 	resp.Write(respBody)
 }
-
 
 func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -22818,7 +22750,6 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 			}
 		}
 	}
-
 
 	newResults := []SubflowData{}
 	finishedSubflows := 0
@@ -22925,7 +22856,7 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 		}
 
 		if result.CompletedAt == 0 {
-			result.CompletedAt = time.Now().Unix()*1000
+			result.CompletedAt = time.Now().Unix() * 1000
 		}
 
 	} else {
@@ -22934,7 +22865,6 @@ func parseSubflowResults(ctx context.Context, result ActionResult) (ActionResult
 
 	return result, true
 }
-
 
 func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) error {
 	// 1. Get current amount of requests for the user
@@ -22958,12 +22888,11 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) er
 
 	timenow := time.Now().Unix()
 	userRequest := UserRequest{
-		IP 		  : foundIP,
-		Method    : request.Method,
-		Path 	  : request.URL.Path,
-		Timestamp : timenow,
+		IP:        foundIP,
+		Method:    request.Method,
+		Path:      request.URL.Path,
+		Timestamp: timenow,
 	}
-
 
 	log.Printf("[DEBUG] User request: %#v", userRequest)
 
@@ -23061,10 +22990,10 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 
 		// Add to the queue
 		request := ExecutionRequest{
-			Type: "DOCKER_IMAGE_DOWNLOAD",
-			ExecutionId: uuid.NewV4().String(),
+			Type:              "DOCKER_IMAGE_DOWNLOAD",
+			ExecutionId:       uuid.NewV4().String(),
 			ExecutionArgument: strings.Join(appnames, ","),
-			Priority: 11,
+			Priority:          11,
 		}
 
 		parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), org.Id)
@@ -23077,7 +23006,6 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 
 	return nil
 }
-
 
 func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 	if project.Environment == "cloud" {
@@ -23105,7 +23033,6 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 		user.Role = "admin"
 		foundOrg.Users = append(foundOrg.Users, user)
 	}
-
 
 	// Save the org
 	err := SetOrg(ctx, foundOrg, foundOrg.Id)
