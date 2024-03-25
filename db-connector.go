@@ -71,6 +71,8 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
+
+
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
 // Shuffle instance
@@ -3664,7 +3666,7 @@ func propagateOrg(org Org) error {
 	return nil
 }
 
-func propagateUser(user User) error {
+func propagateUser(user User, delete bool) error {
 	if len(user.Id) == 0 {
 		return errors.New("no ID provided for user")
 	}
@@ -3676,6 +3678,9 @@ func propagateUser(user User) error {
 	log.Printf("[INFO] Asking %s to propagate user %s", propagateUrl, user.Id)
 
 	data := map[string]string{"mode": "user", "userId": user.Id}
+	if delete {
+		data["type"] = "delete"
+	}
 
 	reqBody, err := json.Marshal(data)
 	if err != nil {
@@ -4693,7 +4698,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		if len(user.Regions) > 1 {
 			go func() {
 				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
-				err = propagateUser(*user)
+				err = propagateUser(*user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
 				}
@@ -10116,7 +10121,9 @@ func GetEsConfig() *opensearch.Client {
 
 	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
 	if len(password) == 0 {
-		password = "admin"
+		// New password that is set by default. 
+		// Security Audit points to changing this during onboarding.
+		password = "StrongShufflePassword321!"
 	}
 
 	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)

@@ -6008,7 +6008,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 
 								// Some internal reserves
-								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") {
+								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
+									// Do nothing
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
@@ -8156,6 +8157,11 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org (2). Please contact support@shuffler.io if this is unexpected."}`))
 		return
+	}
+
+	if user.SupportAccess {
+		usr.Role = "admin"
+		user.Role = "admin"
 	}
 
 	user.ActiveOrg = OrgMini{
@@ -13475,7 +13481,8 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
+	if user.Role != "admin" && !user.SupportAccess {
+		log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
 		return
