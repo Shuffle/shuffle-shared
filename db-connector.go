@@ -4757,6 +4757,16 @@ func DeleteUsersAccount(ctx context.Context, user *User, username string) error 
 		if err != nil {
 			log.Printf("[Error] deleting from %s from %s: %s", nameKey, parsedKey, err)
 		}
+		if (len(user.Regions)) > 1 {
+			go func() {
+				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+				err = propagateUser(*user)
+				if err != nil {
+					log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
+				}
+			}()
+		}
+
 	}
 
 	DeleteCache(ctx, user.ApiKey)

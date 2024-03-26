@@ -7411,16 +7411,16 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// if project.Environment == "cloud" {
-	// 	// Checking if it's a special region. All user-specific requests should
-	// 	// go through shuffler.io and not subdomains
-	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-	// 		log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
-	// 		RedirectUserRequest(resp, request)
-	// 		return
-	// 	}
-	// }
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
@@ -7483,14 +7483,6 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("wrong passowrd ")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Password is incorrect"}`))
-		return
-	}
-
-	err = DeleteUsersAccount(ctx, foundUser, userId)
-	if err != nil {
-		log.Printf("[Error] Can't Delete User with User name: %v and Id: %v", foundUser.Username, foundUser.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason":"Can't Delete User with Username: %v}`, userInfo.Username)))
 		return
 	}
 
@@ -7573,11 +7565,21 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	org.Users = users
+	if len(org.Users) > 1 {
 	err = SetOrg(ctx, *org, org.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating org (delete user %s) %s: %s", foundUser.Username, org.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Removed their access but failed updating own user list"}`)))
+			return
+		}
+	}
+
+	err = DeleteUsersAccount(ctx, foundUser, userId)
+	if err != nil {
+		log.Printf("[Error] Can't Delete User with User name: %v and Id: %v", foundUser.Username, foundUser.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason":"Can't Delete User with Username: %v}`, userInfo.Username)))
 		return
 	}
 
