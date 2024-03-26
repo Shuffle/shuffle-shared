@@ -7411,16 +7411,16 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// if project.Environment == "cloud" {
-	// 	// Checking if it's a special region. All user-specific requests should
-	// 	// go through shuffler.io and not subdomains
-	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-	// 		log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
-	// 		RedirectUserRequest(resp, request)
-	// 		return
-	// 	}
-	// }
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
