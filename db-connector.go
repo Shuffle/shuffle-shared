@@ -3679,7 +3679,8 @@ func propagateUser(user User, delete bool) error {
 
 	data := map[string]string{"mode": "user", "userId": user.Id}
 	if delete {
-		data["type"] = "delete"
+		log.Printf("[INFO] Deletion propagation is disabled right now.")
+		// data["delete"] = "true"
 	}
 
 	reqBody, err := json.Marshal(data)
