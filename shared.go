@@ -7411,16 +7411,16 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// if project.Environment == "cloud" {
+	// 	// Checking if it's a special region. All user-specific requests should
+	// 	// go through shuffler.io and not subdomains
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
@@ -7459,37 +7459,47 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if !userInfo.SupportAccess && userInfo.Username != foundUser.Username {
+	if !userInfo.SupportAccess && userInfo.Id != foundUser.Id {
 		log.Printf("Unauthorized user (%s) attempted to delete an account. Must be a user or have support access.", userInfo.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Unauthorize User. Must be a regular user or have support access"}`))
 		return
 	}
 
-	var requestBody struct {
-		Password string `json:"password"`
-	}
+	if !userInfo.SupportAccess {
+		var requestBody struct {
+			Password string `json:"password"`
+		}
+	
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed decoding request body"}`))
+			return
+		}
+	
+		password := requestBody.Password	
 
-	if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
-		http.Error(resp, "Failed to parse request body", http.StatusBadRequest)
-		return
-	}
-
-	password := requestBody.Password
-
-	err = bcrypt.CompareHashAndPassword([]byte(foundUser.Password), []byte(password))
-	if err != nil {
-		// Passwords don't match
-		log.Printf("wrong passowrd ")
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Password is incorrect"}`))
-		return
+		err = bcrypt.CompareHashAndPassword([]byte(foundUser.Password), []byte(password))
+		if err != nil {
+			// Passwords don't match
+			log.Printf("[WARNING] Password is incorrect for user while deleting account %s (%s): %s", userInfo.Username, userInfo.Id, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Password is incorrect"}`))
+			return
+		}
 	}
 
 	// Overwrite incase the user is in the same org
 	// This could be a way to jump into someone elses organisation if the user already has the correct org name without correct name.
-	if foundUser.ActiveOrg.Id == "" && foundUser.ActiveOrg.Name == userInfo.ActiveOrg.Name && len(foundUser.Orgs) == 0 {
+	if (foundUser.ActiveOrg.Id == "" && foundUser.ActiveOrg.Name == userInfo.ActiveOrg.Name && len(foundUser.Orgs) == 0) {
 		foundUser.ActiveOrg.Id = string(userInfo.ActiveOrg.Id)
+	}
+
+	if (foundUser.SupportAccess) {
+		log.Printf("[AUDIT] Can't delete support user %s (%s)", userInfo.Username, userInfo.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Can't delete support user"}`))
+		return
 	}
 
 	orgFound := false
@@ -7575,7 +7585,7 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	err = DeleteUsersAccount(ctx, foundUser, userId)
+	err = DeleteUsersAccount(ctx, foundUser)
 	if err != nil {
 		log.Printf("[Error] Can't Delete User with User name: %v and Id: %v", foundUser.Username, foundUser.Id)
 		resp.WriteHeader(401)
@@ -7583,7 +7593,7 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[AUDIT] User %s (%s) successfully removed %s from org %s", userInfo.Username, userInfo.Id, foundUser.Username, userInfo.ActiveOrg.Id)
+	log.Printf("[AUDIT] User %s (%s) successfully deleted %s (%s)", userInfo.Username, userInfo.Id, foundUser.Username, foundUser.Id)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
