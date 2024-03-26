@@ -7248,16 +7248,16 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// if project.Environment == "cloud" {
-	// 	// Checking if it's a special region. All user-specific requests should
-	// 	// go through shuffler.io and not subdomains
-	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-	// 		log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
-	// 		RedirectUserRequest(resp, request)
-	// 		return
-	// 	}
-	// }
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
@@ -7266,7 +7266,6 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-	log.Printf("user role is : %v and support access is: %v", userInfo.Role, userInfo.SupportAccess)
 
 	if userInfo.Role != "admin" {
 		log.Printf("[DEBUG] Wrong user (%s) when deleting - must be admin", userInfo.Username)
@@ -7296,12 +7295,12 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// if userId == userInfo.Id {
-	// 	log.Printf("[WARNING] Can't change activation of your own user %s (%s)", userInfo.Username, userInfo.Id)
-	// 	resp.WriteHeader(401)
-	// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change activation of your own user"}`)))
-	// 	return
-	// }
+	if userId == userInfo.Id {
+		log.Printf("[WARNING] Can't change activation of your own user %s (%s)", userInfo.Username, userInfo.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't change activation of your own user"}`)))
+		return
+	}
 
 	foundUser, err := GetUser(ctx, userId)
 	if err != nil {
