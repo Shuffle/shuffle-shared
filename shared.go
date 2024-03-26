@@ -7522,27 +7522,6 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// NEW
-	neworgs := []string{}
-	for _, orgid := range foundUser.Orgs {
-		if orgid == userInfo.ActiveOrg.Id {
-			continue
-		} else {
-			// Automatically setting to first one
-			if foundUser.ActiveOrg.Id == userInfo.ActiveOrg.Id {
-				foundUser.ActiveOrg.Id = orgid
-			}
-		}
-
-		neworgs = append(neworgs, orgid)
-	}
-
-	if foundUser.ActiveOrg.Id == userInfo.ActiveOrg.Id {
-		foundUser.ActiveOrg.Id = ""
-		foundUser.ActiveOrg.Name = ""
-	}
-
-	foundUser.Orgs = neworgs
 	if len(foundUser.Orgs) == 0 {
 		log.Printf("[INFO] User %s (%s) doesn't have an org anymore after being deleted. This will be generated when they log in next time", foundUser.Username, foundUser.Id)
 	}
