@@ -3356,9 +3356,49 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	// Check if Subscription is from BEFORE November 4th 2023
-	for orgIndex, sub := range curOrg.Subscriptions {
-		if sub.Startdate == 0 || sub.Startdate < 1699053459 {
-			curOrg.Subscriptions[orgIndex].EulaSigned = true
+
+	eulaSigned := false
+	if len(curOrg.Subscriptions) > 1 {
+		replicas := map[string]int64{}
+		for orgIndex, sub := range curOrg.Subscriptions {
+			if sub.EulaSigned {
+				eulaSigned = true
+			}
+
+			if sub.Startdate == 0 || sub.Startdate < 1699053459 {
+				curOrg.Subscriptions[orgIndex].EulaSigned = true
+			}
+
+			if _, ok := replicas[sub.Name]; ok {
+				if replicas[sub.Name] > sub.Startdate {
+					log.Printf("[DEBUG] Removing subscription %s from org %s", sub.Name, curOrg.Id)
+
+					replicas[sub.Name] = sub.Startdate
+				}
+			} else {
+				replicas[sub.Name] = sub.Startdate
+			}
+		}
+
+		newsubs := []PaymentSubscription{}
+		for key, value := range replicas {
+			foundsub := PaymentSubscription{}
+			for _, sub := range curOrg.Subscriptions {
+				if sub.Name == key && sub.Startdate == value {
+					foundsub = sub
+					break
+				}
+			}
+
+			if foundsub.Name != "" {
+				foundsub.EulaSigned = eulaSigned
+				newsubs = append(newsubs, foundsub)
+			}
+		}
+
+		if len(newsubs) > 0 {
+			curOrg.Subscriptions = newsubs
+			log.Printf("[DEBUG] New subscriptions for org %s: %d", curOrg.Id, len(newsubs))
 		}
 	}
 

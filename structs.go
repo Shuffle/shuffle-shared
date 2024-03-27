@@ -3717,6 +3717,8 @@ type StructuredCategoryAction struct {
 	AvailableLabels []string `json:"available_labels"`
 	ThreadId string `json:"thread_id"`
 	RunId string `json:"run_id"`
+
+	Translated bool `json:"translated"`
 }
 
 type ModelLabelParameter struct {
@@ -3741,4 +3743,14 @@ type HTTPOutput struct {
 	Headers  map[string]string `json:"headers"`
 	Cookies  map[string]string `json:"cookies"`
 	Errors   []string `json:"errors"`
+}
+
+type SnappStep struct {
+	Name string `json:"name"`
+	Category string `json:"category"`
+}
+
+type SnappWf struct {
+	Name string `json:"name"`
+	Steps []SnappStep `json:"steps"`
 }
