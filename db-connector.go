@@ -3396,7 +3396,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 
 		if len(newsubs) > 0 {
 			curOrg.Subscriptions = newsubs
-			log.Printf("[DEBUG] New subscriptions for org %s: %d", curOrg.Id, len(newsubs))
+			//log.Printf("[DEBUG] New subscriptions for org %s: %d", curOrg.Id, len(newsubs))
 		}
 	}
 

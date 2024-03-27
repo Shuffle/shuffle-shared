@@ -20807,15 +20807,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	client := GetExternalClient(streamUrl)
 
 	// AI fallback mechanism to handle missing fields
-<<<<<<< HEAD
-	// This is in case some fields are not sent in properly
-	if len(missingFields) > 0 {
-=======
 	// This is in case some fields are not sent in properly 
 	authorization := ""
 	optionalExecutionId := ""
 	if len(missingFields) > 0 { 
->>>>>>> ce4f9870fb6100a96e7b2ccbdb11e839060fa544
 		formattedQueryFields := []string{}
 		for _, field := range value.Fields {
 			formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
@@ -20930,14 +20925,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
 			streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
-<<<<<<< HEAD
-		}
-=======
 
 			authorization = request.URL.Query().Get("authorization")
 			optionalExecutionId = request.URL.Query().Get("execution_id")
 		} 
->>>>>>> ce4f9870fb6100a96e7b2ccbdb11e839060fa544
 
 		if len(value.OrgId) > 0 {
 			streamUrl = fmt.Sprintf("%s&org_id=%s", streamUrl, value.OrgId)
