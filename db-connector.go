@@ -71,8 +71,6 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
-
-
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
 // Shuffle instance
@@ -84,7 +82,6 @@ func GetESIndexPrefix(index string) string {
 	}
 	return index
 }
-
 
 // 1. Check list if there is a record for yesterday
 // 2. If there isn't, set it and clear out the daily records
@@ -1570,7 +1567,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	// - Webhooks v2 with for response
 	if finalWorkflowExecution.Status == "ABORTED" {
 		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
-	} else  if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED"  { 
+	} else if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED" {
 		//log.Printf("\n\n[DEBUG] Finding new response value\n\n")
 		lastResult := ""
 		lastCompleted := int64(-1)
@@ -2532,7 +2529,6 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 
 	return count, nil
 }
-
 
 func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 	orgs := []Org{}
@@ -4768,6 +4764,81 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	return nil
 }
 
+func DeleteUsersAccount(ctx context.Context, user *User) error {
+	cacheKey := fmt.Sprintf("user_%s", user.Id)
+
+	for _, orgId := range user.Orgs {
+		org, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[WARNING] Error getting org %s in delete user: %s", orgId, err)
+			continue
+		}
+
+		newUsers := []User{}
+		for _, orgUser := range org.Users {
+			if orgUser.Id == user.Id {
+				continue
+			}
+
+			newUsers = append(newUsers, orgUser)
+		}
+		org.Users = newUsers
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org %s (1)", orgId)
+		}
+	}
+
+	nameKey := "Users"
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(nameKey)), user.Id)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return err
+		}
+		defer res.Body.Close()
+
+		log.Printf("Response from OpenSearch deletion: StatusCode=%d", res.StatusCode)
+
+		if res.StatusCode == 404 {
+			return errors.New("User doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return err
+		}
+
+		wrapped := UserWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, user.Id, nil)
+		err := project.Dbclient.Delete(ctx, key)
+		if err != nil {
+			log.Printf("[Error] deleting from %s from %s: %s", nameKey, user.Id, err)
+		}
+		// if (len(user.Regions)) > 1 {
+		// 	go func() {
+		// 		log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+		// 		err = propagateUser(*user, true)
+		// 		if err != nil {
+		// 			log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
+		// 		}
+		// 	}()
+		// }
+
+	}
+
+	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+
+	return nil
+}
+
 func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
 	// FIXME - this doesn't work
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
@@ -5231,7 +5302,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	maxLen := 200
-	queryLimit := 25 
+	queryLimit := 25
 	cursorStr := ""
 
 	allApps = user.PrivateApps
@@ -5252,7 +5323,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
 		go SetOrg(ctx, *org, org.Id)
 	}
-
 
 	if len(user.PrivateApps) > 0 && orgErr == nil {
 		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
@@ -5359,7 +5429,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-
 	// Find public apps
 
 	appsAdded := []string{}
@@ -5381,7 +5450,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[DEBUG] Failed getting cache for PUBLIC apps: %s", err)
 		}
 	}
-
 
 	// May be better to just list all, then set to true?
 	// Is this the slow one?
@@ -5486,7 +5554,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		}
 	}
-
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	// Instead loading in all public apps which is shared between all orgs
@@ -5606,7 +5673,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		allApps = append(allApps, newApps...)
 	}
 
-
 	// Deduplicate (e.g. multiple gmail)
 	dedupedApps := []WorkflowApp{}
 	for _, app := range allApps {
@@ -5629,8 +5695,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			dedupedApps = append(dedupedApps, app)
 			continue
 		}
-
-
 
 		//log.Printf("[INFO] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, replaceIndex)
 		// If owner of dedup, don't change
@@ -5702,7 +5766,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-
 	// Also prioritize most used ones from app-framework on top?
 	slice.Sort(allApps[:], func(i, j int) bool {
 		return allApps[i].Edited > allApps[j].Edited
@@ -5724,7 +5787,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
-
 
 	return allApps, nil
 }
@@ -5858,15 +5920,15 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 							},
 						},
 						{
-						  "match": map[string]interface{}{
-							"contributors": userId,
-						  },
+							"match": map[string]interface{}{
+								"contributors": userId,
 							},
 						},
 					},
-					"minimum_should_match": 1,
 				},
-			}		
+				"minimum_should_match": 1,
+			},
+		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
@@ -10065,7 +10127,7 @@ func GetEsConfig() *opensearch.Client {
 
 	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
 	if len(password) == 0 {
-		// New password that is set by default. 
+		// New password that is set by default.
 		// Security Audit points to changing this during onboarding.
 		password = "StrongShufflePassword321!"
 	}
@@ -11036,7 +11098,6 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 					userInput = true
 				}
 			}
-
 
 			if comparisonTime > 600 && !userInput {
 				// FIXME: Check if there are any actions with delays?
