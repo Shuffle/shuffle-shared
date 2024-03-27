@@ -5920,7 +5920,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								}
 
 								// Some internal reserves
-								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") {
+								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
+									// Do nothing
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
@@ -8251,6 +8252,11 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org (2). Please contact support@shuffler.io if this is unexpected."}`))
 		return
+	}
+
+	if user.SupportAccess {
+		usr.Role = "admin"
+		user.Role = "admin"
 	}
 
 	user.ActiveOrg = OrgMini{
@@ -13557,7 +13563,8 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
+	if user.Role != "admin" && !user.SupportAccess {
+		log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
 		return
@@ -14588,7 +14595,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 				// Check for single action errors in liquid and similar
 				// to be used in the frontend
-				log.Printf("[INFO] Checking for errors in single execution %s", workflowExecution.ExecutionId)
+				//log.Printf("[INFO] Checking for errors in single execution %s", workflowExecution.ExecutionId)
 
 				for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
 					//log.Printf("Name: %s", param.Name)
@@ -17229,11 +17236,23 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						if err != nil {
 							log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens: '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
 
+							CreateOrgNotification(
+								ctx,
+								fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
+								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Contact support@shiffler.io for additional help."),
+								fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+								workflowExecution.ExecutionOrg,
+								true,
+							)
+
 							// Adding so it can be used to fail the auth naturally with Outlook
+
+							/*
 							newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
 								Key:   "access_token",
 								Value: "FAILURE_REFRESH",
 							})
+							*/
 
 							// Commented out as we don't want to stop the app, but just continue with the old tokens
 							/*
@@ -17762,7 +17781,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			// Should run all keys goroutines, then go find them again when all are done and replace
 			// Wtf is this garbage
 			if len(findKeys) > 0 {
-				//log.Printf("[INFO] Found %d auth keys to decrypt from KMS", len(findKeys))
+				log.Printf("\n\n\n\n[INFO] Found %d auth keys to decrypt from KMS\n\n\n\n", len(findKeys))
 
 				// Have to set the workflow exec in cache while running this so that access rights exist
 				foundValues := map[string]string{}
@@ -20152,7 +20171,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[DEBUG] No category set in category action")
 	}
 
-	log.Printf("[INFO] Found label %s in category %s. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
+	log.Printf("[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
 
 	newapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
@@ -20800,8 +20819,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	client := GetExternalClient(streamUrl)
 
 	// AI fallback mechanism to handle missing fields
+<<<<<<< HEAD
 	// This is in case some fields are not sent in properly
 	if len(missingFields) > 0 {
+=======
+	// This is in case some fields are not sent in properly 
+	authorization := ""
+	optionalExecutionId := ""
+	if len(missingFields) > 0 { 
+>>>>>>> ce4f9870fb6100a96e7b2ccbdb11e839060fa544
 		formattedQueryFields := []string{}
 		for _, field := range value.Fields {
 			formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
@@ -20856,11 +20882,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] LOCAL AI REQUEST SENT TO %s", streamUrl)
 
 		req.Header.Add("Authorization", request.Header.Get("Authorization"))
+		authorization = request.Header.Get("Authorization")
 		newresp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[WARNING] Error running body for execute generated workflow: %s", err)
 			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running generated app. Contact support."}`)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running app %s (%s). Contact support."}`, selectedAction.Name, selectedAction.AppID)))
 			return
 		}
 
@@ -20915,7 +20942,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
 			streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+<<<<<<< HEAD
 		}
+=======
+
+			authorization = request.URL.Query().Get("authorization")
+			optionalExecutionId = request.URL.Query().Get("execution_id")
+		} 
+>>>>>>> ce4f9870fb6100a96e7b2ccbdb11e839060fa544
 
 		if len(value.OrgId) > 0 {
 			streamUrl = fmt.Sprintf("%s&org_id=%s", streamUrl, value.OrgId)
@@ -20936,7 +20970,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(request.Header.Get("Authorization")) > 0 {
-			log.Printf("[DEBUG] Adding authorization header to request: %s", request.Header.Get("Authorization"))
 			req.Header.Add("Authorization", request.Header.Get("Authorization"))
 		}
 
@@ -20972,7 +21005,20 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// Unmarshal responseBody back to secondAction
-		schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody)
+		// FIXME: add auth config to save translation files properly
+		
+		//streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+
+		baseurlSplit := strings.Split(streamUrl, "/")
+		if len(baseurlSplit) > 2 { 
+			// Only grab from https -> start of path
+			streamUrl = strings.Join(baseurlSplit[0:3], "/")
+		}
+
+		log.Printf("\n\n[DEBUG] BASEURL FOR SCHEMALESS: %s\n\n", streamUrl)
+		authConfig := fmt.Sprintf("%s,%s,,%s", streamUrl, authorization, optionalExecutionId)
+
+		schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody, authConfig)
 		if err != nil {
 			log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
 			resp.WriteHeader(202)

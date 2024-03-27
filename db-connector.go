@@ -71,6 +71,8 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
+
+
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
 // Shuffle instance
@@ -3356,9 +3358,49 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	// Check if Subscription is from BEFORE November 4th 2023
-	for orgIndex, sub := range curOrg.Subscriptions {
-		if sub.Startdate == 0 || sub.Startdate < 1699053459 {
-			curOrg.Subscriptions[orgIndex].EulaSigned = true
+
+	eulaSigned := false
+	if len(curOrg.Subscriptions) > 1 {
+		replicas := map[string]int64{}
+		for orgIndex, sub := range curOrg.Subscriptions {
+			if sub.EulaSigned {
+				eulaSigned = true
+			}
+
+			if sub.Startdate == 0 || sub.Startdate < 1699053459 {
+				curOrg.Subscriptions[orgIndex].EulaSigned = true
+			}
+
+			if _, ok := replicas[sub.Name]; ok {
+				if replicas[sub.Name] > sub.Startdate {
+					log.Printf("[DEBUG] Removing subscription %s from org %s", sub.Name, curOrg.Id)
+
+					replicas[sub.Name] = sub.Startdate
+				}
+			} else {
+				replicas[sub.Name] = sub.Startdate
+			}
+		}
+
+		newsubs := []PaymentSubscription{}
+		for key, value := range replicas {
+			foundsub := PaymentSubscription{}
+			for _, sub := range curOrg.Subscriptions {
+				if sub.Name == key && sub.Startdate == value {
+					foundsub = sub
+					break
+				}
+			}
+
+			if foundsub.Name != "" {
+				foundsub.EulaSigned = eulaSigned
+				newsubs = append(newsubs, foundsub)
+			}
+		}
+
+		if len(newsubs) > 0 {
+			curOrg.Subscriptions = newsubs
+			log.Printf("[DEBUG] New subscriptions for org %s: %d", curOrg.Id, len(newsubs))
 		}
 	}
 
@@ -3664,7 +3706,7 @@ func propagateOrg(org Org) error {
 	return nil
 }
 
-func propagateUser(user User) error {
+func propagateUser(user User, delete bool) error {
 	if len(user.Id) == 0 {
 		return errors.New("no ID provided for user")
 	}
@@ -3676,6 +3718,10 @@ func propagateUser(user User) error {
 	log.Printf("[INFO] Asking %s to propagate user %s", propagateUrl, user.Id)
 
 	data := map[string]string{"mode": "user", "userId": user.Id}
+	if delete {
+		log.Printf("[INFO] Deletion propagation is disabled right now.")
+		// data["delete"] = "true"
+	}
 
 	reqBody, err := json.Marshal(data)
 	if err != nil {
@@ -4693,7 +4739,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		if len(user.Regions) > 1 {
 			go func() {
 				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
-				err = propagateUser(*user)
+				err = propagateUser(*user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
 				}
@@ -10073,7 +10119,9 @@ func GetEsConfig() *opensearch.Client {
 
 	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
 	if len(password) == 0 {
-		password = "admin"
+		// New password that is set by default. 
+		// Security Audit points to changing this during onboarding.
+		password = "StrongShufflePassword321!"
 	}
 
 	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)

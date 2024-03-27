@@ -3818,6 +3818,9 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		requestRefreshUrl := fmt.Sprintf("%s", refreshUrl)
 		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
+
+		//log.Printf("[DEBUG] Refresh URL: %s?%s", refreshUrl, refreshData)
+
 		//log.Printf("[DEBUG] Refresh URL: %s\n", requestRefreshUrl)
 		req, err := http.NewRequest(
 			"POST",
@@ -3939,6 +3942,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if len(oauthResp.RefreshToken) > 0 {
+		//log.Printf("[DEBUG] Got NEW refresh token %s", oauthResp.RefreshToken) 
+
 		newauth := []AuthenticationStore{}
 		for _, item := range appAuth.Fields {
 			if item.Key == "refresh_token" {
@@ -3947,6 +3952,9 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 			newauth = append(newauth, item)
 		}
+
+		// Tested March 2024. Works to hotswap refresh tokens
+		// 4. M.C515_BL2.0.U.-Cot3MTbxsV8lXPwxLHd8Q1g1p49Mm31MamCfxBEHhXX1tGq2IDFBQ24dcX2RjC*cJW0Qdah9rO*2cEximZVVH0lBgjSEQckYrpv*9h1k1TWQCxmdatJGYjYxMVnflUtEL*dykvv4wEVvV2cdk!vSNih7BATGKrLoqB4ix38ufUjR4ynJxUcJS2hnIntqUPVHOsvXkFHncxDARAIrp7ZnvtXzR9gydhb*FkI!GaF8OIQwJgjqa7p0x8yhyJYLY0k1aAdFg8ehVsK6MzMVLB*dFQTBFzUdnF0tF09xAwsBbL0aWITXIEF*cPC5ghY07n!5H1Q8eOdcc*qOAFMQ!ov0wejM4eddXl*pytEt91IXC3b2
 
 		newauth = append(newauth, AuthenticationStore{
 			Key:   "refresh_token",
