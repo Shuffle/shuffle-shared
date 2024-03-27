@@ -2108,10 +2108,9 @@ type TriggerWithID struct {
 }
 
 type AllTriggersWrapper struct {
-	Emails     []TriggerWithID `json:"email"`
-	WebHooks   []TriggerWithID `json:"webhook"`
-	SubFlows   []TriggerWithID `json:"subflow"`
-	UserInputs []TriggerWithID `json:"user_input"`
+	Pipelines []TriggerWithID `json:"pipelines"`
+	WebHooks   []TriggerWithID `json:"webhooks"`
+	Schedules []ScheduleOld `json:"schedules"`
 }
 
 // Used for Gmail triggers using Pubsub

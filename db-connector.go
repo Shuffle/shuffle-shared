@@ -8418,7 +8418,7 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 	return schedules, nil
 }
 
-func GetAllTriggers(ctx context.Context, orgId string) ([]TriggerWithID, error) {
+func GetTriggers(ctx context.Context, orgId string) ([]TriggerWithID, error) {
 	triggerWithIDs := []TriggerWithID{}
 
 	nameKey := "workflow"

@@ -3842,7 +3842,7 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("Should set %s
 }
 
-func HandleGetAllTriggers(resp http.ResponseWriter, request *http.Request) {
+func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	cors := HandleCors(resp, request)
 	if cors {
@@ -3864,43 +3864,57 @@ func HandleGetAllTriggers(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	triggersWithIds, err := GetAllTriggers(ctx, user.ActiveOrg.Id)
+	triggersWithIds, err := GetTriggers(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] failed getting triggers: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success":false ,"reason": "Cannot get the triggers"}`))
 		return
 	}
+	schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting schedules but continuing anyway with other triggers: %s", err)
+	}
 
 	// this is our struct to store all the seperated triggers
 	allTriggersWrapper := AllTriggersWrapper{}
 
 	for _, inner := range triggersWithIds {
-		// clean triggers to only include neccessary fields
-		cleanedTrigger := Trigger{
-			Label:       inner.Trigger.Label,
-			Environment: inner.Trigger.Environment,
-			Status:      inner.Trigger.Status,
-			TriggerType: inner.Trigger.TriggerType,
-		}
+		triggerType := inner.Trigger.TriggerType
 
-		triggerWithID := TriggerWithID{
-			ID:      inner.ID,
-			Trigger: cleanedTrigger,
-		}
+		if triggerType == "PIPELINE" {
 
-		// seperate each trigger  based on its trigger type
-		switch inner.Trigger.TriggerType {
-		case "EMAIL":
-			allTriggersWrapper.Emails = append(allTriggersWrapper.Emails, triggerWithID)
-		case "WEBHOOK":
+			triggerWithID := TriggerWithID{
+				ID:      inner.ID, // workflow_id
+				Trigger: inner.Trigger,
+			}
+			allTriggersWrapper.WebHooks = append(allTriggersWrapper.Pipelines, triggerWithID)
+
+		} else if triggerType == "WEBHOOK" {
+			params := []WorkflowAppActionParameter{}
+			for _, param := range inner.Trigger.Parameters {
+				if param.Name == "url" {
+					params = append(params, param)
+					break
+				}
+			}
+			// clean triggers to only include neccessary fields
+			cleanedTrigger := Trigger{
+				Label:       inner.Trigger.Label,
+				Environment: inner.Trigger.Environment,
+				ID:          inner.Trigger.ID,
+				Parameters:  params,
+			}
+
+			triggerWithID := TriggerWithID{
+				ID:      inner.ID, // workflow_id
+				Trigger: cleanedTrigger,
+			}
 			allTriggersWrapper.WebHooks = append(allTriggersWrapper.WebHooks, triggerWithID)
-		case "SUBFLOW":
-			allTriggersWrapper.SubFlows = append(allTriggersWrapper.SubFlows, triggerWithID)
-		case "USERINPUT":
-			allTriggersWrapper.UserInputs = append(allTriggersWrapper.UserInputs, triggerWithID)
 		}
 	}
+
+	allTriggersWrapper.Schedules = schedules
 
 	newjson, err := json.Marshal(allTriggersWrapper)
 	if err != nil {
@@ -3912,8 +3926,8 @@ func HandleGetAllTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
-
 }
+
 
 func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
