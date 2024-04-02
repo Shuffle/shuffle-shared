@@ -2226,6 +2226,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 			if project.Environment == "cloud" {
 				queueName = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), user.ActiveOrg.Id)
 			}
+				
 
 			for i := 0; i < 10; i++ {
 				executionRequests, err := GetWorkflowQueue(ctx, queueName, maxAmount)
@@ -2266,6 +2267,13 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[DEBUG] Less than 1000 in queue. Stopping search requests")
 					break
 				}
+			}
+
+			// Delete the index entirely
+			indexName := "workflowqueue-"+queueName
+			err = DeleteDbIndex(ctx, indexName)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting index %s: %s", indexName, err)
 			}
 		}
 	}
@@ -7420,6 +7428,10 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 			RedirectUserRequest(resp, request)
 			return
 		}
+	} else {
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Not allowed onprem"}`))
+		return
 	}
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
@@ -14392,9 +14404,9 @@ func CheckHookAuth(request *http.Request, auth string) error {
 
 // Body = The action body received from the user to test.
 func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte) (WorkflowExecution, error) {
-	var action Action
-
 	workflowExecution := WorkflowExecution{}
+
+	var action Action
 	err := json.Unmarshal(body, &action)
 	if err != nil {
 		log.Printf("[WARNING] Failed action single execution unmarshaling: %s", err)
@@ -14474,19 +14486,21 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	action.Public = app.Public
 	action.Generated = app.Generated
 
-	if project.Environment == "cloud" {
-		action.Environment = "cloud"
-	} else {
-		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
-		}
+	if len(action.Environment) == 0 {
+		if project.Environment == "cloud" {
+			action.Environment = "cloud"
+		} else {
+			environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting environments for org in single action %s: %s", user.ActiveOrg.Id, err)
+			}
 
-		for _, env := range environments {
-			if env.Default {
-				//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
-				action.Environment = env.Name
-				break
+			for _, env := range environments {
+				if env.Default {
+					//log.Printf("[INFO] Setting default environment for single action: %s", env.Name)
+					action.Environment = env.Name
+					break
+				}
 			}
 		}
 	}
@@ -14516,15 +14530,16 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		}
 	*/
 
+	// Make a fake request object as it's not necessary
+	badRequest := &http.Request{}
+
 	if user.ActiveOrg.Id != "" {
-		//log.Printf("ACTIVEORG: %#v", user.ActiveOrg)
+		workflow.Owner = user.Id
+		workflow.OrgId = user.ActiveOrg.Id
 		workflow.ExecutingOrg = user.ActiveOrg
 		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
-
-	// Make a fake request object as it's not necessary
-	badRequest := &http.Request{}
 
 	// Add fake queries to it
 	badRequest.URL, _ = url.Parse(fmt.Sprintf("http://localhost:3000/api/v1/workflows/%s/execute", workflow.ID))
@@ -14535,7 +14550,12 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	if err != nil || len(errString) > 0 {
 		log.Printf("[ERROR] Failed preparing single execution (%s): %s", workflowExecution.ExecutionId, err)
 	}
-	//log.Printf("\n\n[INFO] Exec: %s\n\n", errString)
+
+	if user.ActiveOrg.Id != "" {
+		workflow.ExecutingOrg = user.ActiveOrg
+		workflowExecution.ExecutionOrg = user.ActiveOrg.Id
+		workflowExecution.OrgId = user.ActiveOrg.Id
+	}
 
 	err = SetWorkflowExecution(ctx, workflowExecution, true)
 	if err != nil {
@@ -14558,9 +14578,9 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	// VERY short sleeptime here on purpose
-	maxSeconds := 10
+	maxSeconds := 15 
 	if project.Environment != "cloud" {
-		maxSeconds = 30
+		maxSeconds = 60 
 	}
 
 	sleeptime := 100
@@ -14598,11 +14618,16 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		cnt += 1
 		//log.Printf("Cnt: %d", cnt)
 		if cnt == (maxSeconds * (maxSeconds * 100 / sleeptime)) {
+
+			returnBody.Success = true 
+
+			returnBody.Errors = []string{fmt.Sprintf("Polling timed out after %d seconds. Use the /api/v1/streams API with body `{\"execution_id\": \"%s\", \"authorization\": \"%s\"}` to get the latest results", maxSeconds, workflowExecution.ExecutionId, workflowExecution.Authorization)}
+
 			break
 		}
 	}
 
-	if len(returnBody.Result) == 0 {
+	if len(returnBody.Result) == 0 && len(returnBody.Errors) == 0 {
 		returnBody.Success = false
 	}
 
@@ -20328,6 +20353,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 				availableLabels = []string{}
 
+				lowercaseLabel := strings.ReplaceAll(strings.ToLower(value.Label), " ", "_")
 				for _, action := range app.Actions {
 					if len(action.CategoryLabel) == 0 {
 						continue
@@ -20336,7 +20362,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[DEBUG] Found category label %s", action.CategoryLabel)
 					availableLabels = append(availableLabels, action.CategoryLabel[0])
 
-					if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == strings.ReplaceAll(strings.ToLower(value.Label), " ", "_") {
+					actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_")
+					if actionCategory == lowercaseLabel || strings.HasPrefix(actionCategory, lowercaseLabel) {
 						selectedAction = action
 
 						for _, category := range categories {
@@ -20521,15 +20548,26 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// Get the environments for the user and choose the default
 	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err == nil {
+		defaultEnv := ""
+
+		foundEnv := strings.TrimSpace(strings.ToLower(value.Environment))
 		for _, env := range environments {
 			if env.Archived {
 				continue
 			}
 
 			if env.Default {
-				environment = env.Name
-				break
+				defaultEnv = env.Name
 			}
+
+			envName := strings.TrimSpace(strings.ToLower(env.Name))
+			if len(value.Environment) > 0 && envName == foundEnv {
+				environment = env.Name
+			}
+		}
+
+		if len(environment) == 0 && len(defaultEnv) > 0 {
+			environment = defaultEnv
 		}
 	}
 
@@ -20902,6 +20940,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		secondAction.LargeImage = newSecondAction.LargeImage
 	}
 
+
 	if value.SkipWorkflow {
 		log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
 
@@ -20921,7 +20960,19 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		// FIXME: Delete disabled for now (April 2nd 2024)
+		// This is due to needing debug capabilities
 		streamUrl = fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", streamUrl, secondAction.AppID)
+
+		if len(request.Header.Get("Authorization")) > 0 {
+			tmpAuth := request.Header.Get("Authorization")
+
+			if strings.HasPrefix(tmpAuth, "Bearer") {
+				tmpAuth = strings.Replace(tmpAuth, "Bearer ", "", 1)
+			}
+
+			authorization = tmpAuth
+		}
 
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
 			streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
@@ -20994,8 +21045,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			streamUrl = strings.Join(baseurlSplit[0:3], "/")
 		}
 
-		log.Printf("\n\n[DEBUG] BASEURL FOR SCHEMALESS: %s\n\n", streamUrl)
 		authConfig := fmt.Sprintf("%s,%s,,%s", streamUrl, authorization, optionalExecutionId)
+
+		//log.Printf("\n\n[DEBUG] BASEURL FOR SCHEMALESS: %s\nAUTHCONFIG: %s\n\n", streamUrl, authConfig)
 
 		schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody, authConfig)
 		if err != nil {
@@ -21005,7 +21057,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("[DEBUG] Schemaless output: %s", string(schemalessOutput))
+		//log.Printf("[DEBUG] Schemaless output: %s", string(schemalessOutput))
 		resp.WriteHeader(200)
 		resp.Write(schemalessOutput)
 

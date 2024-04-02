@@ -2091,6 +2091,162 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	return sub, nil
 }
 
+// No deduplication for popular files
+func FindSimilarFilename(ctx context.Context, filename, orgId string) ([]File, error) {
+	//log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
+	files := []File{}
+	nameKey := "Files"
+
+	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, orgId, filename)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for file: %s", err)
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+
+		// Or search?
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"filename": filename,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return files, nil
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (find file filename): %s", err)
+			return files, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return files, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return files, err
+		}
+
+		wrapped := FileSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return files, err
+		}
+
+		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 && wrapped.Hits.Hits[0].Source.Status == "active" && wrapped.Hits.Hits[0].Source.Md5sum == filename {
+			files = append(files, wrapped.Hits.Hits[0].Source)
+		} else {
+			//file = []Environment{}
+			for _, hit := range wrapped.Hits.Hits {
+				if hit.Source.Md5sum != filename {
+					continue
+				}
+
+				if hit.Source.OrgId == orgId && hit.Source.Status == "active" {
+					files = append(files, hit.Source)
+				}
+
+			}
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("filename =", filename).Limit(25)
+		_, err := project.Dbclient.GetAll(ctx, query, &files)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+			return files, err
+		} else {
+			//log.Printf("[INFO] Got %d files for filename: %s", len(files), filename)
+			parsedFiles := []File{}
+			for _, newfile := range files {
+				if newfile.OrgId == orgId && newfile.Status == "active" {
+					parsedFiles = append(parsedFiles, newfile)
+				}
+			}
+
+			//log.Printf("[INFO] Got %d PARSD files for filename: %s", len(parsedFiles), md5)
+
+			if len(parsedFiles) == 0 {
+				return parsedFiles, errors.New(fmt.Sprintf("No file found for filename: %s", filename))
+				//log.Printf("[INFO] Couldn't find file with md5 %s for org %s", md5, orgId)
+			}
+
+			files = parsedFiles
+		}
+	}
+
+	//log.Printf("[DEBUG] Got hit: %s", file)
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in find file md5 : %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for find file md5 %s: %s", cacheKey, err)
+		}
+	}
+
+	return files, nil
+}
+
 // Check OrgId later
 // No deduplication for popular files
 func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
@@ -11828,4 +11984,60 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 	return executions, cursor, nil
 
+}
+
+func DeleteDbIndex(ctx context.Context, index string) error {
+	if !strings.HasPrefix(index, "workflowqueue-") {
+		return errors.New("Not allowed to delete that index")
+	}
+
+	if project.Environment != "cloud" {
+		return errors.New("Can only delete indexes from cloud")
+	}
+
+	log.Printf("[WARNING] Deleting index %s entirely. This is normal behavior for workflowqueues", index)
+
+    // Create a query to retrieve all items in the index
+	var err error
+	query := datastore.NewQuery(index).KeysOnly()
+	it := project.Dbclient.Run(ctx, query)
+
+	var keys []*datastore.Key
+	for {
+		var key *datastore.Key
+		key, err = it.Next(nil)
+		if err == iterator.Done {
+			break
+		}
+
+		if err != nil {
+			log.Printf("[ERROR] Error fetching next key: %v\n", err)
+			break
+		}
+
+		keys = append(keys, key)
+		if len(keys) == 500 {
+			// Delete entities in batch
+			err := project.Dbclient.DeleteMulti(ctx, keys)
+			if err != nil {
+				log.Printf("[WARNING] Failed deleting keys: %s", err)
+				break
+			}
+			keys = nil
+		}
+	}
+
+
+	// Delete remaining entities
+	if len(keys) > 0 {
+		err := project.Dbclient.DeleteMulti(ctx, keys)
+		if err != nil {
+			log.Printf("[WARNING] Failed deleting keys: %s", err)
+		}
+	}
+
+
+
+
+	return nil
 }

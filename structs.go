@@ -3432,6 +3432,7 @@ type CategoryAction struct {
 	DryRun 		bool   `json:"dry_run"` 		// If true, it will not actually execute the action, but instead just build the workflow
 	SkipWorkflow bool   `json:"skip_workflow"` // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
+	Environment string `json:"environment"` // The environment to use for the action (Orborus) 
 }
 
 type LabelStruct struct {
@@ -3746,8 +3747,11 @@ type HTTPOutput struct {
 }
 
 type SnappStep struct {
-	Name string `json:"name"`
-	Category string `json:"category"`
+	Name string `json:"name" yaml:"name"`
+	Category string `json:"category" yaml:"category"`
+	AppName string `json:"app_name" yaml:"app_name"`
+	Environment string `json:"environment" yaml:"environment"`
+	Fields []Valuereplace `json:"fields" yaml:"fields"`
 }
 
 type SnappWf struct {
