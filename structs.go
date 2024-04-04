@@ -2251,14 +2251,18 @@ type HookWrapper struct {
 }
 
 type AllHooksWrapper struct {
-	Index       string `json:"_index"`
-	Type        string `json:"_type"`
-	ID          string `json:"_id"`
-	Version     int    `json:"_version"`
-	SeqNo       int    `json:"_seq_no"`
-	PrimaryTerm int    `json:"_primary_term"`
-	Found       bool   `json:"found"`
-	Source      []Hook   `json:"_source"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source Hook `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
 }
 
 type ScheduleWrapper struct {

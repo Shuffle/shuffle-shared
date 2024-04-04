@@ -7709,14 +7709,19 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 		if err != nil {
 			return []Hook{}, err
 		}
-		respReader := bytes.NewReader(respBody)
 		wrapper := AllHooksWrapper{}
-		if err := json.NewDecoder(respReader).Decode(&wrapper); err != nil {
-			log.Printf("[WARNING] Ercannot use respBody (variable of type []byte) as io.Reader value in argument to json.NewDecoder: []byte does not implemeror parsing response body into wrapper struct: %s", err)
+		err = json.Unmarshal(respBody, &wrapper)
+	
+		if err != nil {
 			return []Hook{}, err
 		}
-		hooks = wrapper.Source
+
+		for _, hit := range wrapper.Hits.Hits {
+			hook := hit.Source 
+			hooks = append(hooks, hook) 
+		}
 		return hooks, err
+		
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
 

@@ -3871,6 +3871,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		workflows, err := GetAllWorkflowsByQuery(ctx, user)
 		if err != nil {
 			errChan <- err
+			defer wg.Done()
 			return
 		}
 		workflowsChan <- workflows
@@ -3881,6 +3882,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			errChan <- err
+			defer wg.Done()
 			return
 		}
 		schedulesChan <- schedules
@@ -3891,6 +3893,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		hooks, err := GetHooks(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			errChan <- err
+			defer wg.Done()
 			return
 		}
 		hooksChan <- hooks
