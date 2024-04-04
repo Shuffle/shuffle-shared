@@ -3901,7 +3901,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		wg.Done()
 		hooksChan <- hooks
 	}()
-	
+
 	log.Printf("go routines started")
 	wg.Wait()
 	log.Printf("go routines completed")
@@ -3912,17 +3912,23 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success":false}`))
 		return
 	}
+	log.Printf("[INFO] this executes if there is no error")
+
 	hooks := <-hooksChan
 	schedules := <-schedulesChan
 	workflows := <-workflowsChan
 	//pipelines := <- pipeliesChan
 
+	log.Printf("[INFO] if it reached this then the code should work")
+
 	// Create map of trigger IDs for quick look ups :)
 	IdMap := make(map[string]bool)
 	for _, hook := range hooks {
+		log.Printf("[INFO] go through hooks")
 		IdMap[hook.Id] = true
 	}
 	for _, schedule := range schedules {
+		log.Printf("[INFO] go through schedules")
 		IdMap[schedule.Id] = true
 	}
 	// for _, pipeline := range pipelines {
@@ -3931,7 +3937,10 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	// Now loop through the workflow triggers to see if anything is not in sync
 	for _, workflow := range workflows {
+		log.Printf("[INFO] go through workflows")
 		for _, trigger := range workflow.Triggers {
+
+			log.Printf("[INFO] go through triggers")
 
 			if trigger.Status == "running" {
 				trigger.Status = "stopped"
