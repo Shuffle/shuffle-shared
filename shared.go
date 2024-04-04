@@ -3870,37 +3870,41 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	go func() {
 		workflows, err := GetAllWorkflowsByQuery(ctx, user)
 		if err != nil {
+			wg.Done()
 			errChan <- err
-			defer wg.Done()
 			return
 		}
+		wg.Done()
 		workflowsChan <- workflows
-		defer wg.Done()
+
 	}()
 
 	go func() {
 		schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
 		if err != nil {
+			wg.Done()
 			errChan <- err
-			defer wg.Done()
 			return
 		}
+		wg.Done()
 		schedulesChan <- schedules
-		defer wg.Done()
+
 	}()
 
 	go func() {
 		hooks, err := GetHooks(ctx, user.ActiveOrg.Id)
 		if err != nil {
+			wg.Done()
 			errChan <- err
-			defer wg.Done()
 			return
 		}
+		wg.Done()
 		hooksChan <- hooks
-		defer wg.Done()
 	}()
-
+	
+	log.Printf("go routines started")
 	wg.Wait()
+	log.Printf("go routines completed")
 
 	if err := <-errChan; err != nil {
 		log.Printf("[ERROR] Failed to fetch data: %s", err)
