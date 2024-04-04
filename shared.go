@@ -3906,12 +3906,15 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	wg.Wait()
 	log.Printf("go routines completed")
 
-	if err := <-errChan; err != nil {
+    // this to check if we got any errors without blocking the entire process
+	select { 
+	case err := <- errChan:
 		log.Printf("[ERROR] Failed to fetch data: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success":false}`))
 		return
 	}
+	
 	log.Printf("[INFO] this executes if there is no error")
 
 	hooks := <-hooksChan
