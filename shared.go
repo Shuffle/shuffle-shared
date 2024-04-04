@@ -3907,13 +3907,18 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("go routines completed")
 
     // this to check if we got any errors without blocking the entire process
-	select { 
-	case err := <- errChan:
-		log.Printf("[ERROR] Failed to fetch data: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success":false}`))
-		return
+	select {
+	case err := <-errChan:
+		if err != nil {
+			log.Printf("[ERROR] Failed to fetch data: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success":false}`))
+			return
+		}
+	case <-time.After(time.Second): // Timeout after 1 second
+		log.Println("[INFO] No errors received within Go routines, proceeding with further logic")
 	}
+	
 	
 	log.Printf("[INFO] this executes if there is no error")
 
