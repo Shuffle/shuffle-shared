@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -3857,64 +3858,136 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
-		return
-	}
-
 	ctx := GetContext(request)
-	triggersWithIds, err := GetTriggers(ctx, user.ActiveOrg.Id)
-	if err != nil {
-		log.Printf("[WARNING] failed getting triggers: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success":false ,"reason": "Cannot get the triggers"}`))
+	workflowsChan := make(chan []Workflow)
+	schedulesChan := make(chan []ScheduleOld)
+	hooksChan := make(chan []Hook)
+	errChan := make(chan error)
+
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+
+	go func() {
+		workflows, err := GetAllWorkflowsByQuery(ctx, user)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		workflowsChan <- workflows
+		defer wg.Done()
+	}()
+
+	go func() {
+		schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		schedulesChan <- schedules
+		defer wg.Done()
+	}()
+
+	go func() {
+		hooks, err := GetHooks(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			errChan <- err
+			return
+		}
+		hooksChan <- hooks
+		defer wg.Done()
+	}()
+
+	wg.Wait()
+
+	if err := <-errChan; err != nil {
+		log.Printf("[ERROR] Failed to fetch data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success":false}`))
 		return
 	}
-	schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting schedules but continuing anyway with other triggers: %s", err)
+	hooks := <-hooksChan
+	schedules := <-schedulesChan
+	workflows := <-workflowsChan
+	//pipelines := <- pipeliesChan
+
+	// Create map of trigger IDs for quick look ups :)
+	IdMap := make(map[string]bool)
+	for _, hook := range hooks {
+		IdMap[hook.Id] = true
 	}
+	for _, schedule := range schedules {
+		IdMap[schedule.Id] = true
+	}
+	// for _, pipeline := range pipelines {
+	// 	IdMap[pipeline.Id] = true
+	// }
 
-	// this is our struct to store all the seperated triggers
-	allTriggersWrapper := AllTriggersWrapper{}
+	// Now loop through the workflow triggers to see if anything is not in sync
+	for _, workflow := range workflows {
+		for _, trigger := range workflow.Triggers {
 
-	for _, inner := range triggersWithIds {
-		triggerType := inner.Trigger.TriggerType
-
-		if triggerType == "PIPELINE" {
-
-			triggerWithID := TriggerWithID{
-				ID:      inner.ID, // workflow_id
-				Trigger: inner.Trigger,
+			if trigger.Status == "running" {
+				trigger.Status = "stopped"
 			}
-			allTriggersWrapper.WebHooks = append(allTriggersWrapper.Pipelines, triggerWithID)
 
-		} else if triggerType == "WEBHOOK" {
-			params := []WorkflowAppActionParameter{}
-			for _, param := range inner.Trigger.Parameters {
-				if param.Name == "url" {
-					params = append(params, param)
-					break
+			switch trigger.TriggerType {
+			case "WEBHOOK":
+				{
+					if _, ok := IdMap[trigger.ID]; !ok {
+						hook := Hook{}
+						hook.Id = trigger.ID
+						hook.Status = trigger.Status
+						hook.Environment = trigger.Environment
+						hook.Workflows = []string{workflow.ID}
+
+						hookAction := HookAction{}
+						for _, param := range trigger.Parameters {
+							if param.Name == "url" {
+								hookAction.Name = param.Name
+								hookAction.Field = param.Value
+							}
+						}
+						hook.Actions = []HookAction{hookAction}
+						hooks = append(hooks, hook)
+					}
+				}
+			case "SCHEDULE":
+				{
+					if _, ok := IdMap[trigger.ID]; !ok {
+						schedule := ScheduleOld{}
+
+						schedule.Id = trigger.ID
+						schedule.WorkflowId = workflow.ID
+						schedule.Environment = trigger.Environment
+
+						for _, param := range trigger.Parameters {
+
+							if param.Name == "cron" {
+								schedule.Frequency = param.Value
+							} else if param.Name == "execution_argument" {
+								schedule.Argument = param.Value
+								schedule.WrappedArgument = param.Value
+							}
+						}
+
+						schedules = append(schedules, schedule)
+
+					}
+				}
+			case "PIPELINE":
+				{
+
 				}
 			}
-			// clean triggers to only include neccessary fields
-			cleanedTrigger := Trigger{
-				Label:       inner.Trigger.Label,
-				Environment: inner.Trigger.Environment,
-				ID:          inner.Trigger.ID,
-				Parameters:  params,
-			}
-
-			triggerWithID := TriggerWithID{
-				ID:      inner.ID, // workflow_id
-				Trigger: cleanedTrigger,
-			}
-			allTriggersWrapper.WebHooks = append(allTriggersWrapper.WebHooks, triggerWithID)
 		}
 	}
 
+	// this is our struct to store the seperated triggers
+	allTriggersWrapper := AllTriggersWrapper{}
+
+	allTriggersWrapper.WebHooks = hooks
 	allTriggersWrapper.Schedules = schedules
+	// allTriggersWrapper.Pipelines = pipelines
 
 	newjson, err := json.Marshal(allTriggersWrapper)
 	if err != nil {
@@ -3927,7 +4000,6 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(newjson)
 }
-
 
 func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)

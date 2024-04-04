@@ -620,6 +620,7 @@ type ScheduleOld struct {
 	LastRuntime          int64        `json:"lastruntime" datastore:"lastruntime,noindex"`
 	Frequency            string       `json:"frequency" datastore:"frequency,noindex"`
 	Environment          string       `json:"environment" datastore:"environment"`
+	Status               string       `json:"status" datastore:"status"`
 }
 
 // Returned from /GET /schedules
@@ -2075,41 +2076,9 @@ type SessionWrapper struct {
 	Source      Session `json:"_source"`
 }
 
-type TriggerSearchWrapper struct {
-	Took     int  `json:"took"`
-	TimedOut bool `json:"timed_out"`
-	Shards   struct {
-		Total      int `json:"total"`
-		Successful int `json:"successful"`
-		Skipped    int `json:"skipped"`
-		Failed     int `json:"failed"`
-	} `json:"_shards"`
-	Hits struct {
-		Total struct {
-			Value    int    `json:"value"`
-			Relation string `json:"relation"`
-		} `json:"total"`
-		MaxScore float64 `json:"max_score"`
-		Hits     []struct {
-			Index  string  `json:"_index"`
-			ID     string  `json:"_id"`
-			Score  float64 `json:"_score"`
-			Source struct {
-				ID string `json:"id"`
-				Triggers []Trigger `json:"triggers"`
-			} `json:"_source"`
-		} `json:"hits"`
-	} `json:"hits"`
-}
-
-type TriggerWithID struct {
-	ID      string  `json:"id"`
-	Trigger Trigger `json:"trigger"`
-}
-
 type AllTriggersWrapper struct {
-	Pipelines []TriggerWithID `json:"pipelines"`
-	WebHooks   []TriggerWithID `json:"webhooks"`
+	// Pipelines []TriggerWithID `json:"pipelines"`
+	WebHooks   []Hook `json:"webhooks"`
 	Schedules []ScheduleOld `json:"schedules"`
 }
 
@@ -2279,6 +2248,17 @@ type HookWrapper struct {
 	PrimaryTerm int    `json:"_primary_term"`
 	Found       bool   `json:"found"`
 	Source      Hook   `json:"_source"`
+}
+
+type AllHooksWrapper struct {
+	Index       string `json:"_index"`
+	Type        string `json:"_type"`
+	ID          string `json:"_id"`
+	Version     int    `json:"_version"`
+	SeqNo       int    `json:"_seq_no"`
+	PrimaryTerm int    `json:"_primary_term"`
+	Found       bool   `json:"found"`
+	Source      []Hook   `json:"_source"`
 }
 
 type ScheduleWrapper struct {
