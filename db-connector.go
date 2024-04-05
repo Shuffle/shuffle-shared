@@ -71,8 +71,6 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
-
-
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
 // Shuffle instance
@@ -84,7 +82,6 @@ func GetESIndexPrefix(index string) string {
 	}
 	return index
 }
-
 
 // 1. Check list if there is a record for yesterday
 // 2. If there isn't, set it and clear out the daily records
@@ -1570,7 +1567,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	// - Webhooks v2 with for response
 	if finalWorkflowExecution.Status == "ABORTED" {
 		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
-	} else  if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED"  { 
+	} else if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED" {
 		//log.Printf("\n\n[DEBUG] Finding new response value\n\n")
 		lastResult := ""
 		lastCompleted := int64(-1)
@@ -2094,6 +2091,162 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	return sub, nil
 }
 
+// No deduplication for popular files
+func FindSimilarFilename(ctx context.Context, filename, orgId string) ([]File, error) {
+	//log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
+	files := []File{}
+	nameKey := "Files"
+
+	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, orgId, filename)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for file: %s", err)
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+
+		// Or search?
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"filename": filename,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return files, nil
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (find file filename): %s", err)
+			return files, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return files, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return files, err
+		}
+
+		wrapped := FileSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return files, err
+		}
+
+		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 && wrapped.Hits.Hits[0].Source.Status == "active" && wrapped.Hits.Hits[0].Source.Md5sum == filename {
+			files = append(files, wrapped.Hits.Hits[0].Source)
+		} else {
+			//file = []Environment{}
+			for _, hit := range wrapped.Hits.Hits {
+				if hit.Source.Md5sum != filename {
+					continue
+				}
+
+				if hit.Source.OrgId == orgId && hit.Source.Status == "active" {
+					files = append(files, hit.Source)
+				}
+
+			}
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("filename =", filename).Limit(25)
+		_, err := project.Dbclient.GetAll(ctx, query, &files)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+			return files, err
+		} else {
+			//log.Printf("[INFO] Got %d files for filename: %s", len(files), filename)
+			parsedFiles := []File{}
+			for _, newfile := range files {
+				if newfile.OrgId == orgId && newfile.Status == "active" {
+					parsedFiles = append(parsedFiles, newfile)
+				}
+			}
+
+			//log.Printf("[INFO] Got %d PARSD files for filename: %s", len(parsedFiles), md5)
+
+			if len(parsedFiles) == 0 {
+				return parsedFiles, errors.New(fmt.Sprintf("No file found for filename: %s", filename))
+				//log.Printf("[INFO] Couldn't find file with md5 %s for org %s", md5, orgId)
+			}
+
+			files = parsedFiles
+		}
+	}
+
+	//log.Printf("[DEBUG] Got hit: %s", file)
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in find file md5 : %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for find file md5 %s: %s", cacheKey, err)
+		}
+	}
+
+	return files, nil
+}
+
 // Check OrgId later
 // No deduplication for popular files
 func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
@@ -2532,7 +2685,6 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 
 	return count, nil
 }
-
 
 func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 	orgs := []Org{}
@@ -3358,9 +3510,49 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	// Check if Subscription is from BEFORE November 4th 2023
-	for orgIndex, sub := range curOrg.Subscriptions {
-		if sub.Startdate == 0 || sub.Startdate < 1699053459 {
-			curOrg.Subscriptions[orgIndex].EulaSigned = true
+
+	eulaSigned := false
+	if len(curOrg.Subscriptions) > 1 {
+		replicas := map[string]int64{}
+		for orgIndex, sub := range curOrg.Subscriptions {
+			if sub.EulaSigned {
+				eulaSigned = true
+			}
+
+			if sub.Startdate == 0 || sub.Startdate < 1699053459 {
+				curOrg.Subscriptions[orgIndex].EulaSigned = true
+			}
+
+			if _, ok := replicas[sub.Name]; ok {
+				if replicas[sub.Name] > sub.Startdate {
+					log.Printf("[DEBUG] Removing subscription %s from org %s", sub.Name, curOrg.Id)
+
+					replicas[sub.Name] = sub.Startdate
+				}
+			} else {
+				replicas[sub.Name] = sub.Startdate
+			}
+		}
+
+		newsubs := []PaymentSubscription{}
+		for key, value := range replicas {
+			foundsub := PaymentSubscription{}
+			for _, sub := range curOrg.Subscriptions {
+				if sub.Name == key && sub.Startdate == value {
+					foundsub = sub
+					break
+				}
+			}
+
+			if foundsub.Name != "" {
+				foundsub.EulaSigned = eulaSigned
+				newsubs = append(newsubs, foundsub)
+			}
+		}
+
+		if len(newsubs) > 0 {
+			curOrg.Subscriptions = newsubs
+			//log.Printf("[DEBUG] New subscriptions for org %s: %d", curOrg.Id, len(newsubs))
 		}
 	}
 
@@ -4782,6 +4974,81 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 	return nil
 }
 
+func DeleteUsersAccount(ctx context.Context, user *User) error {
+	cacheKey := fmt.Sprintf("user_%s", user.Id)
+
+	for _, orgId := range user.Orgs {
+		org, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[WARNING] Error getting org %s in delete user: %s", orgId, err)
+			continue
+		}
+
+		newUsers := []User{}
+		for _, orgUser := range org.Users {
+			if orgUser.Id == user.Id {
+				continue
+			}
+
+			newUsers = append(newUsers, orgUser)
+		}
+		org.Users = newUsers
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org %s (1)", orgId)
+		}
+	}
+
+	nameKey := "Users"
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(nameKey)), user.Id)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return err
+		}
+		defer res.Body.Close()
+
+		log.Printf("Response from OpenSearch deletion: StatusCode=%d", res.StatusCode)
+
+		if res.StatusCode == 404 {
+			return errors.New("User doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return err
+		}
+
+		wrapped := UserWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, user.Id, nil)
+		err := project.Dbclient.Delete(ctx, key)
+		if err != nil {
+			log.Printf("[Error] deleting from %s from %s: %s", nameKey, user.Id, err)
+		}
+		// if (len(user.Regions)) > 1 {
+		// 	go func() {
+		// 		log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+		// 		err = propagateUser(*user, true)
+		// 		if err != nil {
+		// 			log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
+		// 		}
+		// 	}()
+		// }
+
+	}
+
+	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
+
+	return nil
+}
+
 func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
 	// FIXME - this doesn't work
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
@@ -5245,7 +5512,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	maxLen := 200
-	queryLimit := 25 
+	queryLimit := 25
 	cursorStr := ""
 
 	allApps = user.PrivateApps
@@ -5266,7 +5533,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
 		go SetOrg(ctx, *org, org.Id)
 	}
-
 
 	if len(user.PrivateApps) > 0 && orgErr == nil {
 		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
@@ -5373,7 +5639,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-
 	// Find public apps
 
 	appsAdded := []string{}
@@ -5395,7 +5660,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[DEBUG] Failed getting cache for PUBLIC apps: %s", err)
 		}
 	}
-
 
 	// May be better to just list all, then set to true?
 	// Is this the slow one?
@@ -5500,7 +5764,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		}
 	}
-
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	// Instead loading in all public apps which is shared between all orgs
@@ -5620,7 +5883,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		allApps = append(allApps, newApps...)
 	}
 
-
 	// Deduplicate (e.g. multiple gmail)
 	dedupedApps := []WorkflowApp{}
 	for _, app := range allApps {
@@ -5643,8 +5905,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			dedupedApps = append(dedupedApps, app)
 			continue
 		}
-
-
 
 		//log.Printf("[INFO] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, replaceIndex)
 		// If owner of dedup, don't change
@@ -5716,7 +5976,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-
 	// Also prioritize most used ones from app-framework on top?
 	slice.Sort(allApps[:], func(i, j int) bool {
 		return allApps[i].Edited > allApps[j].Edited
@@ -5738,7 +5997,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
-
 
 	return allApps, nil
 }
@@ -5872,15 +6130,15 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 							},
 						},
 						{
-						  "match": map[string]interface{}{
-							"contributors": userId,
-						  },
+							"match": map[string]interface{}{
+								"contributors": userId,
 							},
 						},
 					},
-					"minimum_should_match": 1,
 				},
-			}		
+				"minimum_should_match": 1,
+			},
+		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
@@ -10079,7 +10337,7 @@ func GetEsConfig() *opensearch.Client {
 
 	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
 	if len(password) == 0 {
-		// New password that is set by default. 
+		// New password that is set by default.
 		// Security Audit points to changing this during onboarding.
 		password = "StrongShufflePassword321!"
 	}
@@ -11051,7 +11309,6 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 				}
 			}
 
-
 			if comparisonTime > 600 && !userInput {
 				// FIXME: Check if there are any actions with delays?
 
@@ -11781,4 +12038,60 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 	return executions, cursor, nil
 
+}
+
+func DeleteDbIndex(ctx context.Context, index string) error {
+	if !strings.HasPrefix(index, "workflowqueue-") {
+		return errors.New("Not allowed to delete that index")
+	}
+
+	if project.Environment != "cloud" {
+		return errors.New("Can only delete indexes from cloud")
+	}
+
+	log.Printf("[WARNING] Deleting index %s entirely. This is normal behavior for workflowqueues", index)
+
+    // Create a query to retrieve all items in the index
+	var err error
+	query := datastore.NewQuery(index).KeysOnly()
+	it := project.Dbclient.Run(ctx, query)
+
+	var keys []*datastore.Key
+	for {
+		var key *datastore.Key
+		key, err = it.Next(nil)
+		if err == iterator.Done {
+			break
+		}
+
+		if err != nil {
+			log.Printf("[ERROR] Error fetching next key: %v\n", err)
+			break
+		}
+
+		keys = append(keys, key)
+		if len(keys) == 500 {
+			// Delete entities in batch
+			err := project.Dbclient.DeleteMulti(ctx, keys)
+			if err != nil {
+				log.Printf("[WARNING] Failed deleting keys: %s", err)
+				break
+			}
+			keys = nil
+		}
+	}
+
+
+	// Delete remaining entities
+	if len(keys) > 0 {
+		err := project.Dbclient.DeleteMulti(ctx, keys)
+		if err != nil {
+			log.Printf("[WARNING] Failed deleting keys: %s", err)
+		}
+	}
+
+
+
+
+	return nil
 }

@@ -3432,6 +3432,7 @@ type CategoryAction struct {
 	DryRun 		bool   `json:"dry_run"` 		// If true, it will not actually execute the action, but instead just build the workflow
 	SkipWorkflow bool   `json:"skip_workflow"` // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
+	Environment string `json:"environment"` // The environment to use for the action (Orborus) 
 }
 
 type LabelStruct struct {
@@ -3717,6 +3718,8 @@ type StructuredCategoryAction struct {
 	AvailableLabels []string `json:"available_labels"`
 	ThreadId string `json:"thread_id"`
 	RunId string `json:"run_id"`
+
+	Translated bool `json:"translated"`
 }
 
 type ModelLabelParameter struct {
@@ -3741,4 +3744,17 @@ type HTTPOutput struct {
 	Headers  map[string]string `json:"headers"`
 	Cookies  map[string]string `json:"cookies"`
 	Errors   []string `json:"errors"`
+}
+
+type SnappStep struct {
+	Name string `json:"name" yaml:"name"`
+	Category string `json:"category" yaml:"category"`
+	AppName string `json:"app_name" yaml:"app_name"`
+	Environment string `json:"environment" yaml:"environment"`
+	Fields []Valuereplace `json:"fields" yaml:"fields"`
+}
+
+type SnappWf struct {
+	Name string `json:"name"`
+	Steps []SnappStep `json:"steps"`
 }
