@@ -49,6 +49,8 @@ import (
 	"github.com/frikky/schemaless"
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/Masterminds/semver"
 )
 
 var project ShuffleStorage
@@ -5363,6 +5365,53 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Handle app versions & upgrades 
+	for _, action := range workflow.Actions {
+		actionApp := strings.ToLower(strings.Replace(action.AppName, " ", "", -1))
+
+		for _, app := range workflowapps {
+			if strings.ToLower(strings.Replace(app.Name, " ", "", -1)) != actionApp {
+				continue
+			}
+
+			if len(app.Versions) <= 1 {
+				continue
+			}
+
+			v2, err := semver.NewVersion(action.AppVersion)
+			if err != nil {
+				log.Printf("[ERROR] Failed parsing original app version %s: %s", app.AppVersion, err)
+				continue
+			}
+
+			newVersion := ""
+			for _, loopedApp := range app.Versions {
+				if action.AppVersion == loopedApp.Version {
+					continue
+				}
+
+				appConstraint := fmt.Sprintf("< %s", loopedApp.Version)
+				c, err := semver.NewConstraint(appConstraint)
+				if err != nil {
+					log.Printf("[ERROR] Failed preparing constraint %s: %s", appConstraint, err)
+					continue
+				}
+
+				if c.Check(v2) {
+					newVersion = loopedApp.Version
+					action.AppVersion = loopedApp.Version
+				}
+			}
+
+			if len(newVersion) > 0 {
+				newError := fmt.Sprintf("App %s has version %s available.", app.Name, newVersion)
+				if !ArrayContains(workflow.Errors, newError) {
+					workflow.Errors = append(workflow.Errors, newError)
+				}
+			}
+		}
+	}
+
 	if !startnodeFound {
 		log.Printf("[WARNING] No startnode found during save of %s!!", workflow.ID)
 
@@ -7223,6 +7272,61 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					workflow.Actions = append(workflow.Actions, newAction)
 					break
+				}
+			}
+		}
+	}
+
+	workflowapps, err := GetPrioritizedApps(ctx, user)
+	if err != nil {
+		log.Printf("[WARNING] Error: Failed getting workflowapps: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// Handle app versions & upgrades 
+	for _, action := range workflow.Actions {
+		actionApp := strings.ToLower(strings.Replace(action.AppName, " ", "", -1))
+
+		for _, app := range workflowapps {
+			if strings.ToLower(strings.Replace(app.Name, " ", "", -1)) != actionApp {
+				continue
+			}
+
+			if len(app.Versions) <= 1 {
+				continue
+			}
+
+			v2, err := semver.NewVersion(action.AppVersion)
+			if err != nil {
+				log.Printf("[ERROR] Failed parsing original app version %s: %s", app.AppVersion, err)
+				continue
+			}
+
+			newVersion := ""
+			for _, loopedApp := range app.Versions {
+				if action.AppVersion == loopedApp.Version {
+					continue
+				}
+
+				appConstraint := fmt.Sprintf("< %s", loopedApp.Version)
+				c, err := semver.NewConstraint(appConstraint)
+				if err != nil {
+					log.Printf("[ERROR] Failed preparing constraint %s: %s", appConstraint, err)
+					continue
+				}
+
+				if c.Check(v2) {
+					newVersion = loopedApp.Version
+					action.AppVersion = loopedApp.Version
+				}
+			}
+
+			if len(newVersion) > 0 {
+				newError := fmt.Sprintf("App %s has version %s available.", app.Name, newVersion)
+				if !ArrayContains(workflow.Errors, newError) {
+					workflow.Errors = append(workflow.Errors, newError)
 				}
 			}
 		}
@@ -14445,6 +14549,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	}
 
 	newParams := []WorkflowAppActionParameter{}
+	/*
 	for _, param := range action.Parameters {
 		if param.Configuration && len(param.Value) == 0 {
 			continue
@@ -14452,6 +14557,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 		newParams = append(newParams, param)
 	}
+	*/
 
 	// Auth is handled in PrepareWorkflowExec, so this may not be needed
 	for _, param := range action.Parameters {
@@ -14459,6 +14565,10 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		if len(newName) > 0 {
 			param.Name = newName[0]
 		}
+
+		//if param.Configuration && len(param.Value) == 0 {
+		//	continue
+		//}
 
 		/*
 			if param.Required && len(param.Value) == 0 {
@@ -20456,7 +20566,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME: Check if ALL fields for the target app can be fullfiled
 	// E.g. for Jira: Org_id is required.
-
 	if foundFields != len(baseFields) {
 		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v, have: %#v", baseFields, value.Fields)
 		resp.WriteHeader(400)
@@ -20805,7 +20914,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if len(selectedAction.RequiredBodyFields) == 0 && len(selectedCategory.RequiredFields) > 0 {
 		// Check if the required fields are present
 		//selectedAction.RequiredBodyFields = selectedCategory.RequiredFields
-		for requiredField, _ := range selectedCategory.RequiredFields {
+
+		log.Printf("CATEGORY: %#v", selectedCategory)
+
+		for requiredField, categoryFields := range selectedCategory.RequiredFields {
+			_ = categoryFields
+			log.Printf("FIELD %#v vs %#v", requiredField, value.Label)
+			if requiredField == value.Label {
+			}
+
 			selectedAction.RequiredBodyFields = append(selectedAction.RequiredBodyFields, requiredField)
 		}
 	}
