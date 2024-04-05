@@ -4000,9 +4000,9 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 							hooks = append(hooks, hook)	
 				}}
 			case "SCHEDULE":
-				{
+				{    		schedule := ScheduleOld{}
 					if _, exist := scheduleMap[trigger.ID]; !exist {
-						schedule := ScheduleOld{}
+				
 						startNode := ""
 
 						schedule.Id = trigger.ID
