@@ -3902,11 +3902,11 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		hooksChan <- hooks
 	}()
 
-	log.Printf("go routines started")
-	wg.Wait()
-	log.Printf("go routines completed")
 
-    // this to check if we got any errors without blocking the entire process
+	wg.Wait()
+
+	log.Println("[INFO] All Go routines Completed")
+    // this is to check if we got any errors without blocking the entire process
 	select {
 	case err := <-errChan:
 		if err != nil {
@@ -3918,26 +3918,22 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	case <-time.After(time.Second): // Timeout after 1 second
 		log.Println("[INFO] No errors received within Go routines, proceeding with further logic")
 	}
-	
-	
-	log.Printf("[INFO] this executes if there is no error")
 
 	hooks := <-hooksChan
 	schedules := <-schedulesChan
 	workflows := <-workflowsChan
 	//pipelines := <- pipeliesChan
 
-	log.Printf("[INFO] if it reached this then the code should work")
+	log.Printf("[INFO] recieved all the data from the channels")
 
-	// Create map of trigger IDs for quick look ups :)
-	IdMap := make(map[string]bool)
+	hookMap := make(map[string]*Hook)
+	scheduleMap := make(map[string]*ScheduleOld)
+
 	for _, hook := range hooks {
-		log.Printf("[INFO] go through hooks")
-		IdMap[hook.Id] = true
+		hookMap[hook.Id] = &hook
 	}
 	for _, schedule := range schedules {
-		log.Printf("[INFO] go through schedules")
-		IdMap[schedule.Id] = true
+		scheduleMap[schedule.Id] = &schedule
 	}
 	// for _, pipeline := range pipelines {
 	// 	IdMap[pipeline.Id] = true
@@ -3945,59 +3941,103 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	// Now loop through the workflow triggers to see if anything is not in sync
 	for _, workflow := range workflows {
-		log.Printf("[INFO] go through workflows")
 		for _, trigger := range workflow.Triggers {
-
-			log.Printf("[INFO] go through triggers")
-
-			if trigger.Status == "running" {
-				trigger.Status = "stopped"
-			}
-
+			
 			switch trigger.TriggerType {
 			case "WEBHOOK":
 				{
-					if _, ok := IdMap[trigger.ID]; !ok {
+					if _, exist := hookMap[trigger.ID]; !exist {
 						hook := Hook{}
+
+						auth := ""
+						version := ""
+						customBody := ""
+						startNode := ""
+
+                        hook.Name = trigger.Label
 						hook.Id = trigger.ID
-						hook.Status = trigger.Status
 						hook.Environment = trigger.Environment
 						hook.Workflows = []string{workflow.ID}
+						hook.Owner = workflow.Owner
+						hook.OrgId = workflow.OrgId
 
-						hookAction := HookAction{}
+						hookInfo := Info{}
 						for _, param := range trigger.Parameters {
 							if param.Name == "url" {
-								hookAction.Name = param.Name
-								hookAction.Field = param.Value
+								hookInfo.Url = param.Value
+								hookInfo.Name = trigger.Label
+							} else if param.Name == "auth_headers" {
+								auth = param.Value
+							} else if param.Name == "await_response" {
+								version = param.Value
+							} else if param.Name == "custom_response_body" {
+                                 customBody = param.Value
 							}
 						}
-						hook.Actions = []HookAction{hookAction}
-						hooks = append(hooks, hook)
-					}
-				}
+						hook.Info = hookInfo
+
+                        // searching for start node
+						if len(workflow.Branches) != 0 {
+                            for _, branch := range workflow.Branches {
+								 if branch.SourceID == trigger.ID {
+									 startNode = branch.DestinationID
+								 }
+							}
+					    }
+						if startNode == "" {
+							startNode = workflow.Start
+						}
+
+					       if trigger.Status == "running"{
+								hook.Status = "stopped"
+								hook.Running = false
+							} else {
+								hook.Status = trigger.Status
+								hook.Running = false
+							}
+							hooks = append(hooks, hook)	
+				}}
 			case "SCHEDULE":
 				{
-					if _, ok := IdMap[trigger.ID]; !ok {
+					if _, exist := scheduleMap[trigger.ID]; !exist {
 						schedule := ScheduleOld{}
+						startNode := ""
 
 						schedule.Id = trigger.ID
 						schedule.WorkflowId = workflow.ID
 						schedule.Environment = trigger.Environment
+						schedule.Org = workflow.OrgId
 
 						for _, param := range trigger.Parameters {
-
 							if param.Name == "cron" {
 								schedule.Frequency = param.Value
 							} else if param.Name == "execution_argument" {
 								schedule.Argument = param.Value
-								schedule.WrappedArgument = param.Value
 							}
 						}
 
+						for _, branch := range workflow.Branches {
+							if branch.SourceID == schedule.Id {
+								startNode = branch.DestinationID
+							}
+						}
+				
+						if startNode == "" {
+							startNode = workflow.Start
+						}
+						schedule.StartNode = startNode
+						Wrapper := fmt.Sprintf(`{"start": "%s", "execution_source": "schedule", "execution_argument": "%s"}`, startNode, schedule.Argument)
+						schedule.WrappedArgument = Wrapper
+						if trigger.Status == "running"{
+							schedule.Status = "stopped"
+						} else {
+							schedule.Status = trigger.Status
+						}
+						
 						schedules = append(schedules, schedule)
+					}
 
 					}
-				}
 			case "PIPELINE":
 				{
 
