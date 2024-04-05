@@ -295,7 +295,7 @@ func FindHttpBody(fullBody []byte) ([]byte, error) {
 	kmsResponse := SubflowData{}
 	err := json.Unmarshal(fullBody, &kmsResponse)
 	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal KMS response (1): %s", err)
+		log.Printf("[ERROR] Failed to unmarshal Schemaless response (1): %s", err)
 		return []byte{}, err
 	}
 
@@ -303,18 +303,18 @@ func FindHttpBody(fullBody []byte) ([]byte, error) {
 	httpOutput := &HTTPOutput{} 
 	err = json.Unmarshal([]byte(kmsResponse.Result), httpOutput)
 	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal KMS response (2): %s", err)
+		log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s", err)
 		return []byte{}, err
 	}
 
 	if httpOutput.Status >= 300 {
-		log.Printf("[ERROR] KMS action failed with status: %d", httpOutput.Status)
-		return []byte{}, errors.New(fmt.Sprintf("KMS action failed with status: %d", httpOutput.Status))
+		log.Printf("[ERROR] Schemaless action failed with status: %d", httpOutput.Status)
+		return []byte{}, errors.New(fmt.Sprintf("Schemaless action failed with status: %d", httpOutput.Status))
 	}
 
 	marshalledBody, err := json.Marshal(httpOutput.Body)
 	if err != nil {
-		log.Printf("[ERROR] Failed to marshal KMS response body back to byte: %s", err)
+		log.Printf("[ERROR] Failed to marshal Schemaless HTTP Body response body back to byte: %s", err)
 		return []byte{}, err
 	}
 
