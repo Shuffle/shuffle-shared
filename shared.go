@@ -4038,6 +4038,9 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						
 						schedules = append(schedules, schedule)
 					}
+					else {
+						schedule.Status = "running"
+					}
 
 					}
 			case "PIPELINE":
