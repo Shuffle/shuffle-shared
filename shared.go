@@ -4037,8 +4037,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						}
 						
 						schedules = append(schedules, schedule)
-					}
-					else {
+					} else {
 						schedule.Status = "running"
 					}
 
