@@ -3871,9 +3871,11 @@ func propagateApp(appId string, delete bool) error {
 	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
 		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
 	}
+	// SHUFFLE_GCE_LOCATION
+	gceRegion := os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
 
 	log.Printf("[INFO] Asking %s to propagate app %s", propagateUrl, appId)
-	data := map[string]string{"mode": "app", "appId": appId}
+	data := map[string]string{"mode": "app", "appId": appId, "region": gceRegion}
 
 	reqBody, err := json.Marshal(data)
 	if err != nil {
