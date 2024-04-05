@@ -3954,7 +3954,6 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						customBody := ""
 						startNode := ""
 
-                        hook.Name = trigger.Label
 						hook.Id = trigger.ID
 						hook.Environment = trigger.Environment
 						hook.Workflows = []string{workflow.ID}
@@ -3995,6 +3994,9 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 								hook.Status = trigger.Status
 								hook.Running = false
 							}
+							hook.Auth = auth
+							hook.Version = version
+							hook.CustomResponse = customBody
 							hooks = append(hooks, hook)	
 				}}
 			case "SCHEDULE":
