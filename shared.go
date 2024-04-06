@@ -3902,11 +3902,10 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		hooksChan <- hooks
 	}()
 
-
 	wg.Wait()
 
 	log.Println("[INFO] All Go routines Completed")
-    // this is to check if we got any errors without blocking the entire process
+	// this is to check if we got any errors without blocking the entire process
 	select {
 	case err := <-errChan:
 		if err != nil {
@@ -3915,7 +3914,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success":false}`))
 			return
 		}
-	case <-time.After(time.Second): // Timeout after 1 second
+	default:
 		log.Println("[INFO] No errors received within Go routines, proceeding with further logic")
 	}
 
@@ -3942,7 +3941,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	// Now loop through the workflow triggers to see if anything is not in sync
 	for _, workflow := range workflows {
 		for _, trigger := range workflow.Triggers {
-			
+
 			switch trigger.TriggerType {
 			case "WEBHOOK":
 				{
@@ -3970,39 +3969,42 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 							} else if param.Name == "await_response" {
 								version = param.Value
 							} else if param.Name == "custom_response_body" {
-                                 customBody = param.Value
+								customBody = param.Value
 							}
 						}
 						hook.Info = hookInfo
 
-                        // searching for start node
+						// searching for start node
 						if len(workflow.Branches) != 0 {
-                            for _, branch := range workflow.Branches {
-								 if branch.SourceID == trigger.ID {
-									 startNode = branch.DestinationID
-								 }
+							for _, branch := range workflow.Branches {
+								if branch.SourceID == trigger.ID {
+									startNode = branch.DestinationID
+								}
 							}
-					    }
+						}
 						if startNode == "" {
 							startNode = workflow.Start
 						}
+						hook.Start = startNode
 
-					       if trigger.Status == "running"{
-								hook.Status = "stopped"
-								hook.Running = false
-							} else {
-								hook.Status = trigger.Status
-								hook.Running = false
-							}
-							hook.Auth = auth
-							hook.Version = version
-							hook.CustomResponse = customBody
-							hooks = append(hooks, hook)	
-				}}
+						if trigger.Status == "running" {
+							hook.Status = "stopped"
+							hook.Running = false
+						} else {
+							hook.Status = trigger.Status
+							hook.Running = false
+						}
+						hook.Auth = auth
+						hook.Version = version
+						hook.CustomResponse = customBody
+						hooks = append(hooks, hook)
+					}
+				}
 			case "SCHEDULE":
-				{    		schedule := ScheduleOld{}
+				{
+					schedule := ScheduleOld{}
 					if _, exist := scheduleMap[trigger.ID]; !exist {
-				
+
 						startNode := ""
 
 						schedule.Id = trigger.ID
@@ -4023,25 +4025,25 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 								startNode = branch.DestinationID
 							}
 						}
-				
+
 						if startNode == "" {
 							startNode = workflow.Start
 						}
 						schedule.StartNode = startNode
 						Wrapper := fmt.Sprintf(`{"start": "%s", "execution_source": "schedule", "execution_argument": "%s"}`, startNode, schedule.Argument)
 						schedule.WrappedArgument = Wrapper
-						if trigger.Status == "running"{
+						if trigger.Status == "running" {
 							schedule.Status = "stopped"
 						} else {
 							schedule.Status = trigger.Status
 						}
-						
+
 						schedules = append(schedules, schedule)
 					} else {
 						schedule.Status = "running"
 					}
 
-					}
+				}
 			case "PIPELINE":
 				{
 
@@ -4068,6 +4070,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(newjson)
 }
+
 
 func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
