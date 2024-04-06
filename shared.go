@@ -4003,7 +4003,8 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 			case "SCHEDULE":
 				{
 					schedule := ScheduleOld{}
-					if _, exist := scheduleMap[trigger.ID]; !exist {
+					scheduleObj, exist := scheduleMap[trigger.ID]; 
+					if !exist {
 
 						startNode := ""
 
@@ -4040,7 +4041,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 						schedules = append(schedules, schedule)
 					} else {
-						schedule.Status = "running"
+						scheduleObj.Status = "running"
 					}
 
 				}
