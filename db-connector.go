@@ -3858,6 +3858,62 @@ func propagateOrg(org Org) error {
 	return nil
 }
 
+func propagateApp(appId string, delete bool) error {
+	if len(appId) == 0 {
+		return errors.New("no ID provided for app")
+	}
+
+	if delete {
+		log.Printf("[INFO] Deletion propagation is disabled right now.")
+		return nil
+	}
+
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
+	}
+	// SHUFFLE_GCE_LOCATION
+	gceRegion := os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
+
+	log.Printf("[INFO] Asking %s to propagate app %s", propagateUrl, appId)
+	data := map[string]string{"mode": "app", "appId": appId, "region": gceRegion}
+
+	reqBody, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling propagation data %s: %s", appId, err)
+		return err
+	}
+
+	req, err := http.NewRequest("POST", propagateUrl, bytes.NewBuffer(reqBody))
+	if err != nil {
+		log.Printf("[WARNING] Failed creating request for app %s: %s", appId, err)
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", propagateToken)
+
+	// Send the request via a client
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Failed sending request for app %s: %s", appId, err)
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Check the response
+	if resp.StatusCode != 200 {
+		log.Printf("[WARNING] Error in propagation: %s for app %s", resp.Status, appId)
+		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
+	}
+
+	log.Printf("[INFO] Propagation successful for app %s", appId)
+
+	return nil
+}
+
 func propagateUser(user User, delete bool) error {
 	if len(user.Id) == 0 {
 		return errors.New("no ID provided for user")
