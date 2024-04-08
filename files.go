@@ -1128,7 +1128,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !found {
-		log.Printf("[AUDIT] User %s doesn't have access to file %s", user.Username, fileId)
+		log.Printf("[AUDIT] User %s in org %s (%s) doesn't have access to file %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
