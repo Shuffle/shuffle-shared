@@ -602,6 +602,7 @@ type AppInfo struct {
 }
 
 type ScheduleOld struct {
+	Name                 string       `json:"name" datastore:"name"`
 	Id                   string       `json:"id" datastore:"id"`
 	StartNode            string       `json:"start_node" datastore:"start_node"`
 	Seconds              int          `json:"seconds" datastore:"seconds"`
@@ -2077,7 +2078,7 @@ type SessionWrapper struct {
 }
 
 type AllTriggersWrapper struct {
-	// Pipelines []TriggerWithID `json:"pipelines"`
+	// Pipelines []PipelineRequest `json:"pipelines"`
 	WebHooks   []Hook `json:"webhooks"`
 	Schedules []ScheduleOld `json:"schedules"`
 }
