@@ -12898,7 +12898,8 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 						if err != nil {
 							log.Printf("[WARNING] Error propagating app %s: %s", appName, err)
 						} else {
-							log.Printf("[INFO] Propagated app %s", appName)
+							log.Printf("[INFO] Propagated app %s. Sending request again!", appName)
+							ActivateWorkflowApp(resp, request)
 						}
 					}()
 
@@ -12966,6 +12967,20 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] Added public app %s (%s) to org %s (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+
+					if project.Environment == "cloud" && gceProject != "shuffler" {
+						// propagate org.ActiveApps to the main region
+						go func() {
+							// wait for a second before propagating again
+							log.Printf("[INFO] Propagating org %s after sleeping for a second!", user.ActiveOrg.Id)
+							time.Sleep(1 * time.Second)
+							err = propagateOrg(*org, true)
+							if err != nil {
+								log.Printf("[WARNING] Error propagating org %s: %s", user.ActiveOrg.Id, err)
+							}
+						}()
+					}
+
 				}
 			}
 		}

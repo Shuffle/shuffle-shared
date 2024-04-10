@@ -3813,7 +3813,11 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	return &org
 }
 
-func propagateOrg(org Org) error {
+func propagateOrg(org Org, reverse bool) error {
+	// the philosophy here is that, usually, we propagate only
+	// from the main region to the other regions. However, "reverse"
+	// makes propagation go from the other regions to the main region.
+
 	if len(org.Id) == 0 {
 		return errors.New("no ID provided for org")
 	}
@@ -3825,6 +3829,10 @@ func propagateOrg(org Org) error {
 	log.Printf("[INFO] Asking %s to propagate org %s", propagateUrl, org.Id)
 
 	data := map[string]string{"mode": "org", "orgId": org.Id}
+
+	if reverse {
+		data["region"] = os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
+	}
 
 	reqBody, err := json.Marshal(data)
 	if err != nil {
@@ -4039,7 +4047,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		if data.Region != "" && data.Region != "europe-west2" && gceProject == "shuffler" {
 			go func() {
 				log.Printf("[INFO] Propagating org %s", data.Id)
-				err := propagateOrg(data)
+				err := propagateOrg(data, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed propagating org %s: %s", data.Id, err)
 				}
