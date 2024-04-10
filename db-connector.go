@@ -57,7 +57,7 @@ var maxCacheSize = 1020000
 // Dumps data from cache to DB for every 5 action (old was 25)
 // var dumpInterval = 0x19
 // var dumpInterval = 0x1
-var dumpInterval = 0xA
+var dumpInterval = 0x5
 
 type ShuffleStorage struct {
 	GceProject    string

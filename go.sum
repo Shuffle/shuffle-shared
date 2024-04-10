@@ -107,6 +107,8 @@ github.com/frikky/kin-openapi v0.41.0 h1:oMmjo+ekGS971lb3KLeZZOqRDZOwWi3+g/OiSWP
 github.com/frikky/kin-openapi v0.41.0/go.mod h1:ev9OZAw7Bv5p0w93j91++6a1ElPzGcCofst+kmrWsj4=
 github.com/frikky/schemaless v0.0.6 h1:mPWbqCxiOz0HUmdN+IiVOHqquCzA0aachzOdMTCaKtg=
 github.com/frikky/schemaless v0.0.6/go.mod h1:mooDxY+D6weHjhKvjy3+IE9S7P4g4cpNnidkdRv/cHQ=
+github.com/frikky/schemaless v0.0.8 h1:9ekdXCgVSKb18g4e6/Jr0C3d5L1gfpYhJoJwQOOMMJo=
+github.com/frikky/schemaless v0.0.8/go.mod h1:mooDxY+D6weHjhKvjy3+IE9S7P4g4cpNnidkdRv/cHQ=
 github.com/fsnotify/fsnotify v1.4.7/go.mod h1:jwhsz4b93w/PPRr/qN1Yymfu8t87LnFCMoQvtojpjFo=
 github.com/fsnotify/fsnotify v1.4.9/go.mod h1:znqG4EE+3YCdAaPaxE2ZRY/06pZUdp0tY4IgpuI1SZQ=
 github.com/ghodss/yaml v1.0.0 h1:wQHKEahhL6wmXdzwWG11gIVCkOv05bNOh+Rxn0yngAk=

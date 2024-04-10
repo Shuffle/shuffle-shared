@@ -15,7 +15,7 @@ require (
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
 	github.com/frikky/kin-openapi v0.41.0
-	github.com/frikky/schemaless v0.0.6
+	github.com/frikky/schemaless v0.0.8
 	github.com/go-git/go-billy/v5 v5.5.0
 	github.com/go-git/go-git/v5 v5.11.0
 	github.com/google/go-github/v28 v28.1.1

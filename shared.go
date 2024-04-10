@@ -2702,7 +2702,15 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (User, error) {
 	var err error
 	apikey := request.Header.Get("Authorization")
+
 	org_id := request.Header.Get("Org-Id")
+	if len(org_id) == 0 {
+		org_id = request.URL.Query().Get("org_id")
+
+		if len(org_id) == 0 {
+			org_id = request.Header.Get("OrgId")
+		}
+	}
 
 	user := &User{}
 	org := &Org{}
@@ -20242,6 +20250,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	request.Header.Add("Org-Id", user.ActiveOrg.Id)
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read for category action: %s", err)
@@ -20936,26 +20945,30 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if len(selectedAction.RequiredBodyFields) == 0 && len(selectedCategory.RequiredFields) > 0 {
 		// Check if the required fields are present
 		//selectedAction.RequiredBodyFields = selectedCategory.RequiredFields
-
-		log.Printf("CATEGORY: %#v", selectedCategory)
-
-		for requiredField, categoryFields := range selectedCategory.RequiredFields {
-			_ = categoryFields
-			log.Printf("FIELD %#v vs %#v", requiredField, value.Label)
-			if requiredField == value.Label {
+		for labelName, requiredFields := range selectedCategory.RequiredFields {
+			newName := strings.ReplaceAll(strings.ToLower(labelName), " ", "_")
+			if newName != value.Label {
+				continue
 			}
 
-			selectedAction.RequiredBodyFields = append(selectedAction.RequiredBodyFields, requiredField)
+			for _, requiredField := range requiredFields {
+				selectedAction.RequiredBodyFields = append(selectedAction.RequiredBodyFields, requiredField)
+			}
 		}
 	}
 
 	log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
+	handledRequiredFields := []string{}
 	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
 		// Optional > Required
+		fieldChanged := false
 		for _, field := range value.OptionalFields {
 			if strings.ReplaceAll(strings.ToLower(field.Key), " ", "_") == strings.ReplaceAll(strings.ToLower(param.Name), " ", "_") {
 				param.Value = field.Value
+				fieldChanged = true 
+
+				//handledFields = append(handledFields, field.Key)
 			}
 		}
 
@@ -20964,36 +20977,67 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("%s & %s", strings.ReplaceAll(strings.ToLower(field.Key), " ", "_"), strings.ReplaceAll(strings.ToLower(param.Name), " ", "_"))
 			if strings.ReplaceAll(strings.ToLower(field.Key), " ", "_") == strings.ReplaceAll(strings.ToLower(param.Name), " ", "_") {
 				param.Value = field.Value
+				fieldChanged = true 
+
+				handledRequiredFields = append(handledRequiredFields, field.Key)
 			}
 		}
 
+		if param.Name == "body" {
+
+			// FIXME: Look for key:values and inject values into them
+			// This SHOULD be just a dumb injection of existing value.Fields & value.OptionalFields for now with synonyms, but later on it should be a more advanced (use schemaless & cross org referencing) 
+			// FIXME: Should PRELOAD all of this?
+
+			param.Value = ""
+			log.Printf("[DEBUG] Found body param. Validating.")
+			if !fieldChanged {
+				log.Printf("\n\nBody not filled yet. Should fill it in (somehow) based on the existing input fields.\n\n")
+			}
+
+			param.Required = true
+		}
+
 		if param.Required && len(param.Value) == 0 && !param.Configuration {
-			//log.Printf("[INFO] Required - Key: %s, Value: %#v", param.Name, param.Value)
 			missingFields = append(missingFields, param.Name)
 		}
 
 		secondAction.Parameters = append(secondAction.Parameters, param)
 	}
 
-	// Send request to /api/v1/conversation with this data
-	streamUrl := fmt.Sprintf("https://shuffler.io")
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		streamUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
+	if len(handledRequiredFields) < len(value.Fields) {
+		// Compare which ones are not handled from value.Fields
+		for _, field := range value.Fields {
+			if !ArrayContains(handledRequiredFields, field.Key) {
+				missingFields = append(missingFields, field.Key)
+			}
+		}
+
+		log.Printf("[WARNING] Not all required fields were handled. Missing: %#v. Should force use of all fields?", missingFields)
 	}
 
-	client := GetExternalClient(streamUrl)
+	// Send request to /api/v1/conversation with this data
+	baseUrl := fmt.Sprintf("https://shuffler.io")
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
+	}
+
+	client := GetExternalClient(baseUrl)
 
 	// AI fallback mechanism to handle missing fields
 	// This is in case some fields are not sent in properly
 	authorization := ""
+	orgId := ""
 	optionalExecutionId := ""
 	if len(missingFields) > 0 {
+		log.Printf("[DEBUG] Missing fields for action: %s", missingFields)
+
 		formattedQueryFields := []string{}
 		for _, field := range value.Fields {
 			formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
 		}
 
-		formattedQuery := fmt.Sprintf("Usefields %s with app %s to '%s'", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
+		formattedQuery := fmt.Sprintf("Use fields %s with app %s to '%s'", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
 
 		newQueryInput := QueryInput{
 			Query:        formattedQuery,
@@ -21019,18 +21063,19 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		//streamUrl = "http://localhost:5002"
-		streamUrl = fmt.Sprintf("%s/api/v1/conversation", streamUrl)
+		conversationUrl := fmt.Sprintf("%s/api/v1/conversation", baseUrl)
 
 		// Check if "execution_id" & "authorization" queries exist
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
-			streamUrl = fmt.Sprintf("%s?execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+			conversationUrl = fmt.Sprintf("%s?execution_id=%s&authorization=%s", conversationUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
 		}
 
 		req, err := http.NewRequest(
 			"POST",
-			streamUrl,
+			conversationUrl,
 			bytes.NewBuffer(marshalledBody),
 		)
+
 		if err != nil {
 			log.Printf("[WARNING] Error in new request for execute generated workflow: %s", err)
 			resp.WriteHeader(500)
@@ -21039,10 +21084,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		log.Printf("MISSINGFIELDS: %#v", missingFields)
-		log.Printf("[DEBUG] LOCAL AI REQUEST SENT TO %s", streamUrl)
+		log.Printf("[DEBUG] LOCAL AI REQUEST SENT TO %s", conversationUrl)
 
 		req.Header.Add("Authorization", request.Header.Get("Authorization"))
+		req.Header.Add("Org-Id", request.Header.Get("Org-Id"))
+
 		authorization = request.Header.Get("Authorization")
+		orgId = request.Header.Get("Org-Id")
+
 		newresp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[WARNING] Error running body for execute generated workflow: %s", err)
@@ -21051,7 +21100,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("\n\n[DEBUG] LOCAL REQUEST RETURNED\n\n")
+		log.Printf("\n\n[DEBUG] TRANSLATION REQUEST RETURNED\n\n")
 
 		defer newresp.Body.Close()
 		responseBody, err := ioutil.ReadAll(newresp.Body)
@@ -21061,8 +21110,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
 			return
 		}
-
-		//log.Printf("[DEBUG] RESPONSE: %s", responseBody)
 
 		// Unmarshal responseBody back to secondAction
 		newSecondAction := Action{}
@@ -21075,8 +21122,35 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		log.Printf("[DEBUG] Taking params and image from second action and adding to workflow")
-		secondAction.Parameters = newSecondAction.Parameters
-		secondAction.LargeImage = newSecondAction.LargeImage
+
+		// FIXME: Image?
+		//secondAction.Parameters = newSecondAction.Parameters
+		//secondAction.LargeImage = newSecondAction.LargeImage
+		secondAction.LargeImage = ""
+
+		missingFields = []string{} 
+		for _, param := range newSecondAction.Parameters {
+			if param.Configuration {
+				continue
+			}
+
+			for paramIndex, originalParam := range secondAction.Parameters {
+				if originalParam.Name != param.Name {
+					continue
+				}
+
+				if len(param.Value) > 0 && param.Value != originalParam.Value {
+					secondAction.Parameters[paramIndex].Value = param.Value
+				}
+
+				//log.Printf("[INFO] Required - Key: %s, Value: %#v", param.Name, param.Value)
+				if originalParam.Required && len(secondAction.Parameters[paramIndex].Value) == 0 {
+					missingFields = append(missingFields, param.Name)
+				}
+
+				break
+			}
+		}
 	}
 
 	if value.SkipWorkflow {
@@ -21087,6 +21161,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(400)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
 			return
+		}
+
+		// FIXME: Make a check for IF we have filled in all fields or not
+		for paramIndex, _ := range secondAction.Parameters {
+			//if param.Configuration {
+			//	continue
+			//}
+			//log.Printf("[DEBUG] Param: %s, Value: %s", param.Name, param.Value)
+			secondAction.Parameters[paramIndex].Example = ""
 		}
 
 		//log.Printf("[DEBUG] App authentication: %#v", secondAction.AuthenticationId)
@@ -21100,7 +21183,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		// FIXME: Delete disabled for now (April 2nd 2024)
 		// This is due to needing debug capabilities
-		streamUrl = fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", streamUrl, secondAction.AppID)
+		apprunUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", baseUrl, secondAction.AppID)
 
 		if len(request.Header.Get("Authorization")) > 0 {
 			tmpAuth := request.Header.Get("Authorization")
@@ -21113,93 +21196,136 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
-			streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+			apprunUrl= fmt.Sprintf("%s&execution_id=%s&authorization=%s", apprunUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
 
 			authorization = request.URL.Query().Get("authorization")
 			optionalExecutionId = request.URL.Query().Get("execution_id")
 		}
 
 		if len(value.OrgId) > 0 {
-			streamUrl = fmt.Sprintf("%s&org_id=%s", streamUrl, value.OrgId)
+			apprunUrl = fmt.Sprintf("%s&org_id=%s", apprunUrl, value.OrgId)
 		}
 
-		//log.Printf("[DEBUG] Running app with URL: %s", streamUrl)
-		req, err := http.NewRequest(
-			"POST",
-			streamUrl,
-			bytes.NewBuffer(preparedAction),
-		)
+		log.Printf("[DEBUG] Running app with URL: %s", apprunUrl)
 
-		if err != nil {
-			log.Printf("[WARNING] Error in new request for execute generated app run: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed preparing new request. Contact support."}`)))
+		additionalInfo := ""
+		inputQuery := ""
+		originalAppname := selectedApp.Name
+
+		// Runs attempts up to 3 times
+		for i := 0; i < 3; i++ {
+			req, err := http.NewRequest(
+				"POST",
+				apprunUrl,
+				bytes.NewBuffer(preparedAction),
+			)
+
+			if err != nil {
+				log.Printf("[WARNING] Error in new request for execute generated app run: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed preparing new request. Contact support."}`)))
+				return
+			}
+
+			for key, value := range request.Header {
+				if len(value) == 0 {
+					continue
+				}
+
+				req.Header.Add(key, value[0])
+			}
+
+			newresp, err := client.Do(req)
+			if err != nil {
+				log.Printf("[WARNING] Error running body for execute generated app run: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running generated app. Contact support."}`)))
+				return
+			}
+
+			defer newresp.Body.Close()
+			apprunBody, err := ioutil.ReadAll(newresp.Body)
+			if err != nil {
+				log.Printf("[WARNING] Failed reading body for execute generated app run: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
+				return
+			}
+
+			// Input value to get raw output instead of translated
+			if value.SkipOutputTranslation {
+				resp.WriteHeader(202)
+				resp.Write(apprunBody)
+				return
+			}
+
+
+			marshalledBody, err := FindHttpBody(apprunBody)
+			if err != nil {
+				if strings.Contains(strings.ToLower(fmt.Sprintf("%s", err)), "status: ") {
+					log.Printf("\n\n\n[DEBUG] Found status code in error: %s\n\n\n", err)
+
+					outputString, outputAction, err, additionalInfo := FindNextApiStep(secondAction, apprunBody, additionalInfo, inputQuery, originalAppname)
+					log.Printf("[DEBUG]\n==== AUTOCORRECT ====\nOUTPUTSTRING: %s\nADDITIONALINFO: %s", outputString, additionalInfo)
+
+					if err == nil && len(outputAction.Parameters) > 0 {
+						log.Printf("[DEBUG] Found output action: %s", outputAction.Name)
+						secondAction.Name = outputAction.Name
+						secondAction.Label = outputAction.Label
+						secondAction.Parameters = outputAction.Parameters
+						secondAction.InvalidParameters = outputAction.InvalidParameters
+						preparedAction, err = json.Marshal(outputAction)
+						if err != nil {
+							resp.WriteHeader(202)
+							resp.Write(apprunBody)
+							return
+						}
+
+						log.Printf("\n\nRUNNING WITH NEW PARAMS. Index: %d\n\n", i)
+
+						continue
+					} else {
+						log.Printf("[DEBUG] Error in autocorrect: %s. Params: %d", err, len(outputAction.Parameters))
+					}
+				}
+
+				resp.WriteHeader(202)
+				resp.Write(apprunBody)
+				return
+			}
+
+			// Unmarshal responseBody back to secondAction
+			// FIXME: add auth config to save translation files properly
+
+			//streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+
+			baseurlSplit := strings.Split(baseUrl, "/")
+			if len(baseurlSplit) > 2 {
+				// Only grab from https -> start of path
+				baseUrl = strings.Join(baseurlSplit[0:3], "/")
+			}
+
+			authConfig := fmt.Sprintf("%s,%s,%s,%s", baseUrl, authorization, orgId, optionalExecutionId)
+
+			//log.Printf("\n\n[DEBUG] BASEURL FOR SCHEMALESS: %s\nAUTHCONFIG: %s\n\n", streamUrl, authConfig)
+
+			schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody, authConfig)
+			if err != nil {
+				log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
+				resp.WriteHeader(202)
+				resp.Write(apprunBody)
+				return
+			}
+
+			//log.Printf("[DEBUG] Schemaless output: %s", string(schemalessOutput))
+			resp.WriteHeader(200)
+			resp.Write(schemalessOutput)
+
 			return
+
 		}
 
-		if len(request.Header.Get("Authorization")) > 0 {
-			req.Header.Add("Authorization", request.Header.Get("Authorization"))
-		}
-
-		newresp, err := client.Do(req)
-		if err != nil {
-			log.Printf("[WARNING] Error running body for execute generated app run: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running generated app. Contact support."}`)))
-			return
-		}
-
-		defer newresp.Body.Close()
-		apprunBody, err := ioutil.ReadAll(newresp.Body)
-		if err != nil {
-			log.Printf("[WARNING] Failed reading body for execute generated app run: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
-			return
-		}
-
-		// Input value to get raw output instead of translated
-		if value.SkipOutputTranslation {
-			resp.WriteHeader(202)
-			resp.Write(apprunBody)
-			return
-		}
-
-		marshalledBody, err := FindHttpBody(apprunBody)
-		if err != nil {
-			resp.WriteHeader(202)
-			resp.Write(apprunBody)
-			return
-		}
-
-		// Unmarshal responseBody back to secondAction
-		// FIXME: add auth config to save translation files properly
-
-		//streamUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", streamUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
-
-		baseurlSplit := strings.Split(streamUrl, "/")
-		if len(baseurlSplit) > 2 {
-			// Only grab from https -> start of path
-			streamUrl = strings.Join(baseurlSplit[0:3], "/")
-		}
-
-		authConfig := fmt.Sprintf("%s,%s,,%s", streamUrl, authorization, optionalExecutionId)
-
-		//log.Printf("\n\n[DEBUG] BASEURL FOR SCHEMALESS: %s\nAUTHCONFIG: %s\n\n", streamUrl, authConfig)
-
-		schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody, authConfig)
-		if err != nil {
-			log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
-			resp.WriteHeader(202)
-			resp.Write(apprunBody)
-			return
-		}
-
-		//log.Printf("[DEBUG] Schemaless output: %s", string(schemalessOutput))
-		resp.WriteHeader(200)
-		resp.Write(schemalessOutput)
-
-		return
+		log.Printf("\n\n\n[DEBUG] Done in autocorrect loop\n\n\n")
 	}
 
 	newWorkflow.Start = secondAction.ID
@@ -21370,19 +21496,21 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	newExecBody, _ := json.Marshal(execData)
 
 	// Starting execution
-	streamUrl = fmt.Sprintf("https://shuffler.io")
+	/*
+	baseUrl := fmt.Sprintf("https://shuffler.io")
 	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-		streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 	}
 
 	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		streamUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
+		baseUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 	}
+	*/
 
-	streamUrl = fmt.Sprintf("%s/api/v1/workflows/%s/execute", streamUrl, newWorkflow.ID)
+	workflowRunUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", baseUrl, newWorkflow.ID)
 	req, err := http.NewRequest(
 		"POST",
-		streamUrl,
+		workflowRunUrl,
 		bytes.NewBuffer(newExecBody),
 	)
 	if err != nil {
