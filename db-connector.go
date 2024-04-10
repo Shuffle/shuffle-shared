@@ -7473,7 +7473,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	workflowappauth.Edited = timeNow
 	workflowappauth.App.Actions = []WorkflowAppAction{}
 
-	if len(workflowappauth.Fields) > 20 {
+	if len(workflowappauth.Fields) > 500 {
 		//log.Printf("[WARNING][%s] Too many fields for app auth: %d", id, len(workflowappauth.Fields))
 		newfields := []AuthenticationStore{}
 
@@ -12053,7 +12053,7 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 
 	log.Printf("[WARNING] Deleting index %s entirely. This is normal behavior for workflowqueues", index)
 
-    // Create a query to retrieve all items in the index
+	// Create a query to retrieve all items in the index
 	var err error
 	query := datastore.NewQuery(index).KeysOnly()
 	it := project.Dbclient.Run(ctx, query)
@@ -12083,7 +12083,6 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 		}
 	}
 
-
 	// Delete remaining entities
 	if len(keys) > 0 {
 		err := project.Dbclient.DeleteMulti(ctx, keys)
@@ -12091,9 +12090,6 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 			log.Printf("[WARNING] Failed deleting keys: %s", err)
 		}
 	}
-
-
-
 
 	return nil
 }
