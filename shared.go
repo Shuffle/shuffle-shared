@@ -20200,6 +20200,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	// Just here to verify that the user is logged in
 	ctx := GetContext(request)
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[ERROR] Request overload for Run Category Action with IP %s", GetRequestIp(request))
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		// Look for "authorization" and "execution_id" queries
@@ -20242,6 +20250,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		user.Role = "admin"
 		user.ActiveOrg.Id = exec.ExecutionOrg
 	}
+
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to run category action: %s (%s)", user.Username, user.Id)
