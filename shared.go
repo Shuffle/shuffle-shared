@@ -12899,12 +12899,12 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 							log.Printf("[WARNING] Error propagating app %s: %s", appName, err)
 						} else {
 							log.Printf("[INFO] Propagated app %s. Sending request again!", appName)
-							ActivateWorkflowApp(resp, request)
+							return ActivateWorkflowApp(resp, request)
 						}
 					}()
 
 					resp.WriteHeader(202)
-					resp.Write([]byte(`{"success": false, "reason": "Please try activation again in a few seconds!"}`))
+					resp.Write([]byte(`{"success": false, "reason": "Taking care of some magic. Please try activation again in a few seconds!"}`))
 					return
 				} else {
 					log.Printf("[WARNING] Error getting app %s (algolia): %s", appName, err)
