@@ -12887,18 +12887,27 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			log.Printf("[WARNING] Error getting app with ID %s (app config): %s", fileId, err)
 			if project.Environment == "cloud" && gceProject != "shuffler" {
-				_, err := HandleAlgoliaAppSearch(ctx, appName)
+				app, err := HandleAlgoliaAppSearch(ctx, fileId)
 				if err == nil {
 					// this means that the app exists. so, let's
 					// ask our propagator to proagate it further.
-					log.Printf("[INFO] Found app %s in algolia", appName)
+					log.Printf("[INFO] Found apps %s - %s in algolia", app.Name, app.ObjectID)
 
+					if app.ObjectID != fileId {
+						log.Printf("[WARNING] App %s doesn't exist in algolia", fileId)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+						return
+					}
+					// i can in theory, run this without using goroutines
+					// and then recursively call the same function. but that 
+					// would make this request way too long.
 					go func() {
 						err = propagateApp(fileId, false)
 						if err != nil {
-							log.Printf("[WARNING] Error propagating app %s: %s", appName, err)
+							log.Printf("[WARNING] Error propagating app %s - %s: %s", app.Name, app.ObjectID, err)
 						} else {
-							log.Printf("[INFO] Propagated app %s. Sending request again!", appName)
+							log.Printf("[INFO] Propagated app %s - %s. Sending request again!", app.Name, app.ObjectID)
 						}
 					}()
 
