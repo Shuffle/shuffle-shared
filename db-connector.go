@@ -3831,7 +3831,7 @@ func propagateOrg(org Org, reverse bool) error {
 	data := map[string]string{"mode": "org", "orgId": org.Id}
 
 	if reverse {
-		data["region"] = os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
+		data["region"] = os.Getenv("SHUFFLE_GCEPROJECT_REGION")
 	}
 
 	reqBody, err := json.Marshal(data)
@@ -3880,7 +3880,7 @@ func propagateApp(appId string, delete bool) error {
 		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
 	}
 	// SHUFFLE_GCE_LOCATION
-	gceRegion := os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
+	gceRegion := os.Getenv("SHUFFLE_GCEPROJECT_REGION")
 
 	log.Printf("[INFO] Asking %s to propagate app %s", propagateUrl, appId)
 	data := map[string]string{"mode": "app", "appId": appId, "region": gceRegion}
