@@ -12899,7 +12899,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 							log.Printf("[WARNING] Error propagating app %s: %s", appName, err)
 						} else {
 							log.Printf("[INFO] Propagated app %s. Sending request again!", appName)
-							return ActivateWorkflowApp(resp, request)
 						}
 					}()
 
