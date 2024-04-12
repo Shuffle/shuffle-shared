@@ -11792,7 +11792,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
 			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID, []string{}, []string{})
-			log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
+			//log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
 			for _, nodeId := range childNodes {
 				log.Printf("[DEBUG][%s] Checking if node %s is already in results", workflowExecution.ExecutionId, nodeId)
 				if nodeId == actionResult.Action.ID {
@@ -20204,7 +20204,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[ERROR] Request overload for Run Category Action with IP %s", GetRequestIp(request))
 		resp.WriteHeader(429)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests. This is an experimental AI feature and can't handle burst traffic yet."}`)))
 		return
 	}
 
@@ -20264,7 +20264,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Error with body read for category action: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body of the request"}`))
 		return
 	}
 
@@ -20273,7 +20273,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[WARNING] Error with unmarshal tmpBody in category action: %s", err)
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshaling body of the request"}`))
 		return
 	}
 
@@ -20551,7 +20551,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "use_app" {
 			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding the label in app '%s'"}`, selectedApp.Name)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding action '%s' labeled in app '%s'. If this is wrong, please contact support@shuffler.io"}`, value.Label, strings.ReplaceAll(selectedApp.Name, "_", " "))))
 			return
 		} else {
 			//log.Printf("[DEBUG] NOT sending back due to label %s", value.Label)
@@ -21092,7 +21092,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("MISSINGFIELDS: %#v", missingFields)
+		log.Printf("[DEBUG] MISSINGFIELDS: %#v", missingFields)
 		log.Printf("[DEBUG] LOCAL AI REQUEST SENT TO %s", conversationUrl)
 
 		req.Header.Add("Authorization", request.Header.Get("Authorization"))
@@ -21109,7 +21109,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("\n\n[DEBUG] TRANSLATION REQUEST RETURNED\n\n")
 
 		defer newresp.Body.Close()
 		responseBody, err := ioutil.ReadAll(newresp.Body)
@@ -21119,6 +21118,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshalling app response. Contact support."}`)))
 			return
 		}
+
+		log.Printf("\n\n[DEBUG] TRANSLATED REQUEST RETURNED: %s\n\n", string(responseBody))
 
 		// Unmarshal responseBody back to secondAction
 		newSecondAction := Action{}
@@ -21221,8 +21222,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		inputQuery := ""
 		originalAppname := selectedApp.Name
 
-		// Runs attempts up to 3 times
-		for i := 0; i < 3; i++ {
+		// Runs attempts up to X times
+		for i := 0; i < 5; i++ {
 			req, err := http.NewRequest(
 				"POST",
 				apprunUrl,
@@ -21294,7 +21295,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 						continue
 					} else {
-						log.Printf("[DEBUG] Error in autocorrect: %s. Params: %d", err, len(outputAction.Parameters))
+						log.Printf("[ERROR] Problem in autocorrect: '%s'\nParams: %d", err, len(outputAction.Parameters))
 					}
 				}
 
