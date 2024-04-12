@@ -533,6 +533,8 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 
 			// Try to fix the request based on the body
 		} else {
+			log.Printf("[ERROR] Status code is not in the 200s or 400s. Status: %d", status)
+
 			return "", action, errors.New(getBadOutputString(action, action.AppName, inputdata, string(body), status)), additionalInfo
 		}
 	}
@@ -614,7 +616,9 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		inputBody = inputBody[:len(inputBody)-2]
 	}
 
-	inputBody += "\n}"
+	if !strings.HasSuffix(strings.TrimSpace(inputBody), "}") {
+		inputBody += "\n}"
+	}
 
 	// Append previous problems too
 	outputBodies := outputBody
@@ -629,9 +633,9 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 	//inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same with modified values.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 
-	inputData := fmt.Sprintf("Change the fields sent to the HTTP API for %s to be correct according to the HTTP error. \n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\nUpdate the following field(s) to have modified values to fix the error:\n%s", appname, status, outputBodies, invalidFieldsString, inputBody)
+	inputData := fmt.Sprintf("Change the fields sent to the HTTP API for %s to be correct according to the HTTP error. \n\nHTTP Status: %d\nHTTP error: %s\n\n%s\nUpdate the following field(s) to have modified values to fix the error:\n%s", appname, status, outputBodies, invalidFieldsString, inputBody)
 
-	log.Printf("[INFO] INPUTDATA: '%s'\n\n\n", inputData)
+	log.Printf("[INFO] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
 
 	contentOutput := ""
 	for {
@@ -697,7 +701,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		}
 	}
 
-	log.Printf("[INFO] Content output: %s", contentOutput)
+	log.Printf("[INFO] Autocorrect output: %s", contentOutput)
 
 
 	// Fix the params based on the contentOuput JSON
