@@ -3813,7 +3813,11 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	return &org
 }
 
-func propagateOrg(org Org) error {
+func propagateOrg(org Org, reverse bool) error {
+	// the philosophy here is that, usually, we propagate only
+	// from the main region to the other regions. However, "reverse"
+	// makes propagation go from the other regions to the main region.
+
 	if len(org.Id) == 0 {
 		return errors.New("no ID provided for org")
 	}
@@ -3825,6 +3829,10 @@ func propagateOrg(org Org) error {
 	log.Printf("[INFO] Asking %s to propagate org %s", propagateUrl, org.Id)
 
 	data := map[string]string{"mode": "org", "orgId": org.Id}
+
+	if reverse {
+		data["region"] = os.Getenv("SHUFFLE_GCEPROJECT_REGION")
+	}
 
 	reqBody, err := json.Marshal(data)
 	if err != nil {
@@ -3872,7 +3880,7 @@ func propagateApp(appId string, delete bool) error {
 		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
 	}
 	// SHUFFLE_GCE_LOCATION
-	gceRegion := os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
+	gceRegion := os.Getenv("SHUFFLE_GCEPROJECT_REGION")
 
 	log.Printf("[INFO] Asking %s to propagate app %s", propagateUrl, appId)
 	data := map[string]string{"mode": "app", "appId": appId, "region": gceRegion}
@@ -4039,7 +4047,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		if data.Region != "" && data.Region != "europe-west2" && gceProject == "shuffler" {
 			go func() {
 				log.Printf("[INFO] Propagating org %s", data.Id)
-				err := propagateOrg(data)
+				err := propagateOrg(data, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed propagating org %s: %s", data.Id, err)
 				}
@@ -7473,7 +7481,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	workflowappauth.Edited = timeNow
 	workflowappauth.App.Actions = []WorkflowAppAction{}
 
-	if len(workflowappauth.Fields) > 20 {
+	if len(workflowappauth.Fields) > 500 {
 		//log.Printf("[WARNING][%s] Too many fields for app auth: %d", id, len(workflowappauth.Fields))
 		newfields := []AuthenticationStore{}
 
@@ -12053,7 +12061,7 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 
 	log.Printf("[WARNING] Deleting index %s entirely. This is normal behavior for workflowqueues", index)
 
-    // Create a query to retrieve all items in the index
+	// Create a query to retrieve all items in the index
 	var err error
 	query := datastore.NewQuery(index).KeysOnly()
 	it := project.Dbclient.Run(ctx, query)
@@ -12083,7 +12091,6 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 		}
 	}
 
-
 	// Delete remaining entities
 	if len(keys) > 0 {
 		err := project.Dbclient.DeleteMulti(ctx, keys)
@@ -12091,9 +12098,6 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 			log.Printf("[WARNING] Failed deleting keys: %s", err)
 		}
 	}
-
-
-
 
 	return nil
 }
