@@ -7919,7 +7919,11 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Id != app.Owner {
+	if project.Environment != "cloud" && len(app.ReferenceOrg) == 0 {
+		app.ReferenceOrg = user.ActiveOrg.Id
+	}
+
+	if user.Id != app.Owner && app.ReferenceOrg != user.ActiveOrg.Id {
 		if user.Role == "admin" && app.Owner == "" {
 			log.Printf("[INFO] Anyone can edit %s (%s), since it doesn't have an owner (DELETE).", app.Name, app.ID)
 		} else {
@@ -9937,8 +9941,14 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	// Modified to make it so users admins in same org can modify an app
 	//log.Printf("User: %s, role: %s, org: %s vs %s", user.Username, user.Role, user.ActiveOrg.Id, app.ReferenceOrg)
-	if user.Id == app.Owner || (user.Role == "admin" && user.ActiveOrg.Id == app.ReferenceOrg) {
+	if project.Environment != "cloud" && len(app.ReferenceOrg) == 0 {
+		app.ReferenceOrg = user.ActiveOrg.Id
+	}
+
+	if user.Id == app.Owner || user.ActiveOrg.Id == app.ReferenceOrg || ArrayContains(app.Contributors, user.Id) {
+
 		log.Printf("[DEBUG] Got app %s with user %s (%s) in org %s", app.ID, user.Username, user.Id, user.ActiveOrg.Id)
+
 	} else {
 		if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Support & Admin user %s (%s) got access to app %s (cloud only)", user.Username, user.Id, app.ID)
@@ -20243,7 +20253,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("[INFO] Got category action request with authorization and execution_id: %s, %s", authorization, executionId)
+		//log.Printf("[INFO] Running category action request with authorization and execution_id: %s, %s", authorization, executionId)
 		// 1. Get the executionId and check if it's valid
 		// 2. Check if authorization is valid
 		// 3. Check if the execution is FINISHED or not
@@ -20299,6 +20309,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshaling body of the request"}`))
 		return
 	}
+
+	log.Printf("[INFO] Running category-action '%s' in category '%s' for org %s (%s)", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	if len(value.Query) > 0 {
 		// Check if app authentication. If so, check if intent is to actually authenticate, or find the actual intent
@@ -20357,8 +20369,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[DEBUG] No category set in category action")
 	}
 
-	log.Printf("[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
+	_ = labelIndex
 
+	//log.Printf("[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
 	newapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting apps in category action: %s", err)
@@ -20424,7 +20437,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	} else {
 		if len(foundCategory.Name) > 0 {
-			log.Printf("[DEBUG] Found item for category %s: %s (%s)", foundAppType, foundCategory.Name, foundCategory.ID)
+			log.Printf("[DEBUG] Found app for category %s: %s (%s)", foundAppType, foundCategory.Name, foundCategory.ID)
 		}
 	}
 
@@ -20486,7 +20499,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			// If we DONT have a category app already
 			if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
-				log.Printf("[DEBUG] Found app: %s vs %s (%s)", app.Name, value.AppName, app.ID)
+				//log.Printf("[DEBUG] Found app: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 				availableLabels = []string{}
 				selectedApp = app
 
@@ -20989,7 +21002,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
+	//log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
 	handledRequiredFields := []string{}
 	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
@@ -21065,11 +21078,18 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Missing fields for action: %s", missingFields)
 
 		formattedQueryFields := []string{}
-		for _, field := range value.Fields {
-			formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
+		for _, missing := range missingFields {
+			for _, field := range value.Fields {
+				if field.Key != missing {
+					continue
+				}
+
+				formattedQueryFields = append(formattedQueryFields, fmt.Sprintf("%s=%s", field.Key, field.Value))
+				break
+			}
 		}
 
-		formattedQuery := fmt.Sprintf("Use fields %s with app %s to '%s'", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
+		formattedQuery := fmt.Sprintf("Use any of the fields '%s' with app %s to '%s'.", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
 
 		newQueryInput := QueryInput{
 			Query:        formattedQuery,
@@ -21142,7 +21162,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("\n\n[DEBUG] TRANSLATED REQUEST RETURNED: %s\n\n", string(responseBody))
+		//log.Printf("\n\n[DEBUG] TRANSLATED REQUEST RETURNED: %s\n\n", string(responseBody))
+		if strings.Contains(string(responseBody), `"success": false`) {
+			log.Printf("[WARNING] Failed running app %s (%s). Contact support.", selectedAction.Name, selectedAction.AppID)
+			resp.WriteHeader(500)
+			resp.Write(responseBody)
+			return
+		}
 
 		// Unmarshal responseBody back to secondAction
 		newSecondAction := Action{}
@@ -21246,7 +21272,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		originalAppname := selectedApp.Name
 
 		// Runs attempts up to X times
-		for i := 0; i < 5; i++ {
+		for i := 0; i < 3; i++ {
 			req, err := http.NewRequest(
 				"POST",
 				apprunUrl,
@@ -21293,14 +21319,30 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 
 
-			marshalledBody, err := FindHttpBody(apprunBody)
+			httpOutput, marshalledBody, err := FindHttpBody(apprunBody)
+
+			parsedTranslation := SchemalessOutput{
+				Success: false,
+				Action:  value.Label,
+				Output:  string(apprunBody),
+
+				Status: httpOutput.Status,
+				URL:	httpOutput.Url,
+			}
+
+			// Parses out data from the output
 			if err != nil {
+
+				// Reruns the app with the new parameters
 				if strings.Contains(strings.ToLower(fmt.Sprintf("%s", err)), "status: ") {
 					log.Printf("\n\n\n[DEBUG] Found status code in error: %s\n\n\n", err)
 
 					outputString, outputAction, err, additionalInfo := FindNextApiStep(secondAction, apprunBody, additionalInfo, inputQuery, originalAppname)
 					log.Printf("[DEBUG]\n==== AUTOCORRECT ====\nOUTPUTSTRING: %s\nADDITIONALINFO: %s", outputString, additionalInfo)
 
+					// Rewriting before continuing
+					// This makes the NEXT loop iterator run with the
+					// output params from this one
 					if err == nil && len(outputAction.Parameters) > 0 {
 						log.Printf("[DEBUG] Found output action: %s", outputAction.Name)
 						secondAction.Name = outputAction.Name
@@ -21322,8 +21364,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
-				resp.WriteHeader(202)
-				resp.Write(apprunBody)
+				marshalledOutput, err := json.Marshal(parsedTranslation)
+				if err != nil {
+					log.Printf("[WARNING] Failed marshalling schemaless output for label %s: %s", value.Label, err)
+					resp.WriteHeader(400)
+					resp.Write(apprunBody)
+					return
+				}
+
+				resp.WriteHeader(400)
+				resp.Write(marshalledOutput)
 				return
 			}
 
@@ -21343,16 +21393,27 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("\n\n[DEBUG] BASEURL FOR SCHEMALESS: %s\nAUTHCONFIG: %s\n\n", streamUrl, authConfig)
 
 			schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody, authConfig)
+
 			if err != nil {
 				log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
+				//resp.WriteHeader(202)
+				//resp.Write(apprunBody)
+				//return
+			} else {
+				parsedTranslation.Success = true
+				parsedTranslation.Output = string(schemalessOutput)
+			}
+
+			marshalledOutput, err := json.Marshal(parsedTranslation)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling schemaless output for label %s: %s", value.Label, err)
 				resp.WriteHeader(202)
-				resp.Write(apprunBody)
+				resp.Write(schemalessOutput)
 				return
 			}
 
-			//log.Printf("[DEBUG] Schemaless output: %s", string(schemalessOutput))
 			resp.WriteHeader(200)
-			resp.Write(schemalessOutput)
+			resp.Write(marshalledOutput)
 
 			return
 
@@ -23272,8 +23333,6 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) er
 		Timestamp: timenow,
 	}
 
-	log.Printf("[DEBUG] User request: %#v", userRequest)
-
 	requestList := []UserRequest{}
 
 	// Maybe do per path? Idk
@@ -23281,7 +23340,7 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) er
 	cacheKey := fmt.Sprintf("userrequest_%s", userRequest.IP)
 	cache, err := GetCache(ctx, cacheKey)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting cache for key %s: %s", cacheKey, err)
+		//log.Printf("[ERROR] Failed getting cache for key %s: %s", cacheKey, err)
 		requestList = append(requestList, userRequest)
 
 		b, err := json.Marshal(requestList)
@@ -23307,8 +23366,6 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) er
 		log.Printf("[WARNING] Failed unmarshalling requestlist: %s", err)
 		return nil
 	}
-
-	log.Printf("[DEBUG] Requestlist: %#v", requestList)
 
 	// Remove any item more than 60 seconds back to make a sliding window
 	newList := []UserRequest{}

@@ -180,6 +180,7 @@ type WorkflowAppActionParameter struct {
 	Example        string           `json:"example" datastore:"example,noindex" yaml:"example"`
 	Value          string           `json:"value" datastore:"value,noindex" yaml:"value,omitempty"`
 	Multiline      bool             `json:"multiline" datastore:"multiline" yaml:"multiline"`
+	Multiselect    bool             `json:"multiselect" datastore:"multiselect" yaml:"multiselect"`
 	Options        []string         `json:"options" datastore:"options" yaml:"options"`
 	ActionField    string           `json:"action_field" datastore:"action_field" yaml:"actionfield,omitempty"`
 	Variant        string           `json:"variant" datastore:"variant" yaml:"variant,omitempty"`
@@ -3410,6 +3411,18 @@ type UserInputResponse struct {
 		Authorization string `json:"authorization"`
 	} `json:"subflow"`
 	SubflowURL string `json:"subflow_url"`
+}
+
+type SchemalessOutput struct {
+	Success bool        `json:"success"`
+	Action  string      `json:"action"`
+	Status  int         `json:"status,omitempty"`
+	URL	    string      `json:"url,omitempty"`
+
+	Output  string 		`json:"output"`
+
+	// Optional
+	RawOutput string `json:"raw_output,omitempty"`
 }
 
 type CategoryAction struct {

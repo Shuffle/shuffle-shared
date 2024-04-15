@@ -72,7 +72,7 @@ func fileAuthentication(request *http.Request) (string, error) {
 			return "", errors.New("Bad authorization key")
 		}
 
-		log.Printf("[INFO] Authorization is correct for execution %s!", executionId[0])
+		//log.Printf("[INFO] Authorization is correct for execution %s!", executionId[0])
 		//%s vs %s. Setting Org", executionId, apikey, workflowExecution.Authorization)
 		if len(workflowExecution.ExecutionOrg) > 0 {
 			return workflowExecution.ExecutionOrg, nil
@@ -433,8 +433,20 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename string) ([]*github.RepositoryContent, error) {
 	ctx := context.Background()
-	//client := github.NewClient(nil)
+
 	files := []*github.RepositoryContent{}
+
+	cacheKey := fmt.Sprintf("github_%s_%s_%s", owner, repo, path)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		}
+	}
 
 	_, items, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
@@ -454,6 +466,19 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 	for _, item := range items {
 		if len(filename) > 0 && strings.HasPrefix(*item.Name, filename) {
 			files = append(files, item)
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getfiles: %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getfiles on github '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -489,8 +514,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
-
+		//log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
 		orgId, err := fileAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad file authentication in get namespace %s: %s", namespace, err)
@@ -551,7 +575,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] Found %d (%d:%d) files in org %s (%s) for namespace '%s'", len(files), len(fileResponse.Files), len(fileResponse.List), user.ActiveOrg.Name, user.ActiveOrg.Id, namespace)
+	//log.Printf("[DEBUG] Found %d (%d:%d) files in org %s (%s) for namespace '%s'", len(files), len(fileResponse.Files), len(fileResponse.List), user.ActiveOrg.Name, user.ActiveOrg.Id, namespace)
 
 	// Standards to load directly from Github if applicable
 	reservedCategoryNames := []string{
@@ -586,7 +610,9 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		if !filenameFound {
+		// FIXME: How to handle files here?
+		if !filenameFound && namespace != "translation_input" && namespace != "translation_ai_queries" && namespace != "translation_output" {
+
 			client := github.NewClient(nil)
 			owner := "shuffle"
 			repo := "standards"
@@ -826,11 +852,10 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
-			log.Printf("[WARNING] Bad file authentication in get for ID %s: %s", fileId, err)
+			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -1410,7 +1435,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in file creation: %s", err)
+		//log.Printf("[AUDIT] INITIAL Api authentication failed in file creation: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {

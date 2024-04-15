@@ -295,35 +295,40 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	return output, nil
 }
 
-func FindHttpBody(fullBody []byte) ([]byte, error) {
+func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	kmsResponse := SubflowData{}
+	httpOutput := &HTTPOutput{} 
 	err := json.Unmarshal(fullBody, &kmsResponse)
 	if err != nil {
 		log.Printf("[ERROR] %s - Failed to unmarshal Schemaless response to match SubflowData struct (1): %s", string(fullBody), err)
-		return []byte{}, err
+		return *httpOutput, []byte{}, err
+	}
+
+	// Handled for weird empty bodies
+	if strings.Contains(kmsResponse.Result, `"body": "",`) {
+		kmsResponse.Result = strings.Replace(kmsResponse.Result, `"body": "",`, `"body": {},`, -1)
 	}
 
 	// Make result into a body as well
-	httpOutput := &HTTPOutput{} 
 	err = json.Unmarshal([]byte(kmsResponse.Result), httpOutput)
 	if err != nil {
-		log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s", err)
-		return []byte{}, err
+		log.Printf("[ERROR] Failed to unmarshal Schemaless HTTP Output response (2): %s. Data: %s", err, kmsResponse.Result)
+		return *httpOutput, []byte{}, err
 	}
 
 	if httpOutput.Status >= 300 {
 		log.Printf("[ERROR] Schemaless action failed with status: %d. Trying Autocorrecting feature", httpOutput.Status)
 
-		return []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
+		return *httpOutput, []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
 	}
 
 	marshalledBody, err := json.Marshal(httpOutput.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal Schemaless HTTP Body response body back to byte: %s", err)
-		return []byte{}, err
+		return *httpOutput, []byte{}, err
 	}
 
-	return marshalledBody, nil
+	return *httpOutput, marshalledBody, nil
 }
 
 // Translates the output of the KMS action to a usable format in the 
@@ -331,7 +336,7 @@ func FindHttpBody(fullBody []byte) ([]byte, error) {
 func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig string) (string, error) {
 	// We need to parse the response from the KMS action
 	// 1. Find JUST the result data
-	marshalledBody, err := FindHttpBody(fullBody)
+	_, marshalledBody, err := FindHttpBody(fullBody)
 	if err != nil {
 		log.Printf("[ERROR] Failed to find HTTP body in KMS response: %s", err)
 		return "", err
@@ -569,13 +574,14 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		}
 
 		// FIXME: Skip all other things for now for some reason?
-		if param.Name != "body" {
-			continue
-		}
+		//if param.Name != "body" {
+		//	continue
+		//}
 
 
 		checkValue := strings.TrimSpace(strings.Replace(param.Value, "\n", "", -1))
-		log.Printf("PARAM START: '%s'. END: '%s'", checkValue[:10], checkValue[len(checkValue)-10:])
+		//log.Printf("PARAM START: '%s'. END: '%s'", checkValue[:10], checkValue[len(checkValue)-10:])
+
 		if  (strings.HasPrefix(checkValue, "{") && strings.HasSuffix(checkValue, "}")) || (strings.HasPrefix(param.Value, "[") && strings.HasSuffix(param.Value, "]")) {
 			inputBody += fmt.Sprintf("\"%s\": %s,\n", param.Name, param.Value)
 			continue
@@ -595,11 +601,9 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		}
 
 		inputBody += fmt.Sprintf("\"%s\": \"%s\",\n", param.Name, param.Value)
-		//break
 	}
 
 	// Remove comma at the end
-
 	invalidFields := map[string]string{}
 	invalidFieldsString := "The following are previous attempts at changing the field which failed. They are invalid fields that need to be fixed.\n"
 	for _, param := range action.InvalidParameters {
@@ -730,14 +734,19 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 			if !runString {
 				// Make map from val and marshal to byte
-				valMap := val.(map[string]interface{})
-				valByte, err := json.Marshal(valMap)
-				if err != nil {
-					log.Printf("[ERROR] Failed to marshal valMap in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
-					continue
-				}
 
-				formattedVal = string(valByte)
+				if valMap, ok := val.(map[string]interface{}); !ok {
+				//valMap := val.(map[string]interface{})
+					valByte, err := json.Marshal(valMap)
+					if err != nil {
+						log.Printf("[ERROR] Failed to marshal valMap in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
+						continue
+					}
+
+					formattedVal = string(valByte)
+				} else {
+					log.Printf("[ERROR] Failed to convert val to map in action fix for app %s with action %s. Field: %s", appname, action.Name, param.Name)
+				}
 			}
 
 			// Check if value is base64 and decode if no mention of base64 previously
@@ -812,7 +821,7 @@ func getOpenApiInformation(appname, action string) string {
 
 	action = GetCorrectActionName(action)
 
-	systemMessage := fmt.Sprintf("What is a valid JSON body format for a HTTP request %s in the %s API?", action, appname)
+	systemMessage := fmt.Sprintf("Output a valid JSON body format for a HTTP request %s in the %s API?", action, appname)
 
 	//log.Printf("[INFO] System message (find API documentation): %s", systemMessage)
 

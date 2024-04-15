@@ -7779,8 +7779,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	}
 
 	if len(users) == 0 {
-		//log.Printf("[WARNING] No users found for session %s", sessionId)
-		return User{}, errors.New("No users found for this apikey")
+		return User{}, errors.New("No users found for this apikey (1)")
 	}
 
 	if project.CacheDb {
@@ -7887,8 +7886,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if len(users) == 0 {
-		log.Printf("[WARNING] No users found for apikey %s", apikey)
-		return User{}, errors.New("No users found for this apikey")
+		return User{}, errors.New("No users found for this apikey (2)")
 	}
 
 	return users[0], nil
@@ -8408,6 +8406,18 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 	var files []File
 
+	cacheKey := fmt.Sprintf("files_%s_%s", orgId, namespace)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		}
+	}
+
 	nameKey := "Files"
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -8558,6 +8568,20 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			}
 		}
 	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling file cache: %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 2)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating file cache: %s", err)
+		}
+	}
+				
 
 	return files, nil
 }
@@ -11447,7 +11471,7 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 			return suggestion, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 60)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getsuggestion'%s': %s", cacheKey, err)
 		}
