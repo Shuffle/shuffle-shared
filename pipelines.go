@@ -101,7 +101,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	availableCommands := []string{
-		"create",
+		"create", "delete",
 	}
 
 	matchingCommand := ""
@@ -122,11 +122,20 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	// 1. Add to trigger list
 	/* TBD */ 
 
+	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
+
+	pipelineData := Pipeline{}
+	pipelineData.Name = pipeline.Name
+	pipelineData.Type = startCommand
+	pipelineData.Command = pipeline.Command
+	pipelineData.Environment = pipeline.Environment
+	pipelineData.WorkflowId = pipeline.WorkflowId
+	pipelineData.OrgId =  user.ActiveOrg.Id
+	pipelineData.Status = "uninitialized"
+	pipelineData.TriggerId = pipeline.TriggerId
 
 	// Look for PIPELINE_ command that exists in the queue already
 	parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
-
-	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
 	existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
 	for _, queue := range existingQueue.Data {
@@ -146,6 +155,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		ExecutionId: uuid.NewV4().String(),
 		ExecutionSource: pipeline.Name,
 		ExecutionArgument: pipeline.Command,
+		TempPipelineId: pipeline.TriggerId,
 		Priority: 11,
 	}
 
@@ -157,7 +167,17 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-	pipelineId := "test"
+	if startCommand == "CREATE" {
+		// err := savePipelinedata(pipelineData)
+		// if err!=nil {
+		// 	log.Printf("[ERROR] Failed to save the pipeline with trigger id: %s into the db: %s",pipeline.Trigger.ID, err)
+		// 	resp.WriteHeader(500)
+		// 	resp.Write([]byte(`{"success": false}`))
+		// 	return
+		// }
+		log.Printf("will save it to the db")
+	}
+
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Pipeline created", "id": "%s"}`, pipelineId)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Pipeline will be created}`)))
 }

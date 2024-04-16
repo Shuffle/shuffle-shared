@@ -22857,6 +22857,17 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(respBody)
 }
 
+func HandleSavePipelineInfo(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+  log.Printf("this will save to the db")
+  
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
 
 func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
