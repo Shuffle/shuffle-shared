@@ -5128,18 +5128,28 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflowapps, apperr := GetPrioritizedApps(ctx, user)
 	allNames := []string{}
 	for _, action := range workflow.Actions {
+		if action.AppID == "integration" {
+			if action.IsStartNode {
+				startnodeFound = true
+			}
+
+			newActions = append(newActions, action)
+			continue
+		}
+
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
 			continue
 		}
 
-		if len(action.Label) > 0 && ArrayContains(allNames, action.Label) {
-			parsedError := fmt.Sprintf("Multiple actions with name '%s'", action.Label)
+		newLabelName := strings.Replace(strings.ToLower(action.Label), " ", "_", -1)
+		if len(action.Label) > 0 && ArrayContains(allNames, newLabelName) {
+			parsedError := fmt.Sprintf("Multiple actions with name '%s'. May cause problems unless changed.", action.Label)
 			if !ArrayContains(workflow.Errors, parsedError) {
 				workflow.Errors = append(workflow.Errors, parsedError)
 			}
 		}
 
-		allNames = append(allNames, action.Label)
+		allNames = append(allNames, newLabelName)
 		allNodes = append(allNodes, action.ID)
 		if workflow.Start == action.ID {
 			//log.Printf("[INFO] FOUND STARTNODE %d", workflow.Start)
@@ -5374,6 +5384,14 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	// Handle app versions & upgrades
 	for _, action := range workflow.Actions {
+		if action.AppID == "integration" {
+			if action.IsStartNode {
+				startnodeFound = true
+			}
+
+			continue
+		}
+
 		actionApp := strings.ToLower(strings.Replace(action.AppName, " ", "", -1))
 
 		for _, app := range workflowapps {
@@ -20620,6 +20638,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	foundFields := 0
 	missingFields := []string{}
 	baseFields := []string{}
+
 	_ = foundFields
 	for innerLabel, labelValue := range selectedCategory.RequiredFields {
 		if strings.ReplaceAll(strings.ToLower(innerLabel), " ", "_") != value.Label {
@@ -20639,6 +20658,23 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		break
 	}
+
+	if len(missingFields) > 0 {
+		for _, missingField := range missingFields {
+			if missingField != "body" {
+				continue
+			}
+
+			fixedBody, err := UpdateActionBody(selectedAction)
+			if err != nil { 
+				log.Printf("[ERROR] Failed getting correct action body for %s: %s", selectedAction.Name, err)
+				continue
+			}
+
+			log.Printf("[DEBUG] GOT BODY: %#v", fixedBody)
+		}
+	}
+
 
 	// FIXME: Check if ALL fields for the target app can be fullfiled
 	// E.g. for Jira: Org_id is required.
@@ -21069,17 +21105,66 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	client := GetExternalClient(baseUrl)
 
+	selectedAction.AppName = selectedApp.Name
+	selectedAction.AppID = selectedApp.ID
+	selectedAction.AppVersion = selectedApp.AppVersion
+
+	for _, missing := range missingFields {
+		if missing != "body" {
+			continue
+		}
+
+		fixedBody, err := UpdateActionBody(selectedAction)
+		if err != nil { 
+			log.Printf("[ERROR] Failed getting correct action body for %s: %s", selectedAction.Name, err)
+			continue
+		}
+
+		// Remove newlines
+		fixedBody = strings.ReplaceAll(fixedBody, "\n", "")
+
+		log.Printf("[DEBUG] GOT BODY: %#v", fixedBody)
+		if len(fixedBody) > 0 {
+			bodyFound := false
+			for paramIndex, param := range selectedAction.Parameters {
+				if param.Name != "body" {
+					continue
+				}
+
+				bodyFound = true 
+				//selectedAction.Parameters[paramIndex].Example = fixedBody
+				selectedAction.Parameters[paramIndex].Value = fixedBody
+				selectedAction.Parameters[paramIndex].Tags = append(selectedAction.Parameters[paramIndex].Tags, "generated")
+			}
+
+			if !bodyFound {
+				selectedAction.Parameters = append(selectedAction.Parameters, WorkflowAppActionParameter{
+					Name:  "body",
+					Value: fixedBody,
+					//Example: fixedBody,
+					Tags:  []string{"generated"},
+				})
+			}
+
+			missingFields = RemoveFromArray(missingFields, "body")
+		}
+
+		break
+	}
+
 	// AI fallback mechanism to handle missing fields
 	// This is in case some fields are not sent in properly
-	authorization := ""
 	orgId := ""
+	authorization := ""
 	optionalExecutionId := ""
 	if len(missingFields) > 0 {
-		log.Printf("[DEBUG] Missing fields for action: %s", missingFields)
+		log.Printf("[DEBUG] Missing fields for action: %#v", missingFields)
 
 		formattedQueryFields := []string{}
-		for _, missing := range missingFields {
+		for _, missing := range missingFields {	
+
 			for _, field := range value.Fields {
+
 				if field.Key != missing {
 					continue
 				}
@@ -21320,7 +21405,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 
 			httpOutput, marshalledBody, err := FindHttpBody(apprunBody)
-
 			parsedTranslation := SchemalessOutput{
 				Success: false,
 				Action:  value.Label,
@@ -21330,9 +21414,18 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				URL:	httpOutput.Url,
 			}
 
-			// Parses out data from the output
-			if err != nil {
+			if err == nil {
+				if httpOutput.Status < 300 {
+					log.Printf("\n\n\n[DEBUG] Found VALID status: %d. Should save the current fields as new base\n\n\n", httpOutput.Status)
 
+					for _, param := range secondAction.Parameters {
+						if ArrayContains(param.Tags, "generated") {
+							log.Printf("[DEBUG] Found generated tag for param %s", param.Name)
+						}
+					}
+				}
+			} else {
+				// Parses out data from the output
 				// Reruns the app with the new parameters
 				if strings.Contains(strings.ToLower(fmt.Sprintf("%s", err)), "status: ") {
 					log.Printf("\n\n\n[DEBUG] Found status code in error: %s\n\n\n", err)
@@ -21360,7 +21453,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 						continue
 					} else {
-						log.Printf("[ERROR] Problem in autocorrect: '%s'\nParams: %d", err, len(outputAction.Parameters))
+						log.Printf("[ERROR] Problem in autocorrect (%d): '%s'\nParams: %d", i, err, len(outputAction.Parameters))
 					}
 				}
 
