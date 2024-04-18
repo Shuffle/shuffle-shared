@@ -137,15 +137,15 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	// Look for PIPELINE_ command that exists in the queue already
 	parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
-	existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
-	for _, queue := range existingQueue.Data {
-		if strings.HasPrefix(queue.Type, "PIPELINE") {
-			log.Printf("[WARNING] Pipeline type already exists: %s", formattedType)
-			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`)))
-			return
-		}
-	}
+	// existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
+	// for _, queue := range existingQueue.Data {
+	// 	if strings.HasPrefix(queue.Type, "PIPELINE") {
+	// 		log.Printf("[WARNING] Pipeline type already exists: %s", formattedType)
+	// 		resp.WriteHeader(400)
+	// 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`)))
+	// 		return
+	// 	}
+	// }
 
 	log.Printf("[INFO] Pipeline type: %s", formattedType)
 
