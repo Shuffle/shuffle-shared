@@ -87,7 +87,6 @@ type ExecutionRequest struct {
 	ExecutionArgument string   `json:"execution_argument"`
 	ExecutionSource   string   `json:"execution_source"`
 	WorkflowId        string   `json:"workflow_id"`
-	TempPipelineId    string    `json:"temp_pipeline_id"`
 	Environments      []string `json:"environments"`
 	Authorization     string   `json:"authorization"`
 	Status            string   `json:"status"`

@@ -153,9 +153,8 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	execRequest := ExecutionRequest{
 		Type: formattedType,
 		ExecutionId: uuid.NewV4().String(),
-		ExecutionSource: pipeline.Name,
+		ExecutionSource: pipeline.TriggerId,
 		ExecutionArgument: pipeline.Command,
-		TempPipelineId: pipeline.TriggerId,
 		Priority: 11,
 	}
 
