@@ -3419,7 +3419,9 @@ type SchemalessOutput struct {
 	Status  int         `json:"status,omitempty"`
 	URL	    string      `json:"url,omitempty"`
 
-	Output  string 		`json:"output"`
+	// JSON output. What if it's a list?
+	//Output map[string]interface{} `json:"output"`
+	Output interface{} `json:"output"`
 
 	// Optional
 	RawOutput string `json:"raw_output,omitempty"`

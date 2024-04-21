@@ -8047,6 +8047,18 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 	nameKey := "Files"
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			curFile := &File{}
+			err = json.Unmarshal(cacheData, &curFile)
+			if err == nil {
+				return curFile, nil
+			}
+		}
+	}
+
 	curFile := &File{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
@@ -8078,7 +8090,19 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 		if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
 			return &File{}, err
 		}
+	}
 
+	if project.CacheDb {
+		fileData, err := json.Marshal(curFile)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getfile: %s", err)
+			return curFile, nil 
+		}
+
+		err = SetCache(ctx, cacheKey, fileData, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for file key '%s': %s", cacheKey, err)
+		}
 	}
 
 	return curFile, nil
@@ -8132,6 +8156,12 @@ func SetFile(ctx context.Context, file File) error {
 		file.CreatedAt = timeNow
 	}
 
+	if !strings.HasPrefix(file.Id, "file_") {
+		return errors.New("Invalid file ID. Must start with file_")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, file.Id)
+
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(file)
 		if err != nil {
@@ -8150,6 +8180,23 @@ func SetFile(ctx context.Context, file File) error {
 			return err
 		}
 	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(file)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setfile: %s", err)
+
+		} else {
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting cache for set file '%s': %s", cacheKey, err)
+			}
+		}
+	}
+
+	DeleteCache(ctx, fmt.Sprintf("files_%s_%s", file.OrgId, file.Namespace))
+	DeleteCache(ctx, fmt.Sprintf("files_%s_", file.OrgId))
+
 
 	return nil
 }

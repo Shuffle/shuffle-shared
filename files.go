@@ -903,11 +903,25 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Fixme: More auth: org and workflow!
+	// Automatically downloads and returns the file through resp
+	// GetFileContent() is used to return data, through resp if possible due to how we used to do it. 
+
+	if len(file.OrgId) == 0 {
+		file.OrgId = user.ActiveOrg.Id
+	}
+
+	_, err = GetFileContent(ctx, file, resp)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting file content for %s: %s", fileId, err)
+	}
+
+	//resp.WriteHeader(200)
+	//resp.Write(content)
+}
+
+func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) ([]byte, error) {
 	downloadPath := file.DownloadPath
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		//log.Printf("[AUDIT] %s (%s) downloaded file '%s' (%s) from google storage. Namespace: %s", user.Username, user.Id, file.Filename, file.Id, file.Namespace)
-
 		bucket := project.StorageClient.Bucket(orgFileBucket)
 		obj := bucket.Object(file.DownloadPath)
 		fileReader, err := obj.NewReader(ctx)
@@ -918,15 +932,21 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			err = SetFile(ctx, *file)
 			if err != nil {
 				log.Printf("[ERROR] SetFile error while uploading")
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
-				return
+
+				if resp != nil {
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+				}
+				return []byte{}, err
 			}
 
 			//File not found, send 404
-			resp.WriteHeader(404)
-			resp.Write([]byte(`{"success": false, "reason": "File doesn't exist in google cloud storage"}`))
-			return
+			if resp != nil {
+				resp.WriteHeader(404)
+				resp.Write([]byte(`{"success": false, "reason": "File doesn't exist in google cloud storage"}`))
+			}
+
+			return []byte{}, err
 		}
 
 		defer fileReader.Close()
@@ -949,12 +969,12 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			passphrase := fmt.Sprintf("%s_%s", file.OrgId, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				// Reference File Id only used as fallback
 				if len(file.ReferenceFileId) > 0 {
-					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+					passphrase = fmt.Sprintf("%s_%s", file.OrgId, file.ReferenceFileId)
 					data, err = HandleKeyDecryption(allText, passphrase)
 					if err != nil {
 						log.Printf("[ERROR] Failed decrypting file (4): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
@@ -974,22 +994,27 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
 			//Send the headers
 			//log.Printf("Content Type: %#v", FileContentType)
-			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
-			resp.Header().Set("Content-Type", FileContentType)
-			resp.Header().Set("Content-Length", FileSize)
 
-			reader := bytes.NewReader(allText)
-			io.Copy(resp, reader)
-			return
+			if resp != nil {
+				resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+				resp.Header().Set("Content-Type", FileContentType)
+				resp.Header().Set("Content-Length", FileSize)
+				reader := bytes.NewReader(allText)
+				io.Copy(resp, reader)
+			}
+
+			return allText, nil
 
 		}
 
-		FileHeader := make([]byte, 512)
-		FileContentType := http.DetectContentType(FileHeader)
-		resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
-		resp.Header().Set("Content-Type", FileContentType)
+		if resp != nil {
+			FileHeader := make([]byte, 512)
+			FileContentType := http.DetectContentType(FileHeader)
 
-		io.Copy(resp, fileReader)
+			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+			resp.Header().Set("Content-Type", FileContentType)
+			io.Copy(resp, fileReader)
+		}
 
 	} else if file.StorageArea == "s3" {
 		log.Printf("[INFO] Trying to download file %s from s3", file.Id)
@@ -1002,18 +1027,24 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			err = SetFile(ctx, *file)
 			if err != nil {
 				log.Printf("Failed setting file to uploading")
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
-				return
+				if resp != nil {
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+				}
+
+				return []byte{}, err
 			}
 
 			//File not found, send 404
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "File doesn't exist locally"}`))
-			return
+			if resp != nil {
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "File doesn't exist locally"}`))
+			}
+
+			return []byte{}, err
 		}
 
-		log.Printf("[DEBUG] Should handle file decryption of %s.", fileId)
+		log.Printf("[DEBUG] Should handle file decryption of %s.", file.Id)
 		allText := []byte{}
 
 		buf := make([]byte, 1024)
@@ -1037,11 +1068,11 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		Openfile.Close()
 
 		if file.Encrypted {
-			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			passphrase := fmt.Sprintf("%s_%s", file.OrgId, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				if len(file.ReferenceFileId) > 0 {
-					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+					passphrase = fmt.Sprintf("%s_%s", file.OrgId, file.ReferenceFileId)
 					data, err = HandleKeyDecryption(allText, passphrase)
 					if err != nil {
 						log.Printf("[ERROR] Failed decrypting file (5): %s", err)
@@ -1065,23 +1096,25 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
 
 		//Send the headers
-		resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
-		resp.Header().Set("Content-Type", FileContentType)
-		resp.Header().Set("Content-Length", FileSize)
+		if resp != nil {
+			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+			resp.Header().Set("Content-Type", FileContentType)
+			resp.Header().Set("Content-Length", FileSize)
 
-		//resp.Write([]byte(allText))
-
-		//log.Printf("Md5: %#v", md5)
-		reader := bytes.NewReader(allText)
-		_, err = io.Copy(resp, reader)
-		if err != nil {
-			log.Printf("[ERROR] Failed copying info to request in download of %s: %s", file.Filename, err)
-		} else {
-			log.Printf("[INFO] Downloading %d bytes from file %s", len(allText), file.Filename)
+			//log.Printf("Md5: %#v", md5)
+			reader := bytes.NewReader(allText)
+			_, err = io.Copy(resp, reader)
+			if err != nil {
+				log.Printf("[ERROR] Failed copying info to request in download of %s: %s", file.Filename, err)
+			} else {
+				log.Printf("[INFO] Downloading %d bytes from file %s", len(allText), file.Filename)
+			}
 		}
 
-		return
+		return allText, nil
 	}
+
+	return nil, nil
 }
 
 func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
@@ -1206,7 +1239,8 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
+	//if len(fileId) != 36 && 
+	if !strings.HasPrefix(fileId, "file_") || len(fileId) > 64 { 
 		log.Printf("[WARNING] Bad format for fileId %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))

@@ -3311,6 +3311,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
@@ -3355,6 +3356,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
 
 	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
 
@@ -3458,24 +3460,28 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	checkExecOrg := false
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions v2): %s", fileId, err)
+		checkExecOrg = true
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false}`))
+		//return
 	}
 
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
 		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
+			log.Printf("[AUDIT] User %s (%s) is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, user.Id, workflow.Name, workflow.ID, user.Role)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
+			checkExecOrg = false
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow execs)", user.Username, workflow.ID)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			checkExecOrg = true
+			//resp.WriteHeader(401)
+			//resp.Write([]byte(`{"success": false}`))
+			//return
 		}
 	}
 
@@ -3513,6 +3519,22 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	if checkExecOrg {
+		if len(workflowExecutions) != 1 {
+			log.Printf("[WARNING] Wrong user (%s) for workflow %s (get workflow execs) - not 1", user.Username, workflow.ID)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if workflowExecutions[0].OrgId != user.ActiveOrg.Id {
+			log.Printf("[WARNING] Wrong user (%s) for workflow %s (get workflow execs) - execution orgid", user.Username, workflow.ID)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	if len(workflowExecutions) != maxAmount {
@@ -21038,10 +21060,17 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// FIXME: Check if the organisation has a specific set of parameters for this action, mapped to the following fields:
+	selectedAction.AppID = selectedApp.ID
+	selectedAction.AppName = selectedApp.Name
+	selectedAction = GetOrgspecificParameters(ctx, *org, selectedAction)
+
+
 	//log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
 	handledRequiredFields := []string{}
 	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
+
 		// Optional > Required
 		fieldChanged := false
 		for _, field := range value.OptionalFields {
@@ -21070,13 +21099,17 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			// This SHOULD be just a dumb injection of existing value.Fields & value.OptionalFields for now with synonyms, but later on it should be a more advanced (use schemaless & cross org referencing) 
 			// FIXME: Should PRELOAD all of this?
 
-			param.Value = ""
-			log.Printf("[DEBUG] Found body param. Validating.")
-			if !fieldChanged {
-				log.Printf("\n\nBody not filled yet. Should fill it in (somehow) based on the existing input fields.\n\n")
-			}
+			if len(param.Example) > 0 {
+				param.Value = param.Example
+			} else {
+				//param.Value = ""
+				log.Printf("[DEBUG] Found body param. Validating: %#v", param)
+				if !fieldChanged {
+					log.Printf("\n\nBody not filled yet. Should fill it in (somehow) based on the existing input fields.\n\n")
+				}
 
-			param.Required = true
+				param.Required = true
+			}
 		}
 
 		if param.Required && len(param.Value) == 0 && !param.Configuration {
@@ -21255,7 +21288,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Unmarshal responseBody back to secondAction
+		// Unmarshal responseBody back to 
 		newSecondAction := Action{}
 		err = json.Unmarshal(responseBody, &newSecondAction)
 		if err != nil {
@@ -21285,6 +21318,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 				if len(param.Value) > 0 && param.Value != originalParam.Value {
 					secondAction.Parameters[paramIndex].Value = param.Value
+					secondAction.Parameters[paramIndex].Tags = param.Tags
 				}
 
 				//log.Printf("[INFO] Required - Key: %s, Value: %#v", param.Name, param.Value)
@@ -21357,7 +21391,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		originalAppname := selectedApp.Name
 
 		// Runs attempts up to X times
-		for i := 0; i < 3; i++ {
+		for i := 0; i < 5; i++ {
 			req, err := http.NewRequest(
 				"POST",
 				apprunUrl,
@@ -21403,12 +21437,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-
 			httpOutput, marshalledBody, err := FindHttpBody(apprunBody)
 			parsedTranslation := SchemalessOutput{
 				Success: false,
 				Action:  value.Label,
-				Output:  string(apprunBody),
+				RawOutput:  string(apprunBody),
 
 				Status: httpOutput.Status,
 				URL:	httpOutput.Url,
@@ -21419,8 +21452,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("\n\n\n[DEBUG] Found VALID status: %d. Should save the current fields as new base\n\n\n", httpOutput.Status)
 
 					for _, param := range secondAction.Parameters {
-						if ArrayContains(param.Tags, "generated") {
-							log.Printf("[DEBUG] Found generated tag for param %s", param.Name)
+						// FIXME: Skipping anything but body for now
+						if param.Name != "body" {
+							continue
+						}
+
+						err = uploadParameterBase(ctx, user.ActiveOrg.Id, selectedApp.ID, secondAction.Name, param.Name, param.Value)
+						if err != nil {
+							log.Printf("[WARNING] Failed uploading parameter base for %s: %s", param.Name, err)
 						}
 					}
 				}
@@ -21450,10 +21489,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						}
 
 						log.Printf("\n\nRUNNING WITH NEW PARAMS. Index: %d\n\n", i)
-
 						continue
+
 					} else {
-						log.Printf("[ERROR] Problem in autocorrect (%d): '%s'\nParams: %d", i, err, len(outputAction.Parameters))
+						log.Printf("[ERROR] Problem in autocorrect (%d):\n%#v\nParams: %d", i, err, len(outputAction.Parameters))
 					}
 				}
 
@@ -21485,17 +21524,50 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 			//log.Printf("\n\n[DEBUG] BASEURL FOR SCHEMALESS: %s\nAUTHCONFIG: %s\n\n", streamUrl, authConfig)
 
+			outputmap := make(map[string]interface{})
 			schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody, authConfig)
-
 			if err != nil {
 				log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
-				//resp.WriteHeader(202)
-				//resp.Write(apprunBody)
-				//return
+
+				/*
+				err = json.Unmarshal(marshalledBody, &outputmap)
+				if err != nil {
+					log.Printf("[WARNING] Failed unmarshalling in schemaless (1) output for label %s: %s", value.Label, err)
+
+				} else {
+					parsedTranslation.Output = outputmap
+				}
+				*/
 			} else {
 				parsedTranslation.Success = true
-				parsedTranslation.Output = string(schemalessOutput)
+				parsedTranslation.RawOutput = string(schemalessOutput)
+
+				err = json.Unmarshal(schemalessOutput, &outputmap)
+				if err != nil {
+
+					// If it's an array and not a map, we should try to unmarshal it as an array
+					if strings.HasPrefix(string(schemalessOutput), "[") {
+						outputArray := []interface{}{}
+						err = json.Unmarshal(schemalessOutput, &outputArray)
+						if err != nil {
+							log.Printf("[WARNING] Failed unmarshalling schemaless (3) output for label %s: %s", value.Label, err)
+						}
+
+						parsedTranslation.Output = outputArray
+						parsedTranslation.RawOutput = ""
+					} else {
+						log.Printf("[WARNING] Failed unmarshalling schemaless (2) output for label %s: %s", value.Label, err)
+					}
+				} else {
+					parsedTranslation.Output = outputmap
+					parsedTranslation.RawOutput = ""
+				}
 			}
+
+			// Check if length of output exists. If it does, remove raw output
+			//if len(parsedTranslation.Output) > 0 {
+			//	parsedTranslation.RawOutput = ""
+			//}
 
 			marshalledOutput, err := json.Marshal(parsedTranslation)
 			if err != nil {

@@ -1,11 +1,12 @@
 package shuffle
 
 import (
+	"os"
 	"fmt"
 	"log"
 	"time"
-	"os"
 	"bytes"
+	"reflect"
 	"errors"
 	"context"
 	"strings"
@@ -736,8 +737,16 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 			if !runString {
 				// Make map from val and marshal to byte
 
-				if valMap, ok := val.(map[string]interface{}); !ok {
-				//valMap := val.(map[string]interface{})
+				stringType := reflect.TypeOf(val).String()
+				log.Printf("STRINGTYPE: %#v", stringType)
+				if stringType == "map[string]interface {}" {
+					valByte, err := json.Marshal(val)
+					if err != nil {
+						log.Printf("[ERROR] Failed to marshal val in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
+					} else {
+						formattedVal = string(valByte)
+					}
+				} else if valMap, ok := val.(map[string]interface{}); !ok {
 					valByte, err := json.Marshal(valMap)
 					if err != nil {
 						log.Printf("[ERROR] Failed to marshal valMap in action fix for app %s with action %s: %s. Field: %s", appname, action.Name, err, param.Name)
@@ -746,7 +755,8 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 					formattedVal = string(valByte)
 				} else {
-					log.Printf("[ERROR] Failed to convert val to map in action fix for app %s with action %s. Field: %s", appname, action.Name, param.Name)
+					// Check if val is a map[string]interface{}, and not interface{} 
+					log.Printf("[ERROR] Failed to convert val of %#v to map[string]interface{} in action fix for app %s with action %s. Field: %s. Type: %#v. Value: %#v", param.Name, appname, action.Name, param.Name, reflect.TypeOf(val), val)
 				}
 			}
 
@@ -904,7 +914,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 
 	newName := strings.Replace(strings.Title(GetCorrectActionName(action.Name)), " ", "_", -1)
 
-	systemMessage := fmt.Sprintf("Output a valid HTTP body to %s in %s. Output ONLY JSON without explainers.", newName, action.AppName)
+	systemMessage := fmt.Sprintf("Output a valid HTTP body to %s in %s. Only add required fields. Output ONLY JSON without explainers.", newName, action.AppName)
 	userMessage := ""
 
 	log.Printf("\n\nBODY CREATE SYSTEM MESSAGE: %s\n\n", systemMessage)
@@ -921,8 +931,6 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 		if start != -1 {
 			end = strings.Index(contentOutput[start+8:], "```")
 		}
-
-		log.Printf("[INFO] Start: %d, end: %d", start, end)
 
 		if start != -1 && end != -1 {
 			contentOutput = contentOutput[start+7 : end+7]
@@ -959,13 +967,13 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 			return contentOutput, nil
 		}
 
-		for _, foundAction := range app.Actions {
+		for actionIndex, foundAction := range app.Actions {
 			if foundAction.Name != action.Name {
 				continue
 			}
 
 			log.Printf("[INFO] Found action %s in app %s", foundAction.Name, app.Name)
-			for _, param := range foundAction.Parameters {
+			for paramIndex, param := range foundAction.Parameters {
 				if param.Name != currentParam {
 					continue
 				}
@@ -979,7 +987,8 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 				param.Example = contentOutput
 				param.Tags = []string{"Generated"}
 
-				//go SetWorkflowAppDatastore(ctx, *app, app.ID)
+				app.Actions[actionIndex].Parameters[paramIndex] = param
+				go SetWorkflowAppDatastore(ctx, *app, app.ID)
 
 				openapiWrapper, err := GetOpenApiDatastore(ctx, app.ID)
 				if err != nil {
@@ -999,8 +1008,9 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 
 				// Find the path
 				actionName := GetCorrectActionName(foundAction.Name)
+
 				updated := false
-				for _, pathItem := range openapi.Paths {
+				for pathIndex, pathItem := range openapi.Paths {
 					// Loop all path operations WITHOUT []string{method} and GetOperaiton().
 					for _, method := range []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD", "TRACE", "CONNECT"} {
 						operation := pathItem.GetOperation(method)
@@ -1015,16 +1025,68 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 						}
 
 						// RequestBody.Body.Example
-						log.Printf("[INFO] Found method %s for action %s", method, action.Name)
+						log.Printf("\n\n[INFO] Found method %s for action %s\n\n", method, action.Name)
 
 						// Should set updated IF we find the correct operation
-						updated = true 
-						if operation.RequestBody != nil {
-							// Check if requestBody.content.example.example exists. Do NOT check application/json
-							if len(operation.RequestBody.Value.Content) > 0 {
+						// If DOESNT exist at all, write it from scratch
+						// If content exists but example doesn't, overwrite it
+
+						// propertypath: 
+						// paths["/rest/api/3/issue"].post.requestBody.content.example.example
+						if operation.RequestBody == nil {
+							log.Printf("IN NEW BODY")
+							operation.RequestBody = &openapi3.RequestBodyRef{
+								Value: &openapi3.RequestBody{
+									Description: "",
+									Required:    true,
+									Content:     map[string]*openapi3.MediaType{
+										"example": {
+											Example: contentOutput,
+										},
+									},
+								},
+							}
+
+							updated = true
+						} else {
+							log.Printf("FOUND EXISTING BODY")
+
+							foundContent := false
+							for contentIndex, content := range operation.RequestBody.Value.Content {
+								// Check if it's in the "example" content type
+								if contentIndex == "example" {
+									foundContent = true
+								}
+
+								log.Printf("[INFO] Found content %s in operation %s. Value: %#v", contentIndex, operation.Summary, content)
+								if content.Example == nil {
+									operation.RequestBody.Value.Content[contentIndex].Example = contentOutput
+									updated = true
+								} else {
+									// Check if string length of example is 0
+									if contentExample, ok := content.Example.(string); ok {
+										log.Printf("[INFO] Found content %s in operation %s. Value: %s", contentIndex, operation.Summary, contentExample)
+										if len(contentExample) < 5 {
+											updated = true
+											operation.RequestBody.Value.Content[contentIndex].Example = contentOutput
+										}
+									}
+								}
+							}
+
+							if !foundContent {
+								// Append
+								updated = true
+								operation.RequestBody.Value.Content["example"] = &openapi3.MediaType{
+									Example: contentOutput,
+								}
 							}
 						}
 
+						if updated {
+							// Update the path in openapi.paths
+							openapi.Paths[pathIndex].SetOperation(method, operation)
+						}
 					}
 
 					if updated {
@@ -1034,6 +1096,20 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 
 				if updated {
 					log.Printf("[INFO] Updated openapi with new body for action %s in app %s", action.Name, app.Name)
+
+					// FIXME: Actually update it back in the database
+					newBody, err := json.Marshal(openapi)
+					if err != nil {
+						log.Printf("[ERROR] Failed to marshal openapi in get action body for find http endpoint (12): %s", err)
+					} else {
+						openapiWrapper.Body = string(newBody)
+
+						err = SetOpenApiDatastore(ctx, openapiWrapper.ID, openapiWrapper) 
+						if err != nil {
+							log.Printf("[ERROR] Failed to set openapi datastore in get action body for find http endpoint (12): %s", err)
+						}
+					}
+
 					break
 				}
 			}
@@ -1041,4 +1117,99 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 	}
 
 	return contentOutput, nil
+}
+
+func GetOrgspecificParameters(ctx context.Context, org Org, action WorkflowAppAction) WorkflowAppAction {
+	log.Printf("\n\n\n\n")
+	for paramIndex, param := range action.Parameters {
+		if param.Configuration {
+			continue
+		}
+
+		if len(param.Options) > 0 {
+			continue
+		}
+
+		fileId := fmt.Sprintf("file_%s-%s-%s-%s.json", org.Id, strings.ToLower(action.AppID), strings.Replace(strings.ToLower(action.Name), " ", "_", -1), strings.ToLower(param.Name))
+
+		file, err := GetFile(ctx, fileId)
+		if err != nil || file.Status != "active" {
+			log.Printf("[WARNING] File %s NOT found or not active. Status: %#v", fileId, file.Status)
+			continue
+		}
+
+		if file.OrgId != org.Id {
+			file.OrgId = org.Id
+		}
+
+		// make a fake resp to get the content
+		//func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) ([]byte, error) {
+		content, err := GetFileContent(ctx, file, nil)
+		if err != nil {
+			continue
+		}
+
+		if len(content) < 5 {
+			continue
+		}
+
+		log.Printf("\n\n\n[INFO] Found content for file %s for action %s in app %s. Should set param.\n\n\n", fileId, action.Name, action.AppName)
+		action.Parameters[paramIndex].Example = string(content)
+	}
+
+	return action
+}
+
+// Uploads modifyable parameter data to file storage, as to be used in the future executions of the app
+func uploadParameterBase(ctx context.Context, orgId, appId, actionName, paramName, paramValue string) error {
+	timeNow := time.Now().Unix()
+
+	// Check if the file already exists
+	//fileId := fmt.Sprintf("file_%s-%s-%s.json", strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
+	fileId := fmt.Sprintf("file_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
+	file, err := GetFile(ctx, fileId)
+	if err == nil && file.Status == "active" {
+		log.Printf("[INFO] File %s already exists. Not re-uploading", fileId)
+		return nil
+	}
+
+	filename := fileId
+	folderPath := fmt.Sprintf("%s/%s/%s", basepath, orgId, "global")
+	downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+
+	newFile := File{
+		Id:           fileId,
+		CreatedAt:    timeNow,
+		UpdatedAt:    timeNow,
+		Description:  "",
+		Status:       "created",
+		Filename:     filename,
+		OrgId:        orgId,
+		WorkflowId:   "global",
+		DownloadPath: downloadPath,
+		Subflows:     []string{},
+		StorageArea:  "local",
+		Namespace:    "app_defaults",
+		Tags:         []string{"parameter base"},
+	}
+
+	err = SetFile(ctx, newFile)
+	if err != nil {
+		log.Printf("[ERROR] Failed to set file in uploadParameterBase: %s", err)
+		return err
+	}
+
+	log.Printf("SHOULD UPLOAD FILE TO ID %s", fileId)
+
+	// Upload to /api/v1/files/{fileId}/upload with the data from paramValue
+	parsedKey := fmt.Sprintf("%s_%s", orgId, newFile.Id)
+	fileId, err = uploadFile(ctx, &newFile, parsedKey, []byte(paramValue))
+	if err != nil {
+		log.Printf("[ERROR] Failed to upload file in uploadParameterBase: %s", err)
+		return err
+	}
+
+	log.Printf("UPLOADED FILE TO ID %s", fileId)
+
+	return nil
 }
