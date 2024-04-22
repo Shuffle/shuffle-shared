@@ -101,7 +101,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	availableCommands := []string{
-		"create", "delete",
+		"create", "delete","update",
 	}
 
 	matchingCommand := ""
@@ -122,30 +122,20 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	// 1. Add to trigger list
 	/* TBD */ 
 
-	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
-
-	pipelineData := Pipeline{}
-	pipelineData.Name = pipeline.Name
-	pipelineData.Type = startCommand
-	pipelineData.Command = pipeline.Command
-	pipelineData.Environment = pipeline.Environment
-	pipelineData.WorkflowId = pipeline.WorkflowId
-	pipelineData.OrgId =  user.ActiveOrg.Id
-	pipelineData.Status = "uninitialized"
-	pipelineData.TriggerId = pipeline.TriggerId
 
 	// Look for PIPELINE_ command that exists in the queue already
+	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
 	parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
-	// existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
-	// for _, queue := range existingQueue.Data {
-	// 	if strings.HasPrefix(queue.Type, "PIPELINE") {
-	// 		log.Printf("[WARNING] Pipeline type already exists: %s", formattedType)
-	// 		resp.WriteHeader(400)
-	// 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`)))
-	// 		return
-	// 	}
-	// }
+	existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
+	for _, queue := range existingQueue.Data {
+		if strings.HasPrefix(queue.Type, "PIPELINE") {
+			log.Printf("[WARNING] Pipeline type already exists: %s", formattedType)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`)))
+			return
+		}
+	}
 
 	log.Printf("[INFO] Pipeline type: %s", formattedType)
 
@@ -158,23 +148,34 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		Priority: 11,
 	}
 
+	if startCommand == "CREATE" {
+
+		pipelineData := Pipeline{}
+		pipelineData.Name = pipeline.Name
+		pipelineData.Type = startCommand
+		pipelineData.Command = pipeline.Command
+		pipelineData.Environment = pipeline.Environment
+		pipelineData.WorkflowId = pipeline.WorkflowId
+		pipelineData.OrgId =  user.ActiveOrg.Id
+		pipelineData.Status = "uninitialized"
+		pipelineData.TriggerId = pipeline.TriggerId
+
+		err := savePipelineData(ctx, pipelineData)
+		if err!=nil {
+			log.Printf("[ERROR] Failed to save the pipeline with trigger id: %s into the db: %s",pipeline.TriggerId, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		log.Printf("[INFO] Successfully saved the pipeline info")
+	}
+
 	err = SetWorkflowQueue(ctx, execRequest, parsedId)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
-	}
-
-	if startCommand == "CREATE" {
-		// err := savePipelinedata(pipelineData)
-		// if err!=nil {
-		// 	log.Printf("[ERROR] Failed to save the pipeline with trigger id: %s into the db: %s",pipeline.Trigger.ID, err)
-		// 	resp.WriteHeader(500)
-		// 	resp.Write([]byte(`{"success": false}`))
-		// 	return
-		// }
-		log.Printf("will save it to the db")
 	}
 
 	resp.WriteHeader(200)

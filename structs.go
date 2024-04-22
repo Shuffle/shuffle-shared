@@ -39,6 +39,30 @@ type Pipeline struct {
 	TriggerId	string `json:"trigger_id"`
 }
 
+type PipelineWrapper struct {
+	Index  string   `json:"_index"`
+	Type   string   `json:"_type"`
+	ID     string   `json:"_id"`
+	Version int     `json:"_version"`
+	Found   bool    `json:"found"`
+	Source  Pipeline `json:"_source"`
+}
+
+type AllPipelinesWrapper struct {
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source Pipeline `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type QueryInput struct {
 	// Required
 	Query string `json:"query"`
