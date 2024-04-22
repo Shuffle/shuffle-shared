@@ -19,24 +19,25 @@ type PipelineRequest struct {
 	Type 		string `json:"type"`
 	Command		string `json:"command"`
 	Environment string `json:"environment"`
-	WorkflowId  string `json: workflow_id`
+	WorkflowId  string `json:"workflow_id"`
 
 	PipelineId 	string `json:"pipeline_id"`
 	TriggerId	string `json:"trigger_id"`
 }
 
 type Pipeline struct {
-	Name	   	string `json:"name"`
-	Type 		string `json:"type"`
-	Command		string `json:"command"`
-	Environment string `json:"environment"`
-	WorkflowId  string `json: workflow_id`
-	StartNode   string `json: "start_node"`
-	OrgId       string `json: "org_id"`
-	Status      string `json: "status"`
+	Name	   	string 		`json:"name"`
+	Type 		string 		`json:"type"`
+	Command		string 		`json:"command"`
+	Environment string 		`json:"environment"`
+	WorkflowId  string 		`json:"workflow_id"`
+	StartNode   string 		`json:"start_node"`
+	OrgId       string 		`json:"org_id"`
+	Status      string 		`json:"status"`
+	Errors      []string 	`json:"errors"`
 	
-	PipelineId 	string `json:"pipeline_id"`
-	TriggerId	string `json:"trigger_id"`
+	PipelineId 	string 		`json:"pipeline_id"`
+	TriggerId	string 		`json:"trigger_id"`
 }
 
 type PipelineWrapper struct {

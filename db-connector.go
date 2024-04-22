@@ -7702,7 +7702,7 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return []Hook{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return []Hook{}, fmt.Errorf("Bad statuscode: %d", res.StatusCode)
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
@@ -7826,10 +7826,13 @@ func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error){
 		}
 		pipeline = &wrapper.Source
 	} else {
-		// do we need for datastore as well ?
+		// key := datastore.NameKey(nameKey, triggerId, nil)
+		// err := project.Dbclient.Get(ctx, key, pipeline)
+		// if err != nil {
+		// 	return &Pipeline{}, err
+		// }
 	}
 	return pipeline, nil
-
 }
 
 func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
@@ -7889,7 +7892,8 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return []Pipeline{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return []Pipeline{}, fmt.Errorf("bad statuscode: %d", res.StatusCode)
+			
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
@@ -7910,12 +7914,12 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 		return pipelines, err
 		
 	} else {
-		q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
+		// q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
 
-		_, err := project.Dbclient.GetAll(ctx, q, &pipelines)
-		if err != nil && len(pipelines) == 0 {
-			return pipelines, err
-		}
+		// _, err := project.Dbclient.GetAll(ctx, q, &pipelines)
+		// if err != nil && len(pipelines) == 0 {
+		// 	return pipelines, err
+		// }
 	}
 
 	return pipelines, nil
