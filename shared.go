@@ -11319,7 +11319,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 func FixActionResultOutput(actionResult ActionResult) ActionResult {
 	if strings.Contains(actionResult.Result, "TypeError") && strings.Contains(actionResult.Result, "missing 1 required positional argument: 'access_token'") {
 		//log.Printf("\n\nTypeError  in actionresult!")
-		actionResult.Result = `{"success": false, "reason": "This App requires authentication with Oauth2. Make sure to authenticate it first."}`
+		actionResult.Result = `{"success": false, "reason": "This App requires authentication with Oauth2. Make sure to authenticate it first.", "extra": "If the app is authenticated, are you sure the Token & Refresh URL in the App is correct? Authentication refresh may have failed."}`
 	}
 
 	// Check length of result timestamp

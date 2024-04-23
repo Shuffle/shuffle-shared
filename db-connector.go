@@ -37,10 +37,7 @@ import (
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
 	"google.golang.org/appengine/memcache"
 
-	//"github.com/frikky/go-opensearch/v8/esapi"
-	//opensearch "github.com/frikky/go-opensearch/v8"
-
-	//"github.com/opensearch-project/go-opensearch/v8/osapi"
+	//opensearch "github.com/shuffle/opensearch-go"
 	opensearch "github.com/opensearch-project/opensearch-go"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )
@@ -10346,11 +10343,23 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(environment) != "worker" && (strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch") {
+
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
 		if err != nil {
-			log.Printf("[WARNING] Failed setting up Opensearch: %s. Typically means the backend can't connect, or that there's a HTTPS vs HTTP problem", err)
+			if strings.Contains(fmt.Sprintf("%s", err), "the client noticed that the server is not a supported distribution") {
+				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0.")
+			}
+		}
+
+		if err != nil {
+			if fmt.Sprintf("%s", err) == "EOF" {
+				log.Printf("[ERROR] Database should be available soon. Retrying in 5 seconds: %s", err)
+			} else {
+				log.Printf("[WARNING] Failed setting up Opensearch: %s. Typically means the backend can't connect, or that there's a HTTPS vs HTTP problem. Is the SHUFFLE_OPENSEARCH_URL correct?", err)
+			}
+
 			if strings.Contains(fmt.Sprintf("%s", err), "x509: certificate signed by unknown authority") || strings.Contains(fmt.Sprintf("%s", err), "EOF") {
 				if retryCount == 0 {
 					esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
@@ -10432,6 +10441,8 @@ func GetEsConfig() *opensearch.Client {
 		Password:      password,
 		MaxRetries:    5,
 		RetryOnStatus: []int{500, 502, 503, 504, 429, 403},
+
+		// User Agent to work with Elasticsearch 8
 	}
 	//APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
 	//CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),

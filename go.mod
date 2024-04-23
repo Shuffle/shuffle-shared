@@ -5,6 +5,7 @@ module github.com/shuffle/shuffle-shared
 go 1.11
 
 //replace github.com/frikky/kin-openapi => ../kin-openapi
+replace github.com/shuffle/opensearch-go => ../opensearch-go
 
 require (
 	cloud.google.com/go/datastore v1.4.0
