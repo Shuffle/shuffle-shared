@@ -7672,6 +7672,185 @@ func GetSchedule(ctx context.Context, schedulename string) (*ScheduleOld, error)
 	return curUser, nil
 }
 
+func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
+	hooks := []Hook{}
+	nameKey := "hooks"
+	OrgId = strings.ToLower(OrgId)
+
+	//FIXME: Implement caching
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": OrgId,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return []Hook{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get hooks): %s", err)
+			return []Hook{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return []Hook{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return []Hook{}, nil
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []Hook{}, fmt.Errorf("Bad statuscode: %d", res.StatusCode)
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []Hook{}, err
+		}
+		wrapper := AllHooksWrapper{}
+		err = json.Unmarshal(respBody, &wrapper)
+	
+		if err != nil {
+			return []Hook{}, err
+		}
+
+		for _, hit := range wrapper.Hits.Hits {
+			hook := hit.Source 
+			hooks = append(hooks, hook) 
+		}
+		return hooks, err
+		
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
+
+		_, err := project.Dbclient.GetAll(ctx, q, &hooks)
+		if err != nil && len(hooks) == 0 {
+			return hooks, err
+		}
+	}
+
+	return hooks, nil
+}
+
+func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
+	pipelines := []Pipeline{}
+	nameKey := "pipelines"
+	OrgId = strings.ToLower(OrgId)
+
+	//FIXME: Implement caching
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": OrgId,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return []Pipeline{}, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get pipelines): %s", err)
+			return []Pipeline{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return []Pipeline{}, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return []Pipeline{}, nil
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return []Pipeline{}, fmt.Errorf("bad statuscode: %d", res.StatusCode)
+			
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return []Pipeline{}, err
+		}
+		wrapper := AllPipelinesWrapper{}
+		err = json.Unmarshal(respBody, &wrapper)
+	
+		if err != nil {
+			return []Pipeline{}, err
+		}
+
+		for _, hit := range wrapper.Hits.Hits {
+			pipeline := hit.Source 
+			pipelines = append(pipelines, pipeline) 
+		}
+		return pipelines, err
+		
+	} else {
+		// q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
+
+		// _, err := project.Dbclient.GetAll(ctx, q, &pipelines)
+		// if err != nil && len(pipelines) == 0 {
+		// 	return pipelines, err
+		// }
+	}
+
+	return pipelines, nil
+}
+
 func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	cacheKey := fmt.Sprintf("session_%s", sessionId)
 	user := &User{}
