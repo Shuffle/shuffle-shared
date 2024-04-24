@@ -125,7 +125,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 
 	// Look for PIPELINE_ command that exists in the queue already
 	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
-	parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
+	parsedId := strings.ToLower(user.ActiveOrg.Id)
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
 	existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
 	for _, queue := range existingQueue.Data {
@@ -160,7 +160,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		pipelineData.Status = "uninitialized"
 		pipelineData.TriggerId = pipeline.TriggerId
 
-		err := savePipelineData(ctx, pipelineData)
+		err = savePipelineData(ctx, pipelineData)
 		if err!=nil {
 			log.Printf("[ERROR] Failed to save the pipeline with trigger id: %s into the db: %s",pipeline.TriggerId, err)
 			resp.WriteHeader(500)
