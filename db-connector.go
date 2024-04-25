@@ -71,8 +71,6 @@ type ShuffleStorage struct {
 	BucketName    string
 }
 
-
-
 // Create ElasticSearch/OpenSearch index prefix
 // It is used where a single cluster of ElasticSearch/OpenSearch utilized by several
 // Shuffle instance
@@ -84,7 +82,6 @@ func GetESIndexPrefix(index string) string {
 	}
 	return index
 }
-
 
 // 1. Check list if there is a record for yesterday
 // 2. If there isn't, set it and clear out the daily records
@@ -1570,7 +1567,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	// - Webhooks v2 with for response
 	if finalWorkflowExecution.Status == "ABORTED" {
 		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
-	} else  if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED"  { 
+	} else if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED" {
 		//log.Printf("\n\n[DEBUG] Finding new response value\n\n")
 		lastResult := ""
 		lastCompleted := int64(-1)
@@ -2533,7 +2530,6 @@ func GetWorkflowRunCount(ctx context.Context, id string, start int64, end int64)
 	return count, nil
 }
 
-
 func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 	orgs := []Org{}
 	nameKey := "Organizations"
@@ -2840,7 +2836,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 	log.Printf("[AUDIT] Getting workflows for user %s (%s - %s)", user.Username, user.Role, user.Id)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
-		query := map[string]interface{}{  
+		query := map[string]interface{}{
 			"size": 1000,
 			"query": map[string]interface{}{
 				"bool": map[string]interface{}{
@@ -5190,7 +5186,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	maxLen := 200
-	queryLimit := 25 
+	queryLimit := 25
 	cursorStr := ""
 
 	allApps = user.PrivateApps
@@ -5211,7 +5207,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
 		go SetOrg(ctx, *org, org.Id)
 	}
-
 
 	if len(user.PrivateApps) > 0 && orgErr == nil {
 		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
@@ -5318,7 +5313,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-
 	// Find public apps
 
 	appsAdded := []string{}
@@ -5340,7 +5334,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[DEBUG] Failed getting cache for PUBLIC apps: %s", err)
 		}
 	}
-
 
 	// May be better to just list all, then set to true?
 	// Is this the slow one?
@@ -5445,7 +5438,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		}
 	}
-
 
 	// PS: If you think there's an error here, it's probably in the Algolia upload of CloudSpecific
 	// Instead loading in all public apps which is shared between all orgs
@@ -5565,7 +5557,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		allApps = append(allApps, newApps...)
 	}
 
-
 	// Deduplicate (e.g. multiple gmail)
 	dedupedApps := []WorkflowApp{}
 	for _, app := range allApps {
@@ -5588,8 +5579,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			dedupedApps = append(dedupedApps, app)
 			continue
 		}
-
-
 
 		//log.Printf("[INFO] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, replaceIndex)
 		// If owner of dedup, don't change
@@ -5661,7 +5650,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-
 	// Also prioritize most used ones from app-framework on top?
 	slice.Sort(allApps[:], func(i, j int) bool {
 		return allApps[i].Edited > allApps[j].Edited
@@ -5683,7 +5671,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
-
 
 	return allApps, nil
 }
@@ -5817,15 +5804,15 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 							},
 						},
 						{
-						  "match": map[string]interface{}{
-							"contributors": userId,
-						  },
+							"match": map[string]interface{}{
+								"contributors": userId,
 							},
 						},
 					},
-					"minimum_should_match": 1,
 				},
-			}		
+				"minimum_should_match": 1,
+			},
+		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find workflowapp query: %s", err)
@@ -7711,17 +7698,17 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 		}
 		wrapper := AllHooksWrapper{}
 		err = json.Unmarshal(respBody, &wrapper)
-	
+
 		if err != nil {
 			return []Hook{}, err
 		}
 
 		for _, hit := range wrapper.Hits.Hits {
-			hook := hit.Source 
-			hooks = append(hooks, hook) 
+			hook := hit.Source
+			hooks = append(hooks, hook)
 		}
 		return hooks, err
-		
+
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
 
@@ -7770,62 +7757,37 @@ func SetHook(ctx context.Context, hook Hook) error {
 	return nil
 }
 
-func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error){
+func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 	pipeline := &Pipeline{}
 	nameKey := "pipelines"
+	
 	triggerId = strings.ToLower(triggerId)
-  
-	if project.DbType == "opensearch" {
-		var buf bytes.Buffer
-		query := map[string]interface{}{
-			"query": map[string]interface{}{
-				"term": map[string]interface{}{
-					"trigger_id": triggerId,
-				},
-			},
-		}
-		
-		if err := json.NewEncoder(&buf).Encode(query); err != nil {
-			log.Printf("[WARNING] Error encoding find user query: %s", err)
-			return &Pipeline{}, err
-		}
 
-		res, err := project.Es.Search(
-			project.Es.Search.WithContext(ctx),
-			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-			project.Es.Search.WithBody(&buf),
-			project.Es.Search.WithTrackTotalHits(true),
-		)
+	if project.DbType == "opensearch" {
+
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), triggerId)
 		if err != nil {
-			log.Printf("[ERROR] Error getting response from Opensearch (get pipeline): %s", err)
 			return &Pipeline{}, err
 		}
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return &Pipeline{}, nil
-		}
-
-		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return &Pipeline{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return &Pipeline{}, errors.New("pipeline doesn't exist")
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return &Pipeline{}, err
 		}
-		wrapper := PipelineWrapper{}
-		err = json.Unmarshal(respBody, &wrapper)
-	
+
+		wrapped := PipelineWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
-			log.Printf("[ERROR] Failed unmarshal of pipeline: %s", err)
 			return &Pipeline{}, err
 		}
-		if wrapper.ID == "" {
-			return &Pipeline{}, fmt.Errorf("no matching document found for trigger ID: %s", triggerId)
-		}
-		pipeline = &wrapper.Source
-	} else {
+
+		pipeline = &wrapped.Source
+	}  else {
 		// key := datastore.NameKey(nameKey, triggerId, nil)
 		// err := project.Dbclient.Get(ctx, key, pipeline)
 		// if err != nil {
@@ -7893,7 +7855,7 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return []Pipeline{}, fmt.Errorf("bad statuscode: %d", res.StatusCode)
-			
+
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
@@ -7902,17 +7864,17 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 		}
 		wrapper := AllPipelinesWrapper{}
 		err = json.Unmarshal(respBody, &wrapper)
-	
+
 		if err != nil {
 			return []Pipeline{}, err
 		}
 
 		for _, hit := range wrapper.Hits.Hits {
-			pipeline := hit.Source 
-			pipelines = append(pipelines, pipeline) 
+			pipeline := hit.Source
+			pipelines = append(pipelines, pipeline)
 		}
 		return pipelines, err
-		
+
 	} else {
 		// q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
 
@@ -7926,9 +7888,9 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 }
 
 func savePipelineData(ctx context.Context, pipeline Pipeline) error {
-	// assuming IndexRequest can be used as an upsert operation 
+	// assuming IndexRequest can be used as an upsert operation
 	nameKey := "pipelines"
- 
+
 	pipelineData, err := json.Marshal(pipeline)
 	if err != nil {
 		log.Printf("[WARNING] Failed marshalling in savePipelineData: %s", err)
@@ -7945,9 +7907,9 @@ func savePipelineData(ctx context.Context, pipeline Pipeline) error {
 		// if _, err := project.Dbclient.Put(ctx, key, &pipeline); err != nil {
 		// 	log.Printf("[ERROR] failed to add pipeline: %s", err)
 		// 	return err
-		}
-    
-    return nil
+	}
+
+	return nil
 }
 
 func GetNotification(ctx context.Context, id string) (*Notification, error) {
@@ -10293,7 +10255,7 @@ func GetEsConfig() *opensearch.Client {
 
 	password := os.Getenv("SHUFFLE_OPENSEARCH_PASSWORD")
 	if len(password) == 0 {
-		// New password that is set by default. 
+		// New password that is set by default.
 		// Security Audit points to changing this during onboarding.
 		password = "StrongShufflePassword321!"
 	}
@@ -11264,7 +11226,6 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 					userInput = true
 				}
 			}
-
 
 			if comparisonTime > 600 && !userInput {
 				// FIXME: Check if there are any actions with delays?

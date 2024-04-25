@@ -1,14 +1,14 @@
 package shuffle
 
 import (
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"strings"
-	"io/ioutil"
-	"encoding/json"
 
-	"github.com/satori/go.uuid"
+	uuid "github.com/satori/go.uuid"
 )
 
 // Pipeline is a sequence of stages that are executed in order.
@@ -75,7 +75,6 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
-
 	ctx := GetContext(request)
 	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
@@ -101,7 +100,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	availableCommands := []string{
-		"create", "delete","update",
+		"create", "delete", "start", "stop",
 	}
 
 	matchingCommand := ""
@@ -120,13 +119,12 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	// 1. Add to trigger list
-	/* TBD */ 
-
+	/* TBD */
 
 	// Look for PIPELINE_ command that exists in the queue already
 	startCommand := strings.ToUpper(strings.Split(pipeline.Type, " ")[0])
 	//parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
-	parsedId :=  strings.ToLower(pipeline.Environment)
+	parsedId := strings.ToLower(pipeline.Environment)
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
 	existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
 	for _, queue := range existingQueue.Data {
@@ -142,11 +140,11 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 
 	// 2. Send to environment queue
 	execRequest := ExecutionRequest{
-		Type: formattedType,
-		ExecutionId: uuid.NewV4().String(),
-		ExecutionSource: pipeline.TriggerId,
+		Type:              formattedType,
+		ExecutionId:       uuid.NewV4().String(),
+		ExecutionSource:   pipeline.TriggerId,
 		ExecutionArgument: pipeline.Command,
-		Priority: 11,
+		Priority:          11,
 	}
 
 	if startCommand == "CREATE" {
@@ -157,13 +155,13 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		pipelineData.Command = pipeline.Command
 		pipelineData.Environment = pipeline.Environment
 		pipelineData.WorkflowId = pipeline.WorkflowId
-		pipelineData.OrgId =  user.ActiveOrg.Id
+		pipelineData.OrgId = user.ActiveOrg.Id
 		pipelineData.Status = "uninitialized"
 		pipelineData.TriggerId = pipeline.TriggerId
 
 		err = savePipelineData(ctx, pipelineData)
-		if err!=nil {
-			log.Printf("[ERROR] Failed to save the pipeline with trigger id: %s into the db: %s",pipeline.TriggerId, err)
+		if err != nil {
+			log.Printf("[ERROR] Failed to save the pipeline with trigger id: %s into the db: %s", pipeline.TriggerId, err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -180,5 +178,5 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Pipeline will be created}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Pipeline will be created"}`)))
 }

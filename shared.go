@@ -2,8 +2,6 @@ package shuffle
 
 import (
 	"bytes"
-	"reflect"
-	"sort"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -14,6 +12,8 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
+	"sort"
 	"sync"
 
 	"gopkg.in/yaml.v3"
@@ -47,9 +47,9 @@ import (
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
 
+	"github.com/frikky/schemaless"
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
-	"github.com/frikky/schemaless"
 )
 
 var project ShuffleStorage
@@ -22884,11 +22884,13 @@ func HandleSavePipelineInfo(resp http.ResponseWriter, request *http.Request) {
 
     ctx := GetContext(request)
     pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
+	log.Printf("[HARI TESTING] trigger id is %s", requestBody.TriggerId)
     if err != nil {
-		if strings.Contains(fmt.Sprintf("%s", err),"no matching document found"){
+		if strings.Contains(fmt.Sprintf("%s", err),"pipeline doesn't exist"){
 			log.Printf("[DEBUG] no matching document found for Pipeline: %s", requestBody.PipelineId)
 			resp.WriteHeader(404)
 			resp.Write([]byte(`{"success": false, "reason": "pipeline not found"}`))
+			return
 		} else {
         log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
         resp.WriteHeader(500)
