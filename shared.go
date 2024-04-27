@@ -23318,6 +23318,62 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(respBody)
 }
 
+func HandleSavePipelineInfo(resp http.ResponseWriter, request *http.Request) {
+    cors := HandleCors(resp, request)
+    if cors {
+        return
+    }
+
+    // How do I make sure that Orborus is the one that made this request?
+
+    var requestBody Pipeline
+    err := json.NewDecoder(request.Body).Decode(&requestBody)
+	if err != nil {
+        log.Printf("[WARNING] Failed to decode request body: %s", err)
+        resp.WriteHeader(401)
+        resp.Write([]byte(`{"success": false}`))
+        return
+    }
+	if len(requestBody.TriggerId) == 0 || len(requestBody.PipelineId) == 0 || len(requestBody.Status) == 0 {
+		log.Printf("[WARNING] Missing fields in the request body")
+        resp.WriteHeader(400)
+        resp.Write([]byte(`{"success": false, "reason": "Missing fields in the request body"}`))
+        return
+	}
+
+    ctx := GetContext(request)
+    pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
+	log.Printf("[HARI TESTING] trigger id is %s", requestBody.TriggerId)
+    if err != nil {
+		if strings.Contains(fmt.Sprintf("%s", err),"pipeline doesn't exist"){
+			log.Printf("[DEBUG] no matching document found for Pipeline: %s", requestBody.PipelineId)
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "pipeline not found"}`))
+			return
+		} else {
+        log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
+        resp.WriteHeader(500)
+        resp.Write([]byte(`{"success": false}`))
+        return
+		}
+    }
+
+    pipeline.PipelineId = requestBody.PipelineId
+    pipeline.Status = requestBody.Status
+
+    
+    err = savePipelineData(ctx, *pipeline)
+    if err != nil {
+        log.Printf("[WARNING] Failed updating pipeline with ID: %s due to %s", pipeline.PipelineId, err)
+        resp.WriteHeader(500)
+        resp.Write([]byte(`{"success": false}`))
+        return
+    }
+	log.Printf("[INFO] Sucessfully saved pipeline: %s", pipeline.PipelineId)
+    resp.WriteHeader(200)
+    resp.Write([]byte(`{"success": true}`))
+}
+
 func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
