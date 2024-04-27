@@ -3882,7 +3882,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	err = json.Unmarshal(respBody, &oauthResp)
 	if err != nil {
 		if len(oauthResp.AccessToken) == 0 {
-			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2): %s. Data: %s. Trying to map to oauthResp anyway", respBody, err)
+			log.Printf("[ERROR] Failed unmarshaling (appauth oauth2 refresh). URL: %#v: %s. Data: %s. Trying to map to oauthResp anyway", url, respBody, err)
 			// respBody as queries -> oauthResp
 			// access_token=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&scope=notifications%2Cproject%2Crepo%2Cuser&token_type=bearer.
 			changed := false

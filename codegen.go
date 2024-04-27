@@ -1320,6 +1320,20 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		},
 	})
 
+	// Fixing parameters with :
+	newExtraParams := []WorkflowAppActionParameter{}
+	newOptionalParams := []WorkflowAppActionParameter{}
+	for _, param := range extraParameters {
+		param.Name = FixParamname(param.Name)
+		newExtraParams = append(newExtraParams, param)
+	}
+	for _, param := range optionalParameters {
+		param.Name = FixParamname(param.Name)
+		newOptionalParams = append(newOptionalParams, param)
+	}
+	extraParameters = newExtraParams
+	optionalParameters = newOptionalParams
+
 	//Verified      bool   `json:"verified" yaml:"verified" required:false datastore:"verified"`
 	for actualPath, path := range swagger.Paths {
 		//actualPath = strings.Replace(actualPath, ".", "", -1)
@@ -1568,6 +1582,39 @@ func DeployAppToDatastore(ctx context.Context, workflowapp WorkflowApp) error {
 	return nil
 }
 
+func FixParamname(paramname string) string {
+	paramname = strings.Replace(paramname, ".", "", -1)
+	paramname = strings.Replace(paramname, ":", "", -1)
+	paramname = strings.Replace(paramname, ",", "", -1)
+	paramname = strings.Replace(paramname, ".", "", -1)
+	paramname = strings.Replace(paramname, "&", "", -1)
+	paramname = strings.Replace(paramname, "/", "", -1)
+	paramname = strings.Replace(paramname, "\\", "", -1)
+
+	paramname = strings.Replace(paramname, "!", "", -1)
+	paramname = strings.Replace(paramname, "?", "", -1)
+	paramname = strings.Replace(paramname, "@", "", -1)
+	paramname = strings.Replace(paramname, "#", "", -1)
+	paramname = strings.Replace(paramname, "$", "", -1)
+	paramname = strings.Replace(paramname, "&", "", -1)
+	paramname = strings.Replace(paramname, "*", "", -1)
+	paramname = strings.Replace(paramname, "(", "", -1)
+	paramname = strings.Replace(paramname, ")", "", -1)
+	paramname = strings.Replace(paramname, "[", "", -1)
+	paramname = strings.Replace(paramname, "]", "", -1)
+	paramname = strings.Replace(paramname, "{", "", -1)
+	paramname = strings.Replace(paramname, "}", "", -1)
+	paramname = strings.Replace(paramname, `"`, "", -1)
+	paramname = strings.Replace(paramname, `'`, "", -1)
+	paramname = strings.Replace(paramname, `|`, "", -1)
+	paramname = strings.Replace(paramname, `~`, "", -1)
+
+	paramname = strings.Replace(paramname, " ", "_", -1)
+	paramname = strings.Replace(paramname, "-", "_", -1)
+
+	return paramname 
+}
+
 // FIXME:
 // https://docs.python.org/3.2/reference/lexical_analysis.html#identifiers
 // This is used to build the python functions.
@@ -1578,6 +1625,7 @@ func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 
 	functionName = strings.Replace(functionName, ".", "", -1)
 	functionName = strings.Replace(functionName, ",", "", -1)
+	functionName = strings.Replace(functionName, ":", "", -1)
 	functionName = strings.Replace(functionName, ".", "", -1)
 	functionName = strings.Replace(functionName, "&", "", -1)
 	functionName = strings.Replace(functionName, "/", "", -1)

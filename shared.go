@@ -11576,7 +11576,7 @@ func ResendActionResult(actionData []byte, retries int64) {
 func FixActionResultOutput(actionResult ActionResult) ActionResult {
 	if strings.Contains(actionResult.Result, "TypeError") && strings.Contains(actionResult.Result, "missing 1 required positional argument: 'access_token'") {
 		//log.Printf("\n\nTypeError  in actionresult!")
-		actionResult.Result = `{"success": false, "reason": "This App requires authentication with Oauth2. Make sure to authenticate it first."}`
+		actionResult.Result = `{"success": false, "reason": "This App requires authentication with Oauth2. Make sure to authenticate it first.", "extra": "If the app is authenticated, are you sure the Token & Refresh URL in the App is correct? Authentication refresh may have failed."}`
 	}
 
 	// Check length of result timestamp
@@ -12443,8 +12443,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if err == nil {
 			//log.Printf("\n\n[WARNING] Unmarshal success in workflow %s! Trying to check for success. Success: %#v\n\n", workflowExecution.Workflow.Name, resultCheck.Success)
 
-			if resultCheck.Success == false && strings.Contains(actionResult.Result, "success") && strings.Contains(actionResult.Result, "false") && workflowExecution.Workflow.Hidden == false {
+			if strings.Contains(strings.Replace(actionResult.Result," ", "", -1), `"success":false`) && resultCheck.Success == false && workflowExecution.Workflow.Hidden == false {
+
 				description := fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Failure Reason: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason)
+
 				if len(resultCheck.Reason) == 0 {
 					description = fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Check the workflow run for more details.", actionResult.Action.Label, workflowExecution.Workflow.Name)
 				}
