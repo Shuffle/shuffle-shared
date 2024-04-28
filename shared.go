@@ -3886,10 +3886,12 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+
 	workflowsChan := make(chan []Workflow)
 	schedulesChan := make(chan []ScheduleOld)
 	hooksChan := make(chan []Hook)
-	//pipelinesChan := make(chan []Pipeline)
+	// pipelinesChan := make(chan []Pipeline)
+
 	errChan := make(chan error)
 
 	wg := sync.WaitGroup{}
@@ -3938,7 +3940,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	// 		return
 	// 	}
 	// 	wg.Done()
-	// 	pipeliesChan <- pipelines
+	// 	pipelinesChan <- pipelines
 	// }()
 
 	wg.Wait()
@@ -3960,12 +3962,13 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	hooks := <-hooksChan
 	schedules := <-schedulesChan
 	workflows := <-workflowsChan
-	//pipelines := <- pipeliesChan
+	// pipelines := <-pipelinesChan
 
 	log.Printf("[INFO] recieved all the data from the channels")
 
 	hookMap := map[string]Hook{}
 	scheduleMap := map[string]ScheduleOld{}
+	// pipelineMap := map[string]Pipeline{}
 
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
@@ -3973,9 +3976,13 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, schedule := range schedules {
 		scheduleMap[schedule.Id] = schedule
 	}
+	// for _, pipeline := range pipelines {
+	// 	pipelineMap[pipeline.TriggerId] = pipeline
+	// }
 
 	allHooks := []Hook{}
 	allSchedules := []ScheduleOld{}
+	// allPipelines := []Pipeline{}
 	// Now loop through the workflow triggers to see if anything is not in sync
 	for _, workflow := range workflows {
 		for _, trigger := range workflow.Triggers {
@@ -4031,7 +4038,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						hook.Start = startNode
 						hook.Status = "stopped"
 						hook.Running = false
-						
+
 						hook.Auth = auth
 						hook.Version = version
 						hook.CustomResponse = customBody
@@ -4045,7 +4052,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 								hookValue.Info.Name = trigger.Label
 							}
 						}
-						
+
 						allHooks = append(allHooks, hookValue)
 					}
 				}
@@ -4084,7 +4091,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						Wrapper := fmt.Sprintf(`{"start": "%s", "execution_source": "schedule", "execution_argument": "%s"}`, startNode, schedule.Argument)
 						schedule.WrappedArgument = Wrapper
 						schedule.Status = "stopped"
-	
+
 						allSchedules = append(allSchedules, schedule)
 					} else {
 						scheduleValue := storedschedule
@@ -4094,25 +4101,50 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						allSchedules = append(allSchedules, scheduleValue)
 					}
 				}
+			case "PIPELINE":
+				{
+
+					// 		storedPipeline, exist := pipelineMap[trigger.ID]
+					// 		if exist && storedPipeline.Status != "uninitialized" {
+					// 			startNode := ""
+
+					// 			storedPipeline.WorkflowId = workflow.ID
+
+					// 			if len(workflow.Branches) != 0 {
+					// 				for _, branch := range workflow.Branches {
+					// 					if branch.SourceID == trigger.ID {
+					// 						startNode = branch.DestinationID
+					// 					}
+					// 				}
+					// 			}
+					// 			if startNode == "" {
+					// 				startNode = workflow.Start
+					// 			}
+					// 			storedPipeline.StartNode = startNode
+					// 			allPipelines = append(allPipelines, storedPipeline)
+
+					// 		}
+					// 	}
+				}
 			}
 		}
 	}
 
 	sort.SliceStable(allHooks, func(i, j int) bool {
-        return allHooks[i].Info.Name < allHooks[j].Info.Name
-    })
+		return allHooks[i].Info.Name < allHooks[j].Info.Name
+	})
 	sort.SliceStable(allSchedules, func(i, j int) bool {
-        return allSchedules[i].Name < allSchedules[j].Name
-    })
+		return allSchedules[i].Name < allSchedules[j].Name
+	})
 	// sort.SliceStable(pipelines, func(i, j int) bool {
-    //     return pipelines[i].Name < pipelines[j].Name
-    // })
+	// 	return pipelines[i].Name < pipelines[j].Name
+	// })
 
 	allTriggersWrapper := AllTriggersWrapper{}
 
 	allTriggersWrapper.WebHooks = allHooks
 	allTriggersWrapper.Schedules = allSchedules
-	// allTriggersWrapper.Pipelines = pipelines
+	// allTriggersWrapper.Pipelines = allPipelines
 
 	newjson, err := json.Marshal(allTriggersWrapper)
 	if err != nil {

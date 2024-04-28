@@ -33,7 +33,7 @@ type Pipeline struct {
 	StartNode   string 		`json:"start_node"`
 	OrgId       string 		`json:"org_id"`
 	Status      string 		`json:"status"`
-	Errors      []string 	`json:"errors"`
+	Error       string 	    `json:"error"`
 	
 	PipelineId 	string 		`json:"pipeline_id"`
 	TriggerId	string 		`json:"trigger_id"`
