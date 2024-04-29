@@ -37,10 +37,7 @@ import (
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
 	"google.golang.org/appengine/memcache"
 
-	//"github.com/frikky/go-opensearch/v8/esapi"
-	//opensearch "github.com/frikky/go-opensearch/v8"
-
-	//"github.com/opensearch-project/go-opensearch/v8/osapi"
+	//opensearch "github.com/shuffle/opensearch-go"
 	opensearch "github.com/opensearch-project/opensearch-go"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 )
@@ -57,7 +54,7 @@ var maxCacheSize = 1020000
 // Dumps data from cache to DB for every 5 action (old was 25)
 // var dumpInterval = 0x19
 // var dumpInterval = 0x1
-var dumpInterval = 0xA
+var dumpInterval = 0x5
 
 type ShuffleStorage struct {
 	GceProject    string
@@ -2091,6 +2088,162 @@ func GetSubscriptionRecipient(ctx context.Context, id string) (*SubscriptionReci
 	return sub, nil
 }
 
+// No deduplication for popular files
+func FindSimilarFilename(ctx context.Context, filename, orgId string) ([]File, error) {
+	//log.Printf("\n\n[DEBUG] Getting query %s for orgId %s\n\n", id, orgId)
+	files := []File{}
+	nameKey := "Files"
+
+	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, orgId, filename)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for file: %s", err)
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+
+		// Or search?
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"filename": filename,
+							},
+						},
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return files, nil
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (find file filename): %s", err)
+			return files, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return files, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return files, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return files, err
+		}
+
+		wrapped := FileSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return files, err
+		}
+
+		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 && wrapped.Hits.Hits[0].Source.Status == "active" && wrapped.Hits.Hits[0].Source.Md5sum == filename {
+			files = append(files, wrapped.Hits.Hits[0].Source)
+		} else {
+			//file = []Environment{}
+			for _, hit := range wrapped.Hits.Hits {
+				if hit.Source.Md5sum != filename {
+					continue
+				}
+
+				if hit.Source.OrgId == orgId && hit.Source.Status == "active" {
+					files = append(files, hit.Source)
+				}
+
+			}
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("filename =", filename).Limit(25)
+		_, err := project.Dbclient.GetAll(ctx, query, &files)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+			return files, err
+		} else {
+			//log.Printf("[INFO] Got %d files for filename: %s", len(files), filename)
+			parsedFiles := []File{}
+			for _, newfile := range files {
+				if newfile.OrgId == orgId && newfile.Status == "active" {
+					parsedFiles = append(parsedFiles, newfile)
+				}
+			}
+
+			//log.Printf("[INFO] Got %d PARSD files for filename: %s", len(parsedFiles), md5)
+
+			if len(parsedFiles) == 0 {
+				return parsedFiles, errors.New(fmt.Sprintf("No file found for filename: %s", filename))
+				//log.Printf("[INFO] Couldn't find file with md5 %s for org %s", md5, orgId)
+			}
+
+			files = parsedFiles
+		}
+	}
+
+	//log.Printf("[DEBUG] Got hit: %s", file)
+
+	if project.CacheDb {
+		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in find file md5 : %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for find file md5 %s: %s", cacheKey, err)
+		}
+	}
+
+	return files, nil
+}
+
 // Check OrgId later
 // No deduplication for popular files
 func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
@@ -3354,9 +3507,49 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	// Check if Subscription is from BEFORE November 4th 2023
-	for orgIndex, sub := range curOrg.Subscriptions {
-		if sub.Startdate == 0 || sub.Startdate < 1699053459 {
-			curOrg.Subscriptions[orgIndex].EulaSigned = true
+
+	eulaSigned := false
+	if len(curOrg.Subscriptions) > 1 {
+		replicas := map[string]int64{}
+		for orgIndex, sub := range curOrg.Subscriptions {
+			if sub.EulaSigned {
+				eulaSigned = true
+			}
+
+			if sub.Startdate == 0 || sub.Startdate < 1699053459 {
+				curOrg.Subscriptions[orgIndex].EulaSigned = true
+			}
+
+			if _, ok := replicas[sub.Name]; ok {
+				if replicas[sub.Name] > sub.Startdate {
+					log.Printf("[DEBUG] Removing subscription %s from org %s", sub.Name, curOrg.Id)
+
+					replicas[sub.Name] = sub.Startdate
+				}
+			} else {
+				replicas[sub.Name] = sub.Startdate
+			}
+		}
+
+		newsubs := []PaymentSubscription{}
+		for key, value := range replicas {
+			foundsub := PaymentSubscription{}
+			for _, sub := range curOrg.Subscriptions {
+				if sub.Name == key && sub.Startdate == value {
+					foundsub = sub
+					break
+				}
+			}
+
+			if foundsub.Name != "" {
+				foundsub.EulaSigned = eulaSigned
+				newsubs = append(newsubs, foundsub)
+			}
+		}
+
+		if len(newsubs) > 0 {
+			curOrg.Subscriptions = newsubs
+			//log.Printf("[DEBUG] New subscriptions for org %s: %d", curOrg.Id, len(newsubs))
 		}
 	}
 
@@ -3617,7 +3810,11 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	return &org
 }
 
-func propagateOrg(org Org) error {
+func propagateOrg(org Org, reverse bool) error {
+	// the philosophy here is that, usually, we propagate only
+	// from the main region to the other regions. However, "reverse"
+	// makes propagation go from the other regions to the main region.
+
 	if len(org.Id) == 0 {
 		return errors.New("no ID provided for org")
 	}
@@ -3629,6 +3826,10 @@ func propagateOrg(org Org) error {
 	log.Printf("[INFO] Asking %s to propagate org %s", propagateUrl, org.Id)
 
 	data := map[string]string{"mode": "org", "orgId": org.Id}
+
+	if reverse {
+		data["region"] = os.Getenv("SHUFFLE_GCEPROJECT_REGION")
+	}
 
 	reqBody, err := json.Marshal(data)
 	if err != nil {
@@ -3662,6 +3863,62 @@ func propagateOrg(org Org) error {
 	return nil
 }
 
+func propagateApp(appId string, delete bool) error {
+	if len(appId) == 0 {
+		return errors.New("no ID provided for app")
+	}
+
+	if delete {
+		log.Printf("[INFO] Deletion propagation is disabled right now.")
+		return nil
+	}
+
+	if len(propagateUrl) == 0 || len(propagateToken) == 0 {
+		return errors.New("no SHUFFLE_PROPAGATE_URL or SHUFFLE_PROPAGATE_TOKEN provided")
+	}
+	// SHUFFLE_GCE_LOCATION
+	gceRegion := os.Getenv("SHUFFLE_GCEPROJECT_REGION")
+
+	log.Printf("[INFO] Asking %s to propagate app %s", propagateUrl, appId)
+	data := map[string]string{"mode": "app", "appId": appId, "region": gceRegion}
+
+	reqBody, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling propagation data %s: %s", appId, err)
+		return err
+	}
+
+	req, err := http.NewRequest("POST", propagateUrl, bytes.NewBuffer(reqBody))
+	if err != nil {
+		log.Printf("[WARNING] Failed creating request for app %s: %s", appId, err)
+		return err
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", propagateToken)
+
+	// Send the request via a client
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Failed sending request for app %s: %s", appId, err)
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	// Check the response
+	if resp.StatusCode != 200 {
+		log.Printf("[WARNING] Error in propagation: %s for app %s", resp.Status, appId)
+		return errors.New(fmt.Sprintf("bad statuscode: %d", resp.StatusCode))
+	}
+
+	log.Printf("[INFO] Propagation successful for app %s", appId)
+
+	return nil
+}
+
 func propagateUser(user User, delete bool) error {
 	if len(user.Id) == 0 {
 		return errors.New("no ID provided for user")
@@ -3675,7 +3932,8 @@ func propagateUser(user User, delete bool) error {
 
 	data := map[string]string{"mode": "user", "userId": user.Id}
 	if delete {
-		data["type"] = "delete"
+		log.Printf("[INFO] Deletion propagation is disabled right now.")
+		// data["delete"] = "true"
 	}
 
 	reqBody, err := json.Marshal(data)
@@ -3786,7 +4044,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		if data.Region != "" && data.Region != "europe-west2" && gceProject == "shuffler" {
 			go func() {
 				log.Printf("[INFO] Propagating org %s", data.Id)
-				err := propagateOrg(data)
+				err := propagateOrg(data, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed propagating org %s: %s", data.Id, err)
 				}
@@ -4719,6 +4977,81 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			log.Printf("[WARNING] Failed updating user cache (username): %s", err)
 		}
 	}
+
+	return nil
+}
+
+func DeleteUsersAccount(ctx context.Context, user *User) error {
+	cacheKey := fmt.Sprintf("user_%s", user.Id)
+
+	for _, orgId := range user.Orgs {
+		org, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[WARNING] Error getting org %s in delete user: %s", orgId, err)
+			continue
+		}
+
+		newUsers := []User{}
+		for _, orgUser := range org.Users {
+			if orgUser.Id == user.Id {
+				continue
+			}
+
+			newUsers = append(newUsers, orgUser)
+		}
+		org.Users = newUsers
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org %s (1)", orgId)
+		}
+	}
+
+	nameKey := "Users"
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(nameKey)), user.Id)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return err
+		}
+		defer res.Body.Close()
+
+		log.Printf("Response from OpenSearch deletion: StatusCode=%d", res.StatusCode)
+
+		if res.StatusCode == 404 {
+			return errors.New("User doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return err
+		}
+
+		wrapped := UserWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, user.Id, nil)
+		err := project.Dbclient.Delete(ctx, key)
+		if err != nil {
+			log.Printf("[Error] deleting from %s from %s: %s", nameKey, user.Id, err)
+		}
+		// if (len(user.Regions)) > 1 {
+		// 	go func() {
+		// 		log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+		// 		err = propagateUser(*user, true)
+		// 		if err != nil {
+		// 			log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
+		// 		}
+		// 	}()
+		// }
+
+	}
+
+	DeleteCache(ctx, user.ApiKey)
+	DeleteCache(ctx, user.Session)
+	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
 	return nil
 }
@@ -5855,38 +6188,65 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			userApps = append(userApps, innerApp)
 		}
 	} else {
+
 		cursorStr := ""
-		query := datastore.NewQuery(indexName).Filter("owner =", userId).Filter("contributors IN", []string{userId}).Order("-edited")
-		for {
-			it := project.Dbclient.Run(ctx, query)
+
+		queries := []datastore.Query{}
+		q := datastore.NewQuery(indexName)
+		q.FilterField("contributors", "in", []string{userId}).Order("-edited")
+		queries = append(queries, *q)
+
+		q = datastore.NewQuery(indexName).Filter("owner =", userId).Order("-edited")
+		queries = append(queries, *q)
+
+		for _, tmpQuery := range queries {
+			query := &tmpQuery
+
 			for {
-				innerApp := WorkflowApp{}
-				_, err := it.Next(&innerApp)
-				if err != nil {
-					break
+				it := project.Dbclient.Run(ctx, query)
+
+				for {
+					innerApp := WorkflowApp{}
+					_, err = it.Next(&innerApp)
+					if err != nil {
+						if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[WARNING] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							break
+						}
+					}
+
+					userApps = append(userApps, innerApp)
 				}
-				userApps = append(userApps, innerApp)
-			}
-			if err != iterator.Done {
-				log.Printf("[ERROR] Failed fetching results: %v", err)
-			}
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("Cursor error: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					// Break the loop if the cursor is the same as the previous one
+
+				if err != nil {
+					log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
 					break
 				}
 
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
+				if err != iterator.Done {
+					log.Printf("[ERROR] Failed fetching user apps (2): %v", err)
+				}
+
+				// Get the cursor for the next page of results.
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("Cursor error: %s", err)
+					break
+
+				} else {
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if cursorStr == nextStr {
+						// Break the loop if the cursor is the same as the previous one
+						break
+					}
+
+					cursorStr = nextStr
+					query = query.Start(nextCursor)
+				}
 			}
 		}
 	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(userApps)
 		if err == nil {
@@ -7145,7 +7505,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	workflowappauth.Edited = timeNow
 	workflowappauth.App.Actions = []WorkflowAppAction{}
 
-	if len(workflowappauth.Fields) > 20 {
+	if len(workflowappauth.Fields) > 500 {
 		//log.Printf("[WARNING][%s] Too many fields for app auth: %d", id, len(workflowappauth.Fields))
 		newfields := []AuthenticationStore{}
 
@@ -7443,8 +7803,7 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 	}
 
 	if len(users) == 0 {
-		//log.Printf("[WARNING] No users found for session %s", sessionId)
-		return User{}, errors.New("No users found for this apikey")
+		return User{}, errors.New("No users found for this apikey (1)")
 	}
 
 	if project.CacheDb {
@@ -7551,8 +7910,7 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	}
 
 	if len(users) == 0 {
-		log.Printf("[WARNING] No users found for apikey %s", apikey)
-		return User{}, errors.New("No users found for this apikey")
+		return User{}, errors.New("No users found for this apikey (2)")
 	}
 
 	return users[0], nil
@@ -7957,6 +8315,18 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 	nameKey := "Files"
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			curFile := &File{}
+			err = json.Unmarshal(cacheData, &curFile)
+			if err == nil {
+				return curFile, nil
+			}
+		}
+	}
+
 	curFile := &File{}
 	if project.DbType == "opensearch" {
 		//log.Printf("GETTING ES USER %s",
@@ -7988,7 +8358,19 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 		if err := project.Dbclient.Get(ctx, key, curFile); err != nil {
 			return &File{}, err
 		}
+	}
 
+	if project.CacheDb {
+		fileData, err := json.Marshal(curFile)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getfile: %s", err)
+			return curFile, nil 
+		}
+
+		err = SetCache(ctx, cacheKey, fileData, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for file key '%s': %s", cacheKey, err)
+		}
 	}
 
 	return curFile, nil
@@ -8042,6 +8424,12 @@ func SetFile(ctx context.Context, file File) error {
 		file.CreatedAt = timeNow
 	}
 
+	if !strings.HasPrefix(file.Id, "file_") {
+		return errors.New("Invalid file ID. Must start with file_")
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, file.Id)
+
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(file)
 		if err != nil {
@@ -8060,6 +8448,23 @@ func SetFile(ctx context.Context, file File) error {
 			return err
 		}
 	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(file)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setfile: %s", err)
+
+		} else {
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting cache for set file '%s': %s", cacheKey, err)
+			}
+		}
+	}
+
+	DeleteCache(ctx, fmt.Sprintf("files_%s_%s", file.OrgId, file.Namespace))
+	DeleteCache(ctx, fmt.Sprintf("files_%s_", file.OrgId))
+
 
 	return nil
 }
@@ -8316,6 +8721,18 @@ func GetUserNotifications(ctx context.Context, userId string) ([]Notification, e
 func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 	var files []File
 
+	cacheKey := fmt.Sprintf("files_%s_%s", orgId, namespace)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		}
+	}
+
 	nameKey := "Files"
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
@@ -8466,6 +8883,20 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			}
 		}
 	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling file cache: %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 2)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating file cache: %s", err)
+		}
+	}
+				
 
 	return files, nil
 }
@@ -10183,11 +10614,23 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(environment) != "worker" && (strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch") {
+
 		project.Es = *GetEsConfig()
 
 		ret, err := project.Es.Info()
 		if err != nil {
-			log.Printf("[WARNING] Failed setting up Opensearch: %s. Typically means the backend can't connect, or that there's a HTTPS vs HTTP problem", err)
+			if strings.Contains(fmt.Sprintf("%s", err), "the client noticed that the server is not a supported distribution") {
+				log.Printf("[ERROR] Version is not supported - most likely Elasticsearch >= 8.0.0.")
+			}
+		}
+
+		if err != nil {
+			if fmt.Sprintf("%s", err) == "EOF" {
+				log.Printf("[ERROR] Database should be available soon. Retrying in 5 seconds: %s", err)
+			} else {
+				log.Printf("[WARNING] Failed setting up Opensearch: %s. Typically means the backend can't connect, or that there's a HTTPS vs HTTP problem. Is the SHUFFLE_OPENSEARCH_URL correct?", err)
+			}
+
 			if strings.Contains(fmt.Sprintf("%s", err), "x509: certificate signed by unknown authority") || strings.Contains(fmt.Sprintf("%s", err), "EOF") {
 				if retryCount == 0 {
 					esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
@@ -10269,6 +10712,8 @@ func GetEsConfig() *opensearch.Client {
 		Password:      password,
 		MaxRetries:    5,
 		RetryOnStatus: []int{500, 502, 503, 504, 429, 403},
+
+		// User Agent to work with Elasticsearch 8
 	}
 	//APIKey:        os.Getenv("SHUFFLE_OPENSEARCH_APIKEY"),
 	//CloudID:       os.Getenv("SHUFFLE_OPENSEARCH_CLOUDID"),
@@ -11355,7 +11800,7 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 			return suggestion, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 60)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for getsuggestion'%s': %s", cacheKey, err)
 		}
@@ -11956,4 +12401,56 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 	return executions, cursor, nil
 
+}
+
+func DeleteDbIndex(ctx context.Context, index string) error {
+	if !strings.HasPrefix(index, "workflowqueue-") {
+		return errors.New("Not allowed to delete that index")
+	}
+
+	if project.Environment != "cloud" {
+		return errors.New("Can only delete indexes from cloud")
+	}
+
+	log.Printf("[WARNING] Deleting index %s entirely. This is normal behavior for workflowqueues", index)
+
+	// Create a query to retrieve all items in the index
+	var err error
+	query := datastore.NewQuery(index).KeysOnly()
+	it := project.Dbclient.Run(ctx, query)
+
+	var keys []*datastore.Key
+	for {
+		var key *datastore.Key
+		key, err = it.Next(nil)
+		if err == iterator.Done {
+			break
+		}
+
+		if err != nil {
+			log.Printf("[ERROR] Error fetching next key: %v\n", err)
+			break
+		}
+
+		keys = append(keys, key)
+		if len(keys) == 500 {
+			// Delete entities in batch
+			err := project.Dbclient.DeleteMulti(ctx, keys)
+			if err != nil {
+				log.Printf("[WARNING] Failed deleting keys: %s", err)
+				break
+			}
+			keys = nil
+		}
+	}
+
+	// Delete remaining entities
+	if len(keys) > 0 {
+		err := project.Dbclient.DeleteMulti(ctx, keys)
+		if err != nil {
+			log.Printf("[WARNING] Failed deleting keys: %s", err)
+		}
+	}
+
+	return nil
 }

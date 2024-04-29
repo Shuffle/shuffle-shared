@@ -72,7 +72,7 @@ func fileAuthentication(request *http.Request) (string, error) {
 			return "", errors.New("Bad authorization key")
 		}
 
-		log.Printf("[INFO] Authorization is correct for execution %s!", executionId[0])
+		//log.Printf("[INFO] Authorization is correct for execution %s!", executionId[0])
 		//%s vs %s. Setting Org", executionId, apikey, workflowExecution.Authorization)
 		if len(workflowExecution.ExecutionOrg) > 0 {
 			return workflowExecution.ExecutionOrg, nil
@@ -217,7 +217,7 @@ func HandleGetFileMeta(resp http.ResponseWriter, request *http.Request) {
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[INFO] File %s not found: %s", fileId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -328,7 +328,7 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[INFO] File %s not found: %s", fileId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -433,12 +433,24 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 
 func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename string) ([]*github.RepositoryContent, error) {
 	ctx := context.Background()
-	//client := github.NewClient(nil)
+
 	files := []*github.RepositoryContent{}
+
+	cacheKey := fmt.Sprintf("github_%s_%s_%s", owner, repo, path)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &files)
+			if err == nil {
+				return files, nil
+			}
+		}
+	}
 
 	_, items, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting standard list for namespace %s: %s", path, err)
+		//log.Printf("[WARNING] Failed getting standard list for namespace %s: %s", path, err)
 		return files, err
 	}
 
@@ -454,6 +466,19 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 	for _, item := range items {
 		if len(filename) > 0 && strings.HasPrefix(*item.Name, filename) {
 			files = append(files, item)
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(files)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in getfiles: %s", err)
+			return files, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for getfiles on github '%s': %s", cacheKey, err)
 		}
 	}
 
@@ -489,8 +514,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
-
+		//log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
 		orgId, err := fileAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad file authentication in get namespace %s: %s", namespace, err)
@@ -503,7 +527,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
-	log.Printf("[INFO] User %s (%s) is trying to get files from namespace %#v", user.Username, user.Id, namespace)
+	log.Printf("[AUDIT] User %s (%s) is trying to get files from namespace %#v", user.Username, user.Id, namespace)
 
 	ctx := GetContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, namespace)
@@ -551,15 +575,15 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] Found %d (%d:%d) files for namespace %s", len(files), len(fileResponse.Files), len(fileResponse.List), namespace)
+	//log.Printf("[DEBUG] Found %d (%d:%d) files in org %s (%s) for namespace '%s'", len(files), len(fileResponse.Files), len(fileResponse.List), user.ActiveOrg.Name, user.ActiveOrg.Id, namespace)
 
 	// Standards to load directly from Github if applicable
 	reservedCategoryNames := []string{
 		"translation_input",
 		"translation_output",
 		"translation_standards",
-
 		"translation_ai_queries", 
+
 		"detections",
 	}
 
@@ -571,14 +595,38 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Found name '%s' with reserved category name: %s. Listlength: %d", filename[0], namespace, len(fileResponse.List))
 
 		// Load from Github repo https://github.com/Shuffle/standards
-		if len(fileResponse.List) == 0 {
+		filenameFound := false
+		parsedFilename := strings.TrimSpace(strings.Replace(strings.ToLower(filename[0]), " ", "_", -1))
+		if strings.HasSuffix(parsedFilename, ".json") {
+			parsedFilename = strings.Replace(parsedFilename, ".json", "", -1)
+		}
+
+		for _, item := range fileResponse.List {
+
+			itemName := strings.TrimSpace(strings.Replace(strings.ToLower(item.Name), " ", "_", -1))
+			if itemName == parsedFilename {
+				filenameFound = true
+				break
+			}
+		}
+
+		// FIXME: How to handle files here?
+		if !filenameFound && namespace != "translation_input" && namespace != "translation_ai_queries" && namespace != "translation_output" {
+
 			client := github.NewClient(nil)
 			owner := "shuffle"
 			repo := "standards"
 
 			foundFiles, err := LoadStandardFromGithub(client, owner, repo, namespace, filename[0])
 			if err != nil {
-				log.Printf("[ERROR] Failed loading file %s in category %s from Github: %s", filename[0], namespace, err)
+				if !strings.Contains(err.Error(), "404") {
+					log.Printf("[ERROR] Failed loading file %s in category %s from Github: %s", filename[0], namespace, err)
+				}
+
+				// Don't quit here as the standard may not exist in that repo
+				//resp.WriteHeader(500)
+				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed loading file from Github repo %s/%s"}`, owner, repo)))
+				//return
 			} else {
 				log.Printf("[DEBUG] Found %d files in category %s for filename '%s'", len(foundFiles), namespace, filename[0])
 				for _, item := range foundFiles {
@@ -595,7 +643,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					log.Printf("[DEBUG] Decoded file %s with content:\n%s", *item.Path, string(decoded))
+					//log.Printf("[DEBUG] Decoded file %s with content:\n%s", *item.Path, string(decoded))
 
 					timeNow := time.Now().Unix()
 					fileId := uuid.NewV4().String()
@@ -720,7 +768,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[ERROR] Failed decrypting file (3): %s", err)
 				} else {
-					log.Printf("[DEBUG] File size of %s reduced from %d to %d after decryption (1)", file.Id, len(allText), len(data))
+					//log.Printf("[DEBUG] File size of %s reduced from %d to %d after decryption (1)", file.Id, len(allText), len(data))
 					allText = []byte(data)
 				}
 
@@ -804,11 +852,10 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
-			log.Printf("[WARNING] Bad file authentication in get for ID %s: %s", fileId, err)
+			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -825,7 +872,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[ERROR] File %s not found: %s", fileId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -856,11 +903,25 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Fixme: More auth: org and workflow!
+	// Automatically downloads and returns the file through resp
+	// GetFileContent() is used to return data, through resp if possible due to how we used to do it. 
+
+	if len(file.OrgId) == 0 {
+		file.OrgId = user.ActiveOrg.Id
+	}
+
+	_, err = GetFileContent(ctx, file, resp)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting file content for %s: %s", fileId, err)
+	}
+
+	//resp.WriteHeader(200)
+	//resp.Write(content)
+}
+
+func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) ([]byte, error) {
 	downloadPath := file.DownloadPath
 	if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-		log.Printf("[AUDIT] %s (%s) downloaded file '%s' (%s) from google storage. Namespace: %s", user.Username, user.Id, file.Filename, file.Id, file.Namespace)
-
 		bucket := project.StorageClient.Bucket(orgFileBucket)
 		obj := bucket.Object(file.DownloadPath)
 		fileReader, err := obj.NewReader(ctx)
@@ -871,15 +932,21 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			err = SetFile(ctx, *file)
 			if err != nil {
 				log.Printf("[ERROR] SetFile error while uploading")
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
-				return
+
+				if resp != nil {
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+				}
+				return []byte{}, err
 			}
 
 			//File not found, send 404
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "File doesn't exist in google cloud storage"}`))
-			return
+			if resp != nil {
+				resp.WriteHeader(404)
+				resp.Write([]byte(`{"success": false, "reason": "File doesn't exist in google cloud storage"}`))
+			}
+
+			return []byte{}, err
 		}
 
 		defer fileReader.Close()
@@ -902,12 +969,12 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			passphrase := fmt.Sprintf("%s_%s", file.OrgId, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				// Reference File Id only used as fallback
 				if len(file.ReferenceFileId) > 0 {
-					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+					passphrase = fmt.Sprintf("%s_%s", file.OrgId, file.ReferenceFileId)
 					data, err = HandleKeyDecryption(allText, passphrase)
 					if err != nil {
 						log.Printf("[ERROR] Failed decrypting file (4): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
@@ -919,7 +986,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 				}
 
 			} else {
-				log.Printf("[DEBUG] File size reduced from %d to %d after decryption (2)", len(allText), len(data))
+				//log.Printf("[DEBUG] File size reduced from %d to %d after decryption (2)", len(allText), len(data))
 				allText = []byte(data)
 			}
 
@@ -927,22 +994,27 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
 			//Send the headers
 			//log.Printf("Content Type: %#v", FileContentType)
-			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
-			resp.Header().Set("Content-Type", FileContentType)
-			resp.Header().Set("Content-Length", FileSize)
 
-			reader := bytes.NewReader(allText)
-			io.Copy(resp, reader)
-			return
+			if resp != nil {
+				resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+				resp.Header().Set("Content-Type", FileContentType)
+				resp.Header().Set("Content-Length", FileSize)
+				reader := bytes.NewReader(allText)
+				io.Copy(resp, reader)
+			}
+
+			return allText, nil
 
 		}
 
-		FileHeader := make([]byte, 512)
-		FileContentType := http.DetectContentType(FileHeader)
-		resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
-		resp.Header().Set("Content-Type", FileContentType)
+		if resp != nil {
+			FileHeader := make([]byte, 512)
+			FileContentType := http.DetectContentType(FileHeader)
 
-		io.Copy(resp, fileReader)
+			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+			resp.Header().Set("Content-Type", FileContentType)
+			io.Copy(resp, fileReader)
+		}
 
 	} else if file.StorageArea == "s3" {
 		log.Printf("[INFO] Trying to download file %s from s3", file.Id)
@@ -955,18 +1027,24 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 			err = SetFile(ctx, *file)
 			if err != nil {
 				log.Printf("Failed setting file to uploading")
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
-				return
+				if resp != nil {
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
+				}
+
+				return []byte{}, err
 			}
 
 			//File not found, send 404
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "File doesn't exist locally"}`))
-			return
+			if resp != nil {
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "File doesn't exist locally"}`))
+			}
+
+			return []byte{}, err
 		}
 
-		log.Printf("[DEBUG] Should handle file decryption of %s.", fileId)
+		log.Printf("[DEBUG] Should handle file decryption of %s.", file.Id)
 		allText := []byte{}
 
 		buf := make([]byte, 1024)
@@ -990,11 +1068,11 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		Openfile.Close()
 
 		if file.Encrypted {
-			passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+			passphrase := fmt.Sprintf("%s_%s", file.OrgId, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				if len(file.ReferenceFileId) > 0 {
-					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+					passphrase = fmt.Sprintf("%s_%s", file.OrgId, file.ReferenceFileId)
 					data, err = HandleKeyDecryption(allText, passphrase)
 					if err != nil {
 						log.Printf("[ERROR] Failed decrypting file (5): %s", err)
@@ -1006,7 +1084,7 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 				}
 
 			} else {
-				log.Printf("[DEBUG] File size reduced from %d to %d after decryption (3)", len(allText), len(data))
+				//log.Printf("[DEBUG] File size reduced from %d to %d after decryption (3)", len(allText), len(data))
 				allText = []byte(data)
 			}
 
@@ -1018,23 +1096,25 @@ func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 		FileSize := strconv.FormatInt(int64(len(allText)), 10) //Get file size as a string
 
 		//Send the headers
-		resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
-		resp.Header().Set("Content-Type", FileContentType)
-		resp.Header().Set("Content-Length", FileSize)
+		if resp != nil {
+			resp.Header().Set("Content-Disposition", "attachment; filename="+file.Filename)
+			resp.Header().Set("Content-Type", FileContentType)
+			resp.Header().Set("Content-Length", FileSize)
 
-		//resp.Write([]byte(allText))
-
-		//log.Printf("Md5: %#v", md5)
-		reader := bytes.NewReader(allText)
-		_, err = io.Copy(resp, reader)
-		if err != nil {
-			log.Printf("[ERROR] Failed copying info to request in download of %s: %s", file.Filename, err)
-		} else {
-			log.Printf("[INFO] Downloading %d bytes from file %s", len(allText), file.Filename)
+			//log.Printf("Md5: %#v", md5)
+			reader := bytes.NewReader(allText)
+			_, err = io.Copy(resp, reader)
+			if err != nil {
+				log.Printf("[ERROR] Failed copying info to request in download of %s: %s", file.Filename, err)
+			} else {
+				log.Printf("[INFO] Downloading %d bytes from file %s", len(allText), file.Filename)
+			}
 		}
 
-		return
+		return allText, nil
 	}
+
+	return nil, nil
 }
 
 func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
@@ -1076,7 +1156,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
+	//log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
 	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	//log.Printf("file obj", file)
@@ -1106,7 +1186,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !found {
-		log.Printf("[AUDIT] User %s doesn't have access to file %s", user.Username, fileId)
+		log.Printf("[AUDIT] User %s in org %s (%s) doesn't have access to file %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1159,7 +1239,8 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
+	//if len(fileId) != 36 && 
+	if !strings.HasPrefix(fileId, "file_") || len(fileId) > 64 { 
 		log.Printf("[WARNING] Bad format for fileId %s", fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))
@@ -1191,12 +1272,12 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
+	//log.Printf("[INFO] Should UPLOAD file %s if user has access", fileId)
 	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[INFO] File %s not found: %s", fileId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -1251,7 +1332,10 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	var buf bytes.Buffer
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
-	log.Printf("\n\n\n\n\nFILE: '''\n%s\n'''\n\n\n\n", contents)
+
+	//if len(contents) < 50 && strings.HasSuffix(file.Filename, ".json"){
+	//	log.Printf("\n\n\n\n\nFILE (%s): '''\n%s\n'''\n\n\n\n", file.Filename, string(contents))
+	//}
 	//log.Printf("File content: %s\n%x", string(contents))
 
 	file.FileSize = int64(len(contents))
@@ -1315,7 +1399,7 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 		}
 
 		if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-			log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s. Content length: %d", file.Id, len(contents))
+			//log.Printf("[INFO] SHOULD UPLOAD FILE TO GOOGLE STORAGE with ID %s. Content length: %d", file.Id, len(contents))
 			file.StorageArea = "google_storage"
 
 			//applocation := fmt.Sprintf("gs://%s/triggers/outlooktrigger.zip", bucketName)
@@ -1385,7 +1469,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in file creation: %s", err)
+		//log.Printf("[AUDIT] INITIAL Api authentication failed in file creation: %s", err)
 
 		orgId, err := fileAuthentication(request)
 		if err != nil {
@@ -1464,7 +1548,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		curfile.WorkflowId = "global"
 		// PS: Not a security issue.
 		// Files are global anyway, but the workflow_id is used to identify origin
-		log.Printf("[INFO] Uploading filename %s for org %s as global file.", curfile.Filename, curfile.OrgId)
+		log.Printf("[INFO] Uploading filename %s for org %s as global file in namespace '%s'.", curfile.Filename, curfile.OrgId, curfile.Namespace)
 	} else {
 		// Try to get the org and workflow in case they don't exist
 		workflow, err = GetWorkflow(ctx, curfile.WorkflowId)
@@ -1539,6 +1623,31 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
+
+	// Check if the file already exists in the category if unique=true is set
+	// If it does, we should just return the file ID in the {success: true, id: "file_id"} json format
+	unique, uniqueOk := request.URL.Query()["unique"]
+	if uniqueOk && len(unique) > 0 && strings.ToLower(unique[0]) == "true" && len(curfile.Namespace) > 0 && len(curfile.Filename) > 0 {
+		//log.Printf("\n\nOnly adding unique filenames (%s) in namespace %s\n\n", curfile.Filename, curfile.Namespace)
+
+		orgId := user.ActiveOrg.Id
+		files, err := FindSimilarFilename(ctx, curfile.Filename, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed finding similar files: %s", err)
+		} else {
+
+			for _, item := range files {
+				if item.OrgId == orgId && item.Namespace == curfile.Namespace && item.Filename == curfile.Filename && item.Status == "active" {
+					resp.WriteHeader(200)
+					resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s", "duplicate": true}`, item.Id)))
+					return
+				}
+			}
+
+		}
+	}
+
 
 	filename := curfile.Filename
 	fileId := fmt.Sprintf("file_%s", uuid.NewV4().String())
