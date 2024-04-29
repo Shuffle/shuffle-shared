@@ -10530,7 +10530,10 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			log.Printf("[DEBUG] Failed to find user %s (%s) in org %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Id)
+			if !found {
+				log.Printf("[DEBUG] Failed to find user %s (%s) in org %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Id)
+			}
+
 			if !found && len(foundOrg.Users) == 0 {
 				// Forcefully add the user back in there
 				err = fixOrgUsers(ctx, *foundOrg)
@@ -17467,7 +17470,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							CreateOrgNotification(
 								ctx,
 								fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
-								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Contact support@shiffler.io for additional help."),
+								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", err.Error()),
 								fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 								workflowExecution.ExecutionOrg,
 								true,
@@ -17475,12 +17478,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 							// Adding so it can be used to fail the auth naturally with Outlook
 
-							/*
+							authfieldFound := false
+							for _, field := range curAuth.Fields {
+								if field.Key == "access_token" {
+									authfieldFound = true
+									break
+								}
+							}
+
+							if !authfieldFound {
 								newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
 									Key:   "access_token",
 									Value: "FAILURE_REFRESH",
 								})
-							*/
+							} 
 
 							// Commented out as we don't want to stop the app, but just continue with the old tokens
 							/*
@@ -21440,14 +21451,40 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			httpOutput, marshalledBody, err := FindHttpBody(apprunBody)
+
 			parsedTranslation := SchemalessOutput{
 				Success: false,
 				Action:  value.Label,
-				RawOutput:  string(apprunBody),
 
 				Status: httpOutput.Status,
 				URL:	httpOutput.Url,
 			}
+
+			marshalledHttpOutput, err := json.Marshal(httpOutput)
+			if err == nil {
+				if strings.HasPrefix(string(marshalledHttpOutput), "[") {
+					outputArray := []interface{}{}
+					err = json.Unmarshal(marshalledHttpOutput, &outputArray)
+					if err != nil {
+						log.Printf("[WARNING] Failed unmarshalling RAW list schemaless (3) output for label %s: %s", value.Label, err)
+
+						parsedTranslation.RawResponse = string(marshalledHttpOutput)
+					} else {
+						parsedTranslation.RawResponse = outputArray
+					}
+				} else if strings.HasPrefix(string(marshalledHttpOutput), "{") {
+					outputmap := map[string]interface{}{}
+					err = json.Unmarshal(marshalledHttpOutput, &outputmap)
+					if err != nil {
+						log.Printf("[WARNING] Failed unmarshalling RAW {} schemaless (2) output for label %s: %s", value.Label, err)
+					}
+						
+					parsedTranslation.RawResponse  = outputmap
+				} else {
+					parsedTranslation.RawResponse = string(marshalledHttpOutput)
+				}
+			}
+
 
 			if err == nil {
 				if httpOutput.Status < 300 {
@@ -21542,7 +21579,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				*/
 			} else {
 				parsedTranslation.Success = true
-				parsedTranslation.RawOutput = string(schemalessOutput)
+				//parsedTranslation.RawOutput = string(schemalessOutput)
 
 				err = json.Unmarshal(schemalessOutput, &outputmap)
 				if err != nil {
@@ -21556,13 +21593,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						}
 
 						parsedTranslation.Output = outputArray
-						parsedTranslation.RawOutput = ""
+						parsedTranslation.RawResponse = nil
 					} else {
 						log.Printf("[WARNING] Failed unmarshalling schemaless (2) output for label %s: %s", value.Label, err)
 					}
 				} else {
 					parsedTranslation.Output = outputmap
-					parsedTranslation.RawOutput = ""
+					parsedTranslation.RawResponse = nil
 				}
 			}
 
