@@ -6188,38 +6188,65 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			userApps = append(userApps, innerApp)
 		}
 	} else {
+
 		cursorStr := ""
-		query := datastore.NewQuery(indexName).Filter("owner =", userId).Filter("contributors IN", []string{userId}).Order("-edited")
-		for {
-			it := project.Dbclient.Run(ctx, query)
+
+		queries := []datastore.Query{}
+		q := datastore.NewQuery(indexName)
+		q.FilterField("contributors", "in", []string{userId}).Order("-edited")
+		queries = append(queries, *q)
+
+		q = datastore.NewQuery(indexName).Filter("owner =", userId).Order("-edited")
+		queries = append(queries, *q)
+
+		for _, tmpQuery := range queries {
+			query := &tmpQuery
+
 			for {
-				innerApp := WorkflowApp{}
-				_, err := it.Next(&innerApp)
-				if err != nil {
-					break
+				it := project.Dbclient.Run(ctx, query)
+
+				for {
+					innerApp := WorkflowApp{}
+					_, err = it.Next(&innerApp)
+					if err != nil {
+						if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[WARNING] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							break
+						}
+					}
+
+					userApps = append(userApps, innerApp)
 				}
-				userApps = append(userApps, innerApp)
-			}
-			if err != iterator.Done {
-				log.Printf("[ERROR] Failed fetching results: %v", err)
-			}
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("Cursor error: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					// Break the loop if the cursor is the same as the previous one
+
+				if err != nil {
+					log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
 					break
 				}
 
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
+				if err != iterator.Done {
+					log.Printf("[ERROR] Failed fetching user apps (2): %v", err)
+				}
+
+				// Get the cursor for the next page of results.
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("Cursor error: %s", err)
+					break
+
+				} else {
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if cursorStr == nextStr {
+						// Break the loop if the cursor is the same as the previous one
+						break
+					}
+
+					cursorStr = nextStr
+					query = query.Start(nextCursor)
+				}
 			}
 		}
 	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(userApps)
 		if err == nil {

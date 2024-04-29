@@ -3464,7 +3464,7 @@ type SchemalessOutput struct {
 	Output interface{} `json:"output"`
 
 	// Optional
-	RawOutput string `json:"raw_output,omitempty"`
+	RawResponse interface{} `json:"raw_response,omitempty"`
 }
 
 type CategoryAction struct {
@@ -3761,11 +3761,11 @@ type WorkflowSearchResult struct {
 // Used for the integrations API to work with AI well
 type StructuredCategoryAction struct {
 	Success     bool          `json:"success"`
+	Reason      string        `json:"reason"`
 	WorkflowId  string        `json:"workflow_id"`
 	ExecutionId string        `json:"execution_id"`
 	Action      string        `json:"action"`
 	Category    string        `json:"category"`
-	Reason      string        `json:"reason"`
 	Apps        []WorkflowApp `json:"apps"`
 
 	Result string `json:"result"`
@@ -3795,7 +3795,7 @@ type HTTPOutput struct {
 	Success bool                   `json:"success"`
 	Status  int                    `json:"status"`
 	Url     string                 `json:"url"`
-	Body    map[string]interface{} `json:"body"`
+	Body    interface{} 		   `json:"body"`
 	Headers map[string]string      `json:"headers"`
 	Cookies map[string]string      `json:"cookies"`
 	Errors  []string               `json:"errors"`
