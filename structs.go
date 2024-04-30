@@ -15,13 +15,83 @@ type AppContext struct {
 }
 
 type PipelineRequest struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Command     string `json:"command"`
+	Name	   	string `json:"name"`
+	Type 		string `json:"type"`
+	Command		string `json:"command"`
 	Environment string `json:"environment"`
+	WorkflowId  string `json:"workflow_id"`
 
-	PipelineId string `json:"pipeline_id"`
-	TriggerId  string `json:"trigger_id"`
+	PipelineId 	string `json:"pipeline_id"`
+	TriggerId	string `json:"trigger_id"`
+}
+
+type Pipeline struct {
+	Name	   	string 		`json:"name"`
+	Type 		string 		`json:"type"`
+	Command		string 		`json:"command"`
+	Environment string 		`json:"environment"`
+	WorkflowId  string 		`json:"workflow_id"`
+	StartNode   string 		`json:"start_node"`
+	OrgId       string 		`json:"org_id"`
+	Status      string 		`json:"status"`
+	Errors      []string 	`json:"errors"`
+	
+	PipelineId 	string 		`json:"pipeline_id"`
+	TriggerId	string 		`json:"trigger_id"`
+}
+
+type PipelineWrapper struct {
+	Index  string   `json:"_index"`
+	Type   string   `json:"_type"`
+	ID     string   `json:"_id"`
+	Version int     `json:"_version"`
+	Found   bool    `json:"found"`
+	Source  Pipeline `json:"_source"`
+}
+
+type AllPipelinesWrapper struct {
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source Pipeline `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
+type Pipeline struct {
+	Name	   	string 		`json:"name"`
+	Type 		string 		`json:"type"`
+	Command		string 		`json:"command"`
+	Environment string 		`json:"environment"`
+	WorkflowId  string 		`json:"workflow_id"`
+	StartNode   string 		`json:"start_node"`
+	OrgId       string 		`json:"org_id"`
+	Status      string 		`json:"status"`
+	Error       string 	    `json:"error"`
+	
+	PipelineId 	string 		`json:"pipeline_id"`
+	TriggerId	string 		`json:"trigger_id"`
+}
+
+type AllPipelinesWrapper struct {
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source Pipeline `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
 }
 
 type QueryInput struct {
@@ -601,6 +671,7 @@ type AppInfo struct {
 }
 
 type ScheduleOld struct {
+	Name                 string       `json:"name" datastore:"name"`
 	Id                   string       `json:"id" datastore:"id"`
 	StartNode            string       `json:"start_node" datastore:"start_node"`
 	Seconds              int          `json:"seconds" datastore:"seconds"`
@@ -619,6 +690,7 @@ type ScheduleOld struct {
 	LastRuntime          int64        `json:"lastruntime" datastore:"lastruntime,noindex"`
 	Frequency            string       `json:"frequency" datastore:"frequency,noindex"`
 	Environment          string       `json:"environment" datastore:"environment"`
+	Status               string       `json:"status" datastore:"status"`
 }
 
 // Returned from /GET /schedules
@@ -2102,6 +2174,12 @@ type SubResponse struct {
 	Expiration string `json:"expiration`
 }
 
+type AllTriggersWrapper struct {
+	// Pipelines []Pipeline `json:"pipelines"`
+	WebHooks   []Hook `json:"webhooks"`
+	Schedules []ScheduleOld `json:"schedules"`
+}
+
 type SubWrapper struct {
 	Index       string                `json:"_index"`
 	Type        string                `json:"_type"`
@@ -2243,6 +2321,21 @@ type HookWrapper struct {
 	PrimaryTerm int    `json:"_primary_term"`
 	Found       bool   `json:"found"`
 	Source      Hook   `json:"_source"`
+}
+
+type AllHooksWrapper struct {
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		Hits     []struct {
+			Index  string  `json:"_index"`
+			ID     string  `json:"_id"`
+			Score  float64 `json:"_score"`
+			Source Hook `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
 }
 
 type ScheduleWrapper struct {
