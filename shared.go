@@ -14,6 +14,7 @@ import (
 	"os"
 	"reflect"
 	"sort"
+	"sync"
 
 	"gopkg.in/yaml.v3"
 
@@ -3867,6 +3868,294 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	//var config configAuth
 
 	//log.Printf("Should set %s
+}
+
+func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get schedules: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success":false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	workflowsChan := make(chan []Workflow)
+	schedulesChan := make(chan []ScheduleOld)
+	hooksChan := make(chan []Hook)
+	// pipelinesChan := make(chan []Pipeline)
+
+	errChan := make(chan error)
+
+	wg := sync.WaitGroup{}
+	wg.Add(3)
+
+	go func() {
+		workflows, err := GetAllWorkflowsByQuery(ctx, user)
+		if err != nil {
+			wg.Done()
+			errChan <- err
+			return
+		}
+		wg.Done()
+		workflowsChan <- workflows
+
+	}()
+
+	go func() {
+		schedules, err := GetAllSchedules(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			wg.Done()
+			errChan <- err
+			return
+		}
+		wg.Done()
+		schedulesChan <- schedules
+
+	}()
+
+	go func() {
+		hooks, err := GetHooks(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			wg.Done()
+			errChan <- err
+			return
+		}
+		wg.Done()
+		hooksChan <- hooks
+	}()
+
+	// go func() {
+	// 	pipelines, err := GetPipelines(ctx, user.ActiveOrg.Id)
+	// 	if err != nil {
+	// 		wg.Done()
+	// 		errChan <- err
+	// 		return
+	// 	}
+	// 	wg.Done()
+	// 	pipelinesChan <- pipelines
+	// }()
+
+	wg.Wait()
+
+	log.Println("[INFO] All Go routines Completed")
+	// this is to check if we got any errors without blocking the entire process
+	select {
+	case err := <-errChan:
+		if err != nil {
+			log.Printf("[ERROR] Failed to fetch data: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success":false}`))
+			return
+		}
+	default:
+		log.Println("[INFO] No errors received within Go routines, proceeding with further logic")
+	}
+
+	hooks := <-hooksChan
+	schedules := <-schedulesChan
+	workflows := <-workflowsChan
+	// pipelines := <-pipelinesChan
+
+	log.Printf("[INFO] recieved all the data from the channels")
+
+	hookMap := map[string]Hook{}
+	scheduleMap := map[string]ScheduleOld{}
+	// pipelineMap := map[string]Pipeline{}
+
+	for _, hook := range hooks {
+		hookMap[hook.Id] = hook
+	}
+	for _, schedule := range schedules {
+		scheduleMap[schedule.Id] = schedule
+	}
+	// for _, pipeline := range pipelines {
+	// 	pipelineMap[pipeline.TriggerId] = pipeline
+	// }
+
+	allHooks := []Hook{}
+	allSchedules := []ScheduleOld{}
+	// allPipelines := []Pipeline{}
+	// Now loop through the workflow triggers to see if anything is not in sync
+	for _, workflow := range workflows {
+		for _, trigger := range workflow.Triggers {
+
+			if trigger.Status == "uninitialized" {
+				continue
+			}
+
+			switch trigger.TriggerType {
+			case "WEBHOOK":
+				{
+					hook := Hook{}
+					storedHook, exist := hookMap[trigger.ID]
+					if !exist {
+
+						auth := ""
+						version := ""
+						customBody := ""
+						startNode := ""
+
+						hook.Id = trigger.ID
+						hook.Environment = trigger.Environment
+						hook.Workflows = []string{workflow.ID}
+						hook.Owner = workflow.Owner
+						hook.OrgId = workflow.OrgId
+
+						hookInfo := Info{}
+						for _, param := range trigger.Parameters {
+							if param.Name == "url" {
+								hookInfo.Url = param.Value
+								hookInfo.Name = trigger.Label
+							} else if param.Name == "auth_headers" {
+								auth = param.Value
+							} else if param.Name == "await_response" {
+								version = param.Value
+							} else if param.Name == "custom_response_body" {
+								customBody = param.Value
+							}
+						}
+						hook.Info = hookInfo
+
+						// searching for start node
+						if len(workflow.Branches) != 0 {
+							for _, branch := range workflow.Branches {
+								if branch.SourceID == trigger.ID {
+									startNode = branch.DestinationID
+								}
+							}
+						}
+						if startNode == "" {
+							startNode = workflow.Start
+						}
+						hook.Start = startNode
+						hook.Status = "stopped"
+						hook.Running = false
+
+						hook.Auth = auth
+						hook.Version = version
+						hook.CustomResponse = customBody
+						allHooks = append(allHooks, hook)
+					} else {
+						hookValue := storedHook
+						hookValue.Status = "running"
+						for _, param := range trigger.Parameters {
+							if param.Name == "url" {
+								hookValue.Info.Url = param.Value
+								hookValue.Info.Name = trigger.Label
+							}
+						}
+
+						allHooks = append(allHooks, hookValue)
+					}
+				}
+			case "SCHEDULE":
+				{
+					schedule := ScheduleOld{}
+					storedschedule, exist := scheduleMap[trigger.ID]
+					if !exist {
+
+						startNode := ""
+
+						schedule.Id = trigger.ID
+						schedule.WorkflowId = workflow.ID
+						schedule.Environment = trigger.Environment
+						schedule.Org = workflow.OrgId
+						schedule.Name = trigger.Label
+
+						for _, param := range trigger.Parameters {
+							if param.Name == "cron" {
+								schedule.Frequency = param.Value
+							} else if param.Name == "execution_argument" {
+								schedule.Argument = param.Value
+							}
+						}
+
+						for _, branch := range workflow.Branches {
+							if branch.SourceID == schedule.Id {
+								startNode = branch.DestinationID
+							}
+						}
+
+						if startNode == "" {
+							startNode = workflow.Start
+						}
+						schedule.StartNode = startNode
+						Wrapper := fmt.Sprintf(`{"start": "%s", "execution_source": "schedule", "execution_argument": "%s"}`, startNode, schedule.Argument)
+						schedule.WrappedArgument = Wrapper
+						schedule.Status = "stopped"
+
+						allSchedules = append(allSchedules, schedule)
+					} else {
+						scheduleValue := storedschedule
+						scheduleValue.Name = trigger.Label
+						scheduleValue.Status = "running"
+
+						allSchedules = append(allSchedules, scheduleValue)
+					}
+				}
+			case "PIPELINE":
+				{
+
+					// 		storedPipeline, exist := pipelineMap[trigger.ID]
+					// 		if exist && storedPipeline.Status != "uninitialized" {
+					// 			startNode := ""
+
+					// 			storedPipeline.WorkflowId = workflow.ID
+
+					// 			if len(workflow.Branches) != 0 {
+					// 				for _, branch := range workflow.Branches {
+					// 					if branch.SourceID == trigger.ID {
+					// 						startNode = branch.DestinationID
+					// 					}
+					// 				}
+					// 			}
+					// 			if startNode == "" {
+					// 				startNode = workflow.Start
+					// 			}
+					// 			storedPipeline.StartNode = startNode
+					// 			allPipelines = append(allPipelines, storedPipeline)
+
+					// 		}
+					// 	}
+				}
+			}
+		}
+	}
+
+	sort.SliceStable(allHooks, func(i, j int) bool {
+		return allHooks[i].Info.Name < allHooks[j].Info.Name
+	})
+	sort.SliceStable(allSchedules, func(i, j int) bool {
+		return allSchedules[i].Name < allSchedules[j].Name
+	})
+	// sort.SliceStable(pipelines, func(i, j int) bool {
+	// 	return pipelines[i].Name < pipelines[j].Name
+	// })
+
+	allTriggersWrapper := AllTriggersWrapper{}
+
+	allTriggersWrapper.WebHooks = allHooks
+	allTriggersWrapper.Schedules = allSchedules
+	// allTriggersWrapper.Pipelines = allPipelines
+
+	newjson, err := json.Marshal(allTriggersWrapper)
+	if err != nil {
+		log.Printf("Failed unmarshal: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed unpacking environments"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(newjson)
 }
 
 func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
