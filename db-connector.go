@@ -8095,6 +8095,31 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 	return users[0], nil
 }
 
+func savePipelineData(ctx context.Context, pipeline Pipeline) error {
+	// assuming IndexRequest can be used as an upsert operation
+	nameKey := "pipelines"
+
+	pipelineData, err := json.Marshal(pipeline)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in savePipelineData: %s", err)
+		return err
+	}
+	triggerId := strings.ToLower(pipeline.TriggerId)
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, triggerId, pipelineData)
+		if err != nil {
+			return err
+		}
+	} else {
+		// key := datastore.NameKey(nameKey, pipelineId, nil)
+		// if _, err := project.Dbclient.Put(ctx, key, &pipeline); err != nil {
+		// 	log.Printf("[ERROR] failed to add pipeline: %s", err)
+		// 	return err
+	}
+
+	return nil
+}
+
 func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 	nameKey := "hooks"
 	hookId = strings.ToLower(hookId)
@@ -8203,6 +8228,46 @@ func SetHook(ctx context.Context, hook Hook) error {
 	}
 
 	return nil
+}
+
+func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
+	pipeline := &Pipeline{}
+	nameKey := "pipelines"
+	
+	triggerId = strings.ToLower(triggerId)
+
+	if project.DbType == "opensearch" {
+
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), triggerId)
+		if err != nil {
+			return &Pipeline{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return &Pipeline{}, errors.New("pipeline doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &Pipeline{}, err
+		}
+
+		wrapped := PipelineWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &Pipeline{}, err
+		}
+
+		pipeline = &wrapped.Source
+	}  else {
+		// key := datastore.NameKey(nameKey, triggerId, nil)
+		// err := project.Dbclient.Get(ctx, key, pipeline)
+		// if err != nil {
+		// 	return &Pipeline{}, err
+		// }
+	}
+	return pipeline, nil
 }
 
 func GetNotification(ctx context.Context, id string) (*Notification, error) {
