@@ -1787,14 +1787,23 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 				},
 			}
 
-			// FIXME: Example & Multiline
 			if param.Value.Example != nil {
-				curParam.Example = param.Value.Example.(string)
+				if exampleVal, ok := param.Value.Example.(string); !ok {
+					curParam.Example = fmt.Sprintf("%v", param.Value.Example)
+				} else {
+					curParam.Example = exampleVal
+				}
 
 				if param.Value.Name == "body" {
-					curParam.Value = param.Value.Example.(string)
+					if exampleVal, ok := param.Value.Example.(string); !ok {
+
+						curParam.Value = fmt.Sprintf("%v", param.Value.Example)
+					} else {
+						curParam.Value = exampleVal
+					}
 				}
 			}
+
 			if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 				j, err := json.Marshal(&val)
 				if err == nil {
@@ -1987,10 +1996,19 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 			}
 
 			if param.Value.Example != nil {
-				curParam.Example = param.Value.Example.(string)
+				if exampleVal, ok := param.Value.Example.(string); !ok {
+					curParam.Example = fmt.Sprintf("%v", param.Value.Example)
+				} else {
+					curParam.Example = exampleVal
+				}
 
 				if param.Value.Name == "body" {
-					curParam.Value = param.Value.Example.(string)
+					if exampleVal, ok := param.Value.Example.(string); !ok {
+
+						curParam.Value = fmt.Sprintf("%v", param.Value.Example)
+					} else {
+						curParam.Value = exampleVal
+					}
 				}
 			}
 
@@ -2173,14 +2191,23 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 				},
 			}
 
-			// FIXME: Example & Multiline
 			if param.Value.Example != nil {
-				curParam.Example = param.Value.Example.(string)
+				if exampleVal, ok := param.Value.Example.(string); !ok {
+					curParam.Example = fmt.Sprintf("%v", param.Value.Example)
+				} else {
+					curParam.Example = exampleVal
+				}
 
 				if param.Value.Name == "body" {
-					curParam.Value = param.Value.Example.(string)
+					if exampleVal, ok := param.Value.Example.(string); !ok {
+
+						curParam.Value = fmt.Sprintf("%v", param.Value.Example)
+					} else {
+						curParam.Value = exampleVal
+					}
 				}
 			}
+
 			if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 				j, err := json.Marshal(&val)
 				if err == nil {
@@ -2377,14 +2404,23 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 				},
 			}
 
-			// FIXME: Example & Multiline
 			if param.Value.Example != nil {
-				curParam.Example = param.Value.Example.(string)
+				if exampleVal, ok := param.Value.Example.(string); !ok {
+					curParam.Example = fmt.Sprintf("%v", param.Value.Example)
+				} else {
+					curParam.Example = exampleVal
+				}
 
 				if param.Value.Name == "body" {
-					curParam.Value = param.Value.Example.(string)
+					if exampleVal, ok := param.Value.Example.(string); !ok {
+
+						curParam.Value = fmt.Sprintf("%v", param.Value.Example)
+					} else {
+						curParam.Value = exampleVal
+					}
 				}
 			}
+			
 			if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 				j, err := json.Marshal(&val)
 				if err == nil {
@@ -2613,14 +2649,24 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 				},
 			}
 
-			// FIXME: Example & Multiline
 			if param.Value.Example != nil {
-				curParam.Example = param.Value.Example.(string)
+				if exampleVal, ok := param.Value.Example.(string); !ok {
+					curParam.Example = fmt.Sprintf("%v", param.Value.Example)
+				} else {
+					curParam.Example = exampleVal
+				}
 
-				if parsedName == "body" {
-					curParam.Value = param.Value.Example.(string)
+				if param.Value.Name == "body" {
+					if exampleVal, ok := param.Value.Example.(string); !ok {
+
+						curParam.Value = fmt.Sprintf("%v", param.Value.Example)
+					} else {
+						curParam.Value = exampleVal
+					}
 				}
 			}
+
+
 			if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 				j, err := json.Marshal(&val)
 				if err == nil {
@@ -2820,14 +2866,23 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 				},
 			}
 
-			// FIXME: Example & Multiline
 			if param.Value.Example != nil {
-				curParam.Example = param.Value.Example.(string)
+				if exampleVal, ok := param.Value.Example.(string); !ok {
+					curParam.Example = fmt.Sprintf("%v", param.Value.Example)
+				} else {
+					curParam.Example = exampleVal
+				}
 
 				if param.Value.Name == "body" {
-					curParam.Value = param.Value.Example.(string)
+					if exampleVal, ok := param.Value.Example.(string); !ok {
+
+						curParam.Value = fmt.Sprintf("%v", param.Value.Example)
+					} else {
+						curParam.Value = exampleVal
+					}
 				}
 			}
+
 			if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 				j, err := json.Marshal(&val)
 				if err == nil {
@@ -3024,14 +3079,23 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 				},
 			}
 
-			// FIXME: Example & Multiline
 			if param.Value.Example != nil {
-				curParam.Example = param.Value.Example.(string)
+				if exampleVal, ok := param.Value.Example.(string); !ok {
+					curParam.Example = fmt.Sprintf("%v", param.Value.Example)
+				} else {
+					curParam.Example = exampleVal
+				}
 
 				if param.Value.Name == "body" {
-					curParam.Value = param.Value.Example.(string)
+					if exampleVal, ok := param.Value.Example.(string); !ok {
+
+						curParam.Value = fmt.Sprintf("%v", param.Value.Example)
+					} else {
+						curParam.Value = exampleVal
+					}
 				}
 			}
+
 			if val, ok := param.Value.ExtensionProps.Extensions["multiline"]; ok {
 				j, err := json.Marshal(&val)
 				if err == nil {
