@@ -64,36 +64,6 @@ type AllPipelinesWrapper struct {
 	} `json:"hits"`
 }
 
-type Pipeline struct {
-	Name	   	string 		`json:"name"`
-	Type 		string 		`json:"type"`
-	Command		string 		`json:"command"`
-	Environment string 		`json:"environment"`
-	WorkflowId  string 		`json:"workflow_id"`
-	StartNode   string 		`json:"start_node"`
-	OrgId       string 		`json:"org_id"`
-	Status      string 		`json:"status"`
-	Error       string 	    `json:"error"`
-	
-	PipelineId 	string 		`json:"pipeline_id"`
-	TriggerId	string 		`json:"trigger_id"`
-}
-
-type AllPipelinesWrapper struct {
-	Hits struct {
-		Total struct {
-			Value    int    `json:"value"`
-			Relation string `json:"relation"`
-		} `json:"total"`
-		Hits     []struct {
-			Index  string  `json:"_index"`
-			ID     string  `json:"_id"`
-			Score  float64 `json:"_score"`
-			Source Pipeline `json:"_source"`
-		} `json:"hits"`
-	} `json:"hits"`
-}
-
 type QueryInput struct {
 	// Required
 	Query string `json:"query"`

@@ -5489,6 +5489,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					}
 				}
 			}
+
+			if app.Authentication.Type == "oauth2-app" && len(app.Authentication.RedirectUri) > 0 {
+				allApps[appIndex].Authentication.Type = "oauth2"
+			}
 		}
 
 		return allApps, nil
@@ -5988,6 +5992,17 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return allApps[i].Edited > allApps[j].Edited
 	})
 
+	// Fix Oauth2 issues
+	for appIndex, app := range allApps {
+		if app.Authentication.Type != "oauth2-app" {
+			continue
+		}
+
+		if len(app.Authentication.RedirectUri) > 0 {
+			allApps[appIndex].Authentication.Type = "oauth2"
+		}
+	}
+
 	if len(allApps) > 0 {
 		// Finds references
 		allApps = findReferenceAppDocs(ctx, allApps)
@@ -6004,6 +6019,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			//log.Printf("[INFO] Set app cache for %s", cacheKey)
 		}
 	}
+
+
 
 	return allApps, nil
 }
