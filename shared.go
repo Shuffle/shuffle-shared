@@ -10541,11 +10541,13 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[ERROR] Failed fixing org %s while re-adding a user: %s", foundOrg.Id, err)
 				}
 			}
+		} else {
+			log.Printf("[ERROR] Failed finding org %s during login: %s", userdata.ActiveOrg.Id, err)
 		}
 
 		// Check if we need to move them over
 		if !found {
-			log.Printf("[DEBUG] Current active org for user %s (%s) not found. Checking other orgs", userdata.Username, userdata.Id)
+			log.Printf("[DEBUG] Current active org (%s) for user %s (%s) not found. Checking other orgs. Found %d orgs.", userdata.ActiveOrg.Id, userdata.Username, userdata.Id,len(userdata.Orgs))
 			for _, org := range userdata.Orgs {
 				// Verify if the user is in the org
 				foundOrg, err := GetOrg(ctx, org)
