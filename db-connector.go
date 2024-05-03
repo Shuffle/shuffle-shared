@@ -4043,10 +4043,11 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 
 		if data.Region != "" && data.Region != "europe-west2" && gceProject == "shuffler" {
 			go func() {
-				log.Printf("[INFO] Propagating org %s", data.Id)
 				err := propagateOrg(data, false)
 				if err != nil {
-					log.Printf("[WARNING] Failed propagating org %s: %s", data.Id, err)
+					log.Printf("[ERROR] Failed propagating org %s for region %#v: %s", data.Id, data.Region, err)
+				} else {
+					log.Printf("[INFO] Successfully propagated org %s to region %#v", data.Id, data.Region)
 				}
 			}()
 		}

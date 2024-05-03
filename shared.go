@@ -6313,7 +6313,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								}
 
 								// Some internal reserves
-								if ((strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
+								if ((strings.ToLower(action.AppName) == "http" && param.Name == "body") || (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
 									// Do nothing
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
@@ -24031,9 +24031,14 @@ func fixOrgUsers(ctx context.Context, foundOrg Org) error {
 }
 
 func IsLicensed(ctx context.Context, org Org) bool {
+	if project.Environment == "cloud" && len(org.ManagerOrgs) > 0 {
+		return true
+	}
+
 	if len(org.SubscriptionUserId) == 0 {
 		return false
 	}
+
 	//if len(org.Subscriptions) > 0 {
 	//	return true
 	//}
