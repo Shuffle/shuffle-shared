@@ -6106,8 +6106,6 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 
 func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 	wrapper := []WorkflowApp{}
-	var err error
-
 	cacheKey := fmt.Sprintf("userapps-%s", userId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -6142,11 +6140,11 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 						{
 							"match": map[string]interface{}{
 								"contributors": userId,
-							},
 						},
 					},
 				},
 				"minimum_should_match": 1,
+				},
 			},
 		}
 
@@ -6172,9 +6170,8 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return []WorkflowApp{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+			return []WorkflowApp{}, fmt.Errorf("bad statuscode: %d", res.StatusCode)
 		}
-
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return []WorkflowApp{}, err
@@ -6191,38 +6188,44 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			userApps = append(userApps, innerApp)
 		}
 	} else {
-		cursorStr := ""
-		query := datastore.NewQuery(indexName).Filter("owner =", userId).Filter("contributors IN", []string{userId}).Order("-edited")
-		for {
-			it := project.Dbclient.Run(ctx, query)
+		uniqueDocs := make(map[string]bool)
+
+		query1 := datastore.NewQuery(indexName).
+			Filter("owner =", userId)
+		it := project.Dbclient.Run(ctx, query1)
 			for {
 				innerApp := WorkflowApp{}
 				_, err := it.Next(&innerApp)
+			if err == iterator.Done {
+				break
+			}
 				if err != nil {
+				log.Printf("[ERROR] Failed fetching results: %v", err)
 					break
 				}
 				userApps = append(userApps, innerApp)
-			}
-			if err != iterator.Done {
-				log.Printf("[ERROR] Failed fetching results: %v", err)
-			}
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("Cursor error: %s", err)
+			uniqueDocs[innerApp.ID] = true
+		}
+
+		query2 := datastore.NewQuery(indexName).
+			Filter("contributors =", userId)
+		it = project.Dbclient.Run(ctx, query2)
+		for {
+			innerApp := WorkflowApp{}
+			_, err := it.Next(&innerApp)
+			if err == iterator.Done {
 				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					// Break the loop if the cursor is the same as the previous one
+			}
+			if err != nil {
+				log.Printf("[ERROR] Failed fetching results: %v", err)
 					break
 				}
-
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
+			if _, ok := uniqueDocs[innerApp.ID]; !ok {
+				userApps = append(userApps, innerApp)
 			}
 		}
 	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(userApps)
 		if err == nil {
