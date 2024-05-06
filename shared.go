@@ -5078,6 +5078,17 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" && tmpworkflow.Validated == false {
+		if workflow.Validated == true {
+
+			if !user.SupportAccess {
+				workflow.Validated = false
+			} else {
+				//log.Printf("[INFO] User %s is validating workflow %s", user.Username, tmpworkflow.ID)
+			}
+		}
+	}
+
 	type PublicCheck struct {
 		UserEditing bool   `json:"user_editing"`
 		Public      bool   `json:"public"`
@@ -5098,32 +5109,32 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
 				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, tmpworkflow.ID)
 				if err != nil {
-					log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s", user.Id, tmpworkflow.ID, err)
+					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
+					log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s. Username: %s. ACL controlled with GITHUB_USER_ALLOWLIST environment variable. Allowed users: %#v", user.Id, tmpworkflow.ID, err, user.PublicProfile.GithubUsername, allowList)
 
 					// Check if current user is one of the few allowed
 					// This can only happen if the workflow doesn't already have an owner
-					//log.Printf("CUR USER: %s\n\n%s", user.PublicProfile, os.Getenv("GITHUB_USER_ALLOWLIST"))
-					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
 					found := false
 					if user.PublicProfile.Public && len(allowList) > 0 {
 						allowListSplit := strings.Split(allowList, ",")
 						for _, username := range allowListSplit {
-							if username == user.PublicProfile.GithubUsername {
-								algoliaUser, err = HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
-								if err != nil {
-									log.Printf("New error: %s", err)
-								}
-
-								found = true
-								break
+							if username != user.PublicProfile.GithubUsername {
+								continue
 							}
 
-						}
+							algoliaUser, err = HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
+							if err != nil {
+								log.Printf("[ERROR] Algolia Creator search error in public workflow edit: %s", err)
+								continue
+							}
 
+							found = true
+							break
+						}
 					}
 
 					if !found {
-						resp.WriteHeader(401)
+						resp.WriteHeader(403)
 						resp.Write([]byte(`{"success": false}`))
 						return
 					}
@@ -5820,7 +5831,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					// Validate workflow exists
 					_, err := GetWorkflow(ctx, param.Value)
 					if err != nil {
-						parsedError := fmt.Sprintf("Workflow %s in Subflow %s (%s) doesn't exist", workflow.ID, trigger.Label, trigger.ID)
+						parsedError := fmt.Sprintf("Selected Subflow in Action %s doesn't exist", trigger.Label)
 						if !ArrayContains(workflow.Errors, parsedError) {
 							workflow.Errors = append(workflow.Errors, parsedError)
 						}
@@ -6176,17 +6187,33 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if curapp.ID != action.AppID && curapp.Name != action.AppName {
-				errorMsg := fmt.Sprintf("App %s version %s doesn't exist", action.AppName, action.AppVersion)
+				if action.AppID == "integration" { 
+					for _, param := range action.Parameters {
+						if param.Name == "action" {
+							if len(param.Value) > 0 {
+								continue
+							}
 
-				action.Errors = append(action.Errors, "This app doesn't exist.")
+							errorMsg := fmt.Sprintf("Parameter %s in Action %s is empty", param.Name, action.Label)
+							if !ArrayContains(workflow.Errors, errorMsg) {
+								workflow.Errors = append(workflow.Errors, errorMsg)
+							}
+						}
+					}
+				} else {
+					errorMsg := fmt.Sprintf("App %s version %s doesn't exist", action.AppName, action.AppVersion)
 
-				if !ArrayContains(workflow.Errors, errorMsg) {
-					workflow.Errors = append(workflow.Errors, errorMsg)
-					log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
+					action.Errors = append(action.Errors, "This app doesn't exist.")
+
+					if !ArrayContains(workflow.Errors, errorMsg) {
+						workflow.Errors = append(workflow.Errors, errorMsg)
+						log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
+					}
+
+					action.IsValid = false
+					workflow.IsValid = false
+
 				}
-
-				action.IsValid = false
-				workflow.IsValid = false
 
 				newActions = append(newActions, action)
 			} else {
@@ -15821,7 +15848,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 						return
 					}
 
-					//log.Printf("[DEBUG] Validated - token: %s!", token)
 					openidUser.Sub = token.Sub
 					org = &token.Org
 					skipValidation = true
@@ -24060,4 +24086,173 @@ func IsLicensed(ctx context.Context, org Org) bool {
 	}
 
 	return false
+}
+		
+// Generates a standard destination workflow that uses:
+// 1. A Startnode mapping $exec
+// 2. An enrichment subflow that maps the data from $exec
+// - A data merger of 1 & 2
+// - Integration framework with dest app
+func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Workflow {
+	appname := app.Name 
+	appCategory := ""
+	if len(app.Categories) > 0 {
+		appCategory = app.Categories[0]
+	}
+
+	workflowId := uuid.NewV4().String()
+	startnodeId := uuid.NewV4().String()
+
+	workflow := Workflow{
+		ID: workflowId,
+		Start: startnodeId,
+	}
+
+	workflow.Actions = append(workflow.Actions, Action{
+		AppName: "Shuffle Tools",
+		AppVersion: "1.2.0",
+		Label: "create_startnode",
+		ID: startnodeId,
+		Name: "repeat_back_to_me",
+		Parameters: []WorkflowAppActionParameter{
+			WorkflowAppActionParameter{
+				Name: "call",
+				Value: "$exec",
+				Multiline: true,
+			},
+		},
+		Position: Position{
+			X: 0,
+			Y: 0,
+		},
+	})
+
+	previousnodeId := startnodeId
+	previousnodeRef := fmt.Sprintf("$%s", workflow.Actions[0].Label)
+	if enrich {
+		enrichNodeId := uuid.NewV4().String()
+		workflow.Triggers = append(workflow.Triggers, Trigger{
+			AppName: "Shuffle Workflow",
+			AppVersion: "1.0.0",
+			Name: "Shuffle Workflow",
+
+			ID: enrichNodeId,
+			Label: "Enrich", 
+			Tags: []string{"Enrich"},
+			TriggerType: "SUBFLOW",
+
+			Position: Position{
+				X: 0,
+				Y: 150, 
+			},
+
+			Parameters: []WorkflowAppActionParameter{
+				WorkflowAppActionParameter{
+					Name: "workflow",
+					Value: "",
+				},
+				WorkflowAppActionParameter{
+					Name: "argument",
+					Value: "$exec",
+				},
+				WorkflowAppActionParameter{
+					Name: "user_apikey",
+					Value: "",
+				},
+				WorkflowAppActionParameter{
+					Name: "startnode",
+					Value: "",
+				},
+				WorkflowAppActionParameter{
+					Name: "check_result",
+					Value: "true",
+				},
+			},
+		})
+
+		// Start -> subflow node 
+		workflow.Branches = append(workflow.Branches, Branch{
+			ID: uuid.NewV4().String(),
+			SourceID: startnodeId,
+			DestinationID: enrichNodeId,
+		})
+
+		// Add merge node
+		mergeNodeId := uuid.NewV4().String()
+		workflow.Actions = append(workflow.Actions, Action{
+			AppName: "Shuffle Tools",
+			AppVersion: "1.2.0",
+			Label: "merge enrichment",
+			ID: mergeNodeId,
+			Name: "merge_incoming_branches",
+			Parameters: []WorkflowAppActionParameter{
+				WorkflowAppActionParameter{
+					Name: "input_type",
+					Value: "dict",
+					Options: []string{"list", "dict",},
+					Required: true,
+				},
+			},
+			Position: Position{
+				X: 0,
+				Y: 300,
+			},
+		})
+
+		// Start -> subflow node 
+		workflow.Branches = append(workflow.Branches, Branch{
+			ID: uuid.NewV4().String(),
+			SourceID: startnodeId,
+			DestinationID: mergeNodeId,
+		})
+
+		workflow.Branches = append(workflow.Branches, Branch{
+			ID: uuid.NewV4().String(),
+			SourceID: enrichNodeId,
+			DestinationID: mergeNodeId,
+		})
+
+		previousnodeId = mergeNodeId
+		previousnodeRef = fmt.Sprintf("$%s", strings.ReplaceAll(workflow.Actions[1].Label, " ", "_"))
+	}
+
+	integrationFrameworkId := uuid.NewV4().String()
+	workflow.Actions = append(workflow.Actions, Action{
+		AppName: "Integration Framework",
+		AppVersion: "1.0.0",
+		AppID: "integration",
+		Label: strings.ReplaceAll(action, " ", "_"),
+		ID: integrationFrameworkId,
+		Name: appCategory,
+		LargeImage: app.LargeImage,
+		Parameters: []WorkflowAppActionParameter{
+			WorkflowAppActionParameter{
+				Name: "action",
+				Value: action,
+				Options: []string{action},
+				Required: true,
+			},
+			WorkflowAppActionParameter{
+				Name: "fields",
+				Value: previousnodeRef,
+				Multiline: true,
+			},
+			WorkflowAppActionParameter{
+				Name: "app_name",
+				Value: appname,
+			},
+		},
+		Position: Position{
+			X: 0,
+			Y: 450,
+		},
+	})
+
+	workflow.Branches = append(workflow.Branches, Branch{
+		ID: uuid.NewV4().String(),
+		SourceID: previousnodeId,
+		DestinationID: integrationFrameworkId,
+	})
+
+	return &workflow
 }

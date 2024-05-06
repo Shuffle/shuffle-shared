@@ -227,7 +227,7 @@ func GetUsecaseData() string {
 				"type": "cases",
 				"last": "cases",
                 "name": "2-way Ticket synchronization",
-				"priority": 60,
+				"priority": 20,
                 "items": {}
             },
             {

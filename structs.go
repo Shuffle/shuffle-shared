@@ -1227,6 +1227,8 @@ type Workflow struct {
 	Generated    bool   `json:"generated" datastore:"generated"`
 	Hidden       bool   `json:"hidden" datastore:"hidden"`
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
+
+	Validated  bool 	`json:"validated" datastore:"validated"` 
 }
 
 type Category struct {
@@ -1452,6 +1454,7 @@ type AlgoliaSearchWorkflow struct {
 	CreatorInfo      CreatorInfo       `json:"creator_info,omitempty"`
 	ActionReferences []ActionReference `json:"action_references,omitempty"`
 	Priority         int               `json:"priority"`
+	Validated  		 bool 			   `json:"validated"`
 }
 
 type ActionReference struct {
