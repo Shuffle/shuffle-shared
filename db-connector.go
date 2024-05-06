@@ -10521,7 +10521,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 				log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (2): %s", err)
 				err = nil
 			} else {
-				log.Printf("[ERROR] Error in cache key loading for %s: %s", id, err)
+				log.Printf("[WARNING] Error in cache key loading for %s: %s", id, err)
 
 				// Search for key by removing first uuid part
 				newId := id

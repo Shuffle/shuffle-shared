@@ -14620,10 +14620,37 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId)
 	if err != nil {
-		log.Printf("[WARNING][%s] Failed to GET cache key %s for org %s (get)", executionId, tmpData.Key, tmpData.OrgId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
-		return
+
+		// Doing a last resort search, e.g. to handle spaces and the like
+		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, 30, "")
+		if err == nil {
+			cacheData = &CacheKeyData{}
+			searchkey := strings.ReplaceAll(strings.Trim(strings.ToLower(tmpData.Key), " "), " ", "_")
+
+			for _, key := range allkeys {
+				tmpkey := strings.ReplaceAll(strings.Trim(strings.ToLower(key.Key), " "), " ", "_")
+
+				log.Printf("%s vs %s", tmpkey, searchkey)
+				if tmpkey == searchkey {
+					log.Printf("\n\n[INFO] Found key %s for org %s\n\n", key.Key, org.Id)
+					cacheData = &key
+					break
+				}
+			}
+
+			if cacheData.Key == "" {
+				log.Printf("[WARNING] Failed to GET cache key %s for org %s (get)", tmpData.Key, tmpData.OrgId)
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
+				return
+			}
+
+		} else {
+			log.Printf("[WARNING][%s] Failed to GET cache key %s for org %s (get)", executionId, tmpData.Key, tmpData.OrgId)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication or key doesn't exist"}`))
+			return
+		}
 	}
 
 	if requireCacheAuth {
@@ -14737,7 +14764,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	b, err := json.Marshal(cacheData)
 	if err != nil {
-		log.Printf("[WARNING] Failed to GET cache key %s for org %s", tmpData.Key, tmpData.OrgId)
+		log.Printf("[WARNING] Failed to marshal cache data %s for org %s", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get key. Does it exist?"}`))
 		return
