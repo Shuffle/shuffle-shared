@@ -10069,6 +10069,11 @@ func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
+	// Check if fileId has the prefix "webhook_"
+	if strings.HasPrefix(fileId, "webhook_") {
+		fileId = strings.TrimPrefix(fileId, "webhook_")
+	}
+
 	if len(fileId) != 36 {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when deleting hook is not valid"}`))
