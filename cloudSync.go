@@ -569,6 +569,7 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 	record.ActionReferences = actionRefs
 
 	record.Priority = GetWorkflowPriority(workflow)
+	record.Validated = workflow.Validated
 
 	records := []AlgoliaSearchWorkflow{
 		record,
