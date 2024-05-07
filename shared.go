@@ -17814,7 +17814,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							CreateOrgNotification(
 								ctx,
 								fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
-								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", err.Error()),
+								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
 								fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 								workflowExecution.ExecutionOrg,
 								true,
