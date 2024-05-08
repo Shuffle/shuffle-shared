@@ -217,7 +217,7 @@ func GetUsecaseData() string {
 				"priority": 100,
 				"type": "siem",
 				"last": "cases",
-				"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on it's way there.",
+				"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on its way there.",
 				"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
 				"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
 				"reference_image": "/images/detectionframework.png",
@@ -232,44 +232,17 @@ func GetUsecaseData() string {
             },
             {
                 "name": "ChatOps",
-								"priority": 70,
-								"type": "communication",
-								"last": "cases",
+				"priority": 70,
+				"type": "communication",
+				"last": "cases",
                 "items": {}
             },
             {
                 "name": "Threat Intel received",
-								"priority": 50,
-								"type": "intel",
-								"last": "cases",
+				"priority": 50,
+				"type": "intel",
+				"last": "cases",
                 "items": {}
-            },
-            {
-                "name": "Assign tickets",
-				"type": "iam",
-				"last": "cases",
-				"priority": 30,
-                "items": {}
-            },
-            {
-                "name": "Firewall alerts",
-				"priority": 90,
-				"type": "network",
-				"last": "cases",
-                "items": {
-                    "name": "URL filtering",
-                    "items": {}
-                }
-            },
-            {
-                "name": "IDS/IPS alerts",
-				"type": "network",
-				"last": "cases",
-				"priority": 30,
-                "items": {
-                    "name": "Manage policies",
-                    "items": {}
-                }
             }
         ]
     },
@@ -297,22 +270,13 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Sandbox",
-								"priority": 60,
-								"type": "intel",
+				"priority": 60,
+				"type": "intel",
                 "items": {
                     "name": "Use a sandbox to analyze",
                     "items": {}
                 }
-            },
-            {
-                "name": "Realtime",
-								"priority": 50,
-								"type": "intel",
-                "items": {
-                    "name": "Analyze screenshots, websites etc. in realtime",
-                    "items": {}
-                }
-						}
+            }
         ]
     },
     {
@@ -369,14 +333,14 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Memory Analysis (Volatility)",
-								"priority": 50,
-								"type": "intel",
+				"priority": 50,
+				"type": "intel",
                 "items": {}
             },
             {
                 "name": "IDS & IPS (Snort/Surricata)",
-								"priority": 50,
-								"type": "network",
+				"priority": 50,
+				"type": "network",
 				"last": "cases",
                 "items": {}
             },
@@ -423,8 +387,8 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Trigger scans",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
@@ -436,39 +400,39 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Autoblock activity when threat intel is received",
-								"priority": 50,
-								"type": "intel",
-								"last": "iam",
+				"priority": 50,
+				"type": "intel",
+				"last": "iam",
                 "items": {}
             },
             {
                 "name": "Lock/Delete/Reset account",
-								"priority": 50,
-								"type": "iam",
+				"priority": 50,
+				"type": "iam",
                 "items": {}
             },
             {
                 "name": "Lock vault",
-								"priority": 50,
-								"type": "iam",
+				"priority": 50,
+				"type": "iam",
                 "items": {}
             },
             {
                 "name": "Increase authentication",
-								"priority": 50,
-								"type": "iam",
+				"priority": 50,
+				"type": "iam",
                 "items": {}
             },
             {
                 "name": "Get policies from assets",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Run ansible scripts",
-								"type": "assets",
-								"priority": 50,
+				"type": "assets",
+				"priority": 50,
                 "items": {}
             }
         ]
@@ -485,94 +449,94 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Discover assets",
-								"priority": 80,
-								"type": "assets",
+				"priority": 80,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Ensure policies are followed",
-								"priority": 80,
-								"type": "assets",
+				"priority": 80,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Find Inactive users",
-								"priority": 50,
-								"type": "iam",
+				"priority": 50,
+				"type": "iam",
                 "items": {}
             },
             {
                 "name": "Botnet tracker",
-								"priority": 50,
-								"type": "network",
+				"priority": 50,
+				"type": "network",
                 "items": {}
             },
             {
                 "name": "Ensure access rights match HR systems",
-								"priority": 50,
-								"type": "iam",
+				"priority": 50,
+				"type": "iam",
                 "items": {}
             },
             {
                 "name": "Ensure onboarding is followed",
-								"priority": 50,
-								"type": "iam",
+				"priority": 50,
+				"type": "iam",
                 "items": {}
             },
             {
                 "name": "Track third party SaaS apps",
-								"priority": 50,
-								"type": "iam",
+				"priority": 50,
+				"type": "iam",
                 "items": {}
             },
             {
                 "name": "Devices used for your cloud account",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Too much access in GCP/Azure/AWS other clouds",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Certificate validation",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor domain creation and expiration",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor new DNS entries for domain with passive DNS",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor and track password dumps",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Monitor for mentions of domain on darknet sites",
-								"priority": 50,
-								"type": "assets",
+				"priority": 50,
+				"type": "assets",
                 "items": {}
             },
             {
                 "name": "Reporting",
-								"priority": 50,
-								"type": "assets",
-								"keywords": ["report", "reporting", "sheets", "excel"],
-								"keyword_matches": 1,
+				"priority": 50,
+				"type": "assets",
+				"keywords": ["report", "reporting", "sheets", "excel"],
+				"keyword_matches": 1,
                 "items": {
                     "name": "Monthly reports",
                     "items": {

@@ -3278,20 +3278,6 @@ func GetAllOpenApi(ctx context.Context) ([]ParsedOpenApi, error) {
 	return apis, nil
 }
 
-func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
-	var allworkflows []Workflow
-	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId).Limit(100)
-	if orgId == "ALL" {
-		q = datastore.NewQuery("workflow")
-	}
-
-	_, err := project.Dbclient.GetAll(ctx, q, &allworkflows)
-	if err != nil && len(allworkflows) == 0 {
-		return []Workflow{}, err
-	}
-
-	return allworkflows, nil
-}
 
 func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 	nameKey := "Organizations"
