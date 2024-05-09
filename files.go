@@ -628,8 +628,10 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 				//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed loading file from Github repo %s/%s"}`, owner, repo)))
 				//return
 			} else {
-				log.Printf("[DEBUG] Found %d files in category %s for filename '%s'", len(foundFiles), namespace, filename[0])
+				log.Printf("[DEBUG] Found %d file(s) in category %s for filename '%s'", len(foundFiles), namespace, filename[0])
 				for _, item := range foundFiles {
+					//log.printf("[DEBUG] %#v: %s", *item.Name, item.Status)
+
 					fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, *item.Path, nil)
 					if err != nil {
 						log.Printf("[ERROR] Failed getting file %s: %s", *item.Path, err)
@@ -646,7 +648,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 					//log.Printf("[DEBUG] Decoded file %s with content:\n%s", *item.Path, string(decoded))
 
 					timeNow := time.Now().Unix()
-					fileId := uuid.NewV4().String()
+					fileId := "file_"+uuid.NewV4().String()
 	
 					folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
 					downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)

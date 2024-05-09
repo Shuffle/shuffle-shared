@@ -3215,6 +3215,65 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				query = query.Start(nextCursor)
 			}
 		}
+
+		/*
+		if len(user.ActiveOrg.Id) > 0 {
+			log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+			query = datastore.NewQuery(nameKey)
+			query.FilterField("suborg_distribution", "in", []string{user.ActiveOrg.Id}).Limit(25)
+			cursorStr = ""
+			for {
+				it := project.Dbclient.Run(ctx, query)
+
+				for {
+					innerWorkflow := Workflow{}
+					_, err := it.Next(&innerWorkflow)
+					log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
+					if err != nil {
+						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
+							continue
+						} 
+
+						break
+					}
+
+					found := false
+					for _, loopedWorkflow := range workflows {
+						if loopedWorkflow.ID == innerWorkflow.ID {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						workflows = append(workflows, innerWorkflow)
+					}
+				}
+
+				if err != iterator.Done {
+					//log.Printf("[INFO] Failed fetching results: %v", err)
+					//break
+				}
+
+				// Get the cursor for the next page of results.
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("Cursorerror: %s", err)
+					break
+				} else {
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if cursorStr == nextStr {
+						break
+					}
+
+					cursorStr = nextStr
+					query = query.Start(nextCursor)
+				}
+			}
+		}
+		*/
 	}
 
 	fixedWorkflows := []Workflow{}
@@ -5583,7 +5642,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[ERROR] Error in reference_org load: %s.", err)
+						log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
 						continue
 					}
 
