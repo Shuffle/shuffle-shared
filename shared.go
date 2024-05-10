@@ -8594,12 +8594,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Just getting here for later
 	ctx := GetContext(request)
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in change org: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in change org (local): %s", userErr)
 	}
 
 	if project.Environment == "cloud" {
@@ -8630,6 +8627,12 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 			return
 		}
+	}
+
+	if userErr != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
