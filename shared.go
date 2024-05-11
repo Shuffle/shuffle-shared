@@ -2973,6 +2973,29 @@ func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	location := strings.Split(request.URL.String(), "/")
+	var userId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		userId = location[4]
+	}
+
+	if userId == "me" {
+		userId = user.Id
+	}
+
+	if user.Id != userId || len(userId) == 0 {
+		log.Printf("[WARNING] No user ID supplied")
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Supply a valid user ID: /api/v1/users/{userId}/apps"}`))
+		return
+	}
+
 	userapps, err := GetUserApps(ctx, user.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting apps (userapps): %s", err)

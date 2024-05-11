@@ -6254,35 +6254,68 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 
 		cursorStr := ""
 
+		log.Printf("[DEBUG] Getting user apps for %s", userId)
+
 		queries := []datastore.Query{}
-		q := datastore.NewQuery(indexName)
-		q.FilterField("contributors", "in", []string{userId}).Order("-edited")
+		q := datastore.NewQuery(indexName).Filter("contributors =", userId)
+
 		queries = append(queries, *q)
 
-		q = datastore.NewQuery(indexName).Filter("owner =", userId).Order("-edited")
+		q = datastore.NewQuery(indexName).Filter("owner =", userId)
 		queries = append(queries, *q)
 
+		cnt := 0
+		maxAmount := 100 
 		for _, tmpQuery := range queries {
 			query := &tmpQuery
 
+			if cnt > maxAmount {
+				break
+			}
+
 			for {
 				it := project.Dbclient.Run(ctx, query)
+				if cnt > maxAmount {
+					break
+				}
 
 				for {
 					innerApp := WorkflowApp{}
 					_, err = it.Next(&innerApp)
+					log.Printf("Got app: %s (%s)", innerApp.Name, innerApp.ID)
+					cnt += 1
+					if cnt > maxAmount {
+						break
+					}
+
 					if err != nil {
+						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+
 						if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-							log.Printf("[WARNING] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							if strings.Contains("no matching index found", fmt.Sprintf("%s", err)) {
+								log.Printf("[ERROR] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							} else {
+								log.Printf("[WARNING] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							}
+
 							break
 						}
 					}
 
+					if !ArrayContains(innerApp.Contributors, userId) && innerApp.Owner != userId {
+						continue
+					}
+
 					userApps = append(userApps, innerApp)
+
+
 				}
 
 				if err != nil {
-					log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+					if !strings.Contains(fmt.Sprintf("%s", err), "no more items") {
+						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+					}
+
 					break
 				}
 
@@ -6309,6 +6342,8 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			}
 		}
 	}
+
+	log.Printf("Found Userapps: %d", len(userApps))
 
 	if project.CacheDb {
 		data, err := json.Marshal(userApps)
