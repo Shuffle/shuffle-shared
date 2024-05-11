@@ -6668,6 +6668,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	workflow.UpdatedBy = user.Username
+	if workflow.Public {
+		workflow.SuborgDistribution = []string{}
+	}
+
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed saving workflow to database: %s", err)
