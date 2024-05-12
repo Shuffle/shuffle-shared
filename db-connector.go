@@ -6280,7 +6280,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 				for {
 					innerApp := WorkflowApp{}
 					_, err = it.Next(&innerApp)
-					log.Printf("Got app: %s (%s)", innerApp.Name, innerApp.ID)
+					//log.Printf("Got app: %s (%s)", innerApp.Name, innerApp.ID)
 					cnt += 1
 					if cnt > maxAmount {
 						break
