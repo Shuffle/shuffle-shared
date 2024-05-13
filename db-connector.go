@@ -96,7 +96,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		}
 	}
 
-	log.Printf("[DEBUG] Daily stats not updated for %s in org %s. Only have %d stats so far", timeYesterday, executionInfo.OrgId, len(executionInfo.DailyStatistics))
+	log.Printf("[DEBUG] Daily stats not updated for %s in org %s today. Only have %d stats so far - running update.", timeYesterday, executionInfo.OrgId, len(executionInfo.DailyStatistics))
 	// If we get here, we need to update the daily stats
 	newDay := DailyStatistics{
 		Date:                       timeYesterday,
@@ -3154,7 +3154,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				}
 			}
 
-			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
+			log.Printf("[INFO] Appending workflows (ADMIN + suborg distribution) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
 		}
 
 	} else {
@@ -3217,7 +3217,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				}
 			}
 
-			log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+			//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 			cursorStr = ""
 			query = datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
@@ -3228,10 +3228,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 					innerWorkflow := Workflow{}
 					_, err := it.Next(&innerWorkflow)
 					if err != nil {
-						log.Printf("[ERROR] Error in suborg workflow iterator: %s", err)
 						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 							log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
+						} else if strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
+							break
 						} else {
+							log.Printf("[ERROR] Error in suborg workflow iterator: %s", err)
 							break
 						}
 					}
@@ -3251,8 +3253,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 					}
 				}
 
+				// FIXME: Handle nil?
 				if err != iterator.Done {
-					log.Printf("[INFO] Failed fetching suborg workflows: %v", err)
+					//log.Printf("[INFO] Failed fetching suborg workflows: %v", err)
 					break
 				}
 
@@ -6340,8 +6343,6 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 			}
 		}
 	}
-
-	log.Printf("Found Userapps: %d", len(userApps))
 
 	if project.CacheDb {
 		data, err := json.Marshal(userApps)
