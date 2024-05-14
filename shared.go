@@ -1778,6 +1778,77 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, appAuth.Id)))
 }
 
+func AddAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in add app auth group: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[WARNING] Need to be admin to add appauth group")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Error with body read in new app auth group: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var appAuthGroup AppAuthenticationGroup
+	if err := json.Unmarshal(body, &appAuthGroup); err != nil {
+		log.Printf("[WARNING] Failed unmarshaling (appauthgroup): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[AUDIT] Setting new app authentication group for %s with user %s (%s) in org %s (%s)", appAuthGroup.Label, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+	ctx := GetContext(request)
+	
+	if len(appAuthGroup.Label) == 0 {
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Label can't be empty"}`)))
+		return
+	}
+
+	// Super basic check
+	if len(appAuthGroup.AppAuthIds) == 0 {	
+		log.Printf("[WARNING] Bad ID for app: %s", appAuthGroup.AppAuthIds)
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Apps have to be defined"}`)))
+		return
+	}
+
+	appAuthGroup.OrgId = user.ActiveOrg.Id
+	appAuthGroup.Active = true
+	appAuthGroup.Id = uuid.NewV4().String()
+
+	err = SetWorkflowAppAuthGroupDatastore(ctx, appAuthGroup, appAuthGroup.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting up app auth group %s: %s", appAuthGroup.Id, err)
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, appAuthGroup.Id)))
+}
+
 func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -3357,7 +3428,6 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
-
 
 	//log.Printf("[DEBUG] Found %d executions for workflow %s", len(workflowExecutions), fileId)
 
@@ -6187,7 +6257,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if curapp.ID != action.AppID && curapp.Name != action.AppName {
-				if action.AppID == "integration" { 
+				if action.AppID == "integration" {
 					for _, param := range action.Parameters {
 						if param.Name == "action" {
 							if len(param.Value) > 0 {
@@ -10863,7 +10933,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		// Check if we need to move them over
 		if !found {
-			log.Printf("[DEBUG] Current active org (%s) for user %s (%s) not found. Checking other orgs. Found %d orgs.", userdata.ActiveOrg.Id, userdata.Username, userdata.Id,len(userdata.Orgs))
+			log.Printf("[DEBUG] Current active org (%s) for user %s (%s) not found. Checking other orgs. Found %d orgs.", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, len(userdata.Orgs))
 			for _, org := range userdata.Orgs {
 				// Verify if the user is in the org
 				foundOrg, err := GetOrg(ctx, org)
@@ -12507,7 +12577,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		if err == nil {
 			//log.Printf("\n\n[WARNING] Unmarshal success in workflow %s! Trying to check for success. Success: %#v\n\n", workflowExecution.Workflow.Name, resultCheck.Success)
 
-			if strings.Contains(strings.Replace(actionResult.Result," ", "", -1), `"success":false`) && resultCheck.Success == false && workflowExecution.Workflow.Hidden == false {
+			if strings.Contains(strings.Replace(actionResult.Result, " ", "", -1), `"success":false`) && resultCheck.Success == false && workflowExecution.Workflow.Hidden == false {
 
 				description := fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Failure Reason: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, resultCheck.Reason)
 
@@ -13273,7 +13343,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 						return
 					}
 					// i can in theory, run this without using goroutines
-					// and then recursively call the same function. but that 
+					// and then recursively call the same function. but that
 					// would make this request way too long.
 					go func() {
 						err = propagateApp(fileId, false)
@@ -14038,6 +14108,7 @@ func handleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 }
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
+	log.Printf("[DEBUG] Passphrase: %s", passphrase)
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
@@ -14072,7 +14143,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		//log.Printf("[ERROR] Error reading decryptionkey: %s", err)
+		log.Printf("[ERROR] Error reading decryptionkey: %s - nonce: %s, ciphertext: %s", err, nonce, ciphertext)
 		return []byte{}, err
 	}
 
@@ -17604,7 +17675,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
-						//log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+						log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
 						setField = false
 						//fieldLength = 0
 						break
@@ -17695,6 +17766,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 						decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 						if err != nil {
+							log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
 							if field.Key != "access_key" && field.Key != "access_token" {
 								//log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
 							}
@@ -17835,7 +17907,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 									Key:   "access_token",
 									Value: "FAILURE_REFRESH",
 								})
-							} 
+							}
 
 							// Commented out as we don't want to stop the app, but just continue with the old tokens
 							/*
@@ -20681,7 +20753,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		user.ActiveOrg.Id = exec.ExecutionOrg
 	}
 
-
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to run category action: %s (%s)", user.Username, user.Id)
 		resp.WriteHeader(403)
@@ -21045,7 +21116,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			fixedBody, err := UpdateActionBody(selectedAction)
-			if err != nil { 
+			if err != nil {
 				log.Printf("[ERROR] Failed getting correct action body for %s: %s", selectedAction.Name, err)
 				continue
 			}
@@ -21053,7 +21124,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[DEBUG] GOT BODY: %#v", fixedBody)
 		}
 	}
-
 
 	// FIXME: Check if ALL fields for the target app can be fullfiled
 	// E.g. for Jira: Org_id is required.
@@ -21422,7 +21492,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedAction.AppName = selectedApp.Name
 	selectedAction = GetOrgspecificParameters(ctx, *org, selectedAction)
 
-
 	//log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
 	handledRequiredFields := []string{}
 	missingFields = []string{}
@@ -21433,7 +21502,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		for _, field := range value.OptionalFields {
 			if strings.ReplaceAll(strings.ToLower(field.Key), " ", "_") == strings.ReplaceAll(strings.ToLower(param.Name), " ", "_") {
 				param.Value = field.Value
-				fieldChanged = true 
+				fieldChanged = true
 
 				//handledFields = append(handledFields, field.Key)
 			}
@@ -21444,7 +21513,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("%s & %s", strings.ReplaceAll(strings.ToLower(field.Key), " ", "_"), strings.ReplaceAll(strings.ToLower(param.Name), " ", "_"))
 			if strings.ReplaceAll(strings.ToLower(field.Key), " ", "_") == strings.ReplaceAll(strings.ToLower(param.Name), " ", "_") {
 				param.Value = field.Value
-				fieldChanged = true 
+				fieldChanged = true
 
 				handledRequiredFields = append(handledRequiredFields, field.Key)
 			}
@@ -21453,7 +21522,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if param.Name == "body" {
 
 			// FIXME: Look for key:values and inject values into them
-			// This SHOULD be just a dumb injection of existing value.Fields & value.OptionalFields for now with synonyms, but later on it should be a more advanced (use schemaless & cross org referencing) 
+			// This SHOULD be just a dumb injection of existing value.Fields & value.OptionalFields for now with synonyms, but later on it should be a more advanced (use schemaless & cross org referencing)
 			// FIXME: Should PRELOAD all of this?
 
 			if len(param.Example) > 0 {
@@ -21505,7 +21574,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		fixedBody, err := UpdateActionBody(selectedAction)
-		if err != nil { 
+		if err != nil {
 			log.Printf("[ERROR] Failed getting correct action body for %s: %s", selectedAction.Name, err)
 			continue
 		}
@@ -21521,7 +21590,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 
-				bodyFound = true 
+				bodyFound = true
 				//selectedAction.Parameters[paramIndex].Example = fixedBody
 				selectedAction.Parameters[paramIndex].Value = fixedBody
 				selectedAction.Parameters[paramIndex].Tags = append(selectedAction.Parameters[paramIndex].Tags, "generated")
@@ -21532,7 +21601,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					Name:  "body",
 					Value: fixedBody,
 					//Example: fixedBody,
-					Tags:  []string{"generated"},
+					Tags: []string{"generated"},
 				})
 			}
 
@@ -21551,7 +21620,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Missing fields for action: %#v", missingFields)
 
 		formattedQueryFields := []string{}
-		for _, missing := range missingFields {	
+		for _, missing := range missingFields {
 
 			for _, field := range value.Fields {
 
@@ -21627,7 +21696,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-
 		defer newresp.Body.Close()
 		responseBody, err := ioutil.ReadAll(newresp.Body)
 		if err != nil {
@@ -21645,7 +21713,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		// Unmarshal responseBody back to 
+		// Unmarshal responseBody back to
 		newSecondAction := Action{}
 		err = json.Unmarshal(responseBody, &newSecondAction)
 		if err != nil {
@@ -21662,7 +21730,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		//secondAction.LargeImage = newSecondAction.LargeImage
 		secondAction.LargeImage = ""
 
-		missingFields = []string{} 
+		missingFields = []string{}
 		for _, param := range newSecondAction.Parameters {
 			if param.Configuration {
 				continue
@@ -21731,7 +21799,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
-			apprunUrl= fmt.Sprintf("%s&execution_id=%s&authorization=%s", apprunUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
+			apprunUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", apprunUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
 
 			authorization = request.URL.Query().Get("authorization")
 			optionalExecutionId = request.URL.Query().Get("execution_id")
@@ -21801,7 +21869,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				Action:  value.Label,
 
 				Status: httpOutput.Status,
-				URL:	httpOutput.Url,
+				URL:    httpOutput.Url,
 			}
 
 			marshalledHttpOutput, err := json.Marshal(httpOutput)
@@ -21822,13 +21890,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					if err != nil {
 						log.Printf("[WARNING] Failed unmarshalling RAW {} schemaless (2) output for label %s: %s", value.Label, err)
 					}
-						
-					parsedTranslation.RawResponse  = outputmap
+
+					parsedTranslation.RawResponse = outputmap
 				} else {
 					parsedTranslation.RawResponse = string(marshalledHttpOutput)
 				}
 			}
-
 
 			if err == nil {
 				if httpOutput.Status < 300 {
@@ -21913,13 +21980,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
 
 				/*
-				err = json.Unmarshal(marshalledBody, &outputmap)
-				if err != nil {
-					log.Printf("[WARNING] Failed unmarshalling in schemaless (1) output for label %s: %s", value.Label, err)
+					err = json.Unmarshal(marshalledBody, &outputmap)
+					if err != nil {
+						log.Printf("[WARNING] Failed unmarshalling in schemaless (1) output for label %s: %s", value.Label, err)
 
-				} else {
-					parsedTranslation.Output = outputmap
-				}
+					} else {
+						parsedTranslation.Output = outputmap
+					}
 				*/
 			} else {
 				parsedTranslation.Success = true
@@ -22139,14 +22206,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	// Starting execution
 	/*
-	baseUrl := fmt.Sprintf("https://shuffler.io")
-	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
-	}
+		baseUrl := fmt.Sprintf("https://shuffler.io")
+		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+			baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+		}
 
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		baseUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
-	}
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			baseUrl = fmt.Sprintf("%s", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
+		}
 	*/
 
 	workflowRunUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", baseUrl, newWorkflow.ID)
@@ -23700,59 +23767,58 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 }
 
 func HandleSavePipelineInfo(resp http.ResponseWriter, request *http.Request) {
-    cors := HandleCors(resp, request)
-    if cors {
-        return
-    }
-
-    // How do I make sure that Orborus is the one that made this request?
-
-    var requestBody Pipeline
-    err := json.NewDecoder(request.Body).Decode(&requestBody)
-	if err != nil {
-        log.Printf("[WARNING] Failed to decode request body: %s", err)
-        resp.WriteHeader(401)
-        resp.Write([]byte(`{"success": false}`))
-        return
-    }
-	if len(requestBody.TriggerId) == 0 || len(requestBody.PipelineId) == 0 || len(requestBody.Status) == 0 {
-		log.Printf("[WARNING] Missing fields in the request body")
-        resp.WriteHeader(400)
-        resp.Write([]byte(`{"success": false, "reason": "Missing fields in the request body"}`))
-        return
+	cors := HandleCors(resp, request)
+	if cors {
+		return
 	}
 
-    ctx := GetContext(request)
-    pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
+	// How do I make sure that Orborus is the one that made this request?
+
+	var requestBody Pipeline
+	err := json.NewDecoder(request.Body).Decode(&requestBody)
+	if err != nil {
+		log.Printf("[WARNING] Failed to decode request body: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	if len(requestBody.TriggerId) == 0 || len(requestBody.PipelineId) == 0 || len(requestBody.Status) == 0 {
+		log.Printf("[WARNING] Missing fields in the request body")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Missing fields in the request body"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
 	log.Printf("[HARI TESTING] trigger id is %s", requestBody.TriggerId)
-    if err != nil {
-		if strings.Contains(fmt.Sprintf("%s", err),"pipeline doesn't exist"){
+	if err != nil {
+		if strings.Contains(fmt.Sprintf("%s", err), "pipeline doesn't exist") {
 			log.Printf("[DEBUG] no matching document found for Pipeline: %s", requestBody.PipelineId)
 			resp.WriteHeader(404)
 			resp.Write([]byte(`{"success": false, "reason": "pipeline not found"}`))
 			return
 		} else {
-        log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
-        resp.WriteHeader(500)
-        resp.Write([]byte(`{"success": false}`))
-        return
+			log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
 		}
-    }
+	}
 
-    pipeline.PipelineId = requestBody.PipelineId
-    pipeline.Status = requestBody.Status
+	pipeline.PipelineId = requestBody.PipelineId
+	pipeline.Status = requestBody.Status
 
-    
-    err = savePipelineData(ctx, *pipeline)
-    if err != nil {
-        log.Printf("[WARNING] Failed updating pipeline with ID: %s due to %s", pipeline.PipelineId, err)
-        resp.WriteHeader(500)
-        resp.Write([]byte(`{"success": false}`))
-        return
-    }
+	err = savePipelineData(ctx, *pipeline)
+	if err != nil {
+		log.Printf("[WARNING] Failed updating pipeline with ID: %s due to %s", pipeline.PipelineId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
 	log.Printf("[INFO] Sucessfully saved pipeline: %s", pipeline.PipelineId)
-    resp.WriteHeader(200)
-    resp.Write([]byte(`{"success": true}`))
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }
 
 func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
@@ -24114,14 +24180,14 @@ func IsLicensed(ctx context.Context, org Org) bool {
 
 	return false
 }
-		
+
 // Generates a standard destination workflow that uses:
 // 1. A Startnode mapping $exec
 // 2. An enrichment subflow that maps the data from $exec
 // - A data merger of 1 & 2
 // - Integration framework with dest app
 func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Workflow {
-	appname := app.Name 
+	appname := app.Name
 	appCategory := ""
 	if len(app.Categories) > 0 {
 		appCategory = app.Categories[0]
@@ -24131,20 +24197,20 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 	startnodeId := uuid.NewV4().String()
 
 	workflow := Workflow{
-		ID: workflowId,
+		ID:    workflowId,
 		Start: startnodeId,
 	}
 
 	workflow.Actions = append(workflow.Actions, Action{
-		AppName: "Shuffle Tools",
+		AppName:    "Shuffle Tools",
 		AppVersion: "1.2.0",
-		Label: "create_startnode",
-		ID: startnodeId,
-		Name: "repeat_back_to_me",
+		Label:      "create_startnode",
+		ID:         startnodeId,
+		Name:       "repeat_back_to_me",
 		Parameters: []WorkflowAppActionParameter{
 			WorkflowAppActionParameter{
-				Name: "call",
-				Value: "$exec",
+				Name:      "call",
+				Value:     "$exec",
 				Multiline: true,
 			},
 		},
@@ -24159,64 +24225,64 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 	if enrich {
 		enrichNodeId := uuid.NewV4().String()
 		workflow.Triggers = append(workflow.Triggers, Trigger{
-			AppName: "Shuffle Workflow",
+			AppName:    "Shuffle Workflow",
 			AppVersion: "1.0.0",
-			Name: "Shuffle Workflow",
+			Name:       "Shuffle Workflow",
 
-			ID: enrichNodeId,
-			Label: "Enrich", 
-			Tags: []string{"Enrich"},
+			ID:          enrichNodeId,
+			Label:       "Enrich",
+			Tags:        []string{"Enrich"},
 			TriggerType: "SUBFLOW",
 
 			Position: Position{
 				X: 0,
-				Y: 150, 
+				Y: 150,
 			},
 
 			Parameters: []WorkflowAppActionParameter{
 				WorkflowAppActionParameter{
-					Name: "workflow",
+					Name:  "workflow",
 					Value: "",
 				},
 				WorkflowAppActionParameter{
-					Name: "argument",
+					Name:  "argument",
 					Value: "$exec",
 				},
 				WorkflowAppActionParameter{
-					Name: "user_apikey",
+					Name:  "user_apikey",
 					Value: "",
 				},
 				WorkflowAppActionParameter{
-					Name: "startnode",
+					Name:  "startnode",
 					Value: "",
 				},
 				WorkflowAppActionParameter{
-					Name: "check_result",
+					Name:  "check_result",
 					Value: "true",
 				},
 			},
 		})
 
-		// Start -> subflow node 
+		// Start -> subflow node
 		workflow.Branches = append(workflow.Branches, Branch{
-			ID: uuid.NewV4().String(),
-			SourceID: startnodeId,
+			ID:            uuid.NewV4().String(),
+			SourceID:      startnodeId,
 			DestinationID: enrichNodeId,
 		})
 
 		// Add merge node
 		mergeNodeId := uuid.NewV4().String()
 		workflow.Actions = append(workflow.Actions, Action{
-			AppName: "Shuffle Tools",
+			AppName:    "Shuffle Tools",
 			AppVersion: "1.2.0",
-			Label: "merge enrichment",
-			ID: mergeNodeId,
-			Name: "merge_incoming_branches",
+			Label:      "merge enrichment",
+			ID:         mergeNodeId,
+			Name:       "merge_incoming_branches",
 			Parameters: []WorkflowAppActionParameter{
 				WorkflowAppActionParameter{
-					Name: "input_type",
-					Value: "dict",
-					Options: []string{"list", "dict",},
+					Name:     "input_type",
+					Value:    "dict",
+					Options:  []string{"list", "dict"},
 					Required: true,
 				},
 			},
@@ -24226,16 +24292,16 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 			},
 		})
 
-		// Start -> subflow node 
+		// Start -> subflow node
 		workflow.Branches = append(workflow.Branches, Branch{
-			ID: uuid.NewV4().String(),
-			SourceID: startnodeId,
+			ID:            uuid.NewV4().String(),
+			SourceID:      startnodeId,
 			DestinationID: mergeNodeId,
 		})
 
 		workflow.Branches = append(workflow.Branches, Branch{
-			ID: uuid.NewV4().String(),
-			SourceID: enrichNodeId,
+			ID:            uuid.NewV4().String(),
+			SourceID:      enrichNodeId,
 			DestinationID: mergeNodeId,
 		})
 
@@ -24245,27 +24311,27 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 
 	integrationFrameworkId := uuid.NewV4().String()
 	workflow.Actions = append(workflow.Actions, Action{
-		AppName: "Integration Framework",
+		AppName:    "Integration Framework",
 		AppVersion: "1.0.0",
-		AppID: "integration",
-		Label: strings.ReplaceAll(action, " ", "_"),
-		ID: integrationFrameworkId,
-		Name: appCategory,
+		AppID:      "integration",
+		Label:      strings.ReplaceAll(action, " ", "_"),
+		ID:         integrationFrameworkId,
+		Name:       appCategory,
 		LargeImage: app.LargeImage,
 		Parameters: []WorkflowAppActionParameter{
 			WorkflowAppActionParameter{
-				Name: "action",
-				Value: action,
-				Options: []string{action},
+				Name:     "action",
+				Value:    action,
+				Options:  []string{action},
 				Required: true,
 			},
 			WorkflowAppActionParameter{
-				Name: "fields",
-				Value: previousnodeRef,
+				Name:      "fields",
+				Value:     previousnodeRef,
 				Multiline: true,
 			},
 			WorkflowAppActionParameter{
-				Name: "app_name",
+				Name:  "app_name",
 				Value: appname,
 			},
 		},
@@ -24276,8 +24342,8 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 	})
 
 	workflow.Branches = append(workflow.Branches, Branch{
-		ID: uuid.NewV4().String(),
-		SourceID: previousnodeId,
+		ID:            uuid.NewV4().String(),
+		SourceID:      previousnodeId,
 		DestinationID: integrationFrameworkId,
 	})
 

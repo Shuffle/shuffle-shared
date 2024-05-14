@@ -7609,6 +7609,56 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	return nil
 }
 
+func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenticationGroup, id string) error {
+	nameKey := "workflowappauthgroup"
+	timeNow := int64(time.Now().Unix())
+	if workflowappauthgroup.Created == 0 {
+		workflowappauthgroup.Created = timeNow
+	}
+
+	data, err := json.Marshal(workflowappauthgroup)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set app auth group: %s", err)
+		return err
+	}
+
+	workflowappauthgroup.Edited = timeNow
+
+	// check if app auth ids are unique
+	uniqueIds := []string{}
+	for _, auth := range workflowappauthgroup.AppAuthIds {
+		if ArrayContains(uniqueIds, auth) {
+			log.Printf("[WARNING] App auth group %s has duplicate app auth id %s", id, auth)
+			return errors.New("Duplicate app auth id")
+		}
+	}
+
+	// New struct, to not add body, author etc
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, id, data)
+		if err != nil {
+			log.Printf("[ERROR] Error adding workflow app AUTH group %s (%s) with %d apps: %s", workflowappauthgroup.Label, workflowappauthgroup.Id, len(workflowappauthgroup.AppAuthIds), err)
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &workflowappauthgroup); err != nil {
+			log.Printf("[ERROR] Error adding workflow app AUTH group %s (%s) with %d apps: %s", workflowappauthgroup.Label, workflowappauthgroup.Id, len(workflowappauthgroup.AppAuthIds), err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		err := SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for setusecase: %s", err)
+		}
+	}
+
+	return nil
+}
+
 func SetEnvironment(ctx context.Context, env *Environment) error {
 	// clear session_token and API_token for user
 	nameKey := "Environments"
