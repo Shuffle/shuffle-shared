@@ -1229,6 +1229,7 @@ type Workflow struct {
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
 
 	Validated  bool 	`json:"validated" datastore:"validated"` 
+	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
 
 type Category struct {

@@ -96,7 +96,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		}
 	}
 
-	log.Printf("[DEBUG] Daily stats not updated for %s in org %s. Only have %d stats so far", timeYesterday, executionInfo.OrgId, len(executionInfo.DailyStatistics))
+	log.Printf("[DEBUG] Daily stats not updated for %s in org %s today. Only have %d stats so far - running update.", timeYesterday, executionInfo.OrgId, len(executionInfo.DailyStatistics))
 	// If we get here, we need to update the daily stats
 	newDay := DailyStatistics{
 		Date:                       timeYesterday,
@@ -3154,65 +3154,125 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				}
 			}
 
-			log.Printf("[INFO] Appending workflows (ADMIN) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
+			log.Printf("[INFO] Appending workflows (ADMIN + suborg distribution) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
 		}
 
 	} else {
 		log.Printf("[INFO] Appending workflows (ADMIN) for organization %s (2)", user.ActiveOrg.Id)
-		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
+		if len(user.ActiveOrg.Id) > 0 {
+			query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
 
-		cursorStr := ""
-		for {
-			it := project.Dbclient.Run(ctx, query)
-
+			cursorStr := ""
 			for {
-				innerWorkflow := Workflow{}
-				_, err := it.Next(&innerWorkflow)
-				if err != nil {
-					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[ERROR] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
-						innerWorkflow.Org = []OrgMini{user.ActiveOrg}
-						err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
-						if err != nil {
-							log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
+				it := project.Dbclient.Run(ctx, query)
+
+				for {
+					innerWorkflow := Workflow{}
+					_, err := it.Next(&innerWorkflow)
+					if err != nil {
+						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[ERROR] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
+							innerWorkflow.Org = []OrgMini{user.ActiveOrg}
+							err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
+							if err != nil {
+								log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
+							}
+						} else {
+							//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+							break
 						}
-					} else {
-						//log.Printf("[WARNING] Workflow iterator issue: %s", err)
-						break
+					}
+
+					found := false
+					for _, loopedWorkflow := range workflows {
+						if loopedWorkflow.ID == innerWorkflow.ID {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						workflows = append(workflows, innerWorkflow)
 					}
 				}
 
-				found := false
-				for _, loopedWorkflow := range workflows {
-					if loopedWorkflow.ID == innerWorkflow.ID {
-						found = true
+				if err != iterator.Done {
+					//log.Printf("[INFO] Failed fetching results: %v", err)
+					//break
+				}
+
+				// Get the cursor for the next page of results.
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("Cursorerror: %s", err)
+					break
+				} else {
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if cursorStr == nextStr {
 						break
+					}
+
+					cursorStr = nextStr
+					query = query.Start(nextCursor)
+				}
+			}
+
+			//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+			cursorStr = ""
+			query = datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
+			for {
+				it := project.Dbclient.Run(ctx, query)
+
+				for {
+					innerWorkflow := Workflow{}
+					_, err := it.Next(&innerWorkflow)
+					if err != nil {
+						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
+						} else if strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
+							break
+						} else {
+							log.Printf("[ERROR] Error in suborg workflow iterator: %s", err)
+							break
+						}
+					}
+
+					log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
+
+					found := false
+					for _, loopedWorkflow := range workflows {
+						if loopedWorkflow.ID == innerWorkflow.ID {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						workflows = append(workflows, innerWorkflow)
 					}
 				}
 
-				if !found {
-					workflows = append(workflows, innerWorkflow)
-				}
-			}
-
-			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching results: %v", err)
-				//break
-			}
-
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("Cursorerror: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
+				// FIXME: Handle nil?
+				if err != iterator.Done {
+					//log.Printf("[INFO] Failed fetching suborg workflows: %v", err)
 					break
 				}
 
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
+				// Get the cursor for the next page of results.
+				nextCursor, err := it.Cursor()
+				if err != nil {
+					log.Printf("Cursorerror: %s", err)
+					break
+				} else {
+					nextStr := fmt.Sprintf("%s", nextCursor)
+					if cursorStr == nextStr {
+						break
+					}
+
+					cursorStr = nextStr
+					query = query.Start(nextCursor)
+				}
 			}
 		}
 	}
@@ -3278,20 +3338,6 @@ func GetAllOpenApi(ctx context.Context) ([]ParsedOpenApi, error) {
 	return apis, nil
 }
 
-func GetAllWorkflows(ctx context.Context, orgId string) ([]Workflow, error) {
-	var allworkflows []Workflow
-	q := datastore.NewQuery("workflow").Filter("org_id = ", orgId).Limit(100)
-	if orgId == "ALL" {
-		q = datastore.NewQuery("workflow")
-	}
-
-	_, err := project.Dbclient.GetAll(ctx, q, &allworkflows)
-	if err != nil && len(allworkflows) == 0 {
-		return []Workflow{}, err
-	}
-
-	return allworkflows, nil
-}
 
 func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 	nameKey := "Organizations"
@@ -5597,7 +5643,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[ERROR] Error in reference_org load: %s.", err)
+						log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
 						continue
 					}
 
@@ -6209,35 +6255,68 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 
 		cursorStr := ""
 
+		log.Printf("[DEBUG] Getting user apps for %s", userId)
+
 		queries := []datastore.Query{}
-		q := datastore.NewQuery(indexName)
-		q.FilterField("contributors", "in", []string{userId}).Order("-edited")
+		q := datastore.NewQuery(indexName).Filter("contributors =", userId)
+
 		queries = append(queries, *q)
 
-		q = datastore.NewQuery(indexName).Filter("owner =", userId).Order("-edited")
+		q = datastore.NewQuery(indexName).Filter("owner =", userId)
 		queries = append(queries, *q)
 
+		cnt := 0
+		maxAmount := 100 
 		for _, tmpQuery := range queries {
 			query := &tmpQuery
 
+			if cnt > maxAmount {
+				break
+			}
+
 			for {
 				it := project.Dbclient.Run(ctx, query)
+				if cnt > maxAmount {
+					break
+				}
 
 				for {
 					innerApp := WorkflowApp{}
 					_, err = it.Next(&innerApp)
+					//log.Printf("Got app: %s (%s)", innerApp.Name, innerApp.ID)
+					cnt += 1
+					if cnt > maxAmount {
+						break
+					}
+
 					if err != nil {
+						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+
 						if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-							log.Printf("[WARNING] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							if strings.Contains("no matching index found", fmt.Sprintf("%s", err)) {
+								log.Printf("[ERROR] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							} else {
+								log.Printf("[WARNING] No more apps for %s in user app load? Breaking: %s.", userId, err)
+							}
+
 							break
 						}
 					}
 
+					if !ArrayContains(innerApp.Contributors, userId) && innerApp.Owner != userId {
+						continue
+					}
+
 					userApps = append(userApps, innerApp)
+
+
 				}
 
 				if err != nil {
-					log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+					if !strings.Contains(fmt.Sprintf("%s", err), "no more items") {
+						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+					}
+
 					break
 				}
 
