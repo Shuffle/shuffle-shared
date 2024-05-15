@@ -932,7 +932,7 @@ func NewEndPointPythonCode () string{
     
         return parsed_queries    
 
-    def new_endpoint(self, method="", base_url="", headers="", queries="", path="", username="", password="", verify=False, req_body=""):
+    def new_endpoint(self, method="", base_url="", headers="", queries="", path="", username="", password="", verify=False, request_body=""):
         url = self.fix_url(base_url)
     
         try:
@@ -951,9 +951,9 @@ func NewEndPointPythonCode () string{
     
         verify = self.checkverify(verify)
     
-        if isinstance(req_body, dict):
+        if isinstance(request_body, dict):
             try:
-                req_body = json.dumps(req_body)
+			request_body = json.dumps(request_body)
             except json.JSONDecodeError as e:
                 self.logger.error(f"error : {e}")
                 return {"error: Invalid JSON format for request body"}
@@ -966,7 +966,7 @@ func NewEndPointPythonCode () string{
                 auth = requests.auth.HTTPBasicAuth(username, password)
     
         try:
-            response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=req_body, auth=auth, verify=verify)
+            response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=request_body, auth=auth, verify=verify)
             response.raise_for_status()
             return response.json()
     
@@ -988,8 +988,8 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		Description:   "The http method to use",
 		Multiline:     false,
 		Required:      true,
-		Configuration: true,
-		Example:       "GET , POST PUT ...",
+		Options:       []string{"GET","POST","PUT","DELETE","PATCH"},
+		Example:       "GET",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -998,9 +998,8 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 	parameters = append(parameters, WorkflowAppActionParameter{
 		Name:          "base_url",
 		Description:   "the base part of your url ",
-		Multiline:     false ,
-		Required:      true ,
-		Configuration: true,
+		Multiline:     false,
+		Required:      true,
 		Example:       "https://api.example.com",
 		Schema: SchemaDefinition{
 			Type: "string",
@@ -1064,17 +1063,18 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 
 	parameters = append(parameters, WorkflowAppActionParameter{
 		Name:          "verify",
-		Description:   "",
+		Description:   "Check certificate",
 		Multiline:     false,
+		Options:       []string{"false","true"},
 		Required:      false,
-		Example:       "True",
+		Example:       "False",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
 	})
 
 	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "req_body",
+		Name:          "request_body",
 		Description:   "the path to add to the base url",
 		Multiline:     true,
 		Required:      false,
@@ -1086,7 +1086,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 
 	action := WorkflowAppAction{
 		Description: "add a new endpoint for your app",
-		Name:        "new_endpoint",
+		Name:        "add_Endpoint",
 		NodeType:    "action",
 		Environment: "Shuffle",
 		Parameters:  parameters,
@@ -1094,7 +1094,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 
 	action.Returns.Schema.Type = "string"
 
-	return action , pyCode
+	return action, pyCode
 
 }
 
