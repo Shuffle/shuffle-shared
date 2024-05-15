@@ -7703,26 +7703,46 @@ func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup 
 
 	workflowappauthgroup.Edited = timeNow
 
-	// check if app auth ids are unique
-	uniqueIds := []string{}
-	for _, auth := range workflowappauthgroup.AppAuthIds {
-		if ArrayContains(uniqueIds, auth) {
-			log.Printf("[WARNING] App auth group %s has duplicate app auth id %s", id, auth)
+	// Check for uniqueness and organization membership
+	uniqueIds := make(map[string]bool)
+	for index, auth := range workflowappauthgroup.AppAuths {
+		// Check uniqueness
+		if _, exists := uniqueIds[auth.Id]; exists {
+			log.Printf("[WARNING] App auth group %s has duplicate app auth id %s", id, auth.Id)
 			return errors.New("Duplicate app auth id")
 		}
+		uniqueIds[auth.Id] = true
+
+		// Fetch real data
+		realAuth, err := GetWorkflowAppAuthDatastore(ctx, auth.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting app auth %s for app auth group %s: %s", auth.Id, id, err)
+			return err
+		}
+
+		// Update the slice with real data
+		workflowappauthgroup.AppAuths[index] = *realAuth
+		auth = *realAuth
+
+		// Check organization membership
+		if auth.OrgId != workflowappauthgroup.OrgId {
+			log.Printf("[WARNING] App auth group %s has app auth id %s that doesn't belong to the same org", id, auth.Id)
+			return errors.New("App auth id doesn't belong to the same org")
+		}
+
 	}
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, id, data)
 		if err != nil {
-			log.Printf("[ERROR] Error adding workflow app AUTH group %s (%s) with %d apps: %s", workflowappauthgroup.Label, workflowappauthgroup.Id, len(workflowappauthgroup.AppAuthIds), err)
+			log.Printf("[ERROR] Error adding workflow app AUTH group %s (%s) with %d apps: %s", workflowappauthgroup.Label, workflowappauthgroup.Id, len(workflowappauthgroup.AppAuths), err)
 			return err
 		}
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowappauthgroup); err != nil {
-			log.Printf("[ERROR] Error adding workflow app AUTH group %s (%s) with %d apps: %s", workflowappauthgroup.Label, workflowappauthgroup.Id, len(workflowappauthgroup.AppAuthIds), err)
+			log.Printf("[ERROR] Error adding workflow app AUTH group %s (%s) with %d apps: %s", workflowappauthgroup.Label, workflowappauthgroup.Id, len(workflowappauthgroup.AppAuths), err)
 			return err
 		}
 	}
@@ -7733,6 +7753,9 @@ func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup 
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for setusecase: %s", err)
 		}
+
+		cacheKey = fmt.Sprintf("%s_%s", nameKey, workflowappauthgroup.OrgId)
+		DeleteCache(ctx, cacheKey)
 	}
 
 	return nil
@@ -9131,6 +9154,82 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	}
 
 	return appAuth, nil
+}
+
+func GetAllWorkflowAppAuthGroupDatastore(ctx context.Context, orgId string) ([]AppAuthenticationGroup, error) {
+	nameKey := "workflowappauthgroup"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+
+	appAuths := []AppAuthenticationGroup{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &appAuths)
+			if err == nil {
+				return appAuths, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"from": 0,
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"org_id": orgId,
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return appAuths, err
+		}
+		
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get app auths): %s", err)
+			return appAuths, err
+		}
+
+		defer res.Body.Close()
+
+		if res.StatusCode == 404 {
+			return appAuths, nil
+		}
+
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(50)
+		_, err := project.Dbclient.GetAll(ctx, q, &appAuths)
+		if err != nil && len(appAuths) == 0 {
+			return appAuths, err
+		}
+	}
+	
+	if project.CacheDb {
+		data, err := json.Marshal(appAuths)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling app auth cache: %s", err)
+			return appAuths, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating app auth cache: %s", err)
+		}
+	}
+
+	return appAuths, nil
 }
 
 func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {

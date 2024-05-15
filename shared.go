@@ -1826,8 +1826,8 @@ func AddAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	// Super basic check
-	if len(appAuthGroup.AppAuthIds) == 0 {	
-		log.Printf("[WARNING] Bad ID for app: %s", appAuthGroup.AppAuthIds)
+	if len(appAuthGroup.AppAuths) == 0 {
+		log.Printf("[WARNING] Empty appauths for appauthgroup")
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Apps have to be defined"}`)))
 		return
@@ -1847,6 +1847,64 @@ func AddAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, appAuthGroup.Id)))
+}
+
+func GetAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in get app auth group: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	allAuthGroups, err := GetAllWorkflowAppAuthGroupDatastore(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get all app auth group: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(allAuthGroups) == 0 {
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true, "data": []}`))
+		return
+	}
+
+	// Cleanup for frontend
+	newAuthGroups := []AppAuthenticationGroup{}
+	for _, authGroup := range allAuthGroups {
+		newAuthGroup := authGroup
+		newAuthGroups = append(newAuthGroups, newAuthGroup)
+	}
+
+	type returnStruct struct {
+		Success bool                   `json:"success"`
+		Data    []AppAuthenticationGroup `json:"data"`
+	}
+
+	allAuth := returnStruct{
+		Success: true,
+		Data:    allAuthGroups,
+	}
+
+	newbody, err := json.Marshal(allAuth)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling all app auth groups: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflow app auth group"}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(newbody))
 }
 
 func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {

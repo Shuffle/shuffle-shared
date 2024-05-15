@@ -1351,7 +1351,7 @@ type AppAuthenticationGroup struct {
 	Active			bool                  `json:"active" datastore:"active"`
 	Label			string                `json:"label" datastore:"label"`
 	Id				string                `json:"id" datastore:"id"`
-	AppAuthIds      []string 			  `json:"app_auth_ids" datastore:"app_auth_ids"`
+	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths"`	
 	Description		string                `json:"description" datastore:"description"`
 	OrgId			string                `json:"org_id" datastore:"org_id"`
 	Created			int64                 `json:"created" datastore:"created"` 
