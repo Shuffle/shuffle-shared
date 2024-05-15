@@ -23,7 +23,8 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-var model = "gpt-4-turbo-preview"
+//var model = "gpt-4-turbo-preview"
+var model = "gpt-4o"
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
 	//log.Printf("\n\n[DEBUG] Getting KMS cache for key %s\n\n", key)

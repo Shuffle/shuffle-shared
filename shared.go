@@ -7080,7 +7080,9 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		item.Executions = ExecutionInfo{}
 		item.Limits = UserLimits{}
 		item.PrivateApps = []WorkflowApp{}
-		item.MFA = MFAInfo{}
+		item.MFA = MFAInfo{
+			Active: item.MFA.Active,
+		}
 
 		if !user.SupportAccess {
 			item.LoginInfo = []LoginInfo{}

@@ -1,11 +1,9 @@
 module github.com/shuffle/shuffle-shared
 
-// Keep on 1.11 until AppEngine supports 1.17 or higher
-
 go 1.11
 
 //replace github.com/frikky/kin-openapi => ../kin-openapi
-replace github.com/shuffle/opensearch-go => ../opensearch-go
+//replace github.com/shuffle/opensearch-go => ../opensearch-go
 
 require (
 	cloud.google.com/go/datastore v1.4.0
@@ -16,7 +14,7 @@ require (
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
 	github.com/frikky/kin-openapi v0.41.0
-	github.com/frikky/schemaless v0.0.9
+	github.com/frikky/schemaless v0.0.11
 	github.com/go-git/go-billy/v5 v5.5.0
 	github.com/go-git/go-git/v5 v5.11.0
 	github.com/google/go-github/v28 v28.1.1

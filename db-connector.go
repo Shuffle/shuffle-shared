@@ -2357,7 +2357,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			}
 		}
 	} else {
-		query := datastore.NewQuery(nameKey).Filter("md5_sum =", md5).Limit(25)
+		query := datastore.NewQuery(nameKey).Filter("md5_sum =", md5).Limit(250)
 		_, err := project.Dbclient.GetAll(ctx, query, &files)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
@@ -8521,9 +8521,11 @@ func SetFile(ctx context.Context, file File) error {
 		file.CreatedAt = timeNow
 	}
 
+	/*
 	if !strings.HasPrefix(file.Id, "file_") {
 		return errors.New("Invalid file ID. Must start with file_")
 	}
+	*/
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, file.Id)
 
