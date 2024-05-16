@@ -3698,6 +3698,10 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		if project.Environment == "cloud" && workflow.ExecutionEnvironment == "onprem" {
+			continue
+		}
+
 		newActions := []Action{}
 		for _, action := range workflow.Actions {
 			// Removed because of exports. These are needed there.
@@ -3707,18 +3711,40 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			newActions = append(newActions, action)
 		}
 
-		workflow.Actions = newActions
+		//workflow.Actions = newActions
+
 
 		// Skipping these as they're related to onprem workflows in cloud (orborus)
-		if project.Environment == "cloud" && workflow.ExecutionEnvironment == "onprem" {
-			continue
-		}
 
 		usecaseIds = append(usecaseIds, workflow.UsecaseIds...)
 		newWorkflows = append(newWorkflows, workflow)
 	}
 
-	workflows = newWorkflows
+	if project.Environment == "cloud" && len(newWorkflows) > 15 {
+		log.Printf("[WARNING] Removed workflow actions for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		for workflowIndex, _ := range newWorkflows {
+			newWorkflows[workflowIndex].Actions = []Action{}
+			newWorkflows[workflowIndex].Triggers = []Trigger{}
+			newWorkflows[workflowIndex].Branches = []Branch{}
+			newWorkflows[workflowIndex].VisualBranches = []Branch{}
+			newWorkflows[workflowIndex].Image = ""
+
+			newWorkflows[workflowIndex].Description = ""
+			newWorkflows[workflowIndex].Blogpost = ""
+
+			if len(newWorkflows[workflowIndex].Org) > 0 {
+				for orgIndex, _ := range newWorkflows[workflowIndex].Org {
+					newWorkflows[workflowIndex].Org[orgIndex].Image = ""
+				}
+			}
+
+			newWorkflows[workflowIndex].ExecutingOrg.Image = "" 
+		}
+
+		// Add header that this is a limited response
+		resp.Header().Set("X-Shuffle-Truncated", "true")
+	}
 
 	// Get the org as well to manage priorities
 	// Only happens on first load, so it's like once per session~
