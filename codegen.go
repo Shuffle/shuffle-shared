@@ -840,7 +840,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	return functionname, data
 }
 
-func NewEndPointPythonCode () string{	
+func GetCustomAction() string{	
 	pythonCode := `		
     def fix_url(self, url):
         if "hhttp" in url:
@@ -859,10 +859,11 @@ func NewEndPointPythonCode () string{
 
         return url
 
+
     def checkverify(self, verify):
         if str(verify).lower().strip() == "false":
             return False
-        elif verify == None:
+        elif verify is None:
             return False
         elif verify:
             return True
@@ -870,6 +871,7 @@ func NewEndPointPythonCode () string{
             return False
         else:
             return True
+
 
     def is_valid_method(self, method):
         valid_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
@@ -879,6 +881,7 @@ func NewEndPointPythonCode () string{
             return method
         else:
             raise ValueError(f"Invalid HTTP method: {method}")
+
 
     def parse_headers(self, headers):
         parsed_headers = {}
@@ -896,29 +899,35 @@ func NewEndPointPythonCode () string{
 
                 splitheader = header.split(splititem)
                 if len(splitheader) >= 2:
-                    parsed_headers[splitheader[0].strip()] = splititem.join(splitheader[1:]).strip()
+                    parsed_headers[splitheader[0].strip()] = splititem.join(
+                        splitheader[1:]
+                    ).strip()
                 else:
-                    self.logger.info("Skipping header %s with split %s cus only one item" % (header, splititem))
+                    self.logger.info(
+                        "Skipping header %s with split %s cus only one item"
+                        % (header, splititem)
+                    )
                     continue
 
         return parsed_headers
-        
+
+
     def parse_queries(self, queries):
         parsed_queries = {}
-    
+
         if not queries:
             return parsed_queries
-    
+
         cleaned_queries = queries.strip()
-    
+
         if not cleaned_queries:
             return parsed_queries
-    
+
         cleaned_queries = " ".join(cleaned_queries.split())
         splitted_queries = cleaned_queries.split("&")
         self.logger.info(splitted_queries)
         for query in splitted_queries:
-    
+
             if "=" not in query:
                 self.logger.info("Skipping as there is no = in the query")
                 continue
@@ -929,47 +938,41 @@ func NewEndPointPythonCode () string{
                 )
                 continue
             parsed_queries[key.strip()] = value.strip()
-    
-        return parsed_queries    
 
-    def new_endpoint(self, method="", base_url="", headers="", queries="", path="", username="", password="", verify=False, request_body=""):
-        url = self.fix_url(base_url)
-    
+        return parsed_queries
+
+
+    def custom_action(self, method="", url="", headers="", queries="", path="", verify=False, body=""):
+        url = self.fix_url(url)
+
         try:
             method = self.is_valid_method(method)
         except ValueError as e:
             self.logger.error(e)
             return {"error": str(e)}
-    
+
         if path and not path.startswith('/'):
             path = '/' + path
-    
+
         url += path
-    
+
         parsed_headers = self.parse_headers(headers)
         parsed_queries = self.parse_queries(queries)
-    
+
         verify = self.checkverify(verify)
-    
-        if isinstance(request_body, dict):
+
+        if isinstance(body, dict):
             try:
-			request_body = json.dumps(request_body)
+                body = json.dumps(body)
             except json.JSONDecodeError as e:
                 self.logger.error(f"error : {e}")
                 return {"error: Invalid JSON format for request body"}
-    
-        auth = None
-        if username or password:
-            if "Authorization" in headers:
-                pass
-            else:
-                auth = requests.auth.HTTPBasicAuth(username, password)
-    
+
         try:
-            response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=request_body, auth=auth, verify=verify)
+            response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=body, verify=verify)
             response.raise_for_status()
             return response.json()
-    
+
         except requests.RequestException as e:
             self.logger.error(f"Request failed: {e}")
             return {"error": f"Request failed: {e}"}
@@ -978,10 +981,10 @@ func NewEndPointPythonCode () string{
 	
 }
 
-func AddNewEndPoint ()  (WorkflowAppAction , string) {
+func AddCustomAction()  (WorkflowAppAction , string) {
 
 	parameters := []WorkflowAppActionParameter{}
-	pyCode := NewEndPointPythonCode()
+	pyCode := GetCustomAction()
 
 	parameters = append(parameters, WorkflowAppActionParameter{
 		Name:          "method",
@@ -996,11 +999,22 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 	})
 	
 	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "base_url",
+		Name:          "url",
 		Description:   "the base part of your url ",
 		Multiline:     false,
 		Required:      true,
 		Example:       "https://api.example.com",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "path",
+		Description:   "the path to add to the base url",
+		Multiline:     false,
+		Required:      false,
+		Example:       "/users/profile",
 		Schema: SchemaDefinition{
 			Type: "string",
 		},
@@ -1028,38 +1042,6 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 		},
 	})
 
-	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "path",
-		Description:   "the path to add to the base url",
-		Multiline:     false,
-		Required:      false,
-		Example:       "users/profile/settings",
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
-
-	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "username",
-		Description:   "username for basic auth",
-		Multiline:     false,
-		Required:      false,
-		Example:       "example_99",
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
-
-	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "password",
-		Description:   "password for the basic auth",
-		Multiline:     false,
-		Required:      false,
-		Example:       "******",
-		Schema: SchemaDefinition{
-			Type: "string",
-		},
-	})
 
 	parameters = append(parameters, WorkflowAppActionParameter{
 		Name:          "verify",
@@ -1074,7 +1056,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 	})
 
 	parameters = append(parameters, WorkflowAppActionParameter{
-		Name:          "request_body",
+		Name:          "body",
 		Description:   "the path to add to the base url",
 		Multiline:     true,
 		Required:      false,
@@ -1086,7 +1068,7 @@ func AddNewEndPoint ()  (WorkflowAppAction , string) {
 
 	action := WorkflowAppAction{
 		Description: "add a new endpoint for your app",
-		Name:        "add_Endpoint",
+		Name:        "custom_action",
 		NodeType:    "action",
 		Environment: "Shuffle",
 		Parameters:  parameters,
@@ -1655,7 +1637,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		//newPaths[actualPath] = path
 	}
 
-	action, curCode := AddNewEndPoint()
+	action, curCode := AddCustomAction()
 	api.Actions = append(api.Actions, action)
 	pythonFunctions = append(pythonFunctions, curCode)
 
