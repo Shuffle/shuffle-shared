@@ -11883,8 +11883,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						if project.Environment == "worker" {
 
 							if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || os.Getenv("SHUFFLE_SWARM_CONFIG") == "swarm" {
-								log.Printf("\n\n\n[DEBUG] MODIFYING workflow based on User Input as we are in swarm\n\n\n")
-
+								//log.Printf("\n\n\n[DEBUG] MODIFYING workflow based on User Input as we are in swarm\n\n\n")
 								workflowExecution.Status = "WAITING"
 								workflowExecution.Results = append(workflowExecution.Results, actionResult)
 								setWorkflow = true
@@ -17153,7 +17152,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					result.CompletedAt = int64(time.Now().Unix()) * 1000
-					log.Printf("\n\n[INFO][%s] Setting result to %s\n\n", oldExecution.ExecutionId, result.Action.Label)
+					log.Printf("[INFO][%s] Setting result to %s", oldExecution.ExecutionId, result.Action.Label)
 
 					sendSelfRequest := false
 					if answer[0] == "false" {
@@ -17213,7 +17212,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							}
 						}
 
-						log.Printf("\n\n\n[DEBUG][%s] SelfReq: %t, Env: %s\n\n\n", result.ExecutionId, sendSelfRequest, result.Action.Environment)
 						if sendSelfRequest || strings.ToLower(result.Action.Environment) == "cloud" {
 							log.Printf("[DEBUG][%s] Sending User Input result to self because we are on cloud env/action is skipped", result.ExecutionId)
 
