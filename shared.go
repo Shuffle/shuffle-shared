@@ -11881,7 +11881,17 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					setWorkflow := false
 					if strings.ToLower(actionResult.Action.Environment) != "cloud" {
 						if project.Environment == "worker" {
-							log.Printf("\n\n\n[DEBUG] NOT modifying workflow based on User Input as we are in worker\n\n\n")
+
+							if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || os.Getenv("SHUFFLE_SWARM_CONFIG") == "swarm" {
+								log.Printf("\n\n\n[DEBUG] MODIFYING workflow based on User Input as we are in swarm\n\n\n")
+
+								workflowExecution.Status = "WAITING"
+								workflowExecution.Results = append(workflowExecution.Results, actionResult)
+								setWorkflow = true
+							} else {
+								log.Printf("\n\n\n[DEBUG] NOT modifying workflow based on User Input as we are in worker\n\n\n")
+							}
+
 						} else {
 							// Find the waiting node and change it to this result
 							workflowExecution.Status = "WAITING"

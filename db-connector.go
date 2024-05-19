@@ -3168,7 +3168,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 				for {
 					innerWorkflow := Workflow{}
-					_, err := it.Next(&innerWorkflow)
+					_, err = it.Next(&innerWorkflow)
 					if err != nil {
 						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 							log.Printf("[ERROR] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
@@ -3197,8 +3197,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				}
 
 				if err != iterator.Done {
-					//log.Printf("[INFO] Failed fetching results: %v", err)
-					//break
+					log.Printf("[INFO] Failed fetching workflow results: %v", err)
+					break
 				}
 
 				// Get the cursor for the next page of results.
@@ -3217,8 +3217,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				}
 			}
 
-			//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
-
+			log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 			cursorStr = ""
 			query = datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
 			for {
@@ -3226,7 +3225,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 				for {
 					innerWorkflow := Workflow{}
-					_, err := it.Next(&innerWorkflow)
+					_, err = it.Next(&innerWorkflow)
+					log.Printf("[DEBUG] SUBFLOW: %#v", innerWorkflow.ID)
+
 					if err != nil {
 						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 							log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
