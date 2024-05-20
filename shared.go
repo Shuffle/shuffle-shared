@@ -10887,10 +10887,50 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		if userdata.ActiveOrg.Id == "" {
 			if len(userdata.Orgs) == 0 {
-				log.Printf("[ERROR] User %s (%s) has no chosen org. ID: %s, Name: %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Id, userdata.ActiveOrg.Name)
-				resp.WriteHeader(400)
-				resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io"}`))
-				return
+				log.Printf("[WARNING] User %s (%s) has no chosen org. ID: %s, Name: %s. Creating a default org", userdata.Username, userdata.Id, userdata.ActiveOrg.Id, userdata.ActiveOrg.Name)
+				orgSetupName := "default"
+				orgId := uuid.NewV4().String()
+				newOrg := Org{
+					Name:      orgSetupName,
+					Id:        orgId,
+					Org:       orgSetupName,
+					Users:     []User{userdata},
+					Roles:     userdata.Roles,
+					CloudSync: false,
+				}
+
+				err := SetOrg(ctx, newOrg, newOrg.Id)
+
+				if err != nil {
+					log.Printf("[ERROR] Failed setting default org for the user: %s", userdata.Username)
+				} else {
+					log.Printf("[DEBUG] Successfully created the default org!")
+
+					defaultEnv := os.Getenv("ORG_ID")
+					if len(defaultEnv) == 0 {
+						defaultEnv = "Shuffle"
+						log.Printf("[DEBUG] Setting default environment for org to %s", defaultEnv)
+					}
+
+					item := Environment{
+						Name:    defaultEnv,
+						Type:    "onperm",
+						OrgId:   orgId,
+						Default: true,
+						Id:      uuid.NewV4().String(),
+					}
+
+					err := SetEnvironment(ctx, &item)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting up new environment for new org: %s", err)
+					}
+
+					userdata.Orgs = append(userdata.Orgs, newOrg.Id)
+				}
+
+				// resp.WriteHeader(400)
+				// resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io"}`))
+				// return
 			}
 
 			userdata.ActiveOrg.Id = userdata.Orgs[0]
