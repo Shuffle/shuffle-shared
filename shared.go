@@ -3675,13 +3675,13 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	workflows, err = GetAllWorkflowsByQuery(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if len(workflows) == 0 {
-		log.Printf("[INFO] No workflows found for user %s", user.Username)
+		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
 		return
@@ -3720,8 +3720,9 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		newWorkflows = append(newWorkflows, workflow)
 	}
 
+	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(newWorkflows))
 	if project.Environment == "cloud" && len(newWorkflows) > 15 {
-		log.Printf("[WARNING] Removed workflow actions for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		for workflowIndex, _ := range newWorkflows {
 			newWorkflows[workflowIndex].Actions = []Action{}
@@ -3744,6 +3745,8 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 		// Add header that this is a limited response
 		resp.Header().Set("X-Shuffle-Truncated", "true")
+	} else {
+		log.Printf("[DEBUG] Loading without truncating for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 	}
 
 	// Get the org as well to manage priorities
@@ -3774,7 +3777,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("[INFO] Returning %d workflows", len(newWorkflows))
 	newjson, err := json.Marshal(newWorkflows)
 	if err != nil {
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflows"}`)))
 		return
 	}
@@ -3782,7 +3785,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	if project.CacheDb {
 		err = SetCache(ctx, cacheKey, newjson, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
+			log.Printf("[ERROR] Failed updating workflow cache for org %s: %s", user.ActiveOrg.Id, err)
 		}
 	}
 
@@ -20770,7 +20773,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Running category-action '%s' in category '%s' for org %s (%s)", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	log.Printf("\n\n\n[INFO] Running category-action '%s' in category '%s' for org %s (%s)\n\n\n", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	if len(value.Query) > 0 {
 		// Check if app authentication. If so, check if intent is to actually authenticate, or find the actual intent
@@ -20779,6 +20782,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if value.Label == "use_app" {
+		for _, field := range value.Fields {
+			if field.Key == "action" {
+				log.Printf("[INFO] NOT IMPLEMENTED: Changing to action label '%s' from use_app", field.Value)
+				//value.Label = field.Value
+				break
+			}
+		}
+	}
 	
 
 	threadId := value.WorkflowId
@@ -20833,7 +20845,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	_ = labelIndex
 
-	//log.Printf("[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
+	log.Printf("\n\n[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d\n\n", value.Label, value.Category, foundIndex, labelIndex)
+
 	newapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting apps in category action: %s", err)
@@ -20939,7 +20952,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == value.Label {
 					selectedAction = action
 
-					//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
+					log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
 					break
 				}
 			}
@@ -21171,6 +21184,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// E.g. for Jira: Org_id is required.
 	if foundFields != len(baseFields) {
 		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v, have: %#v", baseFields, value.Fields)
+
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
 		return

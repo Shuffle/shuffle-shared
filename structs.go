@@ -3792,6 +3792,7 @@ type StructuredCategoryAction struct {
 	WorkflowId  string        `json:"workflow_id"`
 	ExecutionId string        `json:"execution_id"`
 	Action      string        `json:"action"`
+	Label 	 	string        `json:"label"`
 	Category    string        `json:"category"`
 	Apps        []WorkflowApp `json:"apps"`
 
@@ -3800,6 +3801,7 @@ type StructuredCategoryAction struct {
 	AvailableLabels []string `json:"available_labels"`
 	ThreadId        string   `json:"thread_id"`
 	RunId           string   `json:"run_id"`
+	MissingFields  []string `json:"missing_fields"`
 
 	Translated bool `json:"translated"`
 }
