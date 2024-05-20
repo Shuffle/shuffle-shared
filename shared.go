@@ -24459,7 +24459,7 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 			TriggerType: "SUBFLOW",
 
 			Position: Position{
-				X: 0,
+				X: 150,
 				Y: 150, 
 			},
 

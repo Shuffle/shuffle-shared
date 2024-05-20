@@ -3226,7 +3226,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				for {
 					innerWorkflow := Workflow{}
 					_, err = it.Next(&innerWorkflow)
-					log.Printf("[DEBUG] SUBFLOW: %#v", innerWorkflow.ID)
+					//log.Printf("[DEBUG] SUBFLOW: %#v", innerWorkflow.ID)
 
 					if err != nil {
 						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
