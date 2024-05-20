@@ -2973,6 +2973,29 @@ func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	location := strings.Split(request.URL.String(), "/")
+	var userId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		userId = location[4]
+	}
+
+	if userId == "me" {
+		userId = user.Id
+	}
+
+	if user.Id != userId || len(userId) == 0 {
+		log.Printf("[WARNING] No user ID supplied")
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Supply a valid user ID: /api/v1/users/{userId}/apps"}`))
+		return
+	}
+
 	userapps, err := GetUserApps(ctx, user.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting apps (userapps): %s", err)
@@ -3635,6 +3658,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	var workflows []Workflow
 
+	/*
 	cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
@@ -3648,17 +3672,18 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		//log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
 	}
+	*/
 
 	workflows, err = GetAllWorkflowsByQuery(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if len(workflows) == 0 {
-		log.Printf("[INFO] No workflows found for user %s", user.Username)
+		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
 		return
@@ -3675,6 +3700,10 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		if project.Environment == "cloud" && workflow.ExecutionEnvironment == "onprem" {
+			continue
+		}
+
 		newActions := []Action{}
 		for _, action := range workflow.Actions {
 			// Removed because of exports. These are needed there.
@@ -3684,18 +3713,43 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			newActions = append(newActions, action)
 		}
 
-		workflow.Actions = newActions
+		//workflow.Actions = newActions
+
 
 		// Skipping these as they're related to onprem workflows in cloud (orborus)
-		if project.Environment == "cloud" && workflow.ExecutionEnvironment == "onprem" {
-			continue
-		}
 
 		usecaseIds = append(usecaseIds, workflow.UsecaseIds...)
 		newWorkflows = append(newWorkflows, workflow)
 	}
 
-	workflows = newWorkflows
+	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(newWorkflows))
+	if project.Environment == "cloud" && len(newWorkflows) > 15 {
+		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		for workflowIndex, _ := range newWorkflows {
+			newWorkflows[workflowIndex].Actions = []Action{}
+			newWorkflows[workflowIndex].Triggers = []Trigger{}
+			newWorkflows[workflowIndex].Branches = []Branch{}
+			newWorkflows[workflowIndex].VisualBranches = []Branch{}
+			newWorkflows[workflowIndex].Image = ""
+
+			newWorkflows[workflowIndex].Description = ""
+			newWorkflows[workflowIndex].Blogpost = ""
+
+			if len(newWorkflows[workflowIndex].Org) > 0 {
+				for orgIndex, _ := range newWorkflows[workflowIndex].Org {
+					newWorkflows[workflowIndex].Org[orgIndex].Image = ""
+				}
+			}
+
+			newWorkflows[workflowIndex].ExecutingOrg.Image = "" 
+		}
+
+		// Add header that this is a limited response
+		resp.Header().Set("X-Shuffle-Truncated", "true")
+	} else {
+		log.Printf("[DEBUG] Loading without truncating for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	}
 
 	// Get the org as well to manage priorities
 	// Only happens on first load, so it's like once per session~
@@ -3725,17 +3779,19 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("[INFO] Returning %d workflows", len(newWorkflows))
 	newjson, err := json.Marshal(newWorkflows)
 	if err != nil {
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflows"}`)))
 		return
 	}
 
+	/*
 	if project.CacheDb {
 		err = SetCache(ctx, cacheKey, newjson, 30)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating workflow cache: %s", err)
+			log.Printf("[ERROR] Failed updating workflow cache for org %s: %s", user.ActiveOrg.Id, err)
 		}
 	}
+	*/
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
@@ -3945,8 +4001,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	wg.Wait()
 
-	log.Println("[INFO] All Go routines Completed")
-	// this is to check if we got any errors without blocking the entire process
+	// Checks if we got any errors without blocking the entire process
 	select {
 	case err := <-errChan:
 		if err != nil {
@@ -3956,15 +4011,13 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	default:
-		log.Println("[INFO] No errors received within Go routines, proceeding with further logic")
+		//log.Println("[INFO] No errors received within Go routines, proceeding with further logic")
 	}
 
 	hooks := <-hooksChan
 	schedules := <-schedulesChan
 	workflows := <-workflowsChan
 	// pipelines := <-pipelinesChan
-
-	log.Printf("[INFO] recieved all the data from the channels")
 
 	hookMap := map[string]Hook{}
 	scheduleMap := map[string]ScheduleOld{}
@@ -6148,7 +6201,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			if curapp.ID == "" {
+			if curapp.ID == "" && action.AppID != "integration" {
 				log.Printf("[WARNING] Didn't find the App ID for %s", action.AppID)
 				for _, app := range workflowapps {
 					if app.ID == action.AppID {
@@ -6645,6 +6698,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	workflow.UpdatedBy = user.Username
+	if workflow.Public {
+		workflow.SuborgDistribution = []string{}
+	}
+
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed saving workflow to database: %s", err)
@@ -7056,7 +7113,9 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		item.Executions = ExecutionInfo{}
 		item.Limits = UserLimits{}
 		item.PrivateApps = []WorkflowApp{}
-		item.MFA = MFAInfo{}
+		item.MFA = MFAInfo{
+			Active: item.MFA.Active,
+		}
 
 		if !user.SupportAccess {
 			item.LoginInfo = []LoginInfo{}
@@ -8594,12 +8653,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Just getting here for later
 	ctx := GetContext(request)
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in change org: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in change org (local): %s", userErr)
 	}
 
 	if project.Environment == "cloud" {
@@ -8630,6 +8686,12 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 			return
 		}
+	}
+
+	if userErr != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -11826,7 +11888,16 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					setWorkflow := false
 					if strings.ToLower(actionResult.Action.Environment) != "cloud" {
 						if project.Environment == "worker" {
-							log.Printf("\n\n\n[DEBUG] NOT modifying workflow based on User Input as we are in worker\n\n\n")
+
+							if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || os.Getenv("SHUFFLE_SWARM_CONFIG") == "swarm" {
+								//log.Printf("\n\n\n[DEBUG] MODIFYING workflow based on User Input as we are in swarm\n\n\n")
+								workflowExecution.Status = "WAITING"
+								workflowExecution.Results = append(workflowExecution.Results, actionResult)
+								setWorkflow = true
+							} else {
+								log.Printf("\n\n\n[DEBUG] NOT modifying workflow based on User Input as we are in worker\n\n\n")
+							}
+
 						} else {
 							// Find the waiting node and change it to this result
 							workflowExecution.Status = "WAITING"
@@ -17088,7 +17159,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					result.CompletedAt = int64(time.Now().Unix()) * 1000
-					log.Printf("\n\n[INFO][%s] Setting result to %s\n\n", oldExecution.ExecutionId, result.Action.Label)
+					log.Printf("[INFO][%s] Setting result to %s", oldExecution.ExecutionId, result.Action.Label)
 
 					sendSelfRequest := false
 					if answer[0] == "false" {
@@ -17148,7 +17219,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							}
 						}
 
-						log.Printf("\n\n\n[DEBUG][%s] SelfReq: %t, Env: %s\n\n\n", result.ExecutionId, sendSelfRequest, result.Action.Environment)
 						if sendSelfRequest || strings.ToLower(result.Action.Environment) == "cloud" {
 							log.Printf("[DEBUG][%s] Sending User Input result to self because we are on cloud env/action is skipped", result.ExecutionId)
 
@@ -17814,7 +17884,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							CreateOrgNotification(
 								ctx,
 								fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
-								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", err.Error()),
+								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
 								fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 								workflowExecution.ExecutionOrg,
 								true,
@@ -20707,7 +20777,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Running category-action '%s' in category '%s' for org %s (%s)", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	log.Printf("\n\n\n[INFO] Running category-action '%s' in category '%s' for org %s (%s)\n\n\n", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	if len(value.Query) > 0 {
 		// Check if app authentication. If so, check if intent is to actually authenticate, or find the actual intent
@@ -20715,6 +20785,17 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] Got authenticate app request. Does the intent %#v match auth?", value.Query)
 		}
 	}
+
+	if value.Label == "use_app" {
+		for _, field := range value.Fields {
+			if field.Key == "action" {
+				log.Printf("[INFO] NOT IMPLEMENTED: Changing to action label '%s' from use_app", field.Value)
+				//value.Label = field.Value
+				break
+			}
+		}
+	}
+	
 
 	threadId := value.WorkflowId
 	if len(value.WorkflowId) > 0 {
@@ -20768,7 +20849,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	_ = labelIndex
 
-	//log.Printf("[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
+	log.Printf("\n\n[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d\n\n", value.Label, value.Category, foundIndex, labelIndex)
+
 	newapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting apps in category action: %s", err)
@@ -20807,7 +20889,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		foundCategory = org.SecurityFramework.SIEM
 	} else {
 		if len(foundAppType) > 0 {
-			log.Printf("[WARNING] Unknown app type in category action: %#v", foundAppType)
+			log.Printf("[ERROR] Unknown app type in category action: %#v", foundAppType)
 		}
 	}
 
@@ -20874,7 +20956,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == value.Label {
 					selectedAction = action
 
-					//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
+					log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
 					break
 				}
 			}
@@ -20971,6 +21053,53 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	fieldHash := ""
+	fieldFileFound := false
+	fieldFileContentMap := map[string]interface{}{}
+	if len(value.Fields) > 0 {
+		sortedKeys := []string{}
+		for _, field := range value.Fields {
+			sortedKeys = append(sortedKeys, field.Key)
+		}
+
+		sort.Strings(sortedKeys)
+		newFields := []Valuereplace{} 
+		for _, key := range sortedKeys {
+			for _, field := range value.Fields {
+				if field.Key == key {
+					newFields = append(newFields, field)
+					break
+				}
+			}
+		}
+
+		value.Fields = newFields
+
+		// Md5 based on sortedKeys. Could subhash key search work?
+		mappedString := fmt.Sprintf("%s-%s", selectedApp.ID, value.Label, strings.Join(sortedKeys, ""))
+		fieldHash = fmt.Sprintf("%x", md5.Sum([]byte(mappedString)))
+		file, err := GetFile(ctx, fmt.Sprintf("file_%s", fieldHash))
+		if err != nil {
+			//log.Printf("[DEBUG] Error with getting file in category action: %s", err)
+		} else {
+			//log.Printf("[DEBUG] Found file in category action: %#v", file)
+			if file.Status == "active" {
+				fieldFileFound = true 
+				fileContent, err := GetFileContent(ctx, file, nil)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting file content in category action: %s", err)
+					fieldFileFound = false
+				}
+
+				//log.Printf("Output content: %#v", string(fileContent))
+				err = json.Unmarshal(fileContent, &fieldFileContentMap)
+				if err != nil {
+					log.Printf("[ERROR] Failed unmarshaling file content in category action: %s", err)
+				}
+			}
+		}
+	}
+
 	if strings.Contains(strings.ToLower(strings.Join(selectedApp.ReferenceInfo.Triggers, ",")), "webhook") {
 		availableLabels = append(availableLabels, "Webhook")
 
@@ -21059,6 +21188,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// E.g. for Jira: Org_id is required.
 	if foundFields != len(baseFields) {
 		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v, have: %#v", baseFields, value.Fields)
+
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
 		return
@@ -21417,13 +21547,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// FIXME: Check if the organisation has a specific set of parameters for this action, mapped to the following fields:
+	// Check if the organisation has a specific set of parameters for this action, mapped to the following fields:
 	selectedAction.AppID = selectedApp.ID
 	selectedAction.AppName = selectedApp.Name
 	selectedAction = GetOrgspecificParameters(ctx, *org, selectedAction)
 
+	log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
 
-	//log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
+
+
 	handledRequiredFields := []string{}
 	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
@@ -21542,13 +21674,88 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		break
 	}
 
+	if len(fieldFileContentMap) > 0 {
+		log.Printf("[DEBUG] Found file content map: %#v", fieldFileContentMap)
+
+		for key, mapValue := range fieldFileContentMap {
+			if _, ok := mapValue.(string); !ok {
+				log.Printf("[WARNING] Value for key %s is not a string: %#v", key, mapValue)
+				continue
+			}
+
+			mappedFieldSplit := strings.Split(mapValue.(string), ".")
+			if len(mappedFieldSplit) == 0 {
+				log.Printf("[WARNING] Failed splitting value for key %s: %#v", key, mapValue)
+				continue
+			}
+
+			// Finds the location
+			for _, field := range value.Fields {
+				if field.Key != key {
+					continue
+				}
+
+				mapValue = field.Value
+				break
+			}
+
+			// Check if the key exists in the parameters
+			for paramIndex, param := range selectedAction.Parameters {
+				if param.Name != mappedFieldSplit[0] {
+					continue
+				}
+
+				foundIndex = paramIndex
+				if param.Name == "queries" {
+					if len(param.Value) == 0 {
+						selectedAction.Parameters[paramIndex].Value = fmt.Sprintf("%s=%s", key, mapValue.(string))
+					} else {
+						selectedAction.Parameters[paramIndex].Value = fmt.Sprintf("%s&%s=%s", param.Value, key, mapValue.(string))
+					}
+
+					missingFields = RemoveFromArray(missingFields, key)
+				} else if param.Name == "body" {
+
+					log.Printf("\n\n\n[DEBUG] Found body field for file content: %s. Location: %#v, Value: %#v\n\n\n", key, strings.Join(mappedFieldSplit, "."), mapValue)
+
+					newBody := param.Value
+
+					mapToSearch := map[string]interface{}{}
+					err := json.Unmarshal([]byte(newBody), &mapToSearch)
+					if err != nil {
+						log.Printf("[WARNING] Failed unmarshalling body for file content: %s. Body: %s", err, string(newBody))
+						continue
+					}
+
+					// Finds where in the body the value should be placed
+					location := strings.Join(mappedFieldSplit[1:], ".")
+					outputMap := schemaless.MapValueToLocation(mapToSearch, location, mapValue.(string))
+
+					// Marshal back to JSON
+					marshalledMap, err := json.Marshal(outputMap)
+					if err != nil {
+						log.Printf("[WARNING] Failed marshalling body for file content: %s", err)
+					} else {
+						selectedAction.Parameters[paramIndex].Value = string(marshalledMap)
+						missingFields = RemoveFromArray(missingFields, key)
+					}
+				} else {
+					log.Printf("\n\n\n[DEBUG] Found map with actionParameter %s with value %s\n\n\n", param.Name, mapValue)
+				}
+
+
+				break
+			}
+		}
+	}
+
 	// AI fallback mechanism to handle missing fields
 	// This is in case some fields are not sent in properly
 	orgId := ""
 	authorization := ""
 	optionalExecutionId := ""
 	if len(missingFields) > 0 {
-		log.Printf("[DEBUG] Missing fields for action: %#v", missingFields)
+		//log.Printf("\n\n\n[DEBUG] Missing fields for action: %#v\n\n\n", missingFields)
 
 		formattedQueryFields := []string{}
 		for _, missing := range missingFields {	
@@ -21564,7 +21771,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		formattedQuery := fmt.Sprintf("Use any of the fields '%s' with app %s to '%s'.", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
+		//formattedQuery := fmt.Sprintf("Use any of the fields '%s' with app %s to '%s'.", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
+		formattedQuery := fmt.Sprintf("Use the fields '%s' with app %s to '%s'.", strings.Join(formattedQueryFields, "&"), strings.ReplaceAll(selectedApp.Name, "_", " "), strings.ReplaceAll(value.Label, "_", " "))
 
 		newQueryInput := QueryInput{
 			Query:        formattedQuery,
@@ -21829,12 +22037,28 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-
 			if err == nil {
 				if httpOutput.Status < 300 {
-					log.Printf("\n\n\n[DEBUG] Found VALID status: %d. Should save the current fields as new base\n\n\n", httpOutput.Status)
+					//log.Printf("\n\n\n[DEBUG] Found VALID status: %d. Should save the current fields as new base\n\n\n", httpOutput.Status)
 
+					parsedParameterMap := map[string]interface{}{}
 					for _, param := range secondAction.Parameters {
+						if strings.Contains(param.Value, "&") && strings.Contains(param.Value, "=") {
+							// Split by & and then by =
+							parsedParameterMap[param.Name] = map[string]string{}
+							paramSplit := strings.Split(param.Value, "&")
+							for _, paramValue := range paramSplit {
+								paramValueSplit := strings.Split(paramValue, "=")
+								if len(paramValueSplit) != 2 {
+									continue
+								}
+
+								parsedParameterMap[param.Name].(map[string]string)[paramValueSplit[0]] = paramValueSplit[1]
+							}
+						} else {
+							parsedParameterMap[param.Name] = param.Value
+						}
+
 						// FIXME: Skipping anything but body for now
 						if param.Name != "body" {
 							continue
@@ -21845,6 +22069,72 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 							log.Printf("[WARNING] Failed uploading parameter base for %s: %s", param.Name, err)
 						}
 					}
+
+					if len(fieldHash) > 0 && fieldFileFound == false {
+						inputFieldMap := map[string]interface{}{}
+						for _, field := range value.Fields {
+							inputFieldMap[field.Key] = field.Value
+						}
+
+						/*
+						marshalled1, err := json.Marshal(inputFieldMap)
+						marshalled2, err := json.Marshal(parsedParameterMap)
+						log.Printf("[DEBUG] Input field map: %s", string(marshalled1))
+						log.Printf("[DEBUG] Parsed parameter map: %s", string(marshalled2))
+						*/
+
+						// Finds location of some data in another part of the data. This is to have a predefined location in subsequent requests
+						reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
+						if err != nil {
+							log.Printf("[ERROR] Problem with reversing: %s", err)
+						} else {
+							finishedFields := 0
+							mappedFields := map[string]string{}
+							err = json.Unmarshal([]byte(reversed), &mappedFields)
+							if err == nil {
+								for _, value := range mappedFields {
+									if len(value) > 0 {
+										finishedFields++
+									}
+								}
+							}
+
+							//log.Printf("Reversed (%d): %s", finishedFields, reversed)
+							if finishedFields > 0 {
+								timeNow := time.Now().Unix()
+
+								fileId := fmt.Sprintf("file_%s", fieldHash)
+								encryptionKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, fileId)
+								folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
+								downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+								file := &File{
+									Id:           fileId,
+									CreatedAt:    timeNow,
+									UpdatedAt:    timeNow,
+									Description:  "",
+									Status:       "active",
+									Filename:     fmt.Sprintf("%s.json", fieldHash),
+									OrgId:        user.ActiveOrg.Id,
+									WorkflowId:   "global",
+									DownloadPath: downloadPath,
+									Subflows:     []string{},
+									StorageArea:  "local",
+									Namespace:    "translation_output",
+									Tags:         []string{
+										"autocomplete",
+									},
+								}
+
+								returnedId, err := uploadFile(ctx, file, encryptionKey, []byte(reversed))
+								if err != nil {
+									log.Printf("[ERROR] Problem uploading file: %s", err)
+								} else {
+									log.Printf("[DEBUG] Uploaded file with ID: %s", returnedId)
+								}
+							}
+						}
+					}
+
 				}
 			} else {
 				// Parses out data from the output
@@ -21910,7 +22200,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			outputmap := make(map[string]interface{})
 			schemalessOutput, err := schemaless.Translate(ctx, value.Label, marshalledBody, authConfig)
 			if err != nil {
-				log.Printf("[WARNING] Failed translating schemaless output for label %s: %s", value.Label, err)
+				log.Printf("[ERROR] Failed translating schemaless output for label '%s': %s", value.Label, err)
 
 				/*
 				err = json.Unmarshal(marshalledBody, &outputmap)

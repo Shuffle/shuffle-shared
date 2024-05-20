@@ -1229,6 +1229,7 @@ type Workflow struct {
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
 
 	Validated  bool 	`json:"validated" datastore:"validated"` 
+	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
 
 type Category struct {
@@ -3791,6 +3792,7 @@ type StructuredCategoryAction struct {
 	WorkflowId  string        `json:"workflow_id"`
 	ExecutionId string        `json:"execution_id"`
 	Action      string        `json:"action"`
+	Label 	 	string        `json:"label"`
 	Category    string        `json:"category"`
 	Apps        []WorkflowApp `json:"apps"`
 
@@ -3799,6 +3801,7 @@ type StructuredCategoryAction struct {
 	AvailableLabels []string `json:"available_labels"`
 	ThreadId        string   `json:"thread_id"`
 	RunId           string   `json:"run_id"`
+	MissingFields  []string `json:"missing_fields"`
 
 	Translated bool `json:"translated"`
 }
