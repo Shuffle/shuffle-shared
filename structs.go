@@ -2516,6 +2516,7 @@ type SSOConfig struct {
 	OpenIdClientSecret  string `json:"client_secret" datastore:"client_secret"`
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
+	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
 }
 
 type SamlRequest struct {
