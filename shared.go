@@ -3658,6 +3658,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	var workflows []Workflow
 
+	/*
 	cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
@@ -3671,6 +3672,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		//log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
 	}
+	*/
 
 	workflows, err = GetAllWorkflowsByQuery(ctx, user)
 	if err != nil {
@@ -3782,12 +3784,14 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	/*
 	if project.CacheDb {
 		err = SetCache(ctx, cacheKey, newjson, 30)
 		if err != nil {
 			log.Printf("[ERROR] Failed updating workflow cache for org %s: %s", user.ActiveOrg.Id, err)
 		}
 	}
+	*/
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
