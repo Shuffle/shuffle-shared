@@ -203,7 +203,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-		log.Printf("[INFO] Set up ipeline with trigger ID %s and environment %s", pipeline.TriggerId, pipeline.Environment)
+		log.Printf("[INFO] Set up pipeline with trigger ID %s and environment %s", pipeline.TriggerId, pipeline.Environment)
 	}
 
 	err = SetWorkflowQueue(ctx, execRequest, parsedId)
