@@ -20,6 +20,7 @@ type PipelineRequest struct {
 	Command		string `json:"command"`
 	Environment string `json:"environment"`
 	WorkflowId  string `json:"workflow_id"`
+	StartNode   string `json:"start_node"`
 
 	PipelineId 	string `json:"pipeline_id"`
 	TriggerId	string `json:"trigger_id"`
@@ -35,6 +36,8 @@ type Pipeline struct {
 	OrgId       string 		`json:"org_id"`
 	Status      string 		`json:"status"`
 	Errors      []string 	`json:"errors"`
+	Url         string      `json:"url"`
+	Owner       string      `json:"owner"`
 	
 	PipelineId 	string 		`json:"pipeline_id"`
 	TriggerId	string 		`json:"trigger_id"`
