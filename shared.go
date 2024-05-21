@@ -11044,7 +11044,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				// that does not exist we create re-create that org.
 				foundOrg, err := GetOrg(ctx, org)
 				if err != nil {
-					log.Printf("[WARNING] Failed finding org %s: %s. Recreating the org", org, err)
+					log.Printf("[WARNING] Failed finding org %s: %s. Trying to recreate the org", org, err)
 
 					rOrg := Org{
 						Name: 		"default",
@@ -11056,9 +11056,11 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					err := SetOrg(ctx, rOrg, org)
+
 					if err != nil {
-						log.Printf("[ERROR] Failed to re-create the lost org")
+						log.Printf("[ERROR] Failed to re-create the org")
 					}
+
 					log.Printf("[DEBUG] Re-created the org %s", org)
 				}
 
