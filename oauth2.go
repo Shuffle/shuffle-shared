@@ -4080,32 +4080,19 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 			foundOrg := ""
 			foundChallenge := ""
 			stateSplit := strings.Split(string(parsedState), "&")
-			regexPattern := `EXTRA string=([A-Za-z0-9~.]+)`
-			re := regexp.MustCompile(regexPattern)
 			for _, innerstate := range stateSplit {
-				itemsplit := strings.SplitN(innerstate, "=", 2)
+				itemsplit := strings.Split(innerstate, "=")
 				if len(itemsplit) <= 1 {
 					log.Printf("[WARNING] No key:value: %s", innerstate)
 					continue
 				}
 
-				key := strings.TrimSpace(itemsplit[0])
-				value := strings.TrimSpace(itemsplit[1])
 				if itemsplit[0] == "org" {
-					foundOrg = value
+					foundOrg = strings.TrimSpace(itemsplit[1])
 				}
 
-				if key == "challenge" {
-					// Extract the "extra string" value from the challenge value
-					matches := re.FindStringSubmatch(value)
-					if len(matches) > 1 {
-						extractedString := matches[1]
-						foundChallenge = extractedString
-						log.Printf("Extracted 'extra string' value is: %s", extractedString)
-					} else {
-						foundChallenge = strings.TrimSpace(itemsplit[1])
-						log.Printf("No 'extra string' value found in challenge: %s", value)
-					}
+				if itemsplit[0] == "challenge" {
+					foundChallenge = strings.TrimSpace(itemsplit[1])
 				}
 			}
 
@@ -4113,11 +4100,13 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 				log.Printf("[ERROR] No org specified in state (2)")
 				return IdTokenCheck{}, err
 			}
+
 			org, err := GetOrg(ctx, foundOrg)
 			if err != nil {
 				log.Printf("[WARNING] Error getting org in OpenID (2): %s", err)
 				return IdTokenCheck{}, err
 			}
+
 			// Validating the user itself
 			if token.Aud == org.SSOConfig.OpenIdClientId && foundChallenge == org.SSOConfig.OpenIdClientSecret {
 				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")
