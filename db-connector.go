@@ -1656,7 +1656,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 					if err != nil {
 						log.Printf("[DEBUG][%s] Failed to parse in execution file value for exec argument: %s (3)", workflowExecution.ExecutionId, err)
 					} else {
-						log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
+						//log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
 						workflowExecution.ExecutionArgument = newValue
 					}
 				}
@@ -1721,7 +1721,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 		// A workaround for large bits of information for execution argument
 		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
-			log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
+			//log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
 			baseArgument := &ActionResult{
 				Result: workflowExecution.ExecutionArgument,
 				Action: Action{ID: "execution_argument"},
@@ -1730,7 +1730,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			if err != nil {
 				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
 			} else {
-				log.Printf("[DEBUG] Found a new value to parse with exec argument")
+				//log.Printf("[DEBUG] Found a new value to parse with exec argument")
 				workflowExecution.ExecutionArgument = newValue
 			}
 		}
@@ -1863,6 +1863,10 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	workflowApp := &WorkflowApp{}
 	if len(id) == 0 {
 		return workflowApp, errors.New("No ID provided to get an app")
+	}
+
+	if id == "integration" {
+		return workflowApp, errors.New("Integration is for the integration framework. Uses the Shuffle-ai app")
 	}
 
 	nameKey := "workflowapp"
@@ -6252,6 +6256,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 		cursorStr := ""
 
 		log.Printf("[DEBUG] Getting user apps for %s", userId)
+		var err error
 
 		queries := []datastore.Query{}
 		q := datastore.NewQuery(indexName).Filter("contributors =", userId)
@@ -6286,9 +6291,10 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 					}
 
 					if err != nil {
-						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
 
 						if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+
 							if strings.Contains("no matching index found", fmt.Sprintf("%s", err)) {
 								log.Printf("[ERROR] No more apps for %s in user app load? Breaking: %s.", userId, err)
 							} else {
@@ -6310,7 +6316,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 
 				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "no more items") {
-						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+						log.Printf("[ERROR] Failed fetching user apps (3): %v", err)
 					}
 
 					break

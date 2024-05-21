@@ -5,6 +5,7 @@ package shuffle
 import (
 	"bytes"
 	"context"
+	"regexp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -4113,11 +4114,13 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 				log.Printf("[ERROR] No org specified in state (2)")
 				return IdTokenCheck{}, err
 			}
+
 			org, err := GetOrg(ctx, foundOrg)
 			if err != nil {
 				log.Printf("[WARNING] Error getting org in OpenID (2): %s", err)
 				return IdTokenCheck{}, err
 			}
+
 			// Validating the user itself
 			if token.Aud == org.SSOConfig.OpenIdClientId && foundChallenge == org.SSOConfig.OpenIdClientSecret {
 				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")

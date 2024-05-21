@@ -10428,7 +10428,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("SHARING: %s. PUBLIC: %s", app.Sharing, app.Public)
 	if app.Sharing || app.Public {
 		if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
-			log.Printf("Should return WITHOUT openapi")
+			log.Printf("[DEBUG] Returning app '%s' without OpenAPI", fileId)
 		} else {
 			//log.Printf("CAN SHARE APP!")
 			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
@@ -21394,14 +21394,18 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME: Check if ALL fields for the target app can be fullfiled
 	// E.g. for Jira: Org_id is required.
+
+	/*
 	if foundFields != len(baseFields) {
 		log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v, have: %#v", baseFields, value.Fields)
 
 		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set. This can be autocompleted from fields you fille in", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
 		return
 
 	}
+	*/
+	_ = baseFields	
 
 	/*
 
