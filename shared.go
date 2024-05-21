@@ -10712,6 +10712,12 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			}
+			if org.SSOConfig.SSORequired == false && len(data.Password) == 0 && (len(org.SSOConfig.SSOEntrypoint) == 0 && len(org.SSOConfig.OpenIdAuthorization) == 0 && len(org.SSOConfig.OpenIdClientId) == 0) {
+				resp.WriteHeader(401)
+				errorMessage := []byte(`{"success": false, "reason": "Your organization doesn't have SSO. Please log in using your Login ID and password."}`)
+				resp.Write(errorMessage)
+				return
+			}
 			goThroughSSO := false
 			if org.SSOConfig.SSORequired {
 				goThroughSSO = true
@@ -11098,6 +11104,234 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			loginData = string(newData)
 		}
 	}
+
+	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(loginData))
+}
+
+func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in login", GetRequestIp(request))
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+	// Gets a struct of Username, password
+	data, err := ParseLoginParameters(resp, request)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	log.Printf("[AUDIT] Handling login of %s", data.Username)
+
+	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
+	err = checkUsername(data.Username)
+	if err != nil {
+		log.Printf("[INFO] Username is too short or bad for %s: %s", data.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	ctx := GetContext(request)
+	users, err := FindUser(ctx, data.Username)
+	if err != nil && len(users) == 0 {
+		log.Printf("[WARNING] Failed getting user %s during login", data.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		return
+	}
+
+	userdata := User{}
+	if len(users) != 1 {
+		log.Printf("[WARNING] Username %s has multiple or no users (%d). Checking if it matches any.", data.Username, len(users))
+
+		for _, user := range users {
+			if user.Id == "" && user.Username == "" {
+				log.Printf(`[AUDIT] Username %s (%s) isn't valid (2). Amount of users checked: %d (1)`, user.Username, user.Id, len(users))
+				continue
+			}
+
+			if user.ActiveOrg.Id != "" {
+				err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
+				if err != nil {
+					log.Printf("[WARNING] Bad password: %s", err)
+					continue
+				}
+
+				userdata = user
+				break
+			}
+		}
+	} else {
+		userdata = users[0]
+	}
+
+	// Starting caching of the username
+	// This is to make it faster later :)
+	go GetAllWorkflowsByQuery(context.Background(), userdata)
+	go GetPrioritizedApps(context.Background(), userdata)
+
+	/*
+			// FIXME: Reenable activation?
+		if project.Environment == "cloud" && !userdata.Active {
+			log.Printf("[DEBUG] %s is not active, but tried to login. Error: %v", data.Username, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "This user is deactivated"}`))
+			return
+		}
+	*/
+
+	org := Org{}
+	updateUser := false
+	if project.Environment == "cloud" {
+		if strings.HasSuffix(strings.ToLower(userdata.Username), "@shuffler.io") {
+			if !userdata.Active {
+				log.Printf("[INFO] User %s with @shuffler suffix is not active.", userdata.Username)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "error: You need to activate your account before logging in"}`)))
+				return
+			}
+		}
+
+		//log.Printf("[DEBUG] Are they using SSO?")
+		// If it fails, allow login if password correct?
+		// Check if suborg -> Get parent & check SSO
+		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+		if err == nil {
+			//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
+			org = *baseOrg
+			if len(baseOrg.ManagerOrgs) > 0 {
+
+				// Use auth from parent org if user is also in that one
+				newOrg, err := GetOrg(ctx, baseOrg.ManagerOrgs[0].Id)
+				if err == nil {
+
+					found := false
+					for _, user := range newOrg.Users {
+						if user.Username == userdata.Username {
+							found = true
+						}
+					}
+
+					if found {
+						log.Printf("[WARNING] Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
+						org = *newOrg
+					}
+				}
+			}
+
+			if org.SSOConfig.SSORequired == false && len(data.Password) == 0 && (len(org.SSOConfig.SSOEntrypoint) == 0 && len(org.SSOConfig.OpenIdAuthorization) == 0 && len(org.SSOConfig.OpenIdClientId) == 0) {
+				resp.WriteHeader(401)
+				errorMessage := []byte(`{"success": false, "reason": "Your organization doesn't have SSO. Please log in using your Login ID and password."}`)
+				resp.Write(errorMessage)
+				return
+			}
+
+			goThroughSSO := false
+			if org.SSOConfig.SSORequired {
+				goThroughSSO = true
+			} else if len(data.Password) > 0 {
+				goThroughSSO = false
+			} else if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
+				goThroughSSO = true
+			} else if !org.SSOConfig.SSORequired && (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0) {
+				goThroughSSO = false
+			} else {
+				goThroughSSO = false
+			}
+
+			log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
+			log.Printf("gothoughsso is : %v", goThroughSSO)
+			// has to contain http(s)
+			if goThroughSSO == true {
+				baseSSOUrl := org.SSOConfig.SSOEntrypoint
+				redirectKey := "SSO_REDIRECT"
+				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+					log.Printf("[INFO] OpenID login for %s", org.Id)
+					redirectKey = "SSO_REDIRECT"
+
+					baseSSOUrl = GetOpenIdUrl(request, org)
+				}
+
+				log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
+
+				// Check if the user has other orgs that can be swapped to - if so SWAP
+				userDomain := strings.Split(userdata.Username, "@")
+				for _, tmporg := range userdata.Orgs {
+					innerorg, err := GetOrg(ctx, tmporg)
+					if err != nil {
+						continue
+					}
+
+					if innerorg.Id == userdata.ActiveOrg.Id {
+						continue
+					}
+
+					if len(innerorg.ManagerOrgs) > 0 {
+						continue
+					}
+
+					// Not your own org
+					if innerorg.Org == userdata.Username || strings.Contains(innerorg.Name, "@") {
+						continue
+					}
+
+					if len(userDomain) >= 2 {
+						if strings.Contains(strings.ToLower(innerorg.Org), strings.ToLower(userDomain[1])) {
+							continue
+						}
+					}
+
+					// Shouldn't contain the domain of the users' email
+					log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", userdata.Username, userdata.Id, innerorg.Name)
+					userdata.ActiveOrg.Id = innerorg.Id
+					userdata.ActiveOrg.Name = innerorg.Name
+
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.ActiveOrg.Id))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Username))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Id))
+
+					updateUser = true
+					break
+
+				}
+
+				// user controllable field hmm :)
+				if !updateUser {
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "%s", "url": "%s"}`, redirectKey, baseSSOUrl)))
+					return
+				}
+			}
+		}
+	}
+
+	loginData := `{"success": true}`
 
 	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
 
