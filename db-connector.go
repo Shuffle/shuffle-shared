@@ -6068,6 +6068,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
+
+
 	return allApps, nil
 }
 
@@ -6166,6 +6168,8 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 
 func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 	wrapper := []WorkflowApp{}
+	var err error
+
 	cacheKey := fmt.Sprintf("userapps-%s", userId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -6203,8 +6207,8 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 							},
 						},
 					},
-					"minimum_should_match": 1,
 				},
+				"minimum_should_match": 1,
 			},
 		}
 
@@ -6230,8 +6234,9 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 		}
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
-			return []WorkflowApp{}, fmt.Errorf("bad statuscode: %d", res.StatusCode)
+			return []WorkflowApp{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
 		}
+
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
 			return []WorkflowApp{}, err
@@ -7855,17 +7860,17 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 		}
 		wrapper := AllHooksWrapper{}
 		err = json.Unmarshal(respBody, &wrapper)
-
+	
 		if err != nil {
 			return []Hook{}, err
 		}
 
 		for _, hit := range wrapper.Hits.Hits {
-			hook := hit.Source
-			hooks = append(hooks, hook)
+			hook := hit.Source 
+			hooks = append(hooks, hook) 
 		}
 		return hooks, err
-
+		
 	} else {
 		q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
 
@@ -7936,7 +7941,7 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return []Pipeline{}, fmt.Errorf("bad statuscode: %d", res.StatusCode)
-
+			
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
@@ -7945,17 +7950,17 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 		}
 		wrapper := AllPipelinesWrapper{}
 		err = json.Unmarshal(respBody, &wrapper)
-
+	
 		if err != nil {
 			return []Pipeline{}, err
 		}
 
 		for _, hit := range wrapper.Hits.Hits {
-			pipeline := hit.Source
-			pipelines = append(pipelines, pipeline)
+			pipeline := hit.Source 
+			pipelines = append(pipelines, pipeline) 
 		}
 		return pipelines, err
-
+		
 	} else {
 		// q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
 
@@ -8326,7 +8331,7 @@ func SetHook(ctx context.Context, hook Hook) error {
 func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 	pipeline := &Pipeline{}
 	nameKey := "pipelines"
-
+	
 	triggerId = strings.ToLower(triggerId)
 
 	if project.DbType == "opensearch" {
@@ -8353,7 +8358,7 @@ func GetPipeline(ctx context.Context, triggerId string) (*Pipeline, error) {
 		}
 
 		pipeline = &wrapped.Source
-	} else {
+	}  else {
 		// key := datastore.NameKey(nameKey, triggerId, nil)
 		// err := project.Dbclient.Get(ctx, key, pipeline)
 		// if err != nil {
@@ -8457,7 +8462,7 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 		fileData, err := json.Marshal(curFile)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getfile: %s", err)
-			return curFile, nil
+			return curFile, nil 
 		}
 
 		err = SetCache(ctx, cacheKey, fileData, 30)
@@ -8559,6 +8564,7 @@ func SetFile(ctx context.Context, file File) error {
 
 	DeleteCache(ctx, fmt.Sprintf("files_%s_%s", file.OrgId, file.Namespace))
 	DeleteCache(ctx, fmt.Sprintf("files_%s_", file.OrgId))
+
 
 	return nil
 }
@@ -8990,6 +8996,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			log.Printf("[WARNING] Failed updating file cache: %s", err)
 		}
 	}
+				
 
 	return files, nil
 }
