@@ -82,23 +82,25 @@ func GetContext(request *http.Request) context.Context {
 func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
-
+	log.Printf("len(origin) is: %v", len(origin))
+	log.Printf("origin is: %v", origin)
 	if len(origin) > 0 {
 		resp.Header().Set("Access-Control-Allow-Origin", origin[0])
 
 		// Location testing
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://us.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://eu.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://in.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
+		// resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
+		// resp.Header().Set("Access-Control-Allow-Origin", "https://us.shuffler.io")
+		// resp.Header().Set("Access-Control-Allow-Origin", "https://eu.shuffler.io")
+		// resp.Header().Set("Access-Control-Allow-Origin", "https://in.shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
+		log.Printf("inside the access-control")
 	} else {
 		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:4201")
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
 	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Authorization")
-	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH")
+	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH, OPTIONS")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
 	if request.Method == "OPTIONS" {
@@ -8689,7 +8691,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	if cors {
 		return
 	}
-
 	// Just getting here for later
 	ctx := GetContext(request)
 	user, userErr := HandleApiAuthentication(resp, request)
@@ -10503,7 +10504,6 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 	if verifiererr == nil {
 		codeChallenge = verifier.Value
 	}
-
 	//log.Printf("[DEBUG] Got challenge value %s (pre state)", codeChallenge)
 
 	// https://192.168.55.222:3443/api/v1/login_openid
@@ -10544,7 +10544,6 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		//log.Printf("[DEBUG] Found OpenID url (PKCE!!). Extra redirect check: %s", request.URL.String())
 		baseSSOUrl += fmt.Sprintf("?client_id=%s&response_type=code&scope=openid&redirect_uri=%s&state=%s&code_challenge_method=S256&code_challenge=%s", org.SSOConfig.OpenIdClientId, redirectUrl, state, codeChallenge)
 	}
-
 	return baseSSOUrl
 }
 
@@ -10742,12 +10741,14 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			}
+
 			if org.SSOConfig.SSORequired == false && len(data.Password) == 0 && (len(org.SSOConfig.SSOEntrypoint) == 0 && len(org.SSOConfig.OpenIdAuthorization) == 0 && len(org.SSOConfig.OpenIdClientId) == 0) {
 				resp.WriteHeader(401)
 				errorMessage := []byte(`{"success": false, "reason": "Your organization doesn't have SSO. Please log in using your Login ID and password."}`)
 				resp.Write(errorMessage)
 				return
 			}
+
 			goThroughSSO := false
 			if org.SSOConfig.SSORequired {
 				goThroughSSO = true
@@ -11425,7 +11426,7 @@ func ParseLoginParameters(resp http.ResponseWriter, request *http.Request) (logi
 	if err != nil {
 		return loginStruct{}, err
 	}
-
+	log.Printf("parselogin parameter is : %v", t)
 	return t, nil
 }
 
@@ -16266,7 +16267,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[WARNING] No key:value: %s", innerstate)
 					continue
 				}
-
 				if itemsplit[0] == "id_token" {
 					token, err := VerifyIdToken(ctx, itemsplit[1])
 					if err != nil {
@@ -16275,11 +16275,9 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 						resp.WriteHeader(401)
 						return
 					}
-
 					openidUser.Sub = token.Sub
 					org = &token.Org
 					skipValidation = true
-
 					break
 				}
 			}
@@ -16308,7 +16306,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		log.Printf("State: %s", stateBase)
 		foundOrg := ""
 		foundRedir := ""
 		foundChallenge := ""
@@ -16434,18 +16431,19 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		log.Printf("[WARNING] Openid SSO is not implemented for cloud yet. User %s", openidUser.Sub)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud Openid is not available yet"}`)))
-		return
-	}
+	// if project.Environment == "cloud" {
+	// 	log.Printf("[WARNING] Openid SSO is not implemented for cloud yet. User %s", openidUser.Sub)
+	// 	resp.WriteHeader(401)
+	// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud Openid is not available yet"}`)))
+	// 	return
+	// }
 
 	userName := strings.ToLower(strings.TrimSpace(openidUser.Sub))
 	if !strings.Contains(userName, "@") {
 		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
 	}
-	redirectUrl := "/workflows"
+
+	redirectUrl := "https://shuffler.io/workflows"
 
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
@@ -16457,7 +16455,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//log.Printf("SESSION: %s", user.Session)
 
 				expiration := time.Now().Add(3600 * time.Second)
-				//if len(user.Session) == 0 {
+				// if len(user.Session) == 0 {
 				log.Printf("[INFO] User does NOT have session - creating")
 				sessionToken := uuid.NewV4().String()
 
@@ -16515,6 +16513,12 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
 
 				//log.Printf("SESSION: %s", user.Session)
+
+				user.ActiveOrg = OrgMini{
+					Name: org.Name,
+					Id:   org.Id,
+					Role: user.Role,
+				}
 
 				expiration := time.Now().Add(3600 * time.Second)
 				//if len(user.Session) == 0 {
@@ -16590,7 +16594,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
 		return
 	}
-
+	log.Printf("user org is : %v", org.Id)
 	log.Printf("[AUDIT] Adding user %s to org %s (%s) through single sign-on", userName, org.Name, org.Id)
 	newUser := new(User)
 	// Random password to ensure its not empty
@@ -16604,6 +16608,12 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newUser.LoginType = "OpenID"
 	newUser.Role = "user"
 	newUser.Session = uuid.NewV4().String()
+
+	newUser.ActiveOrg = OrgMini{
+		Name: org.Name,
+		Id:   org.Id,
+		Role: "user",
+	}
 
 	verifyToken := uuid.NewV4()
 	ID := uuid.NewV4()
@@ -16690,8 +16700,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[DEBUG] Using %s as redirectUrl in SSO", backendUrl)
-
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read of SSO: %s", err)
@@ -16700,8 +16708,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Parsing out without using Field
-	// This is a mess, but all made to handle base64 and equal signs
 	parsedSAML := ""
 	for _, item := range strings.Split(string(body), "&") {
 		//log.Printf("Got body with info: %s", item)
@@ -16835,7 +16841,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	if !strings.Contains(userName, "@") {
 		log.Printf("[ERROR] Bad username, but allowing due to SSO: %s. Full Subject: %#v", userName, samlResp.Assertion.Subject)
 	}
-
 	if len(userName) == 0 {
 		log.Printf("[WARNING] Failed finding user - No name: %s", samlResp.Assertion.Subject)
 		resp.WriteHeader(401)
@@ -17067,7 +17072,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
 		return
 	}
-
 	newUser.Session = sessionToken
 
 	newUser.LoginInfo = append(newUser.LoginInfo, LoginInfo{
@@ -18214,7 +18218,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							CreateOrgNotification(
 								ctx,
 								fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
-								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
+								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", err.Error()),
 								fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 								workflowExecution.ExecutionOrg,
 								true,
@@ -21883,8 +21887,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedAction.AppName = selectedApp.Name
 	selectedAction = GetOrgspecificParameters(ctx, *org, selectedAction)
 
-	log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
-
 	handledRequiredFields := []string{}
 	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
@@ -23969,14 +23971,14 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
@@ -24322,53 +24324,55 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 //         return
 //     }
 
-//     // How do I make sure that Orborus is the one that made this request?
+    // How do I make sure that Orborus is the one that made this request?
 
-//     var requestBody Pipeline
-//     err := json.NewDecoder(request.Body).Decode(&requestBody)
-// 	if err != nil {
-//         log.Printf("[WARNING] Failed to decode request body: %s", err)
-//         resp.WriteHeader(401)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-//     }
-// 	if len(requestBody.TriggerId) == 0 || len(requestBody.PipelineId) == 0 || len(requestBody.Status) == 0 {
-// 		log.Printf("[WARNING] Missing fields in the request body")
-//         resp.WriteHeader(400)
-//         resp.Write([]byte(`{"success": false, "reason": "Missing fields in the request body"}`))
-//         return
-// 	}
+    var requestBody Pipeline
+    err := json.NewDecoder(request.Body).Decode(&requestBody)
+	if err != nil {
+        log.Printf("[WARNING] Failed to decode request body: %s", err)
+        resp.WriteHeader(401)
+        resp.Write([]byte(`{"success": false}`))
+        return
+    }
+	if len(requestBody.TriggerId) == 0 || len(requestBody.PipelineId) == 0 || len(requestBody.Status) == 0 {
+		log.Printf("[WARNING] Missing fields in the request body")
+        resp.WriteHeader(400)
+        resp.Write([]byte(`{"success": false, "reason": "Missing fields in the request body"}`))
+        return
+	}
 
-//     ctx := GetContext(request)
-//     pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
-//     if err != nil {
-// 		if strings.Contains(fmt.Sprintf("%s", err),"pipeline doesn't exist"){
-// 			log.Printf("[DEBUG] no matching document found for Pipeline: %s", requestBody.PipelineId)
-// 			resp.WriteHeader(404)
-// 			resp.Write([]byte(`{"success": false, "reason": "pipeline not found"}`))
-// 			return
-// 		} else {
-//         log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
-//         resp.WriteHeader(500)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-// 		}
-//     }
+    ctx := GetContext(request)
+    pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
+	log.Printf("[HARI TESTING] trigger id is %s", requestBody.TriggerId)
+    if err != nil {
+		if strings.Contains(fmt.Sprintf("%s", err),"pipeline doesn't exist"){
+			log.Printf("[DEBUG] no matching document found for Pipeline: %s", requestBody.PipelineId)
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "pipeline not found"}`))
+			return
+		} else {
+        log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
+        resp.WriteHeader(500)
+        resp.Write([]byte(`{"success": false}`))
+        return
+		}
+    }
 
-//     pipeline.PipelineId = requestBody.PipelineId
-//     pipeline.Status = requestBody.Status
+    pipeline.PipelineId = requestBody.PipelineId
+    pipeline.Status = requestBody.Status
 
-//     err = savePipelineData(ctx, *pipeline)
-//     if err != nil {
-//         log.Printf("[WARNING] Failed updating pipeline with ID: %s due to %s", pipeline.PipelineId, err)
-//         resp.WriteHeader(500)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-//     }
-// 	log.Printf("[INFO] Sucessfully saved pipeline: %s", pipeline.PipelineId)
-//     resp.WriteHeader(200)
-//     resp.Write([]byte(`{"success": true}`))
-// }
+    
+    err = savePipelineData(ctx, *pipeline)
+    if err != nil {
+        log.Printf("[WARNING] Failed updating pipeline with ID: %s due to %s", pipeline.PipelineId, err)
+        resp.WriteHeader(500)
+        resp.Write([]byte(`{"success": false}`))
+        return
+    }
+	log.Printf("[INFO] Sucessfully saved pipeline: %s", pipeline.PipelineId)
+    resp.WriteHeader(200)
+    resp.Write([]byte(`{"success": true}`))
+}
 
 func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -24784,8 +24788,8 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 			TriggerType: "SUBFLOW",
 
 			Position: Position{
-				X: 150,
-				Y: 150,
+				X: 0,
+				Y: 150, 
 			},
 
 			Parameters: []WorkflowAppActionParameter{

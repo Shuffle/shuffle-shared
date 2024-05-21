@@ -15,15 +15,15 @@ type AppContext struct {
 }
 
 type PipelineRequest struct {
-	Name	   	string `json:"name"`
-	Type 		string `json:"type"`
-	Command		string `json:"command"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Command     string `json:"command"`
 	Environment string `json:"environment"`
 	WorkflowId  string `json:"workflow_id"`
 	StartNode   string `json:"start_node"`
 
-	PipelineId 	string `json:"pipeline_id"`
-	TriggerId	string `json:"trigger_id"`
+	PipelineId string `json:"pipeline_id"`
+	TriggerId  string `json:"trigger_id"`
 }
 
 type Pipeline struct {
@@ -39,16 +39,16 @@ type Pipeline struct {
 	Url         string   `json:"url" datastore:"url"`
 	Owner       string   `json:"owner" datastore:"owner"`
 
-	PipelineId  string   `json:"pipeline_id" datastore:"pipeline_id"`
-	TriggerId   string   `json:"trigger_id" datastore:"trigger_id"`
+	PipelineId string `json:"pipeline_id" datastore:"pipeline_id"`
+	TriggerId  string `json:"trigger_id" datastore:"trigger_id"`
 }
 
 type PipelineWrapper struct {
-	Index  string   `json:"_index"`
-	Type   string   `json:"_type"`
-	ID     string   `json:"_id"`
-	Version int     `json:"_version"`
-	Found   bool    `json:"found"`
+	Index   string   `json:"_index"`
+	Type    string   `json:"_type"`
+	ID      string   `json:"_id"`
+	Version int      `json:"_version"`
+	Found   bool     `json:"found"`
 	Source  Pipeline `json:"_source"`
 }
 
@@ -58,10 +58,10 @@ type AllPipelinesWrapper struct {
 			Value    int    `json:"value"`
 			Relation string `json:"relation"`
 		} `json:"total"`
-		Hits     []struct {
-			Index  string  `json:"_index"`
-			ID     string  `json:"_id"`
-			Score  float64 `json:"_score"`
+		Hits []struct {
+			Index  string   `json:"_index"`
+			ID     string   `json:"_id"`
+			Score  float64  `json:"_score"`
 			Source Pipeline `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
@@ -1231,7 +1231,7 @@ type Workflow struct {
 	Hidden       bool   `json:"hidden" datastore:"hidden"`
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
 
-	Validated  bool 	`json:"validated" datastore:"validated"` 
+	Validated          bool     `json:"validated" datastore:"validated"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
 
@@ -1458,7 +1458,7 @@ type AlgoliaSearchWorkflow struct {
 	CreatorInfo      CreatorInfo       `json:"creator_info,omitempty"`
 	ActionReferences []ActionReference `json:"action_references,omitempty"`
 	Priority         int               `json:"priority"`
-	Validated  		 bool 			   `json:"validated"`
+	Validated        bool              `json:"validated"`
 }
 
 type ActionReference struct {
@@ -2153,7 +2153,7 @@ type SubResponse struct {
 
 type AllTriggersWrapper struct {
 	// Pipelines []Pipeline `json:"pipelines"`
-	WebHooks   []Hook `json:"webhooks"`
+	WebHooks  []Hook        `json:"webhooks"`
 	Schedules []ScheduleOld `json:"schedules"`
 }
 
@@ -2306,11 +2306,11 @@ type AllHooksWrapper struct {
 			Value    int    `json:"value"`
 			Relation string `json:"relation"`
 		} `json:"total"`
-		Hits     []struct {
+		Hits []struct {
 			Index  string  `json:"_index"`
 			ID     string  `json:"_id"`
 			Score  float64 `json:"_score"`
-			Source Hook `json:"_source"`
+			Source Hook    `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
 }
@@ -3484,10 +3484,10 @@ type UserInputResponse struct {
 }
 
 type SchemalessOutput struct {
-	Success bool        `json:"success"`
-	Action  string      `json:"action"`
-	Status  int         `json:"status,omitempty"`
-	URL	    string      `json:"url,omitempty"`
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Status  int    `json:"status,omitempty"`
+	URL     string `json:"url,omitempty"`
 
 	// JSON output. What if it's a list?
 	//Output map[string]interface{} `json:"output"`
@@ -3795,7 +3795,7 @@ type StructuredCategoryAction struct {
 	WorkflowId  string        `json:"workflow_id"`
 	ExecutionId string        `json:"execution_id"`
 	Action      string        `json:"action"`
-	Label 	 	string        `json:"label"`
+	Label       string        `json:"label"`
 	Category    string        `json:"category"`
 	Apps        []WorkflowApp `json:"apps"`
 
@@ -3804,7 +3804,7 @@ type StructuredCategoryAction struct {
 	AvailableLabels []string `json:"available_labels"`
 	ThreadId        string   `json:"thread_id"`
 	RunId           string   `json:"run_id"`
-	MissingFields  []string `json:"missing_fields"`
+	MissingFields   []string `json:"missing_fields"`
 
 	Translated bool `json:"translated"`
 }
@@ -3824,13 +3824,13 @@ type UserRequest struct {
 }
 
 type HTTPOutput struct {
-	Success bool                   `json:"success"`
-	Status  int                    `json:"status"`
-	Url     string                 `json:"url"`
-	Body    interface{} 		   `json:"body"`
-	Headers map[string]string      `json:"headers"`
-	Cookies map[string]string      `json:"cookies"`
-	Errors  []string               `json:"errors"`
+	Success bool              `json:"success"`
+	Status  int               `json:"status"`
+	Url     string            `json:"url"`
+	Body    interface{}       `json:"body"`
+	Headers map[string]string `json:"headers"`
+	Cookies map[string]string `json:"cookies"`
+	Errors  []string          `json:"errors"`
 }
 
 type SnappStep struct {
