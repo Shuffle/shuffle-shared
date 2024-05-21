@@ -27,20 +27,20 @@ type PipelineRequest struct {
 }
 
 type Pipeline struct {
-	Name	   	string 		`json:"name"`
-	Type 		string 		`json:"type"`
-	Command		string 		`json:"command"`
-	Environment string 		`json:"environment"`
-	WorkflowId  string 		`json:"workflow_id"`
-	StartNode   string 		`json:"start_node"`
-	OrgId       string 		`json:"org_id"`
-	Status      string 		`json:"status"`
-	Errors      []string 	`json:"errors"`
-	Url         string      `json:"url"`
-	Owner       string      `json:"owner"`
-	
-	PipelineId 	string 		`json:"pipeline_id"`
-	TriggerId	string 		`json:"trigger_id"`
+	Name        string   `json:"name" datastore:"name"`
+	Type        string   `json:"type" datastore:"type"`
+	Command     string   `json:"command" datastore:"command"`
+	Environment string   `json:"environment" datastore:"environment"`
+	WorkflowId  string   `json:"workflow_id" datastore:"workflow_id"`
+	StartNode   string   `json:"start_node" datastore:"start_node"`
+	OrgId       string   `json:"org_id" datastore:"org_id"`
+	Status      string   `json:"status" datastore:"status"`
+	Errors      []string `json:"errors" datastore:"errors"`
+	Url         string   `json:"url" datastore:"url"`
+	Owner       string   `json:"owner" datastore:"owner"`
+
+	PipelineId  string   `json:"pipeline_id" datastore:"pipeline_id"`
+	TriggerId   string   `json:"trigger_id" datastore:"trigger_id"`
 }
 
 type PipelineWrapper struct {
