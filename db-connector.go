@@ -8215,10 +8215,11 @@ func savePipelineData(ctx context.Context, pipeline Pipeline) error {
 			return err
 		}
 	} else {
-		// key := datastore.NameKey(nameKey, pipelineId, nil)
-		// if _, err := project.Dbclient.Put(ctx, key, &pipeline); err != nil {
-		// 	log.Printf("[ERROR] failed to add pipeline: %s", err)
-		// 	return err
+		key := datastore.NameKey(nameKey, triggerId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &pipeline); err != nil {
+			log.Printf("[ERROR] failed to add pipeline: %s", err)
+			return err
+	}
 	}
 
 	return nil
