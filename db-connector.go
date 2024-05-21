@@ -9287,6 +9287,86 @@ func GetEnvironmentCount() (int, error) {
 	return count, nil
 }
 
+func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
+	index := "workflow"
+
+	workflows := []Workflow{}
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{} {
+			"from": 0,
+			"size": 1000,
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding  %s", err)
+			return workflows, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(index))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get workflows): %s", err)
+			return workflows, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return workflows, nil
+		}
+
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return workflows, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return workflows, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflows, err
+		}
+
+		wrapped := WorkflowSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflows, err
+		}
+
+		//log.Printf("Found workflows: %d", len(wrapped.Hits.Hits))
+		for _, hit := range wrapped.Hits.Hits {
+			workflows = append(workflows, hit.Source)
+		}
+		return workflows, nil
+	} else {
+		// implementation for different db
+		q := datastore.NewQuery(index).Limit(50)
+
+		_, err := project.Dbclient.GetAll(ctx, q, &workflows)
+		if err != nil {
+			return []Workflow{}, err
+		}
+	}
+		return workflows, nil
+}
+
 func GetAllUsers(ctx context.Context) ([]User, error) {
 	index := "Users"
 
