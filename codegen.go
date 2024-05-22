@@ -2,7 +2,6 @@ package shuffle
 
 import (
 	"archive/zip"
-	"sort"
 	"bytes"
 	"context"
 	"crypto/md5"
@@ -14,11 +13,13 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
 	"cloud.google.com/go/storage"
 	"github.com/frikky/kin-openapi/openapi3"
+
 	//"github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
 )
@@ -839,6 +840,375 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	return functionname, data
 }
 
+func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{	
+
+	authenticationParameter := ""
+	authenticationSetup := ""
+	authenticationAddin := ""
+
+	if swagger.Components.SecuritySchemes != nil {
+		if swagger.Components.SecuritySchemes["BearerAuth"] != nil {
+			authenticationParameter = ", apikey"
+			authenticationSetup = "if apikey != \" \" and not apikey.startswith(\"Bearer\"): parsed_headers[\"Authorization\"] = f\"Bearer {apikey}\""
+
+		} else if swagger.Components.SecuritySchemes["BasicAuth"] != nil {
+			authenticationParameter = ", username_basic, password_basic"
+			authenticationSetup = "auth=None\n        if username_basic or password_basic:\n            if \"Authorization\" not in headers and \"Basic\" not in headers and not \"Bearer\" in headers:\n                auth = requests.auth.HTTPBasicAuth(username_basic, password_basic)"
+			authenticationAddin = ", auth=auth"
+
+		} else if swagger.Components.SecuritySchemes["ApiKeyAuth"] != nil {
+			authenticationParameter = ", apikey"
+
+			if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "header" {
+			
+				authenticationSetup = fmt.Sprintf(`if apikey != " ": parsed_headers["%s"] = apikey`, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+
+				if len(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description) > 0 {
+					trimmedDescription := strings.Trim(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, " ")
+
+					authenticationSetup = fmt.Sprintf("if apikey != \" \":\n    if apikey.startswith(\"%s\"):\n        parsed_headers[\"%s\"] = apikey\n    else:\n        apikey = apikey.replace(\"%s\", \"\", -1).strip()\n        parsed_headers[\"%s\"] = f\"%s{apikey}\"", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description)
+				}
+
+			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
+		
+				authenticationSetup = fmt.Sprintf("if apikey != \" \": parsed_queries[\"%s\"] = requests.utils.quote(apikey)", swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+			}
+
+		} else if swagger.Components.SecuritySchemes["Oauth2"] != nil {
+	
+			authenticationParameter = ", access_token"
+			authenticationSetup = fmt.Sprintf("if access_token != \" \": parsed_headers[\"Authorization\"] = f\"Bearer {access_token}\"\n        #parsed_headers[\"Content-Type\"] = \"application/json\"")
+
+		} else if swagger.Components.SecuritySchemes["jwt"] != nil {
+			authenticationParameter = ", username_basic, password_basic"
+			authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=parsed_headers, auth=(username_basic, password_basic), verify=False)\n        if 'access_token' in authret.text:\n            parsed_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            parsed_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            parsed_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            parsed_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
+		}
+		
+	}
+
+	pythonCode := fmt.Sprintf(`		
+    def fix_url(self, url):
+        if "hhttp" in url:
+            url = url.replace("hhttp", "http")
+
+        if "http:/" in url and not "http://" in url:
+            url = url.replace("http:/", "http://", -1)
+        if "https:/" in url and not "https://" in url:
+            url = url.replace("https:/", "https://", -1)
+        if "http:///" in url:
+            url = url.replace("http:///", "http://", -1)
+        if "https:///" in url:
+            url = url.replace("https:///", "https://", -1)
+        if not "http://" in url and not "http" in url:
+            url = f"http://{url}"
+
+        return url
+
+
+    def checkverify(self, verify):
+        if str(verify).lower().strip() == "false":
+            return False
+        elif verify is None:
+            return False
+        elif verify:
+            return True
+        elif not verify:
+            return False
+        else:
+            return True
+
+
+    def is_valid_method(self, method):
+        valid_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+        method = method.upper()
+
+        if method in valid_methods:
+            return method
+        else:
+            raise ValueError(f"Invalid HTTP method: {method}")
+
+
+    def parse_headers(self, headers):
+        parsed_headers = {}
+        if headers:
+            split_headers = headers.split("\n")
+            self.logger.info(split_headers)
+            for header in split_headers:
+                if ":" in header:
+                    splititem = ":"
+                elif "=" in header:
+                    splititem = "="
+                else:
+                    continue
+
+                splitheader = header.split(splititem)
+                if len(splitheader) >= 2:
+                    parsed_headers[splitheader[0].strip()] = splititem.join(
+                        splitheader[1:]
+                    ).strip()
+                else:
+                    continue
+
+        return parsed_headers
+
+
+    def parse_queries(self, queries):
+        parsed_queries = {}
+
+        if not queries:
+            return parsed_queries
+
+        cleaned_queries = queries.strip()
+
+        if not cleaned_queries:
+            return parsed_queries
+
+        cleaned_queries = " ".join(cleaned_queries.split())
+        splitted_queries = cleaned_queries.split("&")
+        self.logger.info(splitted_queries)
+        for query in splitted_queries:
+
+            if "=" not in query:
+                self.logger.info("Skipping as there is no = in the query")
+                continue
+            key, value = query.split("=")
+            if not key.strip() or not value.strip():
+                self.logger.info(
+                    "Skipping because either key or value is not present in query"
+                )
+                continue
+            parsed_queries[key.strip()] = value.strip()
+
+        return parsed_queries
+
+
+    def custom_action(self%s, method="", url="", headers="", queries="", path="", ssl_verify=False, body=""):
+        url = self.fix_url(url)
+
+        try:
+            method = self.is_valid_method(method)
+        except ValueError as e:
+            self.logger.error(e)
+            return {"error": str(e)}
+
+        if path and not path.startswith('/'):
+            path = '/' + path
+
+        url += path
+
+        parsed_headers = self.parse_headers(headers)
+        parsed_queries = self.parse_queries(queries)
+
+        %s
+        
+        ssl_verify = self.checkverify(ssl_verify)
+
+        if isinstance(body, dict):
+            try:
+                body = json.dumps(body)
+            except json.JSONDecodeError as e:
+                self.logger.error(f"error : {e}")
+                return {"error: Invalid JSON format for request body"}
+
+        try:
+            response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=body, verify=ssl_verify%s)
+            response.raise_for_status()
+            return response.json()
+
+        except requests.RequestException as e:
+            self.logger.error(f"Request failed: {e}")
+            return {"error": f"Request failed: {e}"}
+    `, authenticationParameter, authenticationSetup, authenticationAddin)
+
+	return pythonCode
+}
+
+func AddCustomAction(swagger *openapi3.Swagger, api WorkflowApp) (WorkflowAppAction, string) {
+
+	parameters := []WorkflowAppActionParameter{}
+	pyCode := GetCustomActionCode(swagger, api)
+
+	securitySchemes := swagger.Components.SecuritySchemes
+	if securitySchemes != nil {
+
+		if securitySchemes["BearerAuth"] != nil {
+
+			parameters = append(parameters, WorkflowAppActionParameter{
+				Name:          "apikey",
+				Description:   "The apikey to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "The API key to use. Space = skip",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
+				},
+			})
+		} else if securitySchemes["ApiKeyAuth"] != nil {
+			
+			extraParam := WorkflowAppActionParameter{
+				Name:          "apikey",
+				Description:   "The apikey to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "**********",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
+				},
+			}
+
+			if len(securitySchemes["ApiKeyAuth"].Value.Description) > 0 {
+				extraParam.Description = fmt.Sprintf("Start with %s", securitySchemes["ApiKeyAuth"].Value.Description)
+			}
+
+			parameters = append(parameters, extraParam)
+
+		} else if securitySchemes["jwt"] != nil {
+
+			parameters = append(parameters, WorkflowAppActionParameter{
+				Name:          "username_basic",
+				Description:   "The username to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "The username to use",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
+				},
+			})
+			parameters = append(parameters, WorkflowAppActionParameter{
+				Name:          "password_basic",
+				Description:   "The password to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "***********",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
+				},
+			})
+		} else if securitySchemes["BasicAuth"] != nil {
+
+			parameters = append(parameters, WorkflowAppActionParameter{
+				Name:          "username_basic",
+				Description:   "The username to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "The username to use",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
+				},
+			})
+			parameters = append(parameters, WorkflowAppActionParameter{
+				Name:          "password_basic",
+				Description:   "The password to use",
+				Multiline:     false,
+				Required:      true,
+				Example:       "***********",
+				Configuration: true,
+				Schema: SchemaDefinition{
+					Type: "string",
+				},
+			})
+		}
+	}
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "method",
+		Description:   "The http method to use",
+		Multiline:     false,
+		Required:      true,
+		Options:       []string{"GET","POST","PUT","DELETE","PATCH"},
+		Example:       "GET",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+	
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "url",
+		Description:   "The URL of the API",
+		Multiline:     false,
+		Required:      true,
+		Example:       "https://api.example.com",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "path",
+		Description:   "the path to add to the base url",
+		Multiline:     false,
+		Required:      false,
+		Example:       "/users/profile",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "headers",
+		Description:   "Add or edit headers",
+		Multiline:     true,
+		Required:      false,
+		Example:       "Content-Type:application/json\nAccept:application/json",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "queries",
+		Description:   "Add or edit queries",
+		Multiline:     true,
+		Required:      false,
+		Example: "view=basic&redirect=test",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "ssl_verify",
+		Description:   "Check if you want to verify request",
+		Multiline:     false,
+		Options:       []string{"False","True"},
+		Required:      false,
+		Example:       "False",
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	parameters = append(parameters, WorkflowAppActionParameter{
+		Name:          "body",
+		Description:   "The body to use",
+		Multiline:     true,
+		Required:      false,
+		Example:      `{"username": "example_user", "email": "user@example.com"}`,
+		Schema: SchemaDefinition{
+			Type: "string",
+		},
+	})
+
+	action := WorkflowAppAction{
+		Description: "add a custom action for your app",
+		Name:        "custom_action",
+		NodeType:    "action",
+		Environment: "Shuffle",
+		Parameters:  parameters,
+	}
+
+	action.Returns.Schema.Type = "string"
+
+	return action, pyCode
+
+}
+
 func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, WorkflowApp, []string, error) {
 	api := WorkflowApp{}
 	//log.Printf("%#v", swagger.Info)
@@ -1319,7 +1689,8 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			Type: "string",
 		},
 	})
-
+    
+	
 	// Fixing parameters with :
 	newExtraParams := []WorkflowAppActionParameter{}
 	newOptionalParams := []WorkflowAppActionParameter{}
@@ -1382,6 +1753,7 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 			pythonFunctions = append(pythonFunctions, curCode)
 		}
 
+
 		// Has to be here because its used differently above.
 		// FIXING this is done during export instead?
 		//log.Printf("OLDPATH: %s", actualPath)
@@ -1392,6 +1764,10 @@ func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, 
 		//log.Printf("NEWPATH: %s", actualPath)
 		//newPaths[actualPath] = path
 	}
+
+	action, curCode := AddCustomAction(swagger, api)
+	api.Actions = append(api.Actions, action)
+	pythonFunctions = append(pythonFunctions, curCode)
 
 	return swagger, api, pythonFunctions, nil
 }

@@ -391,14 +391,14 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 		file.Status = "deleted"
 		err = SetFile(ctx, *file)
 		if err != nil {
-			log.Printf("[ERROR] Failed setting file to deleted")
+			log.Printf("[ERROR] Failed setting file to deleted: %s", err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
 			return
 		}
 	
 		outputFiles, err := FindSimilarFile(ctx, file.Md5sum, file.OrgId)
-		log.Printf("[INFO] Found %d similar files", len(outputFiles))
+		log.Printf("[INFO] Found %d similar files for Md5 '%s'", len(outputFiles), file.Md5sum)
 		if len(outputFiles) > 0 {
 			for _, item := range outputFiles {
 				item.Status = "deleted"
@@ -596,7 +596,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	// also be environment variables / input arguments
 	filename, filenameOk := request.URL.Query()["filename"]
 	if filenameOk && ArrayContains(reservedCategoryNames, namespace) {
-		log.Printf("[DEBUG] Filename '%s' in URL with reserved category name: %s. Listlength: %d", filename[0], namespace, len(fileResponse.List))
+		//log.Printf("[DEBUG] Filename '%s' in URL with reserved category name: %s. Listlength: %d", filename[0], namespace, len(fileResponse.List))
 
 		// Load from Github repo https://github.com/Shuffle/standards
 		filenameFound := false
@@ -650,7 +650,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					log.Printf("\n\n\n[DEBUG] Decoded file '%s' with content:\n%s\n\n\n", *item.Path, string(decoded))
+					//log.Printf("[DEBUG] Decoded Github file '%s' with content:\n%s", *item.Path, string(decoded))
 
 					timeNow := time.Now().Unix()
 					fileId := "file_"+uuid.NewV4().String()
@@ -698,7 +698,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					log.Printf("\n\n[DEBUG] Uploaded file %s with ID %s in category %#v\n\n", file.Filename, fileId, namespace)
+					log.Printf("[DEBUG] Uploaded file %#v with ID %s in category %#v", file.Filename, fileId, namespace)
 
 					fileResponse.List = append(fileResponse.List, BaseFile{
 						Name: file.Filename,
@@ -1641,7 +1641,7 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		orgId := user.ActiveOrg.Id
 		files, err := FindSimilarFilename(ctx, curfile.Filename, orgId)
 		if err != nil {
-			log.Printf("[ERROR] Failed finding similar files: %s", err)
+			//log.Printf("[ERROR] Couldn't find any similar files: %s", err)
 		} else {
 
 			for _, item := range files {

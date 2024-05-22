@@ -1656,7 +1656,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 					if err != nil {
 						log.Printf("[DEBUG][%s] Failed to parse in execution file value for exec argument: %s (3)", workflowExecution.ExecutionId, err)
 					} else {
-						log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
+						//log.Printf("[DEBUG][%s] Found a new value to parse with exec argument", workflowExecution.ExecutionId)
 						workflowExecution.ExecutionArgument = newValue
 					}
 				}
@@ -1721,7 +1721,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 		// A workaround for large bits of information for execution argument
 		if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
-			log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
+			//log.Printf("[DEBUG] Found prefix %s to be replaced for exec argument (3)", workflowExecution.ExecutionArgument)
 			baseArgument := &ActionResult{
 				Result: workflowExecution.ExecutionArgument,
 				Action: Action{ID: "execution_argument"},
@@ -1730,7 +1730,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 			if err != nil {
 				log.Printf("[DEBUG] Failed to parse in execution file value for exec argument: %s (4)", err)
 			} else {
-				log.Printf("[DEBUG] Found a new value to parse with exec argument")
+				//log.Printf("[DEBUG] Found a new value to parse with exec argument")
 				workflowExecution.ExecutionArgument = newValue
 			}
 		}
@@ -1863,6 +1863,10 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	workflowApp := &WorkflowApp{}
 	if len(id) == 0 {
 		return workflowApp, errors.New("No ID provided to get an app")
+	}
+
+	if id == "integration" {
+		return workflowApp, errors.New("Integration is for the integration framework. Uses the Shuffle-ai app")
 	}
 
 	nameKey := "workflowapp"
@@ -2357,7 +2361,7 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 			}
 		}
 	} else {
-		query := datastore.NewQuery(nameKey).Filter("md5_sum =", md5).Limit(25)
+		query := datastore.NewQuery(nameKey).Filter("md5_sum =", md5).Limit(250)
 		_, err := project.Dbclient.GetAll(ctx, query, &files)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
@@ -3168,7 +3172,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 				for {
 					innerWorkflow := Workflow{}
-					_, err := it.Next(&innerWorkflow)
+					_, err = it.Next(&innerWorkflow)
 					if err != nil {
 						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 							log.Printf("[ERROR] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
@@ -3197,8 +3201,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				}
 
 				if err != iterator.Done {
-					//log.Printf("[INFO] Failed fetching results: %v", err)
-					//break
+					log.Printf("[INFO] Failed fetching workflow results: %v", err)
+					break
 				}
 
 				// Get the cursor for the next page of results.
@@ -3217,8 +3221,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 				}
 			}
 
-			//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
-
+			log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 			cursorStr = ""
 			query = datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
 			for {
@@ -3226,7 +3229,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User) ([]Workflow, error) 
 
 				for {
 					innerWorkflow := Workflow{}
-					_, err := it.Next(&innerWorkflow)
+					_, err = it.Next(&innerWorkflow)
+					//log.Printf("[DEBUG] SUBFLOW: %#v", innerWorkflow.ID)
+
 					if err != nil {
 						if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 							log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
@@ -6167,7 +6172,7 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 
 func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 	wrapper := []WorkflowApp{}
-	var err error
+	//var err error
 
 	cacheKey := fmt.Sprintf("userapps-%s", userId)
 	if project.CacheDb {
@@ -6256,6 +6261,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 		cursorStr := ""
 
 		log.Printf("[DEBUG] Getting user apps for %s", userId)
+		var err error
 
 		queries := []datastore.Query{}
 		q := datastore.NewQuery(indexName).Filter("contributors =", userId)
@@ -6290,9 +6296,10 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 					}
 
 					if err != nil {
-						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
 
 						if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+							log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+
 							if strings.Contains("no matching index found", fmt.Sprintf("%s", err)) {
 								log.Printf("[ERROR] No more apps for %s in user app load? Breaking: %s.", userId, err)
 							} else {
@@ -6314,7 +6321,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 
 				if err != nil {
 					if !strings.Contains(fmt.Sprintf("%s", err), "no more items") {
-						log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+						log.Printf("[ERROR] Failed fetching user apps (3): %v", err)
 					}
 
 					break
@@ -8281,10 +8288,11 @@ func savePipelineData(ctx context.Context, pipeline Pipeline) error {
 			return err
 		}
 	} else {
-		// key := datastore.NameKey(nameKey, pipelineId, nil)
-		// if _, err := project.Dbclient.Put(ctx, key, &pipeline); err != nil {
-		// 	log.Printf("[ERROR] failed to add pipeline: %s", err)
-		// 	return err
+		key := datastore.NameKey(nameKey, triggerId, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &pipeline); err != nil {
+			log.Printf("[ERROR] failed to add pipeline: %s", err)
+			return err
+	}
 	}
 
 	return nil
@@ -8594,9 +8602,11 @@ func SetFile(ctx context.Context, file File) error {
 		file.CreatedAt = timeNow
 	}
 
+	/*
 	if !strings.HasPrefix(file.Id, "file_") {
 		return errors.New("Invalid file ID. Must start with file_")
 	}
+	*/
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, file.Id)
 

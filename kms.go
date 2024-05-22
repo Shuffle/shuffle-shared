@@ -23,7 +23,8 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 )
 
-var model = "gpt-4-turbo-preview"
+//var model = "gpt-4-turbo-preview"
+var model = "gpt-4o"
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
 	//log.Printf("\n\n[DEBUG] Getting KMS cache for key %s\n\n", key)
@@ -682,30 +683,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 	log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
 
-	if strings.Contains(contentOutput, "```") {
-		// Handle ```json
-		start := strings.Index(contentOutput, "```json")
-		end := strings.Index(contentOutput, "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+7:], "```")
-		}
-
-		if start != -1 && end != -1 {
-			contentOutput = contentOutput[start+7 : end+7]
-		}
-	}
-
-	if strings.Contains(contentOutput, "```") {
-		start := strings.Index(contentOutput, "```")
-		end := strings.Index(contentOutput[start+3:], "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+3:], "```")
-		}
-			
-		if start != -1 && end != -1 {
-			contentOutput = contentOutput[start+3 : end+3]
-		}
-	}
+	contentOutput = FixContentOutput(contentOutput)
 
 	log.Printf("[INFO] Autocorrect output: %s", contentOutput)
 
@@ -925,29 +903,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 		return "", err
 	}
 
-	if strings.Contains(contentOutput, "```json") {
-		start := strings.Index(contentOutput, "```json")
-		end := strings.Index(contentOutput, "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+8:], "```")
-		}
-
-		if start != -1 && end != -1 {
-			contentOutput = contentOutput[start+7 : end+7]
-		}
-	}
-
-	if strings.Contains(contentOutput, "```") {
-		start := strings.Index(contentOutput, "```")
-		end := strings.Index(contentOutput[start+3:], "```")
-		if start != -1 {
-			end = strings.Index(contentOutput[start+3:], "```")
-		}
-			
-		if start != -1 && end != -1 {
-			contentOutput = contentOutput[start+3 : end+3]
-		}
-	}
+	contentOutput = FixContentOutput(contentOutput)
 
 	output := map[string]interface{}{}
 	err = json.Unmarshal([]byte(contentOutput), &output)
@@ -1212,4 +1168,33 @@ func uploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 	log.Printf("UPLOADED FILE TO ID %s", fileId)
 
 	return nil
+}
+
+func FixContentOutput(contentOutput string) string {
+	if strings.Contains(contentOutput, "```") {
+		// Handle ```json
+		start := strings.Index(contentOutput, "```json")
+		end := strings.Index(contentOutput, "```")
+		if start != -1 {
+			end = strings.Index(contentOutput[start+7:], "```")
+		}
+
+		if start != -1 && end != -1 {
+			contentOutput = contentOutput[start+7 : end+7]
+		}
+	}
+
+	if strings.Contains(contentOutput, "```") {
+		start := strings.Index(contentOutput, "```")
+		end := strings.Index(contentOutput[start+3:], "```")
+		if start != -1 {
+			end = strings.Index(contentOutput[start+3:], "```")
+		}
+			
+		if start != -1 && end != -1 {
+			contentOutput = contentOutput[start+3 : end+3]
+		}
+	}
+
+	return contentOutput
 }
