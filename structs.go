@@ -2151,7 +2151,7 @@ type SubResponse struct {
 }
 
 type AllTriggersWrapper struct {
-	// Pipelines []Pipeline `json:"pipelines"`
+	Pipelines []Pipeline `json:"pipelines"`
 	WebHooks   []Hook `json:"webhooks"`
 	Schedules []ScheduleOld `json:"schedules"`
 }

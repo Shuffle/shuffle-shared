@@ -3890,12 +3890,12 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	workflowsChan := make(chan []Workflow)
 	schedulesChan := make(chan []ScheduleOld)
 	hooksChan := make(chan []Hook)
-	// pipelinesChan := make(chan []Pipeline)
+	pipelinesChan := make(chan []Pipeline)
 
 	errChan := make(chan error)
 
 	wg := sync.WaitGroup{}
-	wg.Add(3)
+	wg.Add(4)
 
 	go func() {
 		workflows, err := GetAllWorkflowsByQuery(ctx, user)
@@ -3932,16 +3932,16 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		hooksChan <- hooks
 	}()
 
-	// go func() {
-	// 	pipelines, err := GetPipelines(ctx, user.ActiveOrg.Id)
-	// 	if err != nil {
-	// 		wg.Done()
-	// 		errChan <- err
-	// 		return
-	// 	}
-	// 	wg.Done()
-	// 	pipelinesChan <- pipelines
-	// }()
+	go func() {
+		pipelines, err := GetPipelines(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			wg.Done()
+			errChan <- err
+			return
+		}
+		wg.Done()
+		pipelinesChan <- pipelines
+	}()
 
 	wg.Wait()
 
@@ -3962,13 +3962,13 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	hooks := <-hooksChan
 	schedules := <-schedulesChan
 	workflows := <-workflowsChan
-	// pipelines := <-pipelinesChan
+	pipelines := <-pipelinesChan
 
 	log.Printf("[INFO] recieved all the data from the channels")
 
 	hookMap := map[string]Hook{}
 	scheduleMap := map[string]ScheduleOld{}
-	// pipelineMap := map[string]Pipeline{}
+	pipelineMap := map[string]Pipeline{}
 
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
@@ -3976,13 +3976,13 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, schedule := range schedules {
 		scheduleMap[schedule.Id] = schedule
 	}
-	// for _, pipeline := range pipelines {
-	// 	pipelineMap[pipeline.TriggerId] = pipeline
-	// }
+	for _, pipeline := range pipelines {
+		pipelineMap[pipeline.TriggerId] = pipeline
+	}
 
 	allHooks := []Hook{}
 	allSchedules := []ScheduleOld{}
-	// allPipelines := []Pipeline{}
+	allPipelines := []Pipeline{}
 	// Now loop through the workflow triggers to see if anything is not in sync
 	for _, workflow := range workflows {
 		for _, trigger := range workflow.Triggers {
@@ -4104,31 +4104,30 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 			case "PIPELINE":
 				{
 
-					// 		storedPipeline, exist := pipelineMap[trigger.ID]
-					// 		if exist && storedPipeline.Status != "uninitialized" {
-					// 			startNode := ""
+							storedPipeline, exist := pipelineMap[trigger.ID]
+							if exist && storedPipeline.Status != "uninitialized" {
+								startNode := ""
 
-					// 			storedPipeline.WorkflowId = workflow.ID
+								storedPipeline.WorkflowId = workflow.ID
 
-					// 			if len(workflow.Branches) != 0 {
-					// 				for _, branch := range workflow.Branches {
-					// 					if branch.SourceID == trigger.ID {
-					// 						startNode = branch.DestinationID
-					// 					}
-					// 				}
-					// 			}
-					// 			if startNode == "" {
-					// 				startNode = workflow.Start
-					// 			}
-					// 			storedPipeline.StartNode = startNode
-					// 			allPipelines = append(allPipelines, storedPipeline)
+								if len(workflow.Branches) != 0 {
+									for _, branch := range workflow.Branches {
+										if branch.SourceID == trigger.ID {
+											startNode = branch.DestinationID
+										}
+									}
+								}
+								if startNode == "" {
+									startNode = workflow.Start
+								}
+								storedPipeline.StartNode = startNode
+								allPipelines = append(allPipelines, storedPipeline)
 
-					// 		}
-					// 	}
+							}
+						}
 				}
 			}
 		}
-	}
 
 	sort.SliceStable(allHooks, func(i, j int) bool {
 		return allHooks[i].Info.Name < allHooks[j].Info.Name
@@ -4136,15 +4135,15 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	sort.SliceStable(allSchedules, func(i, j int) bool {
 		return allSchedules[i].Name < allSchedules[j].Name
 	})
-	// sort.SliceStable(pipelines, func(i, j int) bool {
-	// 	return pipelines[i].Name < pipelines[j].Name
-	// })
+	sort.SliceStable(pipelines, func(i, j int) bool {
+		return pipelines[i].Name < pipelines[j].Name
+	})
 
 	allTriggersWrapper := AllTriggersWrapper{}
 
 	allTriggersWrapper.WebHooks = allHooks
 	allTriggersWrapper.Schedules = allSchedules
-	// allTriggersWrapper.Pipelines = allPipelines
+	allTriggersWrapper.Pipelines = allPipelines
 
 	newjson, err := json.Marshal(allTriggersWrapper)
 	if err != nil {
