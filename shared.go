@@ -8047,10 +8047,6 @@ func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 			RedirectUserRequest(resp, request)
 			return
 		}
-	} else {
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Not allowed onprem"}`))
-		return
 	}
 
 	userInfo, userErr := HandleApiAuthentication(resp, request)
@@ -18386,6 +18382,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				action.Parameters = append(action.Parameters, parameter)
+				log.Printf("[INFO] Adding parameter %s to subflow", parameter.Name)
 			}
 
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
@@ -18429,7 +18426,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				})
 			} else {
 				log.Printf("[ERROR] No Backend URL found for subflow. May fail to connect properly.")
-
 			}
 
 			workflowExecution.Workflow.Actions = append(workflowExecution.Workflow.Actions, action)
