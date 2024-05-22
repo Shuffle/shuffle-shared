@@ -8865,10 +8865,28 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 		}
 
-		// user controllable field hmm :)
+		type SSOResponse struct {
+			Success bool   `json:"success"`
+			Reason  string `json:"reason"`
+			URL     string `json:"url"`
+		}
+
 		if !updateUser {
-			resp.WriteHeader(200)
-			resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "%s", "url": "%s"}`, redirectKey, baseSSOUrl)))
+			ssoResponse := SSOResponse{
+				Success: true,
+				Reason:  redirectKey,
+				URL:     baseSSOUrl,
+			}
+
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusUnauthorized)
+
+			if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
+				log.Printf("[ERROR] Failed to encode SSO response: %v", err)
+				resp.WriteHeader(http.StatusInternalServerError)
+				resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+			}
+
 			return
 		}
 	}
@@ -10895,11 +10913,27 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					break
 
 				}
+				type SSOResponse struct {
+					Success bool   `json:"success"`
+					Reason  string `json:"reason"`
+					URL     string `json:"url"`
+				}
 
-				// user controllable field hmm :)
 				if !updateUser {
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "%s", "url": "%s"}`, redirectKey, baseSSOUrl)))
+					ssoResponse := SSOResponse{
+						Success: true,
+						Reason:  redirectKey,
+						URL:     baseSSOUrl,
+					}
+
+					resp.Header().Set("Content-Type", "application/json")
+					resp.WriteHeader(http.StatusUnauthorized)
+
+					if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
+						log.Printf("[ERROR] Failed to encode SSO response: %v", err)
+						resp.WriteHeader(http.StatusInternalServerError)
+						resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+					}
 					return
 				}
 			}
@@ -11466,10 +11500,28 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 
 				}
 
-				// user controllable field hmm :)
+				type SSOResponse struct {
+					Success bool   `json:"success"`
+					Reason  string `json:"reason"`
+					URL     string `json:"url"`
+				}
+
 				if !updateUser {
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "%s", "url": "%s"}`, redirectKey, baseSSOUrl)))
+					ssoResponse := SSOResponse{
+						Success: true,
+						Reason:  redirectKey,
+						URL:     baseSSOUrl,
+					}
+
+					resp.Header().Set("Content-Type", "application/json")
+					resp.WriteHeader(http.StatusUnauthorized)
+
+					if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
+						log.Printf("[ERROR] Failed to encode SSO response: %v", err)
+						resp.WriteHeader(http.StatusInternalServerError)
+						resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+					}
+
 					return
 				}
 			}
@@ -16520,7 +16572,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if !strings.Contains(userName, "@") {
 		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
 	}
-	redirectUrl := "/workflows"
+	redirectUrl := "https://shuffler.io/workflows"
 
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
@@ -16954,7 +17006,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
 
 				if project.Environment == "cloud" {
-					user.ActiveOrg.Id = matchingOrgs[0].Id
+					// user.ActiveOrg.Id = matchingOrgs[0].Id
 
 					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
