@@ -6172,7 +6172,7 @@ func fixAppAppend(allApps []WorkflowApp, innerApp WorkflowApp) ([]WorkflowApp, W
 
 func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 	wrapper := []WorkflowApp{}
-	var err error
+	//var err error
 
 	cacheKey := fmt.Sprintf("userapps-%s", userId)
 	if project.CacheDb {

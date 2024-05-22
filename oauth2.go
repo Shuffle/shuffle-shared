@@ -5,7 +5,7 @@ package shuffle
 import (
 	"bytes"
 	"context"
-	"regexp"
+	//"regexp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
