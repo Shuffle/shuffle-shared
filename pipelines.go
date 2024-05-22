@@ -195,6 +195,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		pipelineData.Owner = user.Id
 		pipelineData.Status = "running"
 		pipelineData.TriggerId = pipeline.TriggerId
+		pipelineData.StartNode = pipeline.StartNode
 
 		err = setPipelineTrigger(ctx, pipelineData)
 		if err != nil {
