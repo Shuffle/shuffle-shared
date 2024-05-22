@@ -8041,12 +8041,12 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 		return pipelines, err
 		
 	} else {
-		// q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
+		q := datastore.NewQuery(nameKey).Filter("org_id = ", OrgId).Limit(1000)
 
-		// _, err := project.Dbclient.GetAll(ctx, q, &pipelines)
-		// if err != nil && len(pipelines) == 0 {
-		// 	return pipelines, err
-		// }
+		_, err := project.Dbclient.GetAll(ctx, q, &pipelines)
+		if err != nil && len(pipelines) == 0 {
+			return pipelines, err
+		}
 	}
 
 	return pipelines, nil
