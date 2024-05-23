@@ -11054,58 +11054,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	// On cloud, we just generate a new org for them on the fly
 	if project.Environment != "cloud" {
 
-		if userdata.ActiveOrg.Id == "" {
-			if len(userdata.Orgs) == 0 {
-				log.Printf("[WARNING] User %s (%s) has no chosen org. ID: %s, Name: %s. Creating a default org", userdata.Username, userdata.Id, userdata.ActiveOrg.Id, userdata.ActiveOrg.Name)
-				orgSetupName := "default"
-				orgId := uuid.NewV4().String()
-				newOrg := Org{
-					Name:      orgSetupName,
-					Id:        orgId,
-					Org:       orgSetupName,
-					Users:     []User{userdata},
-					Roles:     userdata.Roles,
-					CloudSync: false,
-				}
-
-				err := SetOrg(ctx, newOrg, newOrg.Id)
-
-				if err != nil {
-					log.Printf("[ERROR] Failed setting default org for the user: %s", userdata.Username)
-				} else {
-					log.Printf("[DEBUG] Successfully created the default org!")
-
-					defaultEnv := os.Getenv("ORG_ID")
-					if len(defaultEnv) == 0 {
-						defaultEnv = "Shuffle"
-						log.Printf("[DEBUG] Setting default environment for org to %s", defaultEnv)
-					}
-
-					item := Environment{
-						Name:    defaultEnv,
-						Type:    "onperm",
-						OrgId:   orgId,
-						Default: true,
-						Id:      uuid.NewV4().String(),
-					}
-
-					err := SetEnvironment(ctx, &item)
-					if err != nil {
-						log.Printf("[ERROR] Failed setting up new environment for new org: %s", err)
-					}
-
-					userdata.Orgs = append(userdata.Orgs, newOrg.Id)
-				}
-
-				// resp.WriteHeader(400)
-				// resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io"}`))
-				// return
-			}
-
-			userdata.ActiveOrg.Id = userdata.Orgs[0]
-		}
-
-		// Check activeorg if they have access to it first
+		// Check activeorg if they have access to it (the user)
 		found := false
 		foundOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
 		if err == nil {
@@ -11122,7 +11071,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !found && len(foundOrg.Users) == 0 {
-				// Forcefully add the user back in there
+				// Forcefully add the user back in there (org)
 				err = fixOrgUsers(ctx, *foundOrg)
 				if err != nil {
 					log.Printf("[ERROR] Failed fixing org %s while re-adding a user: %s", foundOrg.Id, err)
@@ -11132,15 +11081,34 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[ERROR] Failed finding org %s during login: %s", userdata.ActiveOrg.Id, err)
 		}
 
-		// Check if we need to move them over
+		// Check if we need to move them over (move the activeOrg to other user org)
 		if !found {
 			log.Printf("[DEBUG] Current active org (%s) for user %s (%s) not found. Checking other orgs. Found %d orgs.", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, len(userdata.Orgs))
 			for _, org := range userdata.Orgs {
-				// Verify if the user is in the org
+				// Verify if the user is in the org and if it points to an org but
+				// that does not exist we create re-create that org.
 				foundOrg, err := GetOrg(ctx, org)
 				if err != nil {
-					log.Printf("[ERROR] Failed finding org %s: %s", org, err)
-					continue
+					log.Printf("[WARNING] Failed finding org %s: %s. Trying to recreate the org", org, err)
+
+					rOrg := Org{
+						Name: 		"default",
+						Id: 		org,
+						Org: 		"default",
+						Users: 		[]User{userdata},
+						Roles: 		userdata.Roles,
+						CloudSync: 	false,
+					}
+
+					err := SetOrg(ctx, rOrg, org)
+					found = true
+
+					if err != nil {
+						log.Printf("[ERROR] Failed to re-create the org")
+						found = false
+					}
+
+					log.Printf("[DEBUG] Re-created the org %s", org)
 				}
 
 				for _, foundUser := range foundOrg.Users {
@@ -11156,11 +11124,85 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
+		// User has no orgs after all checks, create a default
 		if !found {
-			log.Printf("[ERROR] User %s (%s) has no orgs (2)", userdata.Username, userdata.Id)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "No organization available. Please contact your team, or the shuffle if you think there has been a mistake: support@shuffler.io (2)"}`))
-			return
+
+			// Check all the workflows has orgs and user
+			workflows, err := GetAllWorkflows(ctx)
+			log.Printf("[DEBUG] Checking all the worflows and finding user a org.")
+			for _, workflow := range workflows {
+				for _, vOrg := range workflow.Org {
+	
+					wOrg, err := GetOrg(ctx, vOrg.Id)
+	
+					if err != nil {
+						log.Printf("[WARNING] Faild getting a org %s for a workflow %s", vOrg.Id ,workflow.ID)
+						log.Printf("[DEBUG] Recreating the org %s", vOrg.Id)
+	
+						WorkflowOrg := Org{
+							Name:      vOrg.Name,
+							Id:        vOrg.Id,
+							Org:       vOrg.Name,
+							Users:     []User{},
+							Roles:     []string{vOrg.Role},
+							CloudSync: false,
+						}
+		
+						err := SetOrg(ctx, WorkflowOrg, vOrg.Id)
+		
+						if err != nil {
+							log.Printf("[ERROR] Failed setting a org")
+						}
+					}
+	
+					err = fixOrgUsers(ctx, *wOrg)
+					if err != nil {
+						log.Printf("[ERROR] %s", err)
+					}
+				}
+			}
+			log.Printf("[WARNING] User %s (%s) has no orgs. ID: %s, Name: %s. Creating a default one.", userdata.Username, userdata.Id, userdata.ActiveOrg.Id, userdata.ActiveOrg.Name)
+
+			orgSetupName := "default"
+			orgId := uuid.NewV4().String()
+			newOrg := Org{
+				Name:      orgSetupName,
+				Id:        orgId,
+				Org:       orgSetupName,
+				Users:     []User{userdata},
+				Roles:     userdata.Roles,
+				CloudSync: false,
+			}
+
+			err = SetOrg(ctx, newOrg, newOrg.Id)
+
+			if err != nil {
+				log.Printf("[ERROR] Failed setting default org for the user: %s", userdata.Username)
+			} else {
+				log.Printf("[DEBUG] Successfully created the default org!")
+
+				defaultEnv := os.Getenv("ORG_ID")
+				if len(defaultEnv) == 0 {
+					defaultEnv = "Shuffle"
+					log.Printf("[DEBUG] Setting default environment for org to %s", defaultEnv)
+				}
+
+				item := Environment{
+					Name:    defaultEnv,
+					Type:    "onperm",
+					OrgId:   orgId,
+					Default: true,
+					Id:      uuid.NewV4().String(),
+				}
+
+				err := SetEnvironment(ctx, &item)
+				if err != nil {
+					log.Printf("[ERROR] Failed setting up new environment for new org: %s", err)
+				}
+
+				userdata.Orgs = append(userdata.Orgs, newOrg.Id)
+			}
+			userdata.ActiveOrg.Id = userdata.Orgs[0]
 		}
 	}
 
