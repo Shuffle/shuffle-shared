@@ -8930,6 +8930,90 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	updateUser := false
+
+	if org.SSOConfig.SSORequired == true && user.SupportAccess == false {
+
+		baseSSOUrl := org.SSOConfig.SSOEntrypoint
+		redirectKey := "SSO_REDIRECT"
+		if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+			log.Printf("[INFO] OpenID login for %s", org.Id)
+			redirectKey = "SSO_REDIRECT"
+
+			baseSSOUrl = GetOpenIdUrl(request, *org)
+		}
+
+		log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
+
+		// Check if the user has other orgs that can be swapped to - if so SWAP
+		userDomain := strings.Split(user.Username, "@")
+		for _, tmporg := range user.Orgs {
+			innerorg, err := GetOrg(ctx, tmporg)
+			if err != nil {
+				continue
+			}
+
+			if innerorg.Id == user.ActiveOrg.Id {
+				continue
+			}
+
+			if len(innerorg.ManagerOrgs) > 0 {
+				continue
+			}
+
+			// Not your own org
+			if innerorg.Org == user.Username || strings.Contains(innerorg.Name, "@") {
+				continue
+			}
+
+			if len(userDomain) >= 2 {
+				if strings.Contains(strings.ToLower(innerorg.Org), strings.ToLower(userDomain[1])) {
+					continue
+				}
+			}
+
+			// Shouldn't contain the domain of the users' email
+			log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", user.Username, user.Id, innerorg.Name)
+			user.ActiveOrg.Id = innerorg.Id
+			user.ActiveOrg.Name = innerorg.Name
+
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+
+			updateUser = true
+			break
+
+		}
+
+		type SSOResponse struct {
+			Success bool   `json:"success"`
+			Reason  string `json:"reason"`
+			URL     string `json:"url"`
+		}
+
+		if !updateUser {
+			ssoResponse := SSOResponse{
+				Success: true,
+				Reason:  redirectKey,
+				URL:     baseSSOUrl,
+			}
+
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(http.StatusUnauthorized)
+
+			if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
+				log.Printf("[ERROR] Failed to encode SSO response: %v", err)
+				resp.WriteHeader(http.StatusInternalServerError)
+				resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+			}
+
+			return
+		}
+	}
+
 	if project.Environment == "cloud" && len(org.RegionUrl) > 0 && !strings.Contains(org.RegionUrl, "\"") {
 		regionUrl = org.RegionUrl
 	}
@@ -9526,6 +9610,16 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	//if len(tmpData.SSOConfig) > 0 {
 	if len(tmpData.SSOConfig.SSOEntrypoint) > 0 || len(tmpData.SSOConfig.OpenIdClientId) > 0 || len(tmpData.SSOConfig.OpenIdClientSecret) > 0 || len(tmpData.SSOConfig.OpenIdAuthorization) > 0 || len(tmpData.SSOConfig.OpenIdToken) > 0 {
+		org.SSOConfig = tmpData.SSOConfig
+	}
+	// Check if there are new values for SSO entry point or certificate or SSORequired
+	if (tmpData.SSOConfig.SSOEntrypoint != org.SSOConfig.SSOEntrypoint) ||
+		(tmpData.SSOConfig.SSOCertificate != org.SSOConfig.SSOCertificate) ||
+		(tmpData.SSOConfig.SSORequired != org.SSOConfig.SSORequired) {
+		org.SSOConfig = tmpData.SSOConfig
+	}
+
+	if (tmpData.SSOConfig.OpenIdClientId != org.SSOConfig.OpenIdClientId) || (tmpData.SSOConfig.OpenIdAuthorization != org.SSOConfig.OpenIdAuthorization) {
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
@@ -10867,10 +10961,28 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			}
+			if org.SSOConfig.SSORequired == false && len(data.Password) == 0 && (len(org.SSOConfig.SSOEntrypoint) == 0 && len(org.SSOConfig.OpenIdAuthorization) == 0 && len(org.SSOConfig.OpenIdClientId) == 0) {
+				resp.WriteHeader(401)
+				errorMessage := []byte(`{"success": false, "reason": "Your organization doesn't have SSO. Please log in using your Login ID and password."}`)
+				resp.Write(errorMessage)
+				return
+			}
+			goThroughSSO := false
+			if org.SSOConfig.SSORequired {
+				goThroughSSO = true
+			} else if len(data.Password) > 0 {
+				goThroughSSO = false
+			} else if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
+				goThroughSSO = true
+			} else if !org.SSOConfig.SSORequired && (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0) {
+				goThroughSSO = false
+			} else {
+				goThroughSSO = false
+			}
 
 			log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
 			// has to contain http(s)
-			if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
+			if goThroughSSO == true {
 				baseSSOUrl := org.SSOConfig.SSOEntrypoint
 				redirectKey := "SSO_REDIRECT"
 				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
@@ -10924,18 +11036,34 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					break
 
 				}
+				type SSOResponse struct {
+					Success bool   `json:"success"`
+					Reason  string `json:"reason"`
+					URL     string `json:"url"`
+				}
 
-				// user controllable field hmm :)
 				if !updateUser {
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "%s", "url": "%s"}`, redirectKey, baseSSOUrl)))
+					ssoResponse := SSOResponse{
+						Success: true,
+						Reason:  redirectKey,
+						URL:     baseSSOUrl,
+					}
+
+					resp.Header().Set("Content-Type", "application/json")
+					resp.WriteHeader(http.StatusUnauthorized)
+
+					if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
+						log.Printf("[ERROR] Failed to encode SSO response: %v", err)
+						resp.WriteHeader(http.StatusInternalServerError)
+						resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+					}
 					return
 				}
 			}
 		}
 	}
 
-	if len(users) == 1 {
+	if len(users) == 1 && len(data.Password) > 0 {
 		err = bcrypt.CompareHashAndPassword([]byte(userdata.Password), []byte(data.Password))
 		if err != nil {
 			userdata = User{}
@@ -11326,6 +11454,249 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			loginData = string(newData)
 		}
 	}
+
+	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(loginData))
+}
+func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in login", GetRequestIp(request))
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+	// Gets a struct of Username, password
+	data, err := ParseLoginParameters(resp, request)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	log.Printf("[AUDIT] Handling login of %s", data.Username)
+
+	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
+	err = checkUsername(data.Username)
+	if err != nil {
+		log.Printf("[INFO] Username is too short or bad for %s: %s", data.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	ctx := GetContext(request)
+	users, err := FindUser(ctx, data.Username)
+	if err != nil && len(users) == 0 {
+		log.Printf("[WARNING] Failed getting user %s during login", data.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+		return
+	}
+
+	userdata := User{}
+	if len(users) != 1 {
+		log.Printf("[WARNING] Username %s has multiple or no users (%d). Checking if it matches any.", data.Username, len(users))
+
+		for _, user := range users {
+			if user.Id == "" && user.Username == "" {
+				log.Printf(`[AUDIT] Username %s (%s) isn't valid (2). Amount of users checked: %d (1)`, user.Username, user.Id, len(users))
+				continue
+			}
+
+			if user.ActiveOrg.Id != "" {
+				err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(data.Password))
+				if err != nil {
+					log.Printf("[WARNING] Bad password: %s", err)
+					continue
+				}
+
+				userdata = user
+				break
+			}
+		}
+	} else {
+		userdata = users[0]
+	}
+
+	// Starting caching of the username
+	// This is to make it faster later :)
+	go GetAllWorkflowsByQuery(context.Background(), userdata)
+	go GetPrioritizedApps(context.Background(), userdata)
+
+	/*
+			// FIXME: Reenable activation?
+		if project.Environment == "cloud" && !userdata.Active {
+			log.Printf("[DEBUG] %s is not active, but tried to login. Error: %v", data.Username, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "This user is deactivated"}`))
+			return
+		}
+	*/
+
+	org := Org{}
+	updateUser := false
+	if project.Environment == "cloud" {
+		if strings.HasSuffix(strings.ToLower(userdata.Username), "@shuffler.io") {
+			if !userdata.Active {
+				log.Printf("[INFO] User %s with @shuffler suffix is not active.", userdata.Username)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "error: You need to activate your account before logging in"}`)))
+				return
+			}
+		}
+
+		//log.Printf("[DEBUG] Are they using SSO?")
+		// If it fails, allow login if password correct?
+		// Check if suborg -> Get parent & check SSO
+		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+		if err == nil {
+			//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
+			org = *baseOrg
+			if len(baseOrg.ManagerOrgs) > 0 {
+
+				// Use auth from parent org if user is also in that one
+				newOrg, err := GetOrg(ctx, baseOrg.ManagerOrgs[0].Id)
+				if err == nil {
+
+					found := false
+					for _, user := range newOrg.Users {
+						if user.Username == userdata.Username {
+							found = true
+						}
+					}
+
+					if found {
+						log.Printf("[WARNING] Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
+						org = *newOrg
+					}
+				}
+			}
+
+			if org.SSOConfig.SSORequired == false && len(data.Password) == 0 && (len(org.SSOConfig.SSOEntrypoint) == 0 && len(org.SSOConfig.OpenIdAuthorization) == 0 && len(org.SSOConfig.OpenIdClientId) == 0) {
+				resp.WriteHeader(401)
+				errorMessage := []byte(`{"success": false, "reason": "Your organization doesn't have SSO. Please log in using your Login ID and password."}`)
+				resp.Write(errorMessage)
+				return
+			}
+			goThroughSSO := false
+			if org.SSOConfig.SSORequired {
+				goThroughSSO = true
+			} else if len(data.Password) > 0 {
+				goThroughSSO = false
+			} else if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
+				goThroughSSO = true
+			} else if !org.SSOConfig.SSORequired && (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0) {
+				goThroughSSO = false
+			} else {
+				goThroughSSO = false
+			}
+
+			log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
+			// has to contain http(s)
+			if goThroughSSO == true {
+				baseSSOUrl := org.SSOConfig.SSOEntrypoint
+				redirectKey := "SSO_REDIRECT"
+				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+					log.Printf("[INFO] OpenID login for %s", org.Id)
+					redirectKey = "SSO_REDIRECT"
+
+					baseSSOUrl = GetOpenIdUrl(request, org)
+				}
+
+				log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
+
+				// Check if the user has other orgs that can be swapped to - if so SWAP
+				userDomain := strings.Split(userdata.Username, "@")
+				for _, tmporg := range userdata.Orgs {
+					innerorg, err := GetOrg(ctx, tmporg)
+					if err != nil {
+						continue
+					}
+
+					if innerorg.Id == userdata.ActiveOrg.Id {
+						continue
+					}
+
+					if len(innerorg.ManagerOrgs) > 0 {
+						continue
+					}
+
+					// Not your own org
+					if innerorg.Org == userdata.Username || strings.Contains(innerorg.Name, "@") {
+						continue
+					}
+
+					if len(userDomain) >= 2 {
+						if strings.Contains(strings.ToLower(innerorg.Org), strings.ToLower(userDomain[1])) {
+							continue
+						}
+					}
+
+					// Shouldn't contain the domain of the users' email
+					log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", userdata.Username, userdata.Id, innerorg.Name)
+					userdata.ActiveOrg.Id = innerorg.Id
+					userdata.ActiveOrg.Name = innerorg.Name
+
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.ActiveOrg.Id))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Username))
+					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Id))
+
+					updateUser = true
+					break
+
+				}
+
+				type SSOResponse struct {
+					Success bool   `json:"success"`
+					Reason  string `json:"reason"`
+					URL     string `json:"url"`
+				}
+
+				if !updateUser {
+					ssoResponse := SSOResponse{
+						Success: true,
+						Reason:  redirectKey,
+						URL:     baseSSOUrl,
+					}
+
+					resp.Header().Set("Content-Type", "application/json")
+					resp.WriteHeader(http.StatusUnauthorized)
+
+					if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
+						log.Printf("[ERROR] Failed to encode SSO response: %v", err)
+						resp.WriteHeader(http.StatusInternalServerError)
+						resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+					}
+
+					return
+				}
+			}
+		}
+	}
+
+	loginData := `{"success": true}`
 
 	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
 
@@ -16370,7 +16741,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if !strings.Contains(userName, "@") {
 		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
 	}
-	redirectUrl := "/workflows"
+	redirectUrl := "https://shuffler.io/workflows"
 
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
@@ -16380,6 +16751,11 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
 
 				//log.Printf("SESSION: %s", user.Session)
+				user.ActiveOrg = OrgMini{
+					Name: org.Name,
+					Id:   org.Id,
+					Role: user.Role,
+				}
 
 				expiration := time.Now().Add(3600 * time.Second)
 				//if len(user.Session) == 0 {
@@ -16440,6 +16816,11 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
 
 				//log.Printf("SESSION: %s", user.Session)
+				user.ActiveOrg = OrgMini{
+					Name: org.Name,
+					Id:   org.Id,
+					Role: user.Role,
+				}
 
 				expiration := time.Now().Add(3600 * time.Second)
 				//if len(user.Session) == 0 {
@@ -16529,6 +16910,11 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newUser.LoginType = "OpenID"
 	newUser.Role = "user"
 	newUser.Session = uuid.NewV4().String()
+	newUser.ActiveOrg = OrgMini{
+		Name: org.Name,
+		Id:   org.Id,
+		Role: "user",
+	}
 
 	verifyToken := uuid.NewV4()
 	ID := uuid.NewV4()
@@ -16789,7 +17175,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
 
 				if project.Environment == "cloud" {
-					user.ActiveOrg.Id = matchingOrgs[0].Id
+					// user.ActiveOrg.Id = matchingOrgs[0].Id
 
 					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
@@ -16798,48 +17184,54 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 				}
 
+				user.ActiveOrg = OrgMini{
+					Name: matchingOrgs[0].Name,
+					Id:   matchingOrgs[0].Id,
+					Role: user.Role,
+				}
 				//log.Printf("SESSION: %s", user.Session)
 
 				expiration := time.Now().Add(3600 * time.Second)
-				//if len(user.Session) == 0 {
-				log.Printf("[INFO] User does NOT have session - creating")
-				sessionToken := uuid.NewV4().String()
-				newCookie := &http.Cookie{
-					Name:    "session_token",
-					Value:   sessionToken,
-					Expires: expiration,
-					Path:    "/",
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating")
+					sessionToken := uuid.NewV4().String()
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
+					user.LoginInfo = append(user.LoginInfo, LoginInfo{
+						IP:        GetRequestIp(request),
+						Timestamp: time.Now().Unix(),
+					})
+
+					user.Session = sessionToken
+					user.LoginInfo = append(user.LoginInfo, LoginInfo{
+						IP:        GetRequestIp(request),
+						Timestamp: time.Now().Unix(),
+					})
 				}
-
-				if project.Environment == "cloud" {
-					newCookie.Domain = ".shuffler.io"
-					newCookie.Secure = true
-					newCookie.HttpOnly = true
-				}
-
-				http.SetCookie(resp, newCookie)
-
-				newCookie.Name = "__session"
-				http.SetCookie(resp, newCookie)
-
-				err = SetSession(ctx, user, sessionToken)
-				if err != nil {
-					log.Printf("[WARNING] Error creating session for user: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-					return
-				}
-
-				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        GetRequestIp(request),
-					Timestamp: time.Now().Unix(),
-				})
-
-				user.Session = sessionToken
-				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        GetRequestIp(request),
-					Timestamp: time.Now().Unix(),
-				})
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -16863,45 +17255,52 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
 
 				//log.Printf("SESSION: %s", user.Session)
-				if project.Environment == "cloud" {
-					user.ActiveOrg.Id = matchingOrgs[0].Id
+				// if project.Environment == "cloud" {
+				// 	user.ActiveOrg.Id = matchingOrgs[0].Id
+				// }
+
+				user.ActiveOrg = OrgMini{
+					Name: matchingOrgs[0].Name,
+					Id:   matchingOrgs[0].Id,
+					Role: user.Role,
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
-				//if len(user.Session) == 0 {
-				log.Printf("[INFO] User does NOT have session - creating")
-				sessionToken := uuid.NewV4().String()
-				newCookie := &http.Cookie{
-					Name:    "session_token",
-					Value:   sessionToken,
-					Expires: expiration,
-					Path:    "/",
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating")
+					sessionToken := uuid.NewV4().String()
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
+					user.Session = sessionToken
+					user.LoginInfo = append(user.LoginInfo, LoginInfo{
+						IP:        GetRequestIp(request),
+						Timestamp: time.Now().Unix(),
+					})
 				}
-
-				if project.Environment == "cloud" {
-					newCookie.Domain = ".shuffler.io"
-					newCookie.Secure = true
-					newCookie.HttpOnly = true
-				}
-
-				http.SetCookie(resp, newCookie)
-
-				newCookie.Name = "__session"
-				http.SetCookie(resp, newCookie)
-
-				err = SetSession(ctx, user, sessionToken)
-				if err != nil {
-					log.Printf("[WARNING] Error creating session for user: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-					return
-				}
-
-				user.Session = sessionToken
-				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        GetRequestIp(request),
-					Timestamp: time.Now().Unix(),
-				})
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -16956,7 +17355,13 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.Role = "user"
 	newUser.Session = uuid.NewV4().String()
 
-	newUser.ActiveOrg.Id = matchingOrgs[0].Id
+	// newUser.ActiveOrg.Id = matchingOrgs[0].Id
+
+	newUser.ActiveOrg = OrgMini{
+		Name: matchingOrgs[0].Name,
+		Id:   matchingOrgs[0].Id,
+		Role: "user",
+	}
 
 	verifyToken := uuid.NewV4()
 	ID := uuid.NewV4()
