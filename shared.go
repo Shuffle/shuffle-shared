@@ -11049,9 +11049,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		loginData = string(newData)
 	}
 
-	// Verify if the user actually should be logged in.
-	// Example: If the user is removed from an org onprem, then they shouldn't be able to log back in
 	// On cloud, we just generate a new org for them on the fly
+	// Onprem, the user shouldn't exist anymore, which means you would need to re-register. You should only get to this point if the user exists
 	if project.Environment != "cloud" {
 
 		// Check activeorg if they have access to it (the user)
@@ -11084,6 +11083,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		// Check if we need to move them over (move the activeOrg to other user org)
 		if !found {
 			log.Printf("[DEBUG] Current active org (%s) for user %s (%s) not found. Checking other orgs. Found %d orgs.", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, len(userdata.Orgs))
+			userdata.Role = "admin"
+			userdata.Roles = []string{"admin"}
 			for _, org := range userdata.Orgs {
 				// Verify if the user is in the org and if it points to an org but
 				// that does not exist we create re-create that org.
@@ -11130,6 +11131,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			// Check all the workflows has orgs and user
 			workflows, err := GetAllWorkflows(ctx)
 			log.Printf("[DEBUG] Checking all the worflows and finding user a org.")
+			userdata.Role = "admin"
+			userdata.Roles = []string{"admin"}
 			for _, workflow := range workflows {
 				for _, vOrg := range workflow.Org {
 	
