@@ -10833,7 +10833,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 
 var retryCount int
 
-func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string) (ShuffleStorage, error) {
+func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject, environment string, cacheDb bool, dbType string, defaultCreds bool, count int) (ShuffleStorage, error) {
 	if dbType == "elasticsearch" {
 		dbType = "opensearch"
 	}
@@ -10871,7 +10871,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
 	if strings.ToLower(environment) != "worker" && (strings.ToLower(dbType) == "opensearch" || strings.ToLower(dbType) == "opensearch") {
 
-		project.Es = *GetEsConfig()
+		project.Es = *GetEsConfig(defaultCreds)
 
 		ret, err := project.Es.Info()
 		if err != nil {
@@ -10900,7 +10900,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 					os.Setenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY", "true")
 
 					retryCount += 1
-					return RunInit(dbclient, storageClient, gceProject, environment, cacheDb, dbType)
+					return RunInit(dbclient, storageClient, gceProject, environment, cacheDb, dbType, false, 0)
 				}
 			}
 
@@ -10916,6 +10916,12 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 			log.Printf("[ERROR] Bad Status from ES: %d", ret.StatusCode)
 			log.Printf("[ERROR] Bad Body from ES: %s", string(respBody))
+
+			if count == 0 {
+				count += 1
+				log.Printf("[ERROR] Trying default creds for ES once before failing")
+				return RunInit(dbclient, storageClient, gceProject, environment, cacheDb, dbType, true, count)
+			}
 
 			return project, errors.New(fmt.Sprintf("Bad status code from ES: %d", ret.StatusCode))
 		} else {
@@ -10941,7 +10947,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	return project, nil
 }
 
-func GetEsConfig() *opensearch.Client {
+func GetEsConfig(defaultCreds bool) *opensearch.Client {
 	esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
 	if len(esUrl) == 0 {
 		esUrl = "https://shuffle-opensearch:9200"
@@ -10957,6 +10963,13 @@ func GetEsConfig() *opensearch.Client {
 		// New password that is set by default.
 		// Security Audit points to changing this during onboarding.
 		password = "StrongShufflePassword321!"
+	}
+
+	if defaultCreds {
+		log.Printf("[DEBUG] Using default credentials for Opensearch (previous versions)")
+
+		username = "admin"
+		password = "admin"
 	}
 
 	log.Printf("[DEBUG] Using custom opensearch url '%s'", esUrl)
