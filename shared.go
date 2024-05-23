@@ -10931,42 +10931,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	// On cloud, we just generate a new org for them on the fly
 	if project.Environment != "cloud" {
 
-		// Check all the workflows has orgs and user
-		workflows, err := GetAllWorkflows(ctx)
-		log.Printf("[DEBUG] Checking all the worflows and finding user a org.")
-
-		for _, workflow := range workflows {
-			for _, vOrg := range workflow.Org {
-
-				wOrg, err := GetOrg(ctx, vOrg.Id)
-
-				if err != nil {
-					log.Printf("[WARNING] Faild getting a org %s for a workflow %s", vOrg.Id ,workflow.ID)
-					log.Printf("[DEBUG] Recreating the org %s", vOrg.Id)
-
-					WorkflowOrg := Org{
-						Name:      vOrg.Name,
-						Id:        vOrg.Id,
-						Org:       vOrg.Name,
-						Users:     []User{},
-						Roles:     []string{vOrg.Role},
-						CloudSync: false,
-					}
-	
-					err := SetOrg(ctx, WorkflowOrg, vOrg.Id)
-	
-					if err != nil {
-						log.Printf("[ERROR] Failed setting a org")
-					}
-				}
-
-				err = fixOrgUsers(ctx, *wOrg)
-				if err != nil {
-					log.Printf("[ERROR] %s", err)
-				}
-			}
-		}
-
 		// Check activeorg if they have access to it (the user)
 		found := false
 		foundOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
@@ -11039,6 +11003,41 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		// User has no orgs after all checks, create a default
 		if !found {
+
+			// Check all the workflows has orgs and user
+			workflows, err := GetAllWorkflows(ctx)
+			log.Printf("[DEBUG] Checking all the worflows and finding user a org.")
+			for _, workflow := range workflows {
+				for _, vOrg := range workflow.Org {
+	
+					wOrg, err := GetOrg(ctx, vOrg.Id)
+	
+					if err != nil {
+						log.Printf("[WARNING] Faild getting a org %s for a workflow %s", vOrg.Id ,workflow.ID)
+						log.Printf("[DEBUG] Recreating the org %s", vOrg.Id)
+	
+						WorkflowOrg := Org{
+							Name:      vOrg.Name,
+							Id:        vOrg.Id,
+							Org:       vOrg.Name,
+							Users:     []User{},
+							Roles:     []string{vOrg.Role},
+							CloudSync: false,
+						}
+		
+						err := SetOrg(ctx, WorkflowOrg, vOrg.Id)
+		
+						if err != nil {
+							log.Printf("[ERROR] Failed setting a org")
+						}
+					}
+	
+					err = fixOrgUsers(ctx, *wOrg)
+					if err != nil {
+						log.Printf("[ERROR] %s", err)
+					}
+				}
+			}
 			log.Printf("[WARNING] User %s (%s) has no orgs. ID: %s, Name: %s. Creating a default one.", userdata.Username, userdata.Id, userdata.ActiveOrg.Id, userdata.ActiveOrg.Name)
 
 			orgSetupName := "default"
@@ -11052,7 +11051,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				CloudSync: false,
 			}
 
-			err := SetOrg(ctx, newOrg, newOrg.Id)
+			err = SetOrg(ctx, newOrg, newOrg.Id)
 
 			if err != nil {
 				log.Printf("[ERROR] Failed setting default org for the user: %s", userdata.Username)
