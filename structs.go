@@ -565,6 +565,7 @@ type User struct {
 	LoginType         string        `datastore:"login_type" json:"login_type"`
 	GeneratedUsername string        `datastore:"generated_username" json:"generated_username"`
 	SessionLogin      bool          `datastore:"session_login" json:"session_login"` // Whether it's a login with session or API (used to verify access)
+	ValidatedSessionOrgs []string `datastore:"validated_session_orgs" json:"validated_session_orgs"` // Orgs that have been used in the current session for the user
 
 	// Starting web3 integration
 	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
@@ -3856,4 +3857,10 @@ type SnappStep struct {
 type SnappWf struct {
 	Name  string      `json:"name"`
 	Steps []SnappStep `json:"steps"`
+}
+
+type SSOResponse struct {
+	Success bool   `json:"success"`
+	Reason  string `json:"reason"`
+	URL     string `json:"url"`
 }

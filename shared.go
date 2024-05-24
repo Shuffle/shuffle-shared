@@ -1101,6 +1101,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, userInfo.Session)
 
 	userInfo.Session = ""
+	userInfo.ValidatedSessionOrgs = []string{}
 	err = SetUser(ctx, &userInfo, true)
 	if err != nil {
 		log.Printf("Failed updating user: %s", err)
@@ -3876,7 +3877,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		// Add header that this is a limited response
 		resp.Header().Set("X-Shuffle-Truncated", "true")
 	} else {
-		log.Printf("[DEBUG] Loading without truncating for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//log.Printf("[DEBUG] Loading workflows without truncating for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 	}
 
 	// Get the org as well to manage priorities
@@ -8824,10 +8825,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
-
 		// Clean up the users' cache for different parts
-
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 
@@ -8930,9 +8928,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	updateUser := false
 
-	if org.SSOConfig.SSORequired == true && user.SupportAccess == false {
+	//if org.SSOConfig.SSORequired == true && !ArrayContains(user.ValidatedSessionOrgs, tmpData.OrgId) && user.SupportAccess == false {
+	if org.SSOConfig.SSORequired == true && !ArrayContains(user.ValidatedSessionOrgs, tmpData.OrgId) {
 
 		baseSSOUrl := org.SSOConfig.SSOEntrypoint
 		redirectKey := "SSO_REDIRECT"
@@ -8943,73 +8941,29 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			baseSSOUrl = GetOpenIdUrl(request, *org)
 		}
 
-		log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
-
-		// Check if the user has other orgs that can be swapped to - if so SWAP
-		userDomain := strings.Split(user.Username, "@")
-		for _, tmporg := range user.Orgs {
-			innerorg, err := GetOrg(ctx, tmporg)
-			if err != nil {
-				continue
-			}
-
-			if innerorg.Id == user.ActiveOrg.Id {
-				continue
-			}
-
-			if len(innerorg.ManagerOrgs) > 0 {
-				continue
-			}
-
-			// Not your own org
-			if innerorg.Org == user.Username || strings.Contains(innerorg.Name, "@") {
-				continue
-			}
-
-			if len(userDomain) >= 2 {
-				if strings.Contains(strings.ToLower(innerorg.Org), strings.ToLower(userDomain[1])) {
-					continue
-				}
-			}
-
-			// Shouldn't contain the domain of the users' email
-			log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", user.Username, user.Id, innerorg.Name)
-			user.ActiveOrg.Id = innerorg.Id
-			user.ActiveOrg.Name = innerorg.Name
-
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-			DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
-
-			updateUser = true
-			break
-
-		}
-
-		type SSOResponse struct {
-			Success bool   `json:"success"`
-			Reason  string `json:"reason"`
-			URL     string `json:"url"`
-		}
-
-		if !updateUser {
+		if !strings.HasPrefix(baseSSOUrl, "http") {
+			log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
+			//resp.WriteHeader(401)
+			//resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
+			//return
+		} else {
+			// Check if the user has other orgs that can be swapped to - if so SWAP
+			log.Printf("[DEBUG] Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
 			ssoResponse := SSOResponse{
 				Success: true,
 				Reason:  redirectKey,
 				URL:     baseSSOUrl,
 			}
 
-			resp.Header().Set("Content-Type", "application/json")
-			resp.WriteHeader(http.StatusUnauthorized)
-
-			if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
-				log.Printf("[ERROR] Failed to encode SSO response: %v", err)
-				resp.WriteHeader(http.StatusInternalServerError)
-				resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+			b, err := json.Marshal(ssoResponse)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling SSO response: %s", err)
+				resp.Write([]byte(`{"success": false}`))
+				return
 			}
 
+			resp.WriteHeader(200)
+			resp.Write(b)
 			return
 		}
 	}
@@ -9087,7 +9041,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	DeleteCache(ctx, fmt.Sprintf("session_%s", user.Session))
 
-	log.Printf("[INFO] User %s (%s) successfully changed org to %s (%s)", user.Username, user.Id, org.Name, org.Id)
+	log.Printf("[INFO] User %s (%s) successfully changed org to '%s' (%s)", user.Username, user.Id, org.Name, org.Id)
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Changed Organization", "region_url": "%s"}`, regionUrl)))
 
@@ -10863,7 +10817,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[AUDIT] Handling login of %s", data.Username)
+	log.Printf("[AUDIT] Handling SSO login of %s", data.Username)
 
 	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
 	err = checkUsername(data.Username)
@@ -11035,11 +10989,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					updateUser = true
 					break
 
-				}
-				type SSOResponse struct {
-					Success bool   `json:"success"`
-					Reason  string `json:"reason"`
-					URL     string `json:"url"`
 				}
 
 				if !updateUser {
@@ -11460,6 +11409,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write([]byte(loginData))
 }
+
+// FIXME: Do NOT use this yet (May 24th, 2024). It is not ready for production due to being a potential cross-tenant attack vector.
 func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -11540,21 +11491,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 
 	// Starting caching of the username
 	// This is to make it faster later :)
-	go GetAllWorkflowsByQuery(context.Background(), userdata)
-	go GetPrioritizedApps(context.Background(), userdata)
 
-	/*
-			// FIXME: Reenable activation?
-		if project.Environment == "cloud" && !userdata.Active {
-			log.Printf("[DEBUG] %s is not active, but tried to login. Error: %v", data.Username, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "This user is deactivated"}`))
-			return
-		}
-	*/
-
-	org := Org{}
-	updateUser := false
 	if project.Environment == "cloud" {
 		if strings.HasSuffix(strings.ToLower(userdata.Username), "@shuffler.io") {
 			if !userdata.Active {
@@ -11564,143 +11501,76 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
-
-		//log.Printf("[DEBUG] Are they using SSO?")
-		// If it fails, allow login if password correct?
-		// Check if suborg -> Get parent & check SSO
-		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
-		if err == nil {
-			//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
-			org = *baseOrg
-			if len(baseOrg.ManagerOrgs) > 0 {
-
-				// Use auth from parent org if user is also in that one
-				newOrg, err := GetOrg(ctx, baseOrg.ManagerOrgs[0].Id)
-				if err == nil {
-
-					found := false
-					for _, user := range newOrg.Users {
-						if user.Username == userdata.Username {
-							found = true
-						}
-					}
-
-					if found {
-						log.Printf("[WARNING] Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
-						org = *newOrg
-					}
-				}
-			}
-
-			if org.SSOConfig.SSORequired == false && len(data.Password) == 0 && (len(org.SSOConfig.SSOEntrypoint) == 0 && len(org.SSOConfig.OpenIdAuthorization) == 0 && len(org.SSOConfig.OpenIdClientId) == 0) {
-				resp.WriteHeader(401)
-				errorMessage := []byte(`{"success": false, "reason": "Your organization doesn't have SSO. Please log in using your Login ID and password."}`)
-				resp.Write(errorMessage)
-				return
-			}
-			goThroughSSO := false
-			if org.SSOConfig.SSORequired {
-				goThroughSSO = true
-			} else if len(data.Password) > 0 {
-				goThroughSSO = false
-			} else if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
-				goThroughSSO = true
-			} else if !org.SSOConfig.SSORequired && (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0) {
-				goThroughSSO = false
-			} else {
-				goThroughSSO = false
-			}
-
-			log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
-			// has to contain http(s)
-			if goThroughSSO == true {
-				baseSSOUrl := org.SSOConfig.SSOEntrypoint
-				redirectKey := "SSO_REDIRECT"
-				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
-					log.Printf("[INFO] OpenID login for %s", org.Id)
-					redirectKey = "SSO_REDIRECT"
-
-					baseSSOUrl = GetOpenIdUrl(request, org)
-				}
-
-				log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
-
-				// Check if the user has other orgs that can be swapped to - if so SWAP
-				userDomain := strings.Split(userdata.Username, "@")
-				for _, tmporg := range userdata.Orgs {
-					innerorg, err := GetOrg(ctx, tmporg)
-					if err != nil {
-						continue
-					}
-
-					if innerorg.Id == userdata.ActiveOrg.Id {
-						continue
-					}
-
-					if len(innerorg.ManagerOrgs) > 0 {
-						continue
-					}
-
-					// Not your own org
-					if innerorg.Org == userdata.Username || strings.Contains(innerorg.Name, "@") {
-						continue
-					}
-
-					if len(userDomain) >= 2 {
-						if strings.Contains(strings.ToLower(innerorg.Org), strings.ToLower(userDomain[1])) {
-							continue
-						}
-					}
-
-					// Shouldn't contain the domain of the users' email
-					log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", userdata.Username, userdata.Id, innerorg.Name)
-					userdata.ActiveOrg.Id = innerorg.Id
-					userdata.ActiveOrg.Name = innerorg.Name
-
-					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.Id))
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.Id))
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.ActiveOrg.Id))
-					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Username))
-					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Id))
-
-					updateUser = true
-					break
-
-				}
-
-				type SSOResponse struct {
-					Success bool   `json:"success"`
-					Reason  string `json:"reason"`
-					URL     string `json:"url"`
-				}
-
-				if !updateUser {
-					ssoResponse := SSOResponse{
-						Success: true,
-						Reason:  redirectKey,
-						URL:     baseSSOUrl,
-					}
-
-					resp.Header().Set("Content-Type", "application/json")
-					resp.WriteHeader(http.StatusUnauthorized)
-
-					if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
-						log.Printf("[ERROR] Failed to encode SSO response: %v", err)
-						resp.WriteHeader(http.StatusInternalServerError)
-						resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
-					}
-
-					return
-				}
-			}
-		}
 	}
 
-	loginData := `{"success": true}`
+	//log.Printf("[DEBUG] Are they using SSO?")
+	// If it fails, allow login if password correct?
+	// Check if suborg -> Get parent & check SSO
+		//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
 
-	log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", data.Username, userdata.Session)
+	for _, orgString := range userdata.Orgs {
+		org, err := GetOrg(ctx, orgString)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting org %s during SSO login: %s", userdata.ActiveOrg.Id, err)
+			continue
+		}
 
-	resp.WriteHeader(200)
+		if (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0 || len(org.SSOConfig.OpenIdClientId) == 0) {
+			continue
+		}
+
+		goThroughSSO := false
+		if org.SSOConfig.SSORequired {
+			goThroughSSO = true
+		} else if len(data.Password) > 0 {
+			goThroughSSO = false
+		} else if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
+			goThroughSSO = true
+		} else if !org.SSOConfig.SSORequired && (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0) {
+			goThroughSSO = false
+		} else {
+			goThroughSSO = false
+		}
+
+		log.Printf("[INFO] Inside SSO / OpenID check for user %s (%s) with org %s (%s)", userdata.Username, userdata.Id, org.Name, org.Id)
+		// has to contain http(s)
+		if !goThroughSSO {
+			continue
+		}
+
+		baseSSOUrl := org.SSOConfig.SSOEntrypoint
+		redirectKey := "SSO_REDIRECT"
+		if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+			redirectKey = "SSO_REDIRECT"
+
+			baseSSOUrl = GetOpenIdUrl(request, *org)
+		}
+
+		log.Printf("[DEBUG] SSO Redirecting user %s (%s) in org %s (%s) to SSO login at %s", userdata.Username, userdata.Id, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
+
+		// Check if the user has other orgs that can be swapped to - if so SWAP
+		ssoResponse := SSOResponse{
+			Success: true,
+			Reason:  redirectKey,
+			URL:     baseSSOUrl,
+		}
+
+		marshalled, err := json.Marshal(ssoResponse)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal SSO response: %v", err)
+			continue
+		}
+
+		resp.Header().Set("Content-Type", "application/json")
+		resp.Write(marshalled)
+		resp.WriteHeader(200)
+		return
+	}
+
+	loginData := `{"success": false, "reason": "No SSO or OpenID login found. Please use the normal Shuffle login."}`
+	log.Printf("[AUDIT] Failed to find a sso login for %s (%s)", data.Username, userdata.Id)
+
+	resp.WriteHeader(401)
 	resp.Write([]byte(loginData))
 }
 
@@ -25229,4 +25099,15 @@ func GetStandardDestWorkflow(app *WorkflowApp, action string, enrich bool) *Work
 	})
 
 	return &workflow
+}
+
+func CheckSessionOrgs(ctx context.Context, user User) {
+	if !ArrayContains(user.ValidatedSessionOrgs, user.ActiveOrg.Id) {
+		user.ValidatedSessionOrgs = append(user.ValidatedSessionOrgs, user.ActiveOrg.Id)
+
+		err := SetUser(ctx, &user, false)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting validated session orgs for user %s: %s", user.Username, err)
+		}
+	}
 }
