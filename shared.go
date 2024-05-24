@@ -1102,7 +1102,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo.Session = ""
 	userInfo.ValidatedSessionOrgs = []string{}
-	err = SetUser(ctx, &userInfo, true)
+	err = SetUser(ctx, &userInfo, false)
 	if err != nil {
 		log.Printf("Failed updating user: %s", err)
 		resp.WriteHeader(401)
@@ -8065,6 +8065,19 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] User %s (%s) doesn't have an org anymore after being deleted. This will be generated when they log in next time", foundUser.Username, foundUser.Id)
 	}
 
+	if len(foundUser.ActiveOrg.Id) > 0 {
+		foundUserOrg, err := GetOrg(ctx, foundUser.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting org '%s' in delete user: %s", foundUser.ActiveOrg.Id, err)
+		} else {
+			if foundUserOrg.SSOConfig.SSORequired && !ArrayContains(foundUser.ValidatedSessionOrgs, foundUserOrg.Id) {
+				log.Printf("[AUDIT] User %s (%s) does not have an active session in org with forced SSO %s, so forcing a re-login (aka logout).", foundUser.ActiveOrg.Id)
+				foundUser.Session = ""
+				foundUser.ValidatedSessionOrgs = []string{}
+			}
+		}
+	}
+
 	err = SetUser(ctx, foundUser, false)
 	if err != nil {
 		log.Printf("[WARNING] Failed removing user %s (%s) from org %s: %s", foundUser.Username, foundUser.Id, userInfo.ActiveOrg.Id, err)
@@ -8948,7 +8961,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			//return
 		} else {
 			// Check if the user has other orgs that can be swapped to - if so SWAP
-			log.Printf("[DEBUG] Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
+			log.Printf("[DEBUG] Change org: Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
 			ssoResponse := SSOResponse{
 				Success: true,
 				Reason:  redirectKey,
@@ -10877,7 +10890,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
-	org := Org{}
 	updateUser := false
 	if project.Environment == "cloud" {
 		if strings.HasSuffix(strings.ToLower(userdata.Username), "@shuffler.io") {
@@ -10888,126 +10900,75 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 		}
+	}
 
-		//log.Printf("[DEBUG] Are they using SSO?")
-		// If it fails, allow login if password correct?
-		// Check if suborg -> Get parent & check SSO
-		baseOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
-		if err == nil {
-			//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
-			org = *baseOrg
-			if len(baseOrg.ManagerOrgs) > 0 {
-
-				// Use auth from parent org if user is also in that one
-				newOrg, err := GetOrg(ctx, baseOrg.ManagerOrgs[0].Id)
-				if err == nil {
-
-					found := false
-					for _, user := range newOrg.Users {
-						if user.Username == userdata.Username {
-							found = true
-						}
-					}
-
-					if found {
-						log.Printf("[WARNING] Using parent org of %s as org %s", baseOrg.Id, newOrg.Id)
-						org = *newOrg
-					}
+	org, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+	if err == nil {
+		//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
+		ssoRequired := org.SSOConfig.SSORequired
+		if ssoRequired {
+			orgFound := false
+			for _, orgString := range userdata.Orgs {
+				innerorg, err := GetOrg(ctx, orgString)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting org %s: %s", orgString, err)
+					continue
 				}
-			}
-			if org.SSOConfig.SSORequired == false && len(data.Password) == 0 && (len(org.SSOConfig.SSOEntrypoint) == 0 && len(org.SSOConfig.OpenIdAuthorization) == 0 && len(org.SSOConfig.OpenIdClientId) == 0) {
-				resp.WriteHeader(401)
-				errorMessage := []byte(`{"success": false, "reason": "Your organization doesn't have SSO. Please log in using your Login ID and password."}`)
-				resp.Write(errorMessage)
-				return
-			}
-			goThroughSSO := false
-			if org.SSOConfig.SSORequired {
-				goThroughSSO = true
-			} else if len(data.Password) > 0 {
-				goThroughSSO = false
-			} else if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
-				goThroughSSO = true
-			} else if !org.SSOConfig.SSORequired && (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0) {
-				goThroughSSO = false
-			} else {
-				goThroughSSO = false
+
+				if innerorg.SSOConfig.SSORequired {
+					continue
+				}
+
+				log.Printf("[INFO] Found Non-SSO org %s (%s) for user %s (%s)", innerorg.Name, innerorg.Id, userdata.Username, userdata.Id) 
+				org = innerorg
+				userdata.ActiveOrg.Id = innerorg.Id
+				userdata.ActiveOrg.Name = innerorg.Name
+				orgFound = true 
+				break
 			}
 
-			log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
-			// has to contain http(s)
-			if goThroughSSO == true {
+			if !orgFound {
+
+				log.Printf("[INFO] Inside SSO / OpenID check: %s", org.Id)
+				// has to contain http(s)
 				baseSSOUrl := org.SSOConfig.SSOEntrypoint
 				redirectKey := "SSO_REDIRECT"
 				if len(org.SSOConfig.OpenIdAuthorization) > 0 {
 					log.Printf("[INFO] OpenID login for %s", org.Id)
 					redirectKey = "SSO_REDIRECT"
 
-					baseSSOUrl = GetOpenIdUrl(request, org)
+					baseSSOUrl = GetOpenIdUrl(request, *org)
 				}
 
-				log.Printf("[DEBUG] Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
+				log.Printf("[DEBUG] Login: Should redirect user %s in org %s(%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
 
 				// Check if the user has other orgs that can be swapped to - if so SWAP
-				userDomain := strings.Split(userdata.Username, "@")
-				for _, tmporg := range userdata.Orgs {
-					innerorg, err := GetOrg(ctx, tmporg)
-					if err != nil {
-						continue
-					}
-
-					if innerorg.Id == userdata.ActiveOrg.Id {
-						continue
-					}
-
-					if len(innerorg.ManagerOrgs) > 0 {
-						continue
-					}
-
-					// Not your own org
-					if innerorg.Org == userdata.Username || strings.Contains(innerorg.Name, "@") {
-						continue
-					}
-
-					if len(userDomain) >= 2 {
-						if strings.Contains(strings.ToLower(innerorg.Org), strings.ToLower(userDomain[1])) {
-							continue
-						}
-					}
-
-					// Shouldn't contain the domain of the users' email
-					log.Printf("[ERROR] Found org for %s (%s) to check into instead of running OpenID/SSO: %s.", userdata.Username, userdata.Id, innerorg.Name)
-					userdata.ActiveOrg.Id = innerorg.Id
-					userdata.ActiveOrg.Name = innerorg.Name
-
-					DeleteCache(ctx, fmt.Sprintf("%s_workflows", userdata.Id))
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.Id))
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", userdata.ActiveOrg.Id))
-					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Username))
-					DeleteCache(ctx, fmt.Sprintf("user_%s", userdata.Id))
-
-					updateUser = true
-					break
-
-				}
-
-				if !updateUser {
+				if !strings.HasPrefix(baseSSOUrl, "http") {
+					log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
+					//resp.WriteHeader(401)
+					//resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
+					//return
+				} else {
+					// Check if the user has other orgs that can be swapped to - if so SWAP
+					log.Printf("[DEBUG] Change org: Should redirect user %s in org %s (%s) to SSO login at %s", userdata.Username, userdata.ActiveOrg.Name, userdata.ActiveOrg.Id, baseSSOUrl)
 					ssoResponse := SSOResponse{
 						Success: true,
 						Reason:  redirectKey,
 						URL:     baseSSOUrl,
 					}
 
-					resp.Header().Set("Content-Type", "application/json")
-					resp.WriteHeader(http.StatusUnauthorized)
-
-					if err := json.NewEncoder(resp).Encode(ssoResponse); err != nil {
-						log.Printf("[ERROR] Failed to encode SSO response: %v", err)
-						resp.WriteHeader(http.StatusInternalServerError)
-						resp.Write([]byte(`{"success": false, "reason": "Internal Server Error"}`))
+					b, err := json.Marshal(ssoResponse)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling SSO response: %s", err)
+						resp.Write([]byte(`{"success": false}`))
+						return
 					}
+
+					resp.WriteHeader(200)
+					resp.Write(b)
 					return
 				}
+
 			}
 		}
 	}
@@ -11099,7 +11060,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	if len(org.Id) == 0 {
 		newOrg, err := GetOrg(ctx, userdata.ActiveOrg.Id)
 		if err == nil {
-			org = *newOrg
+			org = newOrg
 		}
 	}
 
@@ -11519,22 +11480,22 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		goThroughSSO := false
+		ssoRequired := false
 		if org.SSOConfig.SSORequired {
-			goThroughSSO = true
+			ssoRequired = true
 		} else if len(data.Password) > 0 {
-			goThroughSSO = false
+			ssoRequired = false
 		} else if len(org.SSOConfig.SSOEntrypoint) > 4 || len(org.SSOConfig.OpenIdAuthorization) > 4 {
-			goThroughSSO = true
+			ssoRequired = true
 		} else if !org.SSOConfig.SSORequired && (len(org.SSOConfig.SSOEntrypoint) == 0 || len(org.SSOConfig.OpenIdAuthorization) == 0) {
-			goThroughSSO = false
+			ssoRequired = false
 		} else {
-			goThroughSSO = false
+			ssoRequired = false
 		}
 
 		log.Printf("[INFO] Inside SSO / OpenID check for user %s (%s) with org %s (%s)", userdata.Username, userdata.Id, org.Name, org.Id)
 		// has to contain http(s)
-		if !goThroughSSO {
+		if !ssoRequired {
 			continue
 		}
 
