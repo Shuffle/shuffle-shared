@@ -4002,10 +4002,23 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	// FIXME: Does this work with string?
 	//https://stackoverflow.com/questions/43870554/microsoft-oauth2-authentication-not-returning-refresh-token
 	parsedTime := strconv.FormatInt(int64(time.Now().Unix())+int64(oauthResp.ExpiresIn), 10)
-	appAuth.Fields = append(appAuth.Fields, AuthenticationStore{
-		Key:   "expiration",
-		Value: parsedTime,
-	})
+	if oauthResp.ExpiresIn > 0 {
+		newauth := []AuthenticationStore{}
+		for _, item := range appAuth.Fields {
+			if item.Key == "expiration" {
+				continue
+			}
+
+			newauth = append(newauth, item)
+		}
+
+		newauth = append(newauth, AuthenticationStore{
+			Key:   "expiration",
+			Value: parsedTime,
+		})
+
+		appAuth.Fields = newauth
+	}
 
 	if len(refreshUrl) > 0 && !refresh {
 		log.Printf("[DEBUG] Appending Oauth2 Refresh URL %s", refreshUrl)

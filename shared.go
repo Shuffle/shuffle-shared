@@ -14565,7 +14565,8 @@ func handleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 }
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
-	log.Printf("[DEBUG] Passphrase: %s", passphrase)
+	//log.Printf("[DEBUG] Passphrase: %s", passphrase)
+	log.Printf("Decrypting key: %s", data)
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
@@ -14600,7 +14601,8 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	nonce, ciphertext := parsedData[:nonceSize], parsedData[nonceSize:]
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		log.Printf("[ERROR] Error reading decryptionkey: %s - nonce: %s, ciphertext: %s", err, nonce, ciphertext)
+		//log.Printf("[ERROR] Error reading decryptionkey: %s - nonce: %s, ciphertext: %s", err, nonce, ciphertext)
+		log.Printf("[ERROR] Error reading decryptionkey: %s - nonce: %s", err, nonce)
 		return []byte{}, err
 	}
 
@@ -18791,7 +18793,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				action.Parameters = append(action.Parameters, parameter)
-				log.Printf("[INFO] Adding parameter %s to subflow", parameter.Name)
+				//log.Printf("[INFO] Adding parameter %s to subflow", parameter.Name)
 			}
 
 			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
