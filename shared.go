@@ -18095,7 +18095,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								backupApikey = user.ApiKey
 							}
 
-							if len(user.Orgs) == 1 || user.ActiveOrg.Id == workflowExecution.Workflow.OrgId {
+							if (len(user.Orgs) == 1 || user.ActiveOrg.Id == workflowExecution.Workflow.OrgId) && action.Name != "send_email_shuffle" {
 								//log.Printf("Choice: %s, %s - %s", user.Username, user.Id, user.ApiKey)
 								action.Parameters[paramKey].Value = user.ApiKey
 								break
