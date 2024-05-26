@@ -3458,6 +3458,7 @@ type Mailcheck struct {
 	Body               string   `json:"body"`
 	Subject            string   `json:"subject"`
 	Type               string   `json:"type"`
+	EmailApp		   bool		 `json:"email_app"`
 	SenderCompany      string   `json:"sender_company"`
 	WorkflowId         string   `json:"workflow_id"`
 	ReferenceExecution string   `json:"reference_execution"`
