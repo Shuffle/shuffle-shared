@@ -3874,6 +3874,9 @@ type Training struct {
 	Time              string `json:"Time"`
 	Country           string `json:"Country"`
 
+	OrgId string `json:"org_id"`
+	UserId string `json:"user_id"`
+	Username string `json:"username"`
 	ID	  string `json:"id"`
 	SignupTime int64 `json:"signupTime"`
 }
