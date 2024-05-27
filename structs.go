@@ -3865,3 +3865,15 @@ type SSOResponse struct {
 	Reason  string `json:"reason"`
 	URL     string `json:"url"`
 }
+
+type Training struct {
+	Name              string `json:"Name"`
+	Email             string `json:"Email"`
+	NumberOfAttendees int    `json:"numberOfAttendees"`
+	Message           string `json:"Message"`
+	Time              string `json:"Time"`
+	Country           string `json:"Country"`
+
+	ID	  string `json:"id"`
+	SignupTime int64 `json:"signupTime"`
+}
