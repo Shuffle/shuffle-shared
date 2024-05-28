@@ -7521,7 +7521,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	// New struct, to not add body, author etc
 	data, err := json.Marshal(workflow)
 	if err != nil {
-		log.Printf("[WARNING] Failed marshalling in getworkflow: %s", err)
+		log.Printf("[WARNING] Failed marshalling in set workflow: %s", err)
 		return nil
 	}
 
@@ -12799,6 +12799,33 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 		if err != nil {
 			log.Printf("[WARNING] Failed deleting keys: %s", err)
 		}
+	}
+
+	return nil
+}
+
+func SetTraining(ctx context.Context, training Training) error {
+	if project.DbType == "opensearch" {
+		return errors.New("Not implemented")
+	}
+
+	if training.ID == "" {
+		training.ID = uuid.NewV4().String()
+	}
+
+	if training.SignupTime == 0 {
+		training.SignupTime = time.Now().Unix()
+	}
+
+	// Overwriting to be sure these are matching
+	// No real point in having id + workflow.ID anymore
+	nameKey := "training"
+
+	log.Printf("[INFO] Setting training with %d attendants", training.NumberOfAttendees)
+	key := datastore.NameKey(nameKey, training.ID, nil)
+	if _, err := project.Dbclient.Put(ctx, key, &training); err != nil {
+		log.Printf("[ERROR] Failed adding training with ID %s: %s", training.ID, err)
+		return err
 	}
 
 	return nil
