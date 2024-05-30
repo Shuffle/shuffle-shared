@@ -981,6 +981,37 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
 
         return parsed_queries
 
+	def prepare_response(self, request):
+        try:
+            parsedheaders = {}
+            for key, value in request.headers.items():
+                parsedheaders[key] = value
+
+            cookies = {}
+            if request.cookies:
+                for key, value in request.cookies.items():
+                    cookies[key] = value
+
+
+            jsondata = request.text
+            try:
+                jsondata = json.loads(jsondata)
+            except:
+                pass
+
+            parseddata = {
+                "status": request.status_code,
+                "body": jsondata,
+                "url": request.url,
+                "headers": parsedheaders,
+                "cookies":cookies,
+                "success": True,
+            }
+
+            return json.dumps(parseddata)
+        except Exception as e:
+            print(f"[WARNING] Failed in request: {e}")
+            return request.text
 
     def custom_action(self%s, method="", url="", headers="", queries="", path="", ssl_verify=False, body=""):
         url = self.fix_url(url)
@@ -1012,8 +1043,9 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
 
         try:
             response = requests.request(method, url, headers=parsed_headers, params=parsed_queries, data=body, verify=ssl_verify%s)
-            response.raise_for_status()
-            return response.json()
+			#response.raise_for_status()
+	
+			return self.prepare_response(response)
 
         except requests.RequestException as e:
             self.logger.error(f"Request failed: {e}")

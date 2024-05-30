@@ -866,12 +866,22 @@ type Org struct {
 	RegionUrl         string      `json:"region_url" datastore:"region_url"`
 	Tutorials         []Tutorial  `json:"tutorials" datastore:"tutorials"`
 	LeadInfo          LeadInfo    `json:"lead_info,omitempty" datastore:"lead_info"`
+	OrgAuth OrgAuth `json:"org_auth" datastore:"org_auth"`
+
 
 	CreatorId string `json:"creator_id" datastore:"creator_id"`
 	Disabled  bool   `json:"disabled" datastore:"disabled"`
 
 	EulaSigned   bool   `json:"eula_signed" datastore:"eula_signed"`
 	EulaSignedBy string `json:"eula_signed_by" datastore:"eula_signed_by"`
+}
+
+// Authentication overrides that times out
+// Only works for certain features, such as public auth keys
+// Timeout after 24 hours 
+type OrgAuth struct {
+	Token string `json:"token" datastore:"token"`
+	Expires time.Time `json:"expires" datastore:"expires"`
 }
 
 type PartnerInfo struct {

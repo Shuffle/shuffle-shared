@@ -574,6 +574,22 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if org.OrgAuth.Token == "" {
+		org.OrgAuth.Token = uuid.NewV4().String()
+		org.OrgAuth.Expires = time.Now().AddDate(0, 0, 1)
+
+		SetOrg(ctx, *org, org.Id)
+	} 
+
+	// Check if orgauth is expired
+	if org.OrgAuth.Expires.Before(time.Now()) {
+		log.Printf("[DEBUG] Refreshing org token for %s (%s)", org.Name, org.Id)
+		org.OrgAuth.Token = uuid.NewV4().String()
+		org.OrgAuth.Expires = time.Now().AddDate(0, 0, 1)
+
+		SetOrg(ctx, *org, org.Id)
+	}
+
 	admin := false
 	if user.SupportAccess == true {
 		admin = true
@@ -627,6 +643,9 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		org.ManagerOrgs = []OrgMini{}
 		org.ChildOrgs = []OrgMini{}
 		org.Invites = []string{}
+
+		org.OrgAuth = OrgAuth{}
+
 	} else {
 		org.SyncFeatures.AppExecutions.Description = "The amount of Apps within Workflows you can run per month. This limit can be exceeded when running workflows without a trigger (manual execution). Usage resets monthly."
 		org.SyncFeatures.WorkflowExecutions.Description = "N/A. See App Executions"
@@ -1268,10 +1287,27 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in add app auth: %s", userErr)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+
+		if session, err := request.Cookie("__session"); err == nil {
+			//log.Printf("\n\n[DEBUG]: Found session token that failed. Should search org auth for %#v", session)
+
+			// Gets a sample user to use
+			ctx := GetContext(request)
+			user, err = GetOrgAuth(ctx, session.Value)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org auth for session: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+		}
+
+		if user.Id == "" || user.Role != "admin" {
+			log.Printf("[WARNING] Api authentication failed in add app auth: %s", userErr)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	if user.Role == "org-reader" {
@@ -6949,7 +6985,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Really don't know why this was happening
-	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s. Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, len(workflow.Actions), len(workflow.Triggers))
+	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
 	resp.WriteHeader(200)
 	newBody, err := json.Marshal(returndata)
 	if err != nil {
@@ -7933,6 +7969,9 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			workflow.ID = ""
 		}
 	}
+
+	log.Printf("[INFO] Got new version of workflow %s (%s) for org %s and user %s (%s). Actions: %d, Triggers: %d", workflow.Name, workflow.ID, user.ActiveOrg.Id, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
+
 
 	body, err := json.Marshal(workflow)
 	if err != nil {
@@ -14566,7 +14605,7 @@ func handleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 
 func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	//log.Printf("[DEBUG] Passphrase: %s", passphrase)
-	log.Printf("Decrypting key: %s", data)
+	//log.Printf("Decrypting key: %s", data)
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[ERROR] Failed hashing in decrypt: %s", err)
@@ -14602,7 +14641,7 @@ func HandleKeyDecryption(data []byte, passphrase string) ([]byte, error) {
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
 		//log.Printf("[ERROR] Error reading decryptionkey: %s - nonce: %s, ciphertext: %s", err, nonce, ciphertext)
-		log.Printf("[ERROR] Error reading decryptionkey: %s - nonce: %s", err, nonce)
+		//log.Printf("[ERROR] Error reading decryptionkey: %s - nonce: %s", err, nonce)
 		return []byte{}, err
 	}
 

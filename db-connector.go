@@ -12830,3 +12830,46 @@ func SetTraining(ctx context.Context, training Training) error {
 
 	return nil
 }
+
+func GetOrgAuth(ctx context.Context, session string) (User, error) {
+	// Search the "org" index for the session in org.org_auth.token
+	log.Printf("[DEBUG] Searching for session %#v", session)
+	nameKey := "Organizations"
+
+	if project.DbType == "opensearch" {
+		return User{}, errors.New("Not implemented")
+	} else {
+		q := datastore.NewQuery(nameKey).Filter("org_auth.token =", session)
+		var orgs []Org
+		_, err := project.Dbclient.GetAll(ctx, q, &orgs)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org for session %#v: %s", session, err)
+			return User{}, err
+		}
+
+		if len(orgs) == 0 {
+			return User{}, errors.New("No org found")
+		}
+
+		// Get the user from the org
+		org := orgs[0]
+		// Check if the token is expired. If it is, override and returns error
+		if org.OrgAuth.Expires.Before(time.Now()) {
+			org.OrgAuth.Token = uuid.NewV4().String()
+			org.OrgAuth.Expires = time.Now().AddDate(0, 0, 1)
+
+			SetOrg(ctx, org, org.Id)
+			return User{}, errors.New("Token expired")
+		}
+
+		for _, user := range org.Users {
+			if user.Role == "admin" {
+				log.Printf("[DEBUG] Letting org auth token %#v impersonate admin user %s (%s) in org %s (%s)", session, user.Username, user.Id, org.Name, org.Id)
+				return user, nil
+			}
+		}
+	}
+
+	// If found, return a sample admin user 
+	return User{}, nil
+}
