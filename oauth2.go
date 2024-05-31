@@ -24,6 +24,12 @@ import (
 	"github.com/google/go-querystring/query"
 	"github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
+
+	"path/filepath"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
 )
 
 var handledIds []string
@@ -4143,4 +4149,89 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 	}
 
 	return IdTokenCheck{}, errors.New("Couldn't verify nonce")
+}
+
+
+func IsRunningInCluster() bool {
+	_, existsHost := os.LookupEnv("KUBERNETES_SERVICE_HOST")
+	_, existsPort := os.LookupEnv("KUBERNETES_SERVICE_PORT")
+	return existsHost && existsPort
+}
+
+func GetKubernetesClient() (*kubernetes.Clientset, *rest.Config, error) {
+
+	config := &rest.Config{}
+	var err error
+
+	/*
+	// Not in use for now. This is a in-cluster override from orborus
+	kubeconfigContent := os.Getenv("KUBERNETES_CONFIG")
+	if len(kubeconfigContent) > 0 {
+		log.Printf("[INFO] Using KUBERNETES_CONFIG to set up Kubernetes client: %#v", os.Getenv("KUBERNETES_CONFIG"))
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			log.Printf("[ERROR] Failed to create Kubernetes client from in-cluster config: %s", err)
+		} else {
+			// Replace client configuration with kubeconfig content
+			config, err = clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfigContent))
+			if err != nil {
+				log.Printf("[ERROR] Failed to create Kubernetes client from KUBERNETES_CONFIG: %s", err)
+			} else {
+				// Create Kubernetes client
+				clientset, err := kubernetes.NewForConfig(config)
+				if err != nil {
+					return nil, config, err
+				}
+
+				return clientset, config, nil
+			}
+		}
+	}
+	*/
+
+	// Look for the kubernetes serviceaccount path  /var/run/secrets/kubernetes.io/serviceaccount
+	// If it exists, use it to create the client
+	path := "/var/run/secrets/kubernetes.io/serviceaccount"
+	if _, err := os.Stat(path); err == nil {
+		log.Printf("[DEBUG] Using service account filepath to create kubernetes client")
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, config, err
+		}
+
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, config, err
+		}
+
+		return clientset, config, nil
+	}
+
+	if IsRunningInCluster() {
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, config, err
+		}
+
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, config, err
+		}
+
+		return clientset, config, nil
+	} 
+
+	home := homedir.HomeDir()
+	kubeconfigPath := filepath.Join(home, ".kube", "config")
+	config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, config, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, config, err
+	}
+
+	return clientset, config, nil
 }
