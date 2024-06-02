@@ -518,6 +518,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 
 		resp.WriteHeader(200)
 		resp.Write([]byte(loginData))
+		return
 	}
 
 	response := fmt.Sprintf(`{"success": true, "reason": "Correct code. MFA is now required for this user.", "MFAActive": %v}`, MFAActive)
