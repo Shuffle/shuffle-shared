@@ -9489,6 +9489,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		Defaults    Defaults  `json:"defaults" datastore:"defaults"`
 		SSOConfig   SSOConfig `json:"sso_config" datastore:"sso_config"`
 		LeadInfo    []string  `json:"lead_info" datastore:"lead_info"`
+		MFARequired bool      `json:"mfa_required" datastore:"mfa_required"`
 
 		CreatorConfig string              `json:"creator_config" datastore:"creator_config"`
 		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
@@ -9631,6 +9632,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 	*/
+
+	//Update mfa required value
+	if tmpData.MFARequired != org.MFARequired {
+		org.MFARequired = tmpData.MFARequired
+	}
 
 	//if len(tmpData.SSOConfig) > 0 {
 	if len(tmpData.SSOConfig.SSOEntrypoint) > 0 || len(tmpData.SSOConfig.OpenIdClientId) > 0 || len(tmpData.SSOConfig.OpenIdClientSecret) > 0 || len(tmpData.SSOConfig.OpenIdAuthorization) > 0 || len(tmpData.SSOConfig.OpenIdToken) > 0 {
