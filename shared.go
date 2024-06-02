@@ -163,19 +163,6 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting SET 2fa request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-
-			DeleteCache(ctx, fmt.Sprintf("Organizations_%s", user.ActiveOrg.Id))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Username)))
-			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Id)))
-			return
-		}
-	}
-
 	ctx := GetContext(request)
 	var user User
 	var userId string
@@ -246,6 +233,19 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	//if user id is empty, use the user data from cache
 	if len(user.Id) == 0 {
 		user = *cacheUser
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting SET 2fa request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+
+			DeleteCache(ctx, fmt.Sprintf("Organizations_%s", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Username)))
+			DeleteCache(ctx, fmt.Sprintf("user_%s", strings.ToLower(user.Id)))
+			return
+		}
 	}
 
 	var fileId string
