@@ -163,9 +163,6 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := GetContext(request)
-	user, err := HandleApiAuthentication(resp, request)
-
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
@@ -179,17 +176,82 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	ctx := GetContext(request)
+	var user User
+	var userId string
+	userSettingUpMfa := false
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in get 2fa: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		parts := strings.Split(request.URL.Path, "/")
+		if len(parts) < 5 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid URL path."}`))
+			return
+		}
+
+		MFACode := parts[4]
+
+		// Retrieve user ID and unique code from cache
+		cacheUserId, err := GetCache(ctx, fmt.Sprintf("user_id_%s", MFACode))
+		if err != nil {
+			log.Printf("[ERROR] Failed to retrieve user ID from cache: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user ID from cache."}`))
+			return
+		}
+
+		cacheUniqueCode, err := GetCache(ctx, fmt.Sprintf("mfa_code_%s", MFACode))
+		if err != nil {
+			log.Printf("[ERROR] Failed to retrieve mfa code from cache: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve MFA code from cache."}`))
+			return
+		}
+
+		//if user id and unique code are not empty, user is setting up MFA
+		if len(cacheUserId.([]byte)) > 0 && len(cacheUniqueCode.([]byte)) > 0 {
+			userSettingUpMfa = true
+		}
+
+		if mfaCodeBytes, ok := cacheUniqueCode.([]byte); ok {
+			cacheUniqueCode = string(mfaCodeBytes)
+		}
+
+		//Both unique code present in cache and MFA code token present in url request must match
+		if cacheUniqueCode != MFACode {
+			log.Printf("[ERROR] user_id or uniqueId does not match")
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"success": false, "reason": "user_id or uniqueId does not match."}`))
+			return
+		}
+
+		if userIdBytes, ok := cacheUserId.([]byte); ok {
+			userId = string(userIdBytes)
+		}
+	}
+
+	var cacheUser *User
+
+	// check if user id received from cache is not empty
+	if len(userId) > 0 && userSettingUpMfa == true {
+		cacheUser, err = GetUser(ctx, userId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to retrieve user from cache: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user from cache."}`))
+			return
+		}
+	}
+
+	//if user id is empty, use the user data from cache
+	if len(user.Id) == 0 {
+		user = *cacheUser
 	}
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
-		if len(location) <= 4 {
+		if len(location) <= 4 && userSettingUpMfa == false {
 			log.Printf("[ERROR] Path too short: %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
@@ -228,9 +290,17 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting your org."}`))
+		return
+	}
+
 	// FIXME: Everything should match?
 	// || user.Id != tmpBody.UserId
-	if user.Id != fileId {
+	if user.Id != fileId && userSettingUpMfa == false {
 		log.Printf("[WARNING] Bad ID: %s vs %s", user.Id, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only set 2fa for your own user. Pass field user_id in JSON."}`)))
@@ -262,9 +332,21 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	foundUser.MFA.Active = true
-	foundUser.MFA.ActiveCode = foundUser.MFA.PreviousCode
-	foundUser.MFA.PreviousCode = ""
+	MFAActive := false
+	if foundUser.MFA.Active == true {
+		foundUser.MFA.Active = false
+		foundUser.MFA.PreviousCode = foundUser.MFA.ActiveCode
+		foundUser.MFA.ActiveCode = ""
+		MFAActive = false
+		log.Printf("[DEBUG] Successfully disable 2FA authentication for user %s (%s)", foundUser.Username, foundUser.Id)
+	} else {
+		foundUser.MFA.Active = true
+		foundUser.MFA.ActiveCode = foundUser.MFA.PreviousCode
+		foundUser.MFA.PreviousCode = ""
+		MFAActive = true
+		log.Printf("[DEBUG] Successfully Enable 2FA authentication for user %s (%s)", foundUser.Username, foundUser.Id)
+	}
+
 	err = SetUser(ctx, foundUser, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed SETTING MFA for user %s (%s): %s", foundUser.Username, foundUser.Id, err)
@@ -273,10 +355,174 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[DEBUG] Successfully enabled 2FA for user %s (%s)", foundUser.Username, foundUser.Id)
+	// log.Printf("[DEBUG] Successfully enabled 2FA for user %s (%s)", foundUser.Username, foundUser.Id)
 
+	// If user is setting up MFA, than reset the user session or create a new one
+	if userSettingUpMfa {
+		user.LoginInfo = append(user.LoginInfo, LoginInfo{
+			IP:        GetRequestIp(request),
+			Timestamp: time.Now().Unix(),
+		})
+
+		tutorialsFinished := []Tutorial{}
+		for _, tutorial := range user.PersonalInfo.Tutorials {
+			tutorialsFinished = append(tutorialsFinished, Tutorial{
+				Name: tutorial,
+			})
+		}
+
+		if len(org.SecurityFramework.SIEM.Name) > 0 || len(org.SecurityFramework.Network.Name) > 0 || len(org.SecurityFramework.EDR.Name) > 0 || len(org.SecurityFramework.Cases.Name) > 0 || len(org.SecurityFramework.IAM.Name) > 0 || len(org.SecurityFramework.Assets.Name) > 0 || len(org.SecurityFramework.Intel.Name) > 0 || len(org.SecurityFramework.Communication.Name) > 0 {
+			tutorialsFinished = append(tutorialsFinished, Tutorial{
+				Name: "find_integrations",
+			})
+		}
+
+		for _, tutorial := range org.Tutorials {
+			tutorialsFinished = append(tutorialsFinished, tutorial)
+		}
+
+		//log.Printf("[INFO] Tutorials finished: %v", tutorialsFinished)
+
+		returnValue := HandleInfo{
+			Success:   true,
+			Tutorials: tutorialsFinished,
+		}
+
+		loginData := `{"success": true}`
+		newData, err := json.Marshal(returnValue)
+		if err == nil {
+			loginData = string(newData)
+		}
+
+		if len(user.Session) != 0 {
+			log.Printf("[INFO] User session exists - resetting session")
+			expiration := time.Now().Add(3600 * time.Second)
+
+			newCookie := &http.Cookie{
+				Name:    "session_token",
+				Value:   user.Session,
+				Expires: expiration,
+				Path:    "/",
+			}
+
+			if project.Environment == "cloud" {
+				newCookie.Domain = ".shuffler.io"
+				newCookie.Secure = true
+				newCookie.HttpOnly = true
+			}
+
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			http.SetCookie(resp, newCookie)
+
+			//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", user.Session)
+			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+				Key:        "session_token",
+				Value:      user.Session,
+				Expiration: expiration.Unix(),
+			})
+
+			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+				Key:        "__session",
+				Value:      user.Session,
+				Expiration: expiration.Unix(),
+			})
+
+			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, user.Session, expiration.Unix())
+			newData, err := json.Marshal(returnValue)
+			if err == nil {
+				loginData = string(newData)
+			}
+
+			err = SetSession(ctx, user, user.Session)
+			if err != nil {
+				log.Printf("[WARNING] Error adding session to database: %s", err)
+			} else {
+				//log.Printf("[DEBUG] Updated session in backend")
+			}
+
+			user.MFA = foundUser.MFA
+
+			err = SetUser(ctx, &user, false)
+			if err != nil {
+				log.Printf("[ERROR] Failed updating user when setting session (2): %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			resp.WriteHeader(200)
+			resp.Write([]byte(loginData))
+			return
+		} else {
+
+			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
+			sessionToken := uuid.NewV4().String()
+			expiration := time.Now().Add(3600 * time.Second)
+			newCookie := &http.Cookie{
+				Name:    "session_token",
+				Value:   sessionToken,
+				Expires: expiration,
+				Path:    "/",
+			}
+
+			if project.Environment == "cloud" {
+				newCookie.Domain = ".shuffler.io"
+				newCookie.Secure = true
+				newCookie.HttpOnly = true
+			}
+
+			// Does it not set both?
+			http.SetCookie(resp, newCookie)
+
+			newCookie.Name = "__session"
+			http.SetCookie(resp, newCookie)
+
+			// ADD TO DATABASE
+			err = SetSession(ctx, user, sessionToken)
+			if err != nil {
+				log.Printf("[DEBUG] Error adding session to database: %s", err)
+			}
+
+			user.Session = sessionToken
+
+			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+				Key:        "session_token",
+				Value:      sessionToken,
+				Expiration: expiration.Unix(),
+			})
+
+			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
+				Key:        "__session",
+				Value:      sessionToken,
+				Expiration: expiration.Unix(),
+			})
+			user.MFA = foundUser.MFA
+			err = SetUser(ctx, &user, true)
+			if err != nil {
+				log.Printf("[ERROR] Failed updating user when setting session: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
+			newData, err := json.Marshal(returnValue)
+			if err == nil {
+				loginData = string(newData)
+			}
+		}
+
+		log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", user.Username, user.Session)
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(loginData))
+	}
+
+	response := fmt.Sprintf(`{"success": true, "reason": "Correct code. MFA is now required for this user.", "MFAActive": %v}`, MFAActive)
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true, "reason": "Correct code. MFA is now required for this user."}`))
+	resp.Write([]byte(response))
 }
 
 func getHOTPToken(secret string, interval int64) (string, error) {
@@ -351,28 +597,94 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	ctx := GetContext(request)
+	var user User
+	var userId string
+	userSettingUpMfa := false
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[ERROR] Api authentication failed in get 2fa: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
+
+		// Attempt to retrieve user data from cache
+		parts := strings.Split(request.URL.Path, "/")
+		if len(parts) < 5 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid URL path."}`))
+			return
+		}
+
+		MFACode := parts[4]
+
+		// Retrieve user ID and unique code from cache
+		cacheUserId, err := GetCache(ctx, fmt.Sprintf("user_id_%s", MFACode))
+		if err != nil {
+			log.Printf("[ERROR] Failed to retrieve user ID from cache: %s", err)
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user ID from cache."}`))
+			return
+		}
+
+		cacheUniqueCode, err := GetCache(ctx, fmt.Sprintf("mfa_code_%s", MFACode))
+		if err != nil {
+			log.Printf("[ERROR] Failed to retrieve mfa code from cache: %s", err)
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve MFA code from cache."}`))
+			return
+		}
+
+		//if user id and unique code are not empty, user is setting up MFA
+		if len(cacheUserId.([]byte)) > 0 && len(cacheUniqueCode.([]byte)) > 0 {
+			userSettingUpMfa = true
+		}
+
+		if mfaCodeBytes, ok := cacheUniqueCode.([]byte); ok {
+			cacheUniqueCode = string(mfaCodeBytes)
+		}
+
+		if userIdBytes, ok := cacheUserId.([]byte); ok {
+			userId = string(userIdBytes)
+		}
+
+		//Both unique code present in cache and MFA code token present in url request must match
+		if cacheUniqueCode != MFACode {
+			log.Printf("[ERROR] Invalid user for the MFA code %s", MFACode)
+			resp.WriteHeader(http.StatusBadRequest)
+			resp.Write([]byte(`{"success": false, "reason": "Invalid user for the MFA code."}`))
+			return
+		}
+	}
+
+	var cacheUser *User
+
+	// check if user id received from cache is not empty
+	if len(userId) > 0 && userSettingUpMfa == true {
+		cacheUser, err = GetUser(ctx, userId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to retrieve user from cache: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user from cache."}`))
+			return
+		}
+	}
+
+	//if user id is empty, use the user data from cache
+	if len(user.Id) == 0 {
+		user = *cacheUser
 	}
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
-	if location[1] == "api" {
+	if location[1] == "api" && userSettingUpMfa == false {
 		if len(location) <= 4 {
 			log.Printf("[ERROR] Path too short: %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-
 		fileId = location[4]
 	}
 
-	if user.Id != fileId {
+	if user.Id != fileId && userSettingUpMfa == false {
 		log.Printf("[WARNING] Bad ID: %s vs %s", user.Id, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only set 2fa for your own user"}`)))
@@ -415,8 +727,6 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
 		return
 	}
-
-	ctx := GetContext(request)
 	//user.MFA.PreviousCode = authLink
 	user.MFA.PreviousCode = secret
 	err = SetUser(ctx, &user, true)
