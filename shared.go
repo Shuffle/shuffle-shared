@@ -11068,6 +11068,54 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf(`[WARNING] Username %s (%s) has login type set to OpenID (single sign-on).`, userdata.Username, userdata.Id)
 	}
 
+	if len(data.MFACode) == 0 {
+		for _, orgID := range userdata.Orgs {
+			org, err := GetOrg(ctx, orgID)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org %s during login: %s", orgID, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
+				return
+			}
+			if org.MFARequired {
+				if org.MFARequired && !userdata.MFA.Active {
+					log.Printf("MFA is required for org %s and user has not set up MFA.", orgID)
+
+					// Generate a unique code
+					MFACode := uuid.NewV4().String()
+
+					cacheKey := fmt.Sprintf("user_id_%s", MFACode)
+
+					err := SetCache(ctx, cacheKey, []byte(userdata.Id), 30)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting cache for user %s: %s", userdata.Username, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false, "reason": "Failed setting cache"}`))
+						return
+					}
+
+					cacheKey = fmt.Sprintf("mfa_code_%s", MFACode)
+					err = SetCache(ctx, cacheKey, []byte(MFACode), 30)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting cache for user %s: %s", userdata.Username, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false, "reason": "Failed setting cache"}`))
+						return
+					}
+
+					response := fmt.Sprintf(`{"success": true, "reason": "MFA_SETUP", "url": "%s"}`, MFACode)
+					resp.WriteHeader(200)
+					resp.Write([]byte(response))
+					return
+				}
+				log.Printf("MFA is required for org %s. Redirecting.", orgID)
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "MFA_REDIRECT"}`)))
+				return
+			}
+		}
+	}
+
 	if userdata.MFA.Active && len(data.MFACode) == 0 {
 		log.Printf(`[DEBUG] Username %s (%s) has MFA activated. Redirecting.`, userdata.Username, userdata.Id)
 		resp.WriteHeader(409)
