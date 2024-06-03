@@ -17744,6 +17744,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								// Increase priority on User Input catch-ups
 								executionRequest.Priority = 11
 								parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(result.Action.Environment, " ", "-"), "_", "-")), oldExecution.ExecutionOrg)
+
+								if project.Environment != "cloud" {
+									parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(result.Action.Environment, " ", "-"), "_", "-"))
+								}
+
 								err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
 								if err != nil {
 									log.Printf("[ERROR] Failed re-adding User Input execution to db: %s", err)
