@@ -5801,6 +5801,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		idFound := false
 		nameVersionFound := false
 		nameFound := false
+
 		discoveredApp := WorkflowApp{}
 		for _, innerApp := range workflowapps {
 			if innerApp.ID == action.AppID {
@@ -5810,6 +5811,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				action.Public = innerApp.Public
 				action.Generated = innerApp.Generated
 				action.ReferenceUrl = innerApp.ReferenceUrl
+
 				idFound = true
 				break
 			}
@@ -5845,6 +5847,22 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					nameFound = true
 					break
 				}
+			}
+		}
+
+		// Handles backend labeling
+		if len(action.CategoryLabel) == 0 && len(discoveredApp.ID) > 0 {
+			for _, discoveredAction := range discoveredApp.Actions {
+				if action.Name != discoveredAction.Name {
+					continue
+				}
+
+				if len(discoveredAction.CategoryLabel) == 0 {
+					break
+				}
+
+				action.CategoryLabel = discoveredAction.CategoryLabel
+				break
 			}
 		}
 
@@ -13512,7 +13530,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	// Should only apply a few seconds after execution, otherwise it's bascially spam.
 	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
-		IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
+		//IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
 	}
 
 	// Should this be able to return errors?
@@ -16150,26 +16168,9 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 		executionSet = true
 
 		if execution.Status == "FINISHED" || execution.Status == "ABORTED" {
-			log.Printf("[INFO][%s] Execution is finished or aborted. Incrementing cache", execution.ExecutionId)
+			//log.Printf("[INFO][%s] Execution is finished or aborted. Incrementing cache statistics", execution.ExecutionId)
 
-			for _, result := range execution.Results {
-				if result.Status == "SUCCESS" {
-					IncrementCache(ctx, execution.ExecutionOrg, "app_executions")
-				} else if result.Status == "FAILURE" || result.Status == "ABORTED" {
-					IncrementCache(ctx, execution.ExecutionOrg, "app_executions")
-					IncrementCache(ctx, execution.ExecutionOrg, "app_executions_failed")
-				}
-
-				if result.Action.AppName == "Shuffle Workflow" && result.Status == "SUCCESS" {
-					IncrementCache(ctx, execution.ExecutionOrg, "subflow_executions")
-				}
-			}
-
-			if execution.Status == "ABORTED" {
-				IncrementCache(ctx, execution.ExecutionOrg, "workflow_executions_failed")
-			} else if execution.Status == "FINISHED" {
-				IncrementCache(ctx, execution.ExecutionOrg, "workflow_executions_finished")
-			}
+			HandleExecutionCacheIncrement(ctx, execution)
 		}
 
 	} else {
@@ -25155,5 +25156,131 @@ func CheckSessionOrgs(ctx context.Context, user User) {
 		if err != nil {
 			log.Printf("[ERROR] Failed setting validated session orgs for user %s: %s", user.Username, err)
 		}
+	}
+}
+
+// Handles statistics incrementation for workflow executions
+func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecution) {
+	if execution.Status != "FINISHED" && execution.Status != "ABORTED" && execution.Status != "FAILURE" {
+		//log.Printf("[DEBUG] Execution %s is not finished (%s). Not incrementing cache", execution.ExecutionId, execution.Status)
+		return
+	}
+
+
+	cacheIncrementKey := fmt.Sprintf("%s_cacheset", execution.ExecutionId)
+ 	_, err := GetCache(ctx, cacheIncrementKey)
+	if err == nil {
+		log.Printf("[DEBUG] Cache already incremented for execution %s", execution.ExecutionId)
+		return
+	}
+
+	SetCache(ctx, cacheIncrementKey, []byte{1}, 60)
+
+	env := "" 
+	appruns := 0
+	appfailure := 0
+	subflows := 0
+
+	for _, result := range execution.Results {
+		// Shoud all be the same :)
+		if len(result.Action.Environment) > 0 {
+			env = result.Action.Environment 
+		}
+
+		if result.Status == "SUCCESS" {
+			appruns += 1
+		} else if result.Status == "FAILURE" || result.Status == "ABORTED" {
+			appruns += 1
+			appfailure += 1
+
+		}
+
+		if result.Action.AppName == "Shuffle Workflow" && result.Status == "SUCCESS" {
+			subflows += 1
+		}
+	}
+
+	actionLabelSuccess := map[string]int{}
+	actionLabelFails := map[string]int{}
+	for _, action := range execution.Workflow.Actions {
+		if len(action.Environment) > 0 {
+			env = action.Environment
+		}
+
+		if len(action.CategoryLabel) == 0 {
+			continue
+		}
+
+		categoryLabel := strings.ToLower(strings.ReplaceAll(action.CategoryLabel[0], " ", "_"))
+		for _, result := range execution.Results {
+			if result.Action.ID != action.ID {
+				continue
+			}
+
+
+			if result.Status == "SUCCESS" {
+				// Check the result if result.Result.status < 300  or something similar
+				updateValue := true 
+				outputValue := HTTPOutput{} 
+				err := json.Unmarshal([]byte(result.Result), &outputValue)
+				if err == nil {
+					if !outputValue.Success || outputValue.Status >= 300 {
+						result.Status = "ABORTED"
+						updateValue = false 
+					}
+				}
+
+				if updateValue { 
+					if _, ok := actionLabelSuccess[categoryLabel]; ok {
+						actionLabelSuccess[categoryLabel] += 1
+					} else {
+						actionLabelSuccess[categoryLabel] = 1
+					}
+				}
+			} 
+
+			if result.Status == "FAILURE" || result.Status == "ABORTED" {
+				if _, ok := actionLabelFails[categoryLabel]; ok {
+					actionLabelFails[categoryLabel] += 1
+				} else {
+					actionLabelFails[categoryLabel] = 1
+				}
+			} else {
+				// Skipped or something. Not relevant.
+			}
+		}
+	}
+
+	if appruns > 0 {
+		apprunName := fmt.Sprintf("app_executions_%s", env)
+		if len(env) == 0 {
+			apprunName = fmt.Sprintf("app_executions")
+		}
+
+		IncrementCache(ctx, execution.ExecutionOrg, apprunName, appruns)
+	}
+
+	if appfailure > 0 {
+		IncrementCache(ctx, execution.ExecutionOrg, "app_executions_failed", appfailure)
+	}
+
+	if subflows > 0 {
+		IncrementCache(ctx, execution.ExecutionOrg, "subflow_executions", subflows)
+	}
+
+	if execution.Status == "ABORTED" {
+		IncrementCache(ctx, execution.ExecutionOrg, "workflow_executions_failed")
+	} else if execution.Status == "FINISHED" {
+		IncrementCache(ctx, execution.ExecutionOrg, "workflow_executions_finished")
+	} else {
+		IncrementCache(ctx, execution.ExecutionOrg, "workflow_executions_executing")
+	}
+
+	for key, value := range actionLabelSuccess {
+		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("categorylabel_success_%s", key), value)
+	}
+
+	for key, value := range actionLabelFails {
+		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("categorylabel_fail_%s", key), value)
 	}
 }

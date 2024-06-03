@@ -353,6 +353,8 @@ type DailyStatistics struct {
 
 	ApiUsage int64      `json:"api_usage" datastore:"api_usage"`
 	AppUsage []AppUsage `json:"app_usage" datastore:"app_usage"`
+
+	Additions []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
 }
 
 // Used to be related to users, now related to orgs.
@@ -425,6 +427,15 @@ type ExecutionInfo struct {
 	// These are just here in case we get use of them
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
 	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
+
+	Additions []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
+}
+
+type AdditionalUseConfig struct {
+	Key   string `json:"key" datastore:"key"`
+	Value int64 `json:"value" datastore:"value"`
+
+	DailyValue int64 `json:"daily_value,omitempty" datastore:"daily_value"`
 }
 
 type ParsedOpenApi struct {

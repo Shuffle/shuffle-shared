@@ -51,10 +51,10 @@ var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
-// Dumps data from cache to DB for every 5 action (old was 25)
-// var dumpInterval = 0x19
-// var dumpInterval = 0x1
-var dumpInterval = 0x5
+// var dbInterval = 0x19
+// var dbInterval = 0x1
+var dbInterval = 0xA
+// Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
 
 type ShuffleStorage struct {
 	GceProject    string
@@ -112,6 +112,8 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		AIUsage:                    executionInfo.DailyAIUsage,
 
 		ApiUsage: executionInfo.DailyApiUsage,
+
+		Additions: executionInfo.Additions,
 	}
 
 	executionInfo.DailyStatistics = append(executionInfo.DailyStatistics, newDay)
@@ -151,80 +153,121 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.WeeklyCloudExecutions = 0
 	executionInfo.WeeklyOnpremExecutions = 0
 
+	for additionIndex, _ := range executionInfo.Additions {
+		executionInfo.Additions[additionIndex].DailyValue = 0
+	}
+
 	return executionInfo
 }
 
-func HandleIncrement(dataType string, orgStatistics *ExecutionInfo) *ExecutionInfo {
-	if dataType == "workflow_executions" {
-		orgStatistics.TotalWorkflowExecutions += int64(dumpInterval)
-		orgStatistics.MonthlyWorkflowExecutions += int64(dumpInterval)
-		orgStatistics.WeeklyWorkflowExecutions += int64(dumpInterval)
-		orgStatistics.DailyWorkflowExecutions += int64(dumpInterval)
-		orgStatistics.HourlyWorkflowExecutions += int64(dumpInterval)
+func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint8) *ExecutionInfo {
+
+	appendCustom := false 
+	if dataType == "app_executions" || strings.HasPrefix(dataType, "app_executions") {
+		orgStatistics.TotalAppExecutions += int64(increment)
+		orgStatistics.MonthlyAppExecutions += int64(increment)
+		orgStatistics.WeeklyAppExecutions += int64(increment)
+		orgStatistics.DailyAppExecutions += int64(increment)
+		orgStatistics.HourlyAppExecutions += int64(increment)
+
+		if dataType != "app_executions" { 
+			appendCustom = true
+		}
+
+	} else if dataType == "workflow_executions" {
+		orgStatistics.TotalWorkflowExecutions += int64(increment)
+		orgStatistics.MonthlyWorkflowExecutions += int64(increment)
+		orgStatistics.WeeklyWorkflowExecutions += int64(increment)
+		orgStatistics.DailyWorkflowExecutions += int64(increment)
+		orgStatistics.HourlyWorkflowExecutions += int64(increment)
 
 	} else if dataType == "workflow_executions_finished" {
-		orgStatistics.TotalWorkflowExecutionsFinished += int64(dumpInterval)
-		orgStatistics.MonthlyWorkflowExecutionsFinished += int64(dumpInterval)
-		orgStatistics.WeeklyWorkflowExecutionsFinished += int64(dumpInterval)
-		orgStatistics.DailyWorkflowExecutionsFinished += int64(dumpInterval)
-		orgStatistics.HourlyWorkflowExecutionsFinished += int64(dumpInterval)
+		orgStatistics.TotalWorkflowExecutionsFinished += int64(increment)
+		orgStatistics.MonthlyWorkflowExecutionsFinished += int64(increment)
+		orgStatistics.WeeklyWorkflowExecutionsFinished += int64(increment)
+		orgStatistics.DailyWorkflowExecutionsFinished += int64(increment)
+		orgStatistics.HourlyWorkflowExecutionsFinished += int64(increment)
 
 	} else if dataType == "workflow_executions_failed" {
-		orgStatistics.TotalWorkflowExecutionsFailed += int64(dumpInterval)
-		orgStatistics.MonthlyWorkflowExecutionsFailed += int64(dumpInterval)
-		orgStatistics.WeeklyWorkflowExecutionsFailed += int64(dumpInterval)
-		orgStatistics.DailyWorkflowExecutionsFailed += int64(dumpInterval)
-		orgStatistics.HourlyWorkflowExecutionsFailed += int64(dumpInterval)
+		orgStatistics.TotalWorkflowExecutionsFailed += int64(increment)
+		orgStatistics.MonthlyWorkflowExecutionsFailed += int64(increment)
+		orgStatistics.WeeklyWorkflowExecutionsFailed += int64(increment)
+		orgStatistics.DailyWorkflowExecutionsFailed += int64(increment)
+		orgStatistics.HourlyWorkflowExecutionsFailed += int64(increment)
 
-	} else if dataType == "app_executions" {
-		orgStatistics.TotalAppExecutions += int64(dumpInterval)
-		orgStatistics.MonthlyAppExecutions += int64(dumpInterval)
-		orgStatistics.WeeklyAppExecutions += int64(dumpInterval)
-		orgStatistics.DailyAppExecutions += int64(dumpInterval)
-		orgStatistics.HourlyAppExecutions += int64(dumpInterval)
 
 	} else if dataType == "app_executions_failed" {
-		orgStatistics.TotalAppExecutionsFailed += int64(dumpInterval)
-		orgStatistics.MonthlyAppExecutionsFailed += int64(dumpInterval)
-		orgStatistics.WeeklyAppExecutionsFailed += int64(dumpInterval)
-		orgStatistics.DailyAppExecutionsFailed += int64(dumpInterval)
-		orgStatistics.HourlyAppExecutionsFailed += int64(dumpInterval)
+		orgStatistics.TotalAppExecutionsFailed += int64(increment)
+		orgStatistics.MonthlyAppExecutionsFailed += int64(increment)
+		orgStatistics.WeeklyAppExecutionsFailed += int64(increment)
+		orgStatistics.DailyAppExecutionsFailed += int64(increment)
+		orgStatistics.HourlyAppExecutionsFailed += int64(increment)
 
 	} else if dataType == "subflow_executions" {
-		orgStatistics.TotalSubflowExecutions += int64(dumpInterval)
-		orgStatistics.MonthlySubflowExecutions += int64(dumpInterval)
-		orgStatistics.WeeklySubflowExecutions += int64(dumpInterval)
-		orgStatistics.DailySubflowExecutions += int64(dumpInterval)
-		orgStatistics.HourlySubflowExecutions += int64(dumpInterval)
+		orgStatistics.TotalSubflowExecutions += int64(increment)
+		orgStatistics.MonthlySubflowExecutions += int64(increment)
+		orgStatistics.WeeklySubflowExecutions += int64(increment)
+		orgStatistics.DailySubflowExecutions += int64(increment)
+		orgStatistics.HourlySubflowExecutions += int64(increment)
 
 	} else if dataType == "org_sync_actions" {
-		orgStatistics.TotalOrgSyncActions += int64(dumpInterval)
-		orgStatistics.MonthlyOrgSyncActions += int64(dumpInterval)
-		orgStatistics.WeeklyOrgSyncActions += int64(dumpInterval)
-		orgStatistics.DailyOrgSyncActions += int64(dumpInterval)
-		orgStatistics.HourlyOrgSyncActions += int64(dumpInterval)
+		orgStatistics.TotalOrgSyncActions += int64(increment)
+		orgStatistics.MonthlyOrgSyncActions += int64(increment)
+		orgStatistics.WeeklyOrgSyncActions += int64(increment)
+		orgStatistics.DailyOrgSyncActions += int64(increment)
+		orgStatistics.HourlyOrgSyncActions += int64(increment)
 
 	} else if dataType == "workflow_executions_cloud" {
-		orgStatistics.TotalCloudExecutions += int64(dumpInterval)
-		orgStatistics.MonthlyCloudExecutions += int64(dumpInterval)
-		orgStatistics.WeeklyCloudExecutions += int64(dumpInterval)
-		orgStatistics.DailyCloudExecutions += int64(dumpInterval)
-		orgStatistics.HourlyCloudExecutions += int64(dumpInterval)
+		orgStatistics.TotalCloudExecutions += int64(increment)
+		orgStatistics.MonthlyCloudExecutions += int64(increment)
+		orgStatistics.WeeklyCloudExecutions += int64(increment)
+		orgStatistics.DailyCloudExecutions += int64(increment)
+		orgStatistics.HourlyCloudExecutions += int64(increment)
 
 	} else if dataType == "workflow_executions_onprem" {
-		orgStatistics.TotalOnpremExecutions += int64(dumpInterval)
-		orgStatistics.MonthlyOnpremExecutions += int64(dumpInterval)
-		orgStatistics.WeeklyOnpremExecutions += int64(dumpInterval)
-		orgStatistics.DailyOnpremExecutions += int64(dumpInterval)
-		orgStatistics.HourlyOnpremExecutions += int64(dumpInterval)
+		orgStatistics.TotalOnpremExecutions += int64(increment)
+		orgStatistics.MonthlyOnpremExecutions += int64(increment)
+		orgStatistics.WeeklyOnpremExecutions += int64(increment)
+		orgStatistics.DailyOnpremExecutions += int64(increment)
+		orgStatistics.HourlyOnpremExecutions += int64(increment)
 	} else if dataType == "api_usage" {
-		orgStatistics.TotalApiUsage += int64(dumpInterval)
-		orgStatistics.MonthlyApiUsage += int64(dumpInterval)
-		orgStatistics.DailyApiUsage += int64(dumpInterval)
+		orgStatistics.TotalApiUsage += int64(increment)
+		orgStatistics.MonthlyApiUsage += int64(increment)
+		orgStatistics.DailyApiUsage += int64(increment)
 	} else if dataType == "ai_executions" {
-		orgStatistics.TotalAIUsage += int64(dumpInterval)
-		orgStatistics.MonthlyAIUsage += int64(dumpInterval)
-		orgStatistics.DailyAIUsage += int64(dumpInterval)
+		orgStatistics.TotalAIUsage += int64(increment)
+		orgStatistics.MonthlyAIUsage += int64(increment)
+		orgStatistics.DailyAIUsage += int64(increment)
+	} else {
+		//log.Printf("\n\n[ERROR] Unknown data type in stats increment for org %s: %s. Appending to custom list.\n\n", orgStatistics.OrgId, dataType)
+		appendCustom = true
+	}
+
+	if appendCustom {
+		//log.Printf("[DEBUG] Appending custom data type %s for org %s", dataType, orgStatistics.OrgId)
+
+		found := false
+		for additionIndex, addition := range orgStatistics.Additions {
+			if addition.Key != dataType {
+				continue
+			}
+
+			found = true 
+			amount := int64(increment)
+
+			orgStatistics.Additions[additionIndex].Value += amount
+			orgStatistics.Additions[additionIndex].DailyValue += amount
+
+			break
+		}
+
+		if !found {
+			orgStatistics.Additions = append(orgStatistics.Additions, AdditionalUseConfig {
+				Key:        dataType,
+				Value:      int64(increment),
+				DailyValue: int64(increment),
+			})
+		}
 	}
 
 	return orgStatistics
@@ -289,10 +332,17 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	return nil
 }
 
-func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
+func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) {
 
 	nameKey := "org_statistics"
 	orgStatistics := &ExecutionInfo{}
+
+	dbDumpInterval := uint8(dbInterval)
+	if len(amount) > 0 {
+		if amount[0] > 0 {
+			dbDumpInterval = uint8(amount[0])
+		}
+	}
 
 	if project.DbType == "opensearch" {
 		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
@@ -312,7 +362,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 			// Init the org stats if it doesn't exist
 			if res.StatusCode == 404 {
 				orgStatistics.OrgId = orgId
-				orgStatistics = HandleIncrement(dataType, orgStatistics)
+				orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
 				orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
 				marshalledData, err := json.Marshal(orgStatistics)
@@ -348,7 +398,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 			orgStatistics.OrgId = orgId
 		}
 
-		orgStatistics = HandleIncrement(dataType, orgStatistics)
+		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
 		// Set the data back in the database
@@ -392,7 +442,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 			orgStatistics.OrgId = orgId
 		}
 
-		orgStatistics = HandleIncrement(dataType, orgStatistics)
+		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
 		if _, err := tx.Put(key, orgStatistics); err != nil {
@@ -424,7 +474,8 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string) {
 
 // Rudementary caching system. WILL go wrong at times without sharding.
 // It's only good for the user in cloud, hence wont bother for a while
-func IncrementCache(ctx context.Context, orgId, dataType string) {
+// Optional input is the amount to increment
+func IncrementCache(ctx context.Context, orgId, dataType string, amount...int) {
 	// Check if environment is worker and skip
 	if project.Environment == "worker" {
 		//log.Printf("[DEBUG] Skipping cache increment for worker with datatype %s", dataType)
@@ -433,10 +484,17 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 
 	//log.Printf("[DEBUG] Incrementing cache '%s' for org '%s'", dataType, orgId)
 
+	incrementAmount := 1
+	if len(amount) > 0 {
+		if amount[0] > 0 {
+			incrementAmount = amount[0]
+		}
+	}
+
 	// Dump to disk every 0x19
 	// 1. Get the existing value
 	// 2. Update it
-	dbDumpInterval := uint8(dumpInterval)
+	dbDumpInterval := uint8(dbInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
 	if len(memcached) > 0 {
 		item, err := mc.Get(key)
@@ -445,7 +503,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 
 			item := &gomemcache.Item{
 				Key:        key,
-				Value:      []byte(string(1)),
+				Value:      []byte(string(incrementAmount)),
 				Expiration: 86400,
 			}
 
@@ -456,19 +514,25 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 		} else if err != nil {
 			log.Printf("[ERROR] Failed increment memcache err: %s", err)
 		} else {
+
 			if item == nil || item.Value == nil {
 				item = &gomemcache.Item{
 					Key:        key,
-					Value:      []byte(string(1)),
+					Value:      []byte(string(incrementAmount)),
 					Expiration: 86400,
 				}
 
 				log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
 			}
 
+			// Just the byte length. 
 			if len(item.Value) == 1 {
 				num := item.Value[0]
-				num += 1
+				num += byte(incrementAmount)
+				//num += []byte{2}
+
+				log.Printf("NEW NUM: %d", num)
+
 				if num >= dbDumpInterval {
 					// Memcache dump first to keep the counter going for other executions
 					num = 0
@@ -482,7 +546,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
 					}
 
-					IncrementCacheDump(ctx, orgId, dataType)
+					IncrementCacheDump(ctx, orgId, dataType, int(num))
 				} else {
 					//log.Printf("NOT Dumping!")
 
@@ -497,25 +561,31 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 					}
 				}
 			} else {
-				log.Printf("[ERROR] Length of value is longer than 1")
+				log.Printf("[ERROR] Length of value in cache key %s is longer than 1: %d", key, len(item.Value))
 			}
 		}
 
 	} else {
 		// Get the cache, but use requestCache instead of memcache
+		//log.Printf("[DEBUG] Incrementing cache for %s with amount %d", key, incrementAmount)
+		foundItem := 1
 		item, err := GetCache(ctx, key)
-
 		if err != nil {
-			err = SetCache(ctx, key, []byte("1"), 86400)
-			if err != nil {
-				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+			if incrementAmount > int(dbDumpInterval) {
+				foundItem = incrementAmount
+
+				err = SetCache(ctx, key, []byte(fmt.Sprintf("0")), 86400)
+			} else {
+				err = SetCache(ctx, key, []byte(fmt.Sprintf("%d", incrementAmount)), 86400)
+				if err != nil {
+					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+				}
 			}
 
 			//log.Printf("[DEBUG] Increment cache miss for %s", key)
 		} else {
 			// make item into a number
 
-			foundItem := 1
 			if item == nil {
 				log.Printf("[ERROR] Value in DB is nil for cache %s. Setting to 1", dataType)
 			} else {
@@ -524,22 +594,24 @@ func IncrementCache(ctx context.Context, orgId, dataType string) {
 				foundItem, err = strconv.Atoi(string(foundData))
 				if err != nil {
 					log.Printf("[ERROR] Failed converting item to int: %s", err)
-					foundItem = 1
+					foundItem = incrementAmount
 				} else {
-					foundItem += 1
+					foundItem += incrementAmount
 				}
 			}
+		}
 
-			if foundItem >= int(dbDumpInterval) {
-				// Memcache dump first to keep the counter going for other executions
-				go SetCache(ctx, key, []byte("0"), 86400)
-				go IncrementCacheDump(ctx, orgId, dataType)
-			} else {
-				// Set cacheo
-				err = SetCache(ctx, key, []byte(strconv.Itoa(foundItem)), 86400)
-				if err != nil {
-					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-				}
+		if foundItem >= int(dbDumpInterval) {
+			// Memcache dump first to keep the counter going for other executions
+			go SetCache(ctx, key, []byte("0"), 86400)
+			IncrementCacheDump(ctx, orgId, dataType, foundItem)
+
+			//log.Printf("[DEBUG] Dumping cache for %s with amount %d", key, foundItem)
+		} else {
+			// Set cacheo
+			err = SetCache(ctx, key, []byte(strconv.Itoa(foundItem)), 86400)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
 			}
 		}
 
@@ -904,6 +976,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		dbSave = true
 	}
 
+
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
 	if err == nil {
@@ -931,8 +1004,10 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return nil
 	}
 
+
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+	HandleExecutionCacheIncrement(ctx, *newexec) 
 	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
 		log.Printf("[INFO][%s] Already finished (set workflow) with status %s! Stopping the rest of the request for execution.", workflowExecution.ExecutionId, newexec.Status)
 		return nil
@@ -11935,12 +12010,11 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			extra += 1
 		}
 	}
-	//}
 
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
 	log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
-	//}
+
 
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
@@ -11978,7 +12052,9 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			return true
 		}
 
+
 		// Updating stats for the workflow
+		/*
 		if project.Environment != "cloud" {
 			for i := 0; i < validResults; i++ {
 				IncrementCache(ctx, workflowExecution.OrgId, "app_executions")
@@ -11992,6 +12068,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 				IncrementCache(ctx, workflowExecution.OrgId, "subflow_executions")
 			}
 		}
+		*/
 
 		if len(workflowExecution.Result) == 0 && len(lastResult.Result) > 0 {
 			workflowExecution.Result = lastResult.Result
@@ -11999,6 +12076,9 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 		workflowExecution.CompletedAt = int64(time.Now().Unix())
 		workflowExecution.Status = "FINISHED"
+
+		HandleExecutionCacheIncrement(ctx, workflowExecution) 
+
 		err = SetWorkflowExecution(ctx, workflowExecution, true)
 		if err != nil {
 			log.Printf("[ERROR] Failed to set execution during finalization %s: %s", workflowExecution.ExecutionId, err)
@@ -12042,6 +12122,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		}
 	}
 
+	HandleExecutionCacheIncrement(ctx, workflowExecution) 
 	return false
 }
 

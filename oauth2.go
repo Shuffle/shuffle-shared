@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"bufio"
 	"strconv"
 
 	//"net/url"
@@ -24,6 +25,15 @@ import (
 	"github.com/google/go-querystring/query"
 	"github.com/satori/go.uuid"
 	"golang.org/x/oauth2"
+
+	"path/filepath"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/util/homedir"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 )
 
 var handledIds []string
@@ -3570,8 +3580,13 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
+	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure.com") && !strings.Contains(refreshData, "resource="){
+		// Add "resource" for microsoft hings
+		refreshData += "&resource=https://management.azure.com"
+	}
 
-	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %s. URL: %s", refreshData, tokenUrl)
+
+	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %#v. URL: %#v", refreshData, tokenUrl)
 
 	client := GetExternalClient(tokenUrl)
 
@@ -4143,4 +4158,135 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 	}
 
 	return IdTokenCheck{}, errors.New("Couldn't verify nonce")
+}
+
+
+func IsRunningInCluster() bool {
+	_, existsHost := os.LookupEnv("KUBERNETES_SERVICE_HOST")
+	_, existsPort := os.LookupEnv("KUBERNETES_SERVICE_PORT")
+	return existsHost && existsPort
+}
+
+
+func GetPodName() string {
+	if len(os.Getenv("MY_POD_NAME")) > 0 {
+		return os.Getenv("MY_POD_NAME")
+	}
+
+	log.Printf("[DEBUG] No podname found to attach to")
+
+	return ""
+}
+
+func GetKubernetesNamespace() (string, error) {
+	namespaceFile := "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+	namespaceFilepathEnv := os.Getenv("KUBERNETES_NAMESPACE_FILEPATH")
+	if namespaceFilepathEnv != "" {
+		namespaceFile = namespaceFilepathEnv
+	}
+
+	file, err := os.Open(namespaceFile)
+	if err != nil {
+		return "", err
+	}
+
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	return "", fmt.Errorf("namespace file is empty")
+}
+
+func GetKubernetesClient() (*kubernetes.Clientset, *rest.Config, error) {
+
+	config := &rest.Config{}
+	var err error
+
+	/*
+	// Not in use for now. This is a in-cluster override from orborus
+	kubeconfigContent := os.Getenv("KUBERNETES_CONFIG")
+	if len(kubeconfigContent) > 0 {
+		log.Printf("[INFO] Using KUBERNETES_CONFIG to set up Kubernetes client: %#v", os.Getenv("KUBERNETES_CONFIG"))
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			log.Printf("[ERROR] Failed to create Kubernetes client from in-cluster config: %s", err)
+		} else {
+			// Replace client configuration with kubeconfig content
+			config, err = clientcmd.RESTConfigFromKubeConfig([]byte(kubeconfigContent))
+			if err != nil {
+				log.Printf("[ERROR] Failed to create Kubernetes client from KUBERNETES_CONFIG: %s", err)
+			} else {
+				// Create Kubernetes client
+				clientset, err := kubernetes.NewForConfig(config)
+				if err != nil {
+					return nil, config, err
+				}
+
+				return clientset, config, nil
+			}
+		}
+	}
+	*/
+
+	// Look for the kubernetes serviceaccount path  /var/run/secrets/kubernetes.io/serviceaccount
+	// If it exists, use it to create the client
+	// /var/run/secrets/kubernetes.io/serviceaccount
+	path := "/var/run/secrets/kubernetes.io/serviceaccount"
+	if _, err := os.Stat(path); err == nil {
+		//log.Printf("[DEBUG] Using service account filepath to create kubernetes client")
+		config, err = rest.InClusterConfig()
+		if err != nil {
+			return nil, config, err
+		}
+
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, config, err
+		}
+
+		return clientset, config, nil
+	}
+
+	if IsRunningInCluster() {
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			return nil, config, err
+		}
+
+		clientset, err := kubernetes.NewForConfig(config)
+		if err != nil {
+			return nil, config, err
+		}
+
+		return clientset, config, nil
+	} 
+
+	home := homedir.HomeDir()
+	kubeconfigPath := filepath.Join(home, ".kube", "config")
+	config, err = clientcmd.BuildConfigFromFlags("", kubeconfigPath)
+	if err != nil {
+		return nil, config, err
+	}
+
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, config, err
+	}
+
+	return clientset, config, nil
+}
+
+func GetCurrentPodNetworkConfig(ctx context.Context, clientset *kubernetes.Clientset, namespace, podName string) (*corev1.PodStatus, error) {
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return &pod.Status, nil
 }
