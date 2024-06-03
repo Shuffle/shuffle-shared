@@ -14,6 +14,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"bufio"
 	"strconv"
 
 	//"net/url"
@@ -30,6 +31,9 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 )
 
 var handledIds []string
@@ -3576,8 +3580,13 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
+	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure.com") && !strings.Contains(refreshData, "resource="){
+		// Add "resource" for microsoft hings
+		refreshData += "&resource=https://management.azure.com"
+	}
 
-	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %s. URL: %s", refreshData, tokenUrl)
+
+	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %#v. URL: %#v", refreshData, tokenUrl)
 
 	client := GetExternalClient(tokenUrl)
 
@@ -4158,6 +4167,43 @@ func IsRunningInCluster() bool {
 	return existsHost && existsPort
 }
 
+
+func GetPodName() string {
+	if len(os.Getenv("MY_POD_NAME")) > 0 {
+		return os.Getenv("MY_POD_NAME")
+	}
+
+	log.Printf("[DEBUG] No podname found to attach to")
+
+	return ""
+}
+
+func GetKubernetesNamespace() (string, error) {
+	namespaceFile := "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+	namespaceFilepathEnv := os.Getenv("KUBERNETES_NAMESPACE_FILEPATH")
+	if namespaceFilepathEnv != "" {
+		namespaceFile = namespaceFilepathEnv
+	}
+
+	file, err := os.Open(namespaceFile)
+	if err != nil {
+		return "", err
+	}
+
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	if scanner.Scan() {
+		return scanner.Text(), nil
+	}
+
+	if err := scanner.Err(); err != nil {
+		return "", err
+	}
+
+	return "", fmt.Errorf("namespace file is empty")
+}
+
 func GetKubernetesClient() (*kubernetes.Clientset, *rest.Config, error) {
 
 	config := &rest.Config{}
@@ -4191,9 +4237,10 @@ func GetKubernetesClient() (*kubernetes.Clientset, *rest.Config, error) {
 
 	// Look for the kubernetes serviceaccount path  /var/run/secrets/kubernetes.io/serviceaccount
 	// If it exists, use it to create the client
+	// /var/run/secrets/kubernetes.io/serviceaccount
 	path := "/var/run/secrets/kubernetes.io/serviceaccount"
 	if _, err := os.Stat(path); err == nil {
-		log.Printf("[DEBUG] Using service account filepath to create kubernetes client")
+		//log.Printf("[DEBUG] Using service account filepath to create kubernetes client")
 		config, err = rest.InClusterConfig()
 		if err != nil {
 			return nil, config, err
@@ -4234,4 +4281,12 @@ func GetKubernetesClient() (*kubernetes.Clientset, *rest.Config, error) {
 	}
 
 	return clientset, config, nil
+}
+
+func GetCurrentPodNetworkConfig(ctx context.Context, clientset *kubernetes.Clientset, namespace, podName string) (*corev1.PodStatus, error) {
+	pod, err := clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+	return &pod.Status, nil
 }
