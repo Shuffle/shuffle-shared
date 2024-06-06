@@ -7746,6 +7746,123 @@ func HandleGetHook(resp http.ResponseWriter, request *http.Request) {
 	return
 }
 
+func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in duplicate workflow: %s. Continuing because it may be public IF cloud.", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		log.Printf("\n\n[WARNING] Workflow ID when duplicating workflow is not valid: %s. URL: %s", fileId, request.URL.String())
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+	isOwner := false
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		// Added org-reader as the user should be able to read everything in an org
+		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as the org is same (duplicate workflow)", user.Username, workflow.ID)
+
+			isOwner = true
+		} else if workflow.Public {
+			log.Printf("[AUDIT] Letting user %s access workflow %s because it's public (duplicate workflow)", user.Username, workflow.ID)
+
+			// Only for Read-Only. No executions or impersonations.
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s (duplicate workflow)", user.Username, workflow.ID)
+
+			isOwner = true
+		} else {
+			log.Printf("[AUDIT] Wrong user %s (%s) for workflow '%s' (duplicate workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, user.Id, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	newId := uuid.NewV4().String()
+	log.Printf("[DEBUG] Duplicated workflow %s for user %s with new ID %s", workflow.ID, user.Username, newId)
+
+	type WorkflowDupe struct {
+		Name string `json:"name"`
+	}
+
+	var t WorkflowDupe
+	err = json.NewDecoder(request.Body).Decode(&t)
+	if err != nil {
+		log.Printf("[WARNING] Failed decoding workflow dupe: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(t.Name) == 0 {
+		t.Name = workflow.Name + " (copy)"
+	}
+
+	workflow.Name = t.Name
+	workflow.Owner = user.Id
+	workflow.ID = newId
+	workflow.OrgId = user.ActiveOrg.Id
+	workflow.Org = []OrgMini{user.ActiveOrg}
+	workflow.ExecutingOrg = user.ActiveOrg
+	workflow.Created = 0
+	workflow.Edited = 0
+
+	err = SetWorkflow(ctx, *workflow, newId)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting workflow %s: %s", workflow.ID, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+
+	_ = isOwner
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, workflow.ID)))
+	return 
+}
+
 func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
