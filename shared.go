@@ -17836,6 +17836,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								log.Printf("\n\n[DEBUG][%s] Worker user input restart. What do? Should we ever reach this point?\n\n")
 							} else {
 
+								updateMade := true
+
 								log.Printf("[DEBUG][%s] Re-adding user input execution to db & queue after re-setting result back", result.ExecutionId)
 								oldExecution.Status = "EXECUTING"
 
@@ -17848,6 +17850,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 								err = SetWorkflowExecution(ctx, *oldExecution, true)
 								if err != nil {
+									updateMade = false
 									log.Printf("[ERROR] Failed setting workflow execution actionresult in execution: %s", err)
 								}
 
@@ -17862,9 +17865,19 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								// Increase priority on User Input catch-ups
 								executionRequest.Priority = 11
 								parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(result.Action.Environment, " ", "-"), "_", "-")), oldExecution.ExecutionOrg)
+
+								if project.Environment != "cloud" {
+									parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(result.Action.Environment, " ", "-"), "_", "-"))
+								}
+
 								err = SetWorkflowQueue(ctx, executionRequest, parsedEnv)
 								if err != nil {
+									updateMade = false
 									log.Printf("[ERROR] Failed re-adding User Input execution to db: %s", err)
+								}
+
+								if updateMade {
+									return *oldExecution, ExecInfo{}, "", errors.New("User Input: Execution action skipped!")
 								}
 							}
 						}
