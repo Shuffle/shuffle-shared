@@ -2766,7 +2766,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 	orgs := []Org{}
 	nameKey := "Organizations"
 
-	cacheKey := fmt.Sprintf("%s_childorgs", nameKey, orgId)
+	cacheKey := fmt.Sprintf("%s_childorgs", orgId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -7243,6 +7243,176 @@ func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, op
 	}
 
 	return nil
+}
+
+func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, error) {
+	var workflows []Workflow
+	var err error
+
+	nameKey := "workflow"
+	cacheKey := fmt.Sprintf("%s_%s_childworkflows", nameKey, originalId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &workflows)
+			if err == nil {
+
+				sort.Slice(workflows, func(i, j int) bool {
+					return workflows[i].Edited > workflows[j].Edited
+				})
+
+				return workflows, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+		}
+	}
+
+	log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"parentorg_workflow": originalId,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return workflows, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
+			return workflows, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return workflows, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return workflows, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return workflows, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflows, err
+		}
+
+		wrapped := WorkflowSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflows, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.ID != originalId {
+				continue
+			}
+
+			workflows = append(workflows, hit.Source)
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("parentorg_workflow =", originalId).Limit(50)
+		//if project.Environment != "cloud" {
+		//	query = query.Order("-edited")
+		//}
+
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := Workflow{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					break
+				}
+
+				workflows = append(workflows, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+
+	// Sort by edited
+	sort.Slice(workflows, func(i, j int) bool {
+		return workflows[i].Edited > workflows[j].Edited
+	})
+
+	// Deduplicate based on edited time
+	filtered := []Workflow{}
+	handled := []string{}
+	for _, workflow := range workflows {
+		if ArrayContains(handled, string(workflow.Edited)) {
+			continue
+		}
+
+		handled = append(handled, string(workflow.Edited))
+		filtered = append(filtered, workflow)
+	}
+
+	// Set cache
+	if project.CacheDb {
+		cacheData, err := json.Marshal(workflows)
+		if err != nil {
+			return workflows, nil
+		}
+
+		err = SetCache(ctx, cacheKey, cacheData, 60)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for workflow revisions: %s (not critical)", err)
+		}
+	}
+
+	return workflows, nil
 }
 
 func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, error) {

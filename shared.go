@@ -3928,10 +3928,10 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Fix parent/child workflow loading to only load EITHER parent OR child
+	removeIds := []string{}
 	newParsedWorkflows := []Workflow{}
 	for _, workflow := range newWorkflows {
 		if len(workflow.ChildWorkflowIds) > 0 {
-
 			found := false
 			for _, childId := range workflow.ChildWorkflowIds {
 				for _, checkWorkflow := range newWorkflows {
@@ -3951,7 +3951,27 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
+		if len(workflow.ParentWorkflowId) > 0 {
+			log.Printf("[DEBUG] Found workflow with parentorg: %s", workflow.ParentWorkflowId)
+
+			removeIds = append(removeIds, workflow.ParentWorkflowId)
+		}
+
 		newParsedWorkflows = append(newParsedWorkflows, workflow)
+	}
+
+	// Bleh
+	if len(removeIds) > 0 {
+		anotherNewOne := []Workflow{}
+		for _, newParsed := range newParsedWorkflows {
+			if ArrayContains(removeIds, newParsed.ID) {
+				continue
+			}
+
+			anotherNewOne = append(anotherNewOne, newParsed)
+		}
+
+		newParsedWorkflows = anotherNewOne
 	}
 
 	newWorkflows = newParsedWorkflows
@@ -7917,6 +7937,56 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 	return 
 }
 
+func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, user *User, orgId string) (*Workflow, error) {
+
+	var err error
+	parentWorkflowId := workflow.ID
+
+	// Make a copy of the workflow, and set parent/child relationships
+	// Seed random based on the existing workflow + suborg to make sure we only make one
+	seedString := fmt.Sprintf("%s_%s", workflow.ID, user.ActiveOrg.Id)
+	hash := sha1.New()
+	hash.Write([]byte(seedString))
+	hashBytes := hash.Sum(nil)
+
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, hashBytes)
+	newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+	if !ArrayContains(workflow.ChildWorkflowIds, newId) {
+		workflow.ChildWorkflowIds = append(workflow.ChildWorkflowIds, newId)
+
+		DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
+		err = SetWorkflow(ctx, workflow, workflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed adding new child workflow %s: %s", newId, err)
+		} else {
+			log.Printf("[AUDIT] Added new child workflow of %s for user %s in suborg %s", workflow.ID, user.Username, orgId)
+		}
+	}
+
+	newWf := workflow
+	newWf.ID = newId 
+
+	newWf.SuborgDistribution = []string{}
+	newWf.ChildWorkflowIds = []string{}
+	newWf.ParentWorkflowId = parentWorkflowId
+
+	newWf.Org = []OrgMini{user.ActiveOrg}
+	newWf.ExecutingOrg = user.ActiveOrg
+	newWf.OrgId = orgId
+
+	newWf.Created = 0
+	newWf.Edited = 0
+
+	err = SetWorkflow(ctx, newWf, newWf.ID)
+	if err != nil {
+		log.Printf("[DEBUG] Failed setting new child workflow of ID %s (%s): %s", workflow.ID, newWf.ID, err)
+	}
+
+	return &newWf, err
+}
+
 func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -7974,6 +8044,13 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
+
+			DeleteCache(ctx, fmt.Sprintf("%s_childorgs", user.ActiveOrg.Id))
+			DeleteCache(ctx, fmt.Sprintf("%s_childorgs", orgId))
+
+
 			log.Printf("[AUDIT] User %s is accessing workflow %s from a suborg that has access (get workflow)", user.Username, workflow.ID)
 
 			// Check local workflows to see if a local version of the workflow exists. Should NOT be able to see the parents' workflow directly (?)
@@ -7994,44 +8071,9 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if !found {
+
 					log.Printf("\n\n\n[AUDIT] Failed to find existing workflow for user %s in suborg %s. Making replica.\n\n\n", user.Username, orgId)
-
-					// Make a copy of the workflow, and set parent/child relationships
-					// Seed random based on the existing workflow + suborg to make sure we only make one
-					seedString := fmt.Sprintf("%s_%s", workflow.ID, user.ActiveOrg.Id)
-					hash := sha1.New()
-					hash.Write([]byte(seedString))
-					hashBytes := hash.Sum(nil)
-
-					uuidBytes := make([]byte, 16)
-					copy(uuidBytes, hashBytes)
-					newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
-
-					workflow.ChildWorkflowIds = append(workflow.ChildWorkflowIds, newId)
-	
-					DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
-					err = SetWorkflow(ctx, *workflow, workflow.ID)
-					if err != nil {
-						log.Printf("[ERROR] Failed adding new child workflow %s: %s", newId, err)
-					} else {
-						log.Printf("[AUDIT] Added new child workflow of %s for user %s in suborg %s", workflow.ID, user.Username, orgId)
-					}
-
-					newWf := workflow
-					newWf.ID = newId 
-
-					newWf.SuborgDistribution = []string{}
-					newWf.ChildWorkflowIds = []string{}
-					newWf.ParentWorkflowId = workflow.ID
-
-					newWf.Org = []OrgMini{user.ActiveOrg}
-					newWf.ExecutingOrg = user.ActiveOrg
-					newWf.OrgId = orgId
-
-					newWf.Created = 0
-					newWf.Edited = 0
-
-					err = SetWorkflow(ctx, *newWf, newWf.ID)
+					newWf, err := GenerateWorkflowFromParent(ctx, *workflow, &user, orgId)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting new child workflow %s: %s", newWf.ID, err)
 					} else {
@@ -9412,6 +9454,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, fmt.Sprintf("apps_%s", inneruser.ActiveOrg.Id))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Username))
 		DeleteCache(ctx, fmt.Sprintf("user_%s", inneruser.Id))
+
+		DeleteCache(ctx, fmt.Sprintf("%s_childorgs", inneruser.ActiveOrg.Id))
 	}
 
 	// Checking if it's a special region. All user-specific requests should
@@ -9547,6 +9591,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Id:   orgId,
 	})
 
+	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating parent org %s: %s", newOrg.Id, err)
@@ -9588,6 +9633,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		newOrg.Users = append(newOrg.Users, loopUser)
 	}
 
+	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", newOrg.Id))
 	err = SetOrg(ctx, newOrg, newOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new org %s: %s", newOrg.Id, err)
@@ -25545,4 +25591,99 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	for key, value := range actionLabelFails {
 		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("categorylabel_fail_%s", key), value)
 	}
+}
+
+func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting child workflows: %s", err) 
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		// Added org-reader as the user should be able to read everything in an org
+		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get child workflows)", user.Username, workflow.ID)
+
+			// Only for Read-Only. No executions or impersonations.
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access childs workflows for %s", user.Username, workflow.ID)
+
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get child workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	// Access is granted -> get revisions
+	childWorkflows, err := ListChildWorkflows(ctx, workflow.ID)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting child workflows of %s: %s", workflow.ID, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	newWfs := []Workflow{}
+	for _, wf := range childWorkflows {
+		if wf.ParentWorkflowId != workflow.ID {
+			continue
+		}
+
+		newWfs = append(newWfs, wf)
+	}
+
+	body, err := json.Marshal(newWfs)
+	if err != nil {
+		log.Printf("[WARNING] Failed child workflow GET marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(body)
 }
