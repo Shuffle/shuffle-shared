@@ -5299,6 +5299,110 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(workflowjson)
 }
 
+func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
+	// Check if there is a difference in parameters, and what they are
+	if newAction.Name != oldAction.Name {
+		return "name", true
+	}
+
+	if newAction.Label != oldAction.Label {
+		return "label", true
+	}
+
+	if newAction.Position.X != oldAction.Position.X || newAction.Position.Y != oldAction.Position.Y {
+		return "position", true
+	}
+
+	if newAction.AppVersion != oldAction.AppVersion {
+		return "app_version", true
+	}
+
+	if newAction.AppID != oldAction.AppID {
+		return "app_id", true
+	}
+
+	if newAction.IsStartNode != oldAction.IsStartNode {
+		return "startnode", true
+	}
+
+	for _, param := range newAction.Parameters {
+		found := false
+		for _, oldParam := range oldAction.Parameters {
+			if param.Name == oldParam.Name {
+				if param.Value != oldParam.Value {
+					return "param_value", true
+				}
+
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return "param_not_found", true
+		}
+	}
+
+	return "", false
+}
+
+func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow) {
+	// Check if there is a difference in actions, and what they are
+	// Check if there is a difference in triggers, and what they are
+	// Check if there is a difference in branches, and what they are
+
+	addedActions := []string{}
+	removedActions := []string{}
+	updatedActions := []Action{}
+
+	for _, newAction := range newWorkflow.Actions {
+		found := false
+		for _, oldAction := range oldWorkflow.Actions {
+			if newAction.ID == oldAction.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			addedActions = append(addedActions, newAction.ID)
+		}
+	}
+
+	for _, oldAction := range oldWorkflow.Actions {
+		found := false
+		for _, newAction := range newWorkflow.Actions {
+			if oldAction.ID == newAction.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			removedActions = append(removedActions, oldAction.ID)
+		}
+	}
+
+	for _, newAction := range newWorkflow.Actions {
+		if ArrayContains(addedActions, newAction.ID) || ArrayContains(removedActions, newAction.ID) {
+			continue
+		}
+
+		for _, oldAction := range oldWorkflow.Actions {
+			if newAction.ID != oldAction.ID {
+				continue
+			}
+
+			changeType, changed := hasActionChanged(newAction, oldAction)
+			if changed { 
+				log.Printf("[DEBUG] Action %s (%s) has changed in %s: %s", newAction.Label, newAction.ID, changeType, newAction)
+				updatedActions = append(updatedActions, newAction)
+			}
+		}
+	}
+
+}
+
 // Saves a workflow to an ID
 func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -5393,6 +5497,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Can't save a workflow distributed from your parent org"}`))
 		return 
+	}
+
+	if len(workflow.ChildWorkflowIds) > 0 {
+		log.Printf("[DEBUG] Finding diffs for %s", workflow.ID)
+		go diffWorkflows(*tmpworkflow, workflow)
 	}
 
 	correctUser := false
@@ -7939,6 +8048,12 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, user *User, orgId string) (*Workflow, error) {
 
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
+
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
+
+
+	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
 	var err error
 	parentWorkflowId := workflow.ID
 
@@ -7952,6 +8067,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, user *Us
 	uuidBytes := make([]byte, 16)
 	copy(uuidBytes, hashBytes)
 	newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
 	if !ArrayContains(workflow.ChildWorkflowIds, newId) {
 		workflow.ChildWorkflowIds = append(workflow.ChildWorkflowIds, newId)
@@ -8043,13 +8159,6 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if orgId != user.ActiveOrg.Id {
 				continue
 			}
-
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
-			DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
-
-			DeleteCache(ctx, fmt.Sprintf("%s_childorgs", user.ActiveOrg.Id))
-			DeleteCache(ctx, fmt.Sprintf("%s_childorgs", orgId))
-
 
 			log.Printf("[AUDIT] User %s is accessing workflow %s from a suborg that has access (get workflow)", user.Username, workflow.ID)
 
