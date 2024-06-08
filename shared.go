@@ -3823,22 +3823,6 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	var workflows []Workflow
 
-	/*
-	cacheKey := fmt.Sprintf("%s_workflows", user.ActiveOrg.Id)
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		err = json.Unmarshal(cacheData, &workflows)
-		if err == nil {
-			resp.WriteHeader(200)
-			resp.Write(cacheData)
-			return
-		}
-	} else {
-		//log.Printf("[INFO] Failed getting cache for workflows for user %s", user.Id)
-	}
-	*/
-
 	workflows, err = GetAllWorkflowsByQuery(ctx, user)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
@@ -3858,7 +3842,9 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	newWorkflows := []Workflow{}
 	for _, workflow := range workflows {
 		if workflow.OrgId != user.ActiveOrg.Id {
-			continue
+			if !ArrayContains(workflow.SuborgDistribution, user.ActiveOrg.Id) {
+				continue
+			}
 		}
 
 		if workflow.Hidden {
@@ -3888,7 +3874,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(newWorkflows))
-	if project.Environment == "cloud" && len(newWorkflows) > 15 {
+	if project.Environment == "cloud" && len(newWorkflows) > 20 {
 		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		for workflowIndex, _ := range newWorkflows {
@@ -3940,6 +3926,36 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
+	// Fix parent/child workflow loading to only load EITHER parent OR child
+	newParsedWorkflows := []Workflow{}
+	for _, workflow := range newWorkflows {
+		if len(workflow.ChildWorkflowIds) > 0 {
+
+			found := false
+			for _, childId := range workflow.ChildWorkflowIds {
+				for _, checkWorkflow := range newWorkflows {
+					if checkWorkflow.ID == childId {
+						found = true
+						break
+					}
+				}
+
+				if found {
+					break
+				}
+			}
+
+			if found {
+				continue
+			}
+		}
+
+		newParsedWorkflows = append(newParsedWorkflows, workflow)
+	}
+
+	newWorkflows = newParsedWorkflows
+
 
 	//log.Printf("[INFO] Returning %d workflows", len(newWorkflows))
 	newjson, err := json.Marshal(newWorkflows)
@@ -5353,6 +5369,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Owner       string `json:"owner"`
 	}
 
+	if len(workflow.ParentWorkflowId) > 0 || len(tmpworkflow.ParentWorkflowId) > 0 {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Can't save a workflow distributed from your parent org"}`))
+		return 
+	}
+
 	correctUser := false
 	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
 		log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
@@ -5616,6 +5638,32 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow needs at least one action"}`))
 		return
+	}
+
+	newsuborgs := []string{}
+	for _, suborg := range workflow.SuborgDistribution {
+		if len(suborg) != 36 {
+			continue
+		}
+
+		newsuborgs = append(newsuborgs, suborg)
+	}
+
+	workflow.SuborgDistribution = newsuborgs
+
+	if len(workflow.SuborgDistribution) != len(tmpworkflow.SuborgDistribution) {
+		log.Printf("[AUDIT] Suborg distribution changed by user %s (%s) for workflow %s (%s) in org %s (%s). Clearing cache for suborgs.", user.Username, user.Id, workflow.Name, workflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		// Clear workflow cache
+		for _, suborg := range workflow.SuborgDistribution {
+			cacheKey := fmt.Sprintf("%s_workflows", suborg)
+			DeleteCache(ctx, cacheKey)
+		}
+
+		for _, suborg := range tmpworkflow.SuborgDistribution {
+			cacheKey := fmt.Sprintf("%s_workflows", suborg)
+			DeleteCache(ctx, cacheKey)
+		}
 	}
 
 	// Resetting subflows as they shouldn't be entirely saved. Used just for imports/exports
@@ -6694,7 +6742,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !workflow.PreviouslySaved {
-		log.Printf("[WORKFLOW INIT] NOT PREVIOUSLY SAVED - SET ACTION AUTH!")
+		log.Printf("[DEBUG] WORKFLOW INIT: NOT PREVIOUSLY SAVED - SET ACTION AUTH!")
 		timeNow := int64(time.Now().Unix())
 
 		//workflow.ID = uuid.NewV4().String()
@@ -6702,7 +6750,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// Get the workflow and check if we own it
 		workflow, err := GetWorkflow(ctx, workflow.ID)
 		if err != nil || len(workflow.Actions) != 1 {
-			log.Printf("[WORKFLOW INIT] ERROR GETTING WORKFLOW: %s - CREATING NEW ID!", err)
+			log.Printf("[ERROR] FAILED GETTING WORKFLOW: %s - CREATING NEW ID!", err)
 			workflow.ID = uuid.NewV4().String()
 		}
 
@@ -7793,6 +7841,12 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(workflow.ParentWorkflowId) > 0 {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Can't duplicate a workflow distributed from your parent org"}`))
+		return 
+	}
+
 	// Check workflow.Sharing == private / public / org  too
 	isOwner := false
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
@@ -7913,6 +7967,89 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	// Special case to handle suborg distribution workflow loading
+	if len(workflow.SuborgDistribution) > 0 {
+		for _, orgId := range workflow.SuborgDistribution {
+			if orgId != user.ActiveOrg.Id {
+				continue
+			}
+
+			log.Printf("[AUDIT] User %s is accessing workflow %s from a suborg that has access (get workflow)", user.Username, workflow.ID)
+
+			// Check local workflows to see if a local version of the workflow exists. Should NOT be able to see the parents' workflow directly (?)
+			workflows, err := GetAllWorkflowsByQuery(ctx, user)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting workflows in get workflow with suborg distrib. Auth should fail.: %s", err)
+			} else {
+				found := false
+				for _, childWorkflow := range workflows {
+					if childWorkflow.ParentWorkflowId != workflow.ID {
+						continue
+					}
+
+					found = true 
+					fileId = childWorkflow.ID
+					workflow = &childWorkflow
+					break
+				}
+
+				if !found {
+					log.Printf("\n\n\n[AUDIT] Failed to find existing workflow for user %s in suborg %s. Making replica.\n\n\n", user.Username, orgId)
+
+					// Make a copy of the workflow, and set parent/child relationships
+					// Seed random based on the existing workflow + suborg to make sure we only make one
+					seedString := fmt.Sprintf("%s_%s", workflow.ID, user.ActiveOrg.Id)
+					hash := sha1.New()
+					hash.Write([]byte(seedString))
+					hashBytes := hash.Sum(nil)
+
+					uuidBytes := make([]byte, 16)
+					copy(uuidBytes, hashBytes)
+					newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+					workflow.ChildWorkflowIds = append(workflow.ChildWorkflowIds, newId)
+	
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
+					err = SetWorkflow(ctx, *workflow, workflow.ID)
+					if err != nil {
+						log.Printf("[ERROR] Failed adding new child workflow %s: %s", newId, err)
+					} else {
+						log.Printf("[AUDIT] Added new child workflow of %s for user %s in suborg %s", workflow.ID, user.Username, orgId)
+					}
+
+					newWf := workflow
+					newWf.ID = newId 
+
+					newWf.SuborgDistribution = []string{}
+					newWf.ChildWorkflowIds = []string{}
+					newWf.ParentWorkflowId = workflow.ID
+
+					newWf.Org = []OrgMini{user.ActiveOrg}
+					newWf.ExecutingOrg = user.ActiveOrg
+					newWf.OrgId = orgId
+
+					newWf.Created = 0
+					newWf.Edited = 0
+
+					err = SetWorkflow(ctx, *newWf, newWf.ID)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting new child workflow %s: %s", newWf.ID, err)
+					} else {
+						log.Printf("[AUDIT] Created new child workflow of %s for user %s in suborg %s", workflow.ID, user.Username, orgId)
+						workflow = newWf
+					
+					}
+
+					DeleteCache(ctx, fmt.Sprintf("%s_workflows", user.ActiveOrg.Id))
+				} else {
+					log.Printf("[AUDIT] Found existing workflow for user %s in suborg %s. Loading.", user.Username, orgId)
+				}
+			}
+
+			break
+		}
+	}
+
 	// Check workflow.Sharing == private / public / org  too
 	isOwner := false
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
@@ -7961,7 +8098,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !workflow.Actions[key].IsValid {
-			log.Printf("[AUDIT] Invalid action in workflow '%s' (%s): '%s' (%s)", workflow.Name, workflow.ID, workflow.Actions[key].Label, workflow.Actions[key].ID)
+			//log.Printf("[AUDIT] Invalid action in workflow '%s' (%s): '%s' (%s)", workflow.Name, workflow.ID, workflow.Actions[key].Label, workflow.Actions[key].ID)
 
 			// Check if all fields are set
 			// Check if auth is set (autofilled)

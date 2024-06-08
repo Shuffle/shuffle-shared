@@ -1254,6 +1254,10 @@ type Workflow struct {
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
 
 	Validated  bool 	`json:"validated" datastore:"validated"` 
+
+	// Distribution system for suborg/parentorg 
+	ParentWorkflowId string `json:"parentorg_workflow" datastore:"parentorg_workflow"`
+	ChildWorkflowIds []string `json:"childorg_workflow_ids" datastore:"childorg_workflow_ids"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
 
