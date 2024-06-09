@@ -3874,15 +3874,26 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(newWorkflows))
-	if project.Environment == "cloud" && len(newWorkflows) > 20 {
+	if project.Environment == "cloud" && len(newWorkflows) > 15 {
 		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
+		// Check for "subflow" query
+		isSubflow := false
+		if subflow, subflowOk := request.URL.Query()["subflow"]; subflowOk && len(subflow) > 0 {
+			if subflow[0] == "true" {
+				isSubflow = true
+			}
+		}
+
 		for workflowIndex, _ := range newWorkflows {
-			newWorkflows[workflowIndex].Actions = []Action{}
+			if !isSubflow {
+				newWorkflows[workflowIndex].Actions = []Action{}
+				newWorkflows[workflowIndex].Image = ""
+			}
+
 			newWorkflows[workflowIndex].Triggers = []Trigger{}
 			newWorkflows[workflowIndex].Branches = []Branch{}
 			newWorkflows[workflowIndex].VisualBranches = []Branch{}
-			newWorkflows[workflowIndex].Image = ""
 
 			newWorkflows[workflowIndex].Description = ""
 			newWorkflows[workflowIndex].Blogpost = ""
