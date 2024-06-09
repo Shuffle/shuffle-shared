@@ -5299,6 +5299,90 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(workflowjson)
 }
 
+func hasBranchChanged(newBranch Branch, oldBranch Branch) (string, bool) {
+	// Check if there is a difference in parameters, and what they are
+	if newBranch.Label != oldBranch.Label {
+		return "label", true
+	}
+
+	if len(newBranch.Conditions) != len(oldBranch.Conditions) {
+		return "condition_amount", true
+	}
+
+	for _, param := range newBranch.Conditions {
+		found := false
+		for _, oldParam := range oldBranch.Conditions {
+			if param.Condition.ID != oldParam.Condition.ID {
+				continue
+			}
+
+			if param.Condition.Value != oldParam.Condition.Value {
+				return "condition_value_type", true
+			}
+
+			if param.Source.Value != oldParam.Source.Value {
+				return "condition_source", true
+			}
+
+			if param.Destination.Value != oldParam.Destination.Value {
+				return "condition_destination", true
+			}
+
+			found = true
+			break
+		}
+
+		if !found {
+			return "param_not_found", true
+		}
+	}
+
+	return "", false
+}
+
+func hasTriggerChanged(newAction Trigger, oldAction Trigger) (string, bool) {
+	// Check if there is a difference in parameters, and what they are
+	if newAction.Name != oldAction.Name {
+		return "name", true
+	}
+
+	if newAction.Label != oldAction.Label {
+		return "label", true
+	}
+
+	if newAction.Position.X != oldAction.Position.X || newAction.Position.Y != oldAction.Position.Y {
+		return "position", true
+	}
+
+	if newAction.AppVersion != oldAction.AppVersion {
+		return "app_version", true
+	}
+
+	if newAction.IsStartNode != oldAction.IsStartNode {
+		return "startnode", true
+	}
+
+	for _, param := range newAction.Parameters {
+		found := false
+		for _, oldParam := range oldAction.Parameters {
+			if param.Name == oldParam.Name {
+				if param.Value != oldParam.Value {
+					return "param_value", true
+				}
+
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return "param_not_found", true
+		}
+	}
+
+	return "", false
+}
+
 func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	// Check if there is a difference in parameters, and what they are
 	if newAction.Name != oldAction.Name {
@@ -5346,14 +5430,64 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	return "", false
 }
 
-func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow) {
+func diffWorkflowWrapper(newWorkflow Workflow) {
+	// Actually load the child workflows directly from DB
+	ctx := context.Background()
+	childWorkflows, err := ListChildWorkflows(ctx, newWorkflow.ID)
+	if err != nil {
+		return
+	}
+
+	for _, childWorkflow := range childWorkflows {
+		if len(childWorkflow.Name) == 0 && len(newWorkflow.ID) == 0 {
+			continue
+		}
+
+		if len(childWorkflow.ID) == 0 {
+			continue
+		}
+
+		if childWorkflow.ParentWorkflowId != newWorkflow.ID {
+			log.Printf("[WARNING] Child workflow '%s' has a different parent than %s", childWorkflow.ID, newWorkflow.ID)
+			continue
+		}
+
+		diffWorkflows(newWorkflow, childWorkflow, true)
+	}
+}
+
+func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	// Check if there is a difference in actions, and what they are
 	// Check if there is a difference in triggers, and what they are
 	// Check if there is a difference in branches, and what they are
 
+	nameChanged := false
+	descriptionChanged := false
+	tagsChanged := false
+
 	addedActions := []string{}
 	removedActions := []string{}
 	updatedActions := []Action{}
+
+	addedTriggers := []string{}
+	removedTriggers := []string{}
+	updatedTriggers := []Trigger{}
+
+	addedBranches := []string{}
+	removedBranches := []string{}
+	updatedBranches := []Branch{}
+
+	if oldWorkflow.Name != newWorkflow.Name {
+		nameChanged = true
+	}
+
+	if oldWorkflow.Description != newWorkflow.Description {
+		descriptionChanged = true
+	}
+
+	if len(oldWorkflow.Tags) != len(newWorkflow.Tags) {
+		tagsChanged = true
+	}
 
 	for _, newAction := range newWorkflow.Actions {
 		found := false
@@ -5395,12 +5529,258 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow) {
 
 			changeType, changed := hasActionChanged(newAction, oldAction)
 			if changed { 
-				log.Printf("[DEBUG] Action %s (%s) has changed in %s: %s", newAction.Label, newAction.ID, changeType, newAction)
+				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
 				updatedActions = append(updatedActions, newAction)
 			}
 		}
 	}
 
+	// Triggers
+	for _, newAction := range newWorkflow.Triggers {
+		found := false
+		for _, oldAction := range oldWorkflow.Triggers {
+			if newAction.ID == oldAction.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			addedTriggers = append(addedTriggers, newAction.ID)
+		}
+	}
+
+	for _, oldAction := range oldWorkflow.Triggers{
+		found := false
+		for _, newAction := range newWorkflow.Triggers{
+			if oldAction.ID == newAction.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			removedTriggers = append(removedTriggers, oldAction.ID)
+		}
+	}
+
+	for _, newAction := range newWorkflow.Triggers {
+		if ArrayContains(addedTriggers, newAction.ID) || ArrayContains(removedTriggers, newAction.ID) {
+			continue
+		}
+
+		for _, oldAction := range oldWorkflow.Triggers {
+			if newAction.ID != oldAction.ID {
+				continue
+			}
+
+			changeType, changed := hasTriggerChanged(newAction, oldAction)
+			if changed { 
+				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
+				updatedTriggers = append(updatedTriggers, newAction)
+			}
+		}
+	}
+
+	// Branches
+	for _, newBranch := range newWorkflow.Branches {
+		found := false
+		for _, oldBranch := range oldWorkflow.Branches {
+			if newBranch.ID == oldBranch.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			addedBranches = append(addedBranches, newBranch.ID)
+		}
+	}
+
+	for _, oldBranch := range oldWorkflow.Branches {
+		found := false
+		for _, newBranch := range newWorkflow.Branches {
+			if oldBranch.ID == newBranch.ID {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			removedBranches = append(removedBranches, oldBranch.ID)
+		}
+	}
+
+	for _, newBranch := range newWorkflow.Branches {
+		if ArrayContains(addedBranches, newBranch.ID) || ArrayContains(removedBranches, newBranch.ID) {
+			continue
+		}
+
+		for _, oldBranch := range oldWorkflow.Branches {
+			if newBranch.ID != oldBranch.ID {
+				continue
+			}
+
+			changeType, changed := hasBranchChanged(newBranch, oldBranch)
+			if changed { 
+				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newBranch.Label, newBranch.ID, changeType)
+				updatedBranches = append(updatedBranches, newBranch)
+			}
+		}
+	}
+
+	// Create / Delete / Modify 
+	log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
+
+	if update {
+		childWorkflow := oldWorkflow
+		if nameChanged {
+			childWorkflow.Name = newWorkflow.Name
+		}
+
+		if descriptionChanged {
+			childWorkflow.Description = newWorkflow.Description
+		}
+
+		if tagsChanged {
+			childWorkflow.Tags = newWorkflow.Tags
+		}
+
+		if len(addedActions) > 0 {
+			actions := []Action{} 
+			for _, action := range newWorkflow.Actions {
+				if !ArrayContains(addedActions, action.ID) {
+					continue
+				}
+
+				actions = append(actions, action)
+			}
+
+			childWorkflow.Actions = append(childWorkflow.Actions, actions...)
+		}
+
+		if len(removedActions) > 0 {
+			newChildActions := []Action{}
+			for _, action := range childWorkflow.Actions {
+				if ArrayContains(removedActions, action.ID) {
+					continue
+				}
+
+				newChildActions = append(newChildActions, action)
+			}
+
+			childWorkflow.Actions = newChildActions
+		}
+
+		if len(updatedActions) > 0 {
+			for _, action := range updatedActions {
+				for index, childAction := range childWorkflow.Actions {
+					if childAction.ID != action.ID {
+						continue
+					}
+
+					// FIXME: 
+					// Make sure it changes things such as environment & app auth appropriately
+
+					childWorkflow.Actions[index] = action
+					break
+				}
+			}
+		}
+
+		if len(addedTriggers) > 0 {
+			actions := []Trigger{}
+			for _, action := range newWorkflow.Triggers {
+				if !ArrayContains(addedTriggers, action.ID) {
+					continue
+				}
+
+				actions = append(actions, action)
+			}
+
+			childWorkflow.Triggers = append(childWorkflow.Triggers, actions...)
+		}
+
+		if len(removedTriggers) > 0 {
+			newChildActions := []Trigger{}
+			for _, action := range childWorkflow.Triggers {
+				if ArrayContains(removedActions, action.ID) {
+					continue
+				}
+
+				newChildActions = append(newChildActions, action)
+			}
+
+			childWorkflow.Triggers = newChildActions
+		}
+
+		if len(updatedTriggers) > 0 {
+			for _, action := range updatedTriggers {
+				for index, childAction := range childWorkflow.Triggers {
+					if childAction.ID != action.ID {
+						continue
+					}
+
+					// FIXME: 
+					// Make sure it changes things such as URL & references properly
+
+					childWorkflow.Triggers[index] = action
+					break
+				}
+			}
+		}
+
+		if len(addedBranches) > 0 {
+			actions := []Branch{}
+			for _, action := range newWorkflow.Branches {
+				if !ArrayContains(addedTriggers, action.ID) {
+					continue
+				}
+
+				actions = append(actions, action)
+			}
+
+			childWorkflow.Branches = append(childWorkflow.Branches, actions...)
+		}
+
+		if len(removedBranches) > 0 {
+			newChildActions := []Branch{}
+			for _, action := range childWorkflow.Branches {
+				if ArrayContains(removedActions, action.ID) {
+					continue
+				}
+
+				newChildActions = append(newChildActions, action)
+			}
+
+			childWorkflow.Branches= newChildActions
+		}
+
+		if len(updatedBranches) > 0 {
+			for _, action := range updatedBranches  {
+				for index, childAction := range childWorkflow.Branches {
+					if childAction.ID != action.ID {
+						continue
+					}
+
+					childWorkflow.Branches[index] = action
+					break
+				}
+			}
+		}
+
+		ctx := context.Background()
+		err := SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
+		} else {
+			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
+		}
+
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newWorkflow.ID))
+
+	}
 }
 
 // Saves a workflow to an ID
@@ -5497,11 +5877,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Can't save a workflow distributed from your parent org"}`))
 		return 
-	}
-
-	if len(workflow.ChildWorkflowIds) > 0 {
-		log.Printf("[DEBUG] Finding diffs for %s", workflow.ID)
-		go diffWorkflows(*tmpworkflow, workflow)
 	}
 
 	correctUser := false
@@ -7127,6 +7502,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//	DeleteCache(ctx, fmt.Sprintf("%s_workflows", loopUser.Id))
 		//	DeleteCache(ctx, fmt.Sprintf("%s_workflows", org.Id))
 		//}
+	}
+
+	if len(workflow.SuborgDistribution) > 0 {
+		diffWorkflowWrapper(workflow)
 	}
 
 	if orgUpdated {
@@ -10954,7 +11333,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 	}
 
-	log.Printf("[INFO] Running GetWorkflowAppConfig for '%s'", fileId)
+	//log.Printf("[INFO] Running GetWorkflowAppConfig for '%s'", fileId)
 
 	ctx := GetContext(request)
 	app, err := GetApp(ctx, fileId, User{}, false)

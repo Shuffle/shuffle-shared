@@ -5723,12 +5723,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
-						continue
-					}
+						//log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
+					} else {
+						//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
 
-					//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
-					break
+						break
+					}
 				}
 
 				if innerApp.Name == "Shuffle Subflow" {
