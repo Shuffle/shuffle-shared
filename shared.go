@@ -10097,7 +10097,9 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		ActiveApps: newApps,
 	}
 
-	newOrg.Defaults.KmsId = ""
+	// FIXME: This may be good to auto distribute no matter what
+	// Then maybe the kms problem won't happen
+	//newOrg.Defaults.KmsId = ""
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
 		Name: tmpData.Name,

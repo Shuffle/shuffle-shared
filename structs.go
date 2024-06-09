@@ -1392,6 +1392,7 @@ type File struct {
 type AppAuthenticationGroup struct {
 	Active			bool                  `json:"active" datastore:"active"`
 	Label			string                `json:"label" datastore:"label"`
+	Environment		string                `json:"environment" datastore:"environment"`
 	Id				string                `json:"id" datastore:"id"`
 	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths"`	
 	Description		string                `json:"description" datastore:"description"`
