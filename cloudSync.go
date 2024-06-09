@@ -795,6 +795,15 @@ func CheckCreatorSelfPermission(ctx context.Context, requestUser, creatorUser Us
 
 // Uploads updates for a workflow to a specific file on git
 func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
+	if workflow.BackupConfig.UploadRepo != "" && workflow.BackupConfig.UploadBranch != "" && workflow.BackupConfig.UploadUsername != "" && workflow.BackupConfig.UploadToken != "" {
+		//log.Printf("\n\n\n[DEBUG] Using workflow backup config for org %s (%s)\n\n\n", org.Name, org.Id)
+
+		org.Defaults.WorkflowUploadRepo = workflow.BackupConfig.UploadRepo
+		org.Defaults.WorkflowUploadBranch = workflow.BackupConfig.UploadBranch
+		org.Defaults.WorkflowUploadUsername = workflow.BackupConfig.UploadUsername
+		org.Defaults.WorkflowUploadToken = workflow.BackupConfig.UploadToken
+	}
+
 
 	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadBranch == "" || org.Defaults.WorkflowUploadUsername == "" || org.Defaults.WorkflowUploadToken == "" {
 		//log.Printf("[DEBUG] No workflow upload repo for org %s (%s)", org.Name, org.Id)
@@ -811,10 +820,22 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		org.Defaults.WorkflowUploadRepo = strings.TrimSuffix(org.Defaults.WorkflowUploadRepo, ".git")
 	}
 
-	log.Printf("[DEBUG] Uploading workflow %s to repo %s for org %s (%s)", workflow.ID, org.Defaults.WorkflowUploadRepo, org.Name, org.Id)
+	//log.Printf("[DEBUG] Uploading workflow %s to repo %s for org %s (%s)", workflow.ID, org.Defaults.WorkflowUploadRepo, org.Name, org.Id)
+
+	// Remove images
+	workflow.Image = ""
+	for actionIndex, _ := range workflow.Actions {
+		workflow.Actions[actionIndex].LargeImage = ""
+		workflow.Actions[actionIndex].SmallImage = ""
+	}
+
+	for triggerIndex, _ := range workflow.Triggers {
+		workflow.Triggers[triggerIndex].LargeImage = ""
+		workflow.Triggers[triggerIndex].SmallImage = ""
+	}
 
 	// Use git to upload the workflow. 
-	workflowData, err := json.Marshal(workflow)
+	workflowData, err := json.MarshalIndent(workflow, "", "  ")
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling workflow %s (%s) for git upload: %s", workflow.Name, workflow.ID, err)
 		return err
@@ -822,14 +843,15 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 	commitMessage := fmt.Sprintf("User '%s' updated workflow '%s' with status '%s'", workflow.UpdatedBy, workflow.Name, workflow.Status)
 	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, org.Defaults.WorkflowUploadToken, org.Defaults.WorkflowUploadRepo)
-	log.Printf("[DEBUG] Parsed URL: %s", location)
+
+	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, strings.Replace(location, org.Defaults.WorkflowUploadToken, "SCRAMBLED", -1))
 
 	fs := memfs.New()
 	if len(workflow.Status) == 0 {
 		workflow.Status = "test"
 	}
 	//filePath := fmt.Sprintf("/%s/%s.json", workflow.Status, workflow.ID)
-	filePath := fmt.Sprintf("%s.json", workflow.ID)
+	filePath := fmt.Sprintf("%s/%s/%s_%s.json", workflow.ExecutingOrg.Name, workflow.Status, strings.ReplaceAll(workflow.Name, " ", "-"), workflow.ID)
 
 	// Specify the file path within the repository
 	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{

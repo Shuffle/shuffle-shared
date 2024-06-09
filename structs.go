@@ -1253,12 +1253,25 @@ type Workflow struct {
 	Hidden       bool   `json:"hidden" datastore:"hidden"`
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
 
+	// Whether it's manually validated or not
 	Validated  bool 	`json:"validated" datastore:"validated"` 
+
 
 	// Distribution system for suborg/parentorg 
 	ParentWorkflowId string `json:"parentorg_workflow" datastore:"parentorg_workflow"`
 	ChildWorkflowIds []string `json:"childorg_workflow_ids" datastore:"childorg_workflow_ids"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+
+	// Config for backup configs
+	// This overrides org settings for the workflow
+	BackupConfig BackupConfig `json:"backup_config" datastore:"backup_config"`
+}
+
+type BackupConfig struct {
+	UploadRepo     string `json:"upload_repo" datastore:"upload_repo"`
+	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
+	UploadUsername string `json:"upload_username" datastore:"upload_username"`
+	UploadToken    string `json:"upload_token" datastore:"upload_token"`
 }
 
 type Category struct {
