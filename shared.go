@@ -5476,6 +5476,8 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	descriptionChanged := false
 	tagsChanged := false
 
+	backupsChanged := false
+
 	addedActions := []string{}
 	removedActions := []string{}
 	updatedActions := []Action{}
@@ -5494,6 +5496,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	if oldWorkflow.Description != newWorkflow.Description {
 		descriptionChanged = true
+	}
+
+	if oldWorkflow.BackupConfig.UploadRepo != newWorkflow.BackupConfig.UploadRepo  || oldWorkflow.BackupConfig.UploadBranch != newWorkflow.BackupConfig.UploadBranch || oldWorkflow.BackupConfig.UploadUsername != newWorkflow.BackupConfig.UploadUsername || oldWorkflow.BackupConfig.UploadToken != newWorkflow.BackupConfig.UploadToken {
+		backupsChanged = true
 	}
 
 	if len(oldWorkflow.Tags) != len(newWorkflow.Tags) {
@@ -5655,6 +5661,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 		if tagsChanged {
 			childWorkflow.Tags = newWorkflow.Tags
+		}
+
+		if backupsChanged {
+			childWorkflow.BackupConfig = newWorkflow.BackupConfig
 		}
 
 		if len(addedActions) > 0 {
@@ -10080,10 +10090,14 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		Region:          parentOrg.Region,
 		RegionUrl:       parentOrg.RegionUrl,
 
+		Defaults: parentOrg.Defaults,
+
 		// FIXME: Should this be here? Makes things slow~
 		// Should only append apps owned by the parentorg itself
 		ActiveApps: newApps,
 	}
+
+	newOrg.Defaults.KmsId = ""
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
 		Name: tmpData.Name,
