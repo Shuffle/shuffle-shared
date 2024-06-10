@@ -2230,6 +2230,17 @@ type EnvWrapper struct {
 	Source      Environment `json:"_source"`
 }
 
+type AuthGroupWrapper struct {
+	Index       string   `json:"_index"`
+	Type        string   `json:"_type"`
+	ID          string   `json:"_id"`
+	Version     int      `json:"_version"`
+	SeqNo       int      `json:"_seq_no"`
+	PrimaryTerm int      `json:"_primary_term"`
+	Found       bool     `json:"found"`
+	Source      AppAuthenticationGroup `json:"_source"`
+}
+
 type WorkflowWrapper struct {
 	Index       string   `json:"_index"`
 	Type        string   `json:"_type"`

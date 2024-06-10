@@ -7940,7 +7940,74 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	return nil
 }
 
-func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenticationGroup, id string) error {
+func GetAppAuthGroup(ctx context.Context, id string) (*AppAuthenticationGroup, error) {
+	authGroup := &AppAuthenticationGroup{}
+	nameKey := "workflowappauthgroup"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &authGroup)
+			if err == nil && authGroup.Id != "" {
+				return authGroup, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for authGroup: %s", err)
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return authGroup, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return authGroup, errors.New("Workflow doesn't exist")
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return authGroup, err
+		}
+
+		wrapped := AuthGroupWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return authGroup, err
+		}
+
+		authGroup = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, authGroup); err != nil {
+			log.Printf("[WARNING] Error getting workflow app auth group %s: %s", id, err)
+			return authGroup, err
+		}
+	}
+
+	if project.CacheDb && authGroup.Id != "" {
+		data, err := json.Marshal(authGroup)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in get auth group: %s", err)
+			return authGroup, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for authGroup '%s': %s", cacheKey, err)
+		}
+	}
+
+	return authGroup, nil
+}
+
+func SetAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenticationGroup, id string) error {
 	nameKey := "workflowappauthgroup"
 	timeNow := int64(time.Now().Unix())
 	if workflowappauthgroup.Created == 0 {
@@ -7956,6 +8023,7 @@ func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup 
 	workflowappauthgroup.Edited = timeNow
 
 	// Check for uniqueness and organization membership
+	removeIds := []string{}
 	uniqueIds := make(map[string]bool)
 	for index, auth := range workflowappauthgroup.AppAuths {
 		// Check uniqueness
@@ -7969,7 +8037,11 @@ func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup 
 		realAuth, err := GetWorkflowAppAuthDatastore(ctx, auth.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting app auth %s for app auth group %s: %s", auth.Id, id, err)
-			return err
+			removeIds = append(removeIds, auth.Id)
+
+			// Remove the app auth from the slice
+			//workflowappauthgroup.AppAuths = append(workflowappauthgroup.AppAuths[:index], workflowappauthgroup.AppAuths[index+1:]...)
+			continue
 		}
 
 		// Update the slice with real data
@@ -7981,8 +8053,19 @@ func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup 
 			log.Printf("[WARNING] App auth group %s has app auth id %s that doesn't belong to the same org", id, auth.Id)
 			return errors.New("App auth id doesn't belong to the same org")
 		}
-
 	}
+
+	// Remove the invalid app auths
+	for _, removeId := range removeIds {
+		for index, auth := range workflowappauthgroup.AppAuths {
+			if auth.Id == removeId {
+				log.Printf("[WARNING] Removed invalid app auth %s from app auth group %s", removeId, id)
+				workflowappauthgroup.AppAuths = append(workflowappauthgroup.AppAuths[:index], workflowappauthgroup.AppAuths[index+1:]...)
+				break
+			}
+		}
+	}
+
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {

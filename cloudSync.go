@@ -851,7 +851,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		workflow.Status = "test"
 	}
 	//filePath := fmt.Sprintf("/%s/%s.json", workflow.Status, workflow.ID)
-	filePath := fmt.Sprintf("%s/%s/%s_%s.json", workflow.ExecutingOrg.Name, workflow.Status, strings.ReplaceAll(workflow.Name, " ", "-"), workflow.ID)
+	filePath := fmt.Sprintf("%s/%s/%s_%s.json", workflow.ExecutingOrg.Id, workflow.Status, strings.ReplaceAll(workflow.Name, " ", "-"), workflow.ID)
 
 	// Specify the file path within the repository
 	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{

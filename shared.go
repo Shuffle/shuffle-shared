@@ -1852,10 +1852,28 @@ func AddAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) 
 		return
 	}
 
+	ctx := GetContext(request)
+	if len(appAuthGroup.Id) > 0 {
+		// Get group and check if it's in the org
+
+		authGroup, err := GetAppAuthGroup(ctx, appAuthGroup.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed finding app auth group %s: %s", appAuthGroup.Id, err)
+			resp.WriteHeader(409)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't find existing app auth group"}`)))
+			return
+		}
+
+		if authGroup.OrgId != user.ActiveOrg.Id {
+			log.Printf("[WARNING] User %s (%s) isn't a part of the right org during auth group edit", user.Username, user.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No access"}`)))
+			return
+		}
+	}
+
 	log.Printf("[AUDIT] Setting new app authentication group for %s with user %s (%s) in org %s (%s)", appAuthGroup.Label, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
-	ctx := GetContext(request)
-	
 	if len(appAuthGroup.Label) == 0 {
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Label can't be empty"}`)))
@@ -1872,9 +1890,12 @@ func AddAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) 
 
 	appAuthGroup.OrgId = user.ActiveOrg.Id
 	appAuthGroup.Active = true
-	appAuthGroup.Id = uuid.NewV4().String()
 
-	err = SetWorkflowAppAuthGroupDatastore(ctx, appAuthGroup, appAuthGroup.Id)
+	if len(appAuthGroup.Id) == 0 {
+		appAuthGroup.Id = uuid.NewV4().String()
+	}
+
+	err = SetAuthGroupDatastore(ctx, appAuthGroup, appAuthGroup.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting up app auth group %s: %s", appAuthGroup.Id, err)
 		resp.WriteHeader(409)
@@ -1942,6 +1963,82 @@ func GetAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(newbody))
+}
+
+func DeleteAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in delete app auth: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[WARNING] Need to be admin to delete appauth")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 5 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[5]
+	}
+
+	log.Printf("[AUDIT] Deleting app auth group %s with user %s (%s) in org %s (%s)", fileId, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+	ctx := GetContext(request)
+	nameKey := "workflowappauthgroup"
+	auth, err := GetAppAuthGroup(ctx, fileId)
+	if err != nil {
+		// Deleting cache here, as it seems to be a constant issue
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, user.ActiveOrg.Id)
+		DeleteCache(ctx, cacheKey)
+
+		log.Printf("[WARNING] Authget group error (DELETE): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": ":("}`))
+		return
+	}
+
+	if auth.OrgId != user.ActiveOrg.Id {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User can't edit this org"}`))
+		return
+	}
+
+	// FIXME: Set affected workflows to have errors
+	// 1. Get the auth
+	// 2. Loop the workflows (.Usage) and set them to have errors
+	// 3. Loop the nodes in workflows and do the same
+	err = DeleteKey(ctx, nameKey, fileId)
+	if err != nil {
+		log.Printf("Failed deleting workflowapp")
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed deleting workflow app"}`)))
+		return
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, user.ActiveOrg.Id)
+	DeleteCache(ctx, cacheKey)
+	cacheKey = fmt.Sprintf("%s_%s", nameKey, fileId)
+	DeleteCache(ctx, cacheKey)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }
 
 func DeleteAppAuthentication(resp http.ResponseWriter, request *http.Request) {
@@ -5441,15 +5538,20 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	return "", false
 }
 
-func diffWorkflowWrapper(newWorkflow Workflow) {
+func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	// Actually load the child workflows directly from DB
 	ctx := context.Background()
 	childWorkflows, err := ListChildWorkflows(ctx, newWorkflow.ID)
 	if err != nil {
-		return
+		return newWorkflow
 	}
 
 	for _, childWorkflow := range childWorkflows {
+		// Skipping distrib to old ones~
+		if !ArrayContains(newWorkflow.SuborgDistribution, childWorkflow.OrgId) {
+			continue
+		}
+
 		if len(childWorkflow.Name) == 0 && len(newWorkflow.ID) == 0 {
 			continue
 		}
@@ -5465,6 +5567,8 @@ func diffWorkflowWrapper(newWorkflow Workflow) {
 
 		diffWorkflows(newWorkflow, childWorkflow, true)
 	}
+
+	return newWorkflow 
 }
 
 func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
@@ -5477,6 +5581,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	tagsChanged := false
 
 	backupsChanged := false
+	inputfieldsChanged := false
 
 	addedActions := []string{}
 	removedActions := []string{}
@@ -5504,6 +5609,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	if len(oldWorkflow.Tags) != len(newWorkflow.Tags) {
 		tagsChanged = true
+	}
+
+	if len(oldWorkflow.InputQuestions) != len(newWorkflow.InputQuestions) {
+		inputfieldsChanged = true
 	}
 
 	for _, newAction := range newWorkflow.Actions {
@@ -5665,6 +5774,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 		if backupsChanged {
 			childWorkflow.BackupConfig = newWorkflow.BackupConfig
+		}
+
+		if inputfieldsChanged {
+			childWorkflow.InputQuestions = newWorkflow.InputQuestions
 		}
 
 		if len(addedActions) > 0 {
@@ -7526,7 +7639,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(workflow.SuborgDistribution) > 0 {
-		diffWorkflowWrapper(workflow)
+		workflow = diffWorkflowWrapper(workflow)
 	}
 
 	if orgUpdated {
