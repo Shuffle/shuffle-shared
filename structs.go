@@ -1265,6 +1265,7 @@ type Workflow struct {
 	// Config for backup configs
 	// This overrides org settings for the workflow
 	BackupConfig BackupConfig `json:"backup_config" datastore:"backup_config"`
+	AuthGroups  []string     `json:"auth_groups" datastore:"auth_groups"`
 }
 
 type BackupConfig struct {
@@ -1394,11 +1395,12 @@ type AppAuthenticationGroup struct {
 	Label			string                `json:"label" datastore:"label"`
 	Environment		string                `json:"environment" datastore:"environment"`
 	Id				string                `json:"id" datastore:"id"`
-	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths"`	
 	Description		string                `json:"description" datastore:"description"`
 	OrgId			string                `json:"org_id" datastore:"org_id"`
 	Created			int64                 `json:"created" datastore:"created"` 
 	Edited			int64                 `json:"edited" datastore:"edited"`
+
+	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths,noindex"`
 }
 
 type AppAuthenticationStorage struct {

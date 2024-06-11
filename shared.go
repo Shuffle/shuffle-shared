@@ -7065,7 +7065,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// 2. Update the node and workflow info in the auth
 		// 3. Get the values in the auth and add them to the action values
 		handleOauth := false
-		if len(action.AuthenticationId) > 0 {
+		if action.AuthenticationId == "authgroups" {
+			log.Printf("[DEBUG] Action %s (%s) in workflow %s (%s) uses authgroups", action.Label, action.ID, workflow.Name, workflow.ID)
+		} else if len(action.AuthenticationId) > 0 {
 			authFound := false
 			for _, auth := range allAuths {
 				if auth.Id == action.AuthenticationId {

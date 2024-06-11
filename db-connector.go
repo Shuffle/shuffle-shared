@@ -8023,17 +8023,21 @@ func SetAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenti
 	workflowappauthgroup.Edited = timeNow
 
 	// Check for uniqueness and organization membership
+	newAuth := []AppAuthenticationStorage{}
 	removeIds := []string{}
 	uniqueIds := make(map[string]bool)
-	for index, auth := range workflowappauthgroup.AppAuths {
+	for _, auth := range workflowappauthgroup.AppAuths {
 		// Check uniqueness
 		if _, exists := uniqueIds[auth.Id]; exists {
 			log.Printf("[WARNING] App auth group %s has duplicate app auth id %s", id, auth.Id)
-			return errors.New("Duplicate app auth id")
+			//return errors.New("Duplicate app auth id")
+			removeIds = append(removeIds, auth.Id)
+			continue
 		}
-		uniqueIds[auth.Id] = true
+
 
 		// Fetch real data
+		uniqueIds[auth.Id] = true
 		realAuth, err := GetWorkflowAppAuthDatastore(ctx, auth.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting app auth %s for app auth group %s: %s", auth.Id, id, err)
@@ -8045,15 +8049,28 @@ func SetAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenti
 		}
 
 		// Update the slice with real data
-		workflowappauthgroup.AppAuths[index] = *realAuth
+		//workflowappauthgroup.AppAuths[index] = *realAuth
 		auth = *realAuth
 
 		// Check organization membership
-		if auth.OrgId != workflowappauthgroup.OrgId {
+		if realAuth.OrgId != workflowappauthgroup.OrgId {
 			log.Printf("[WARNING] App auth group %s has app auth id %s that doesn't belong to the same org", id, auth.Id)
-			return errors.New("App auth id doesn't belong to the same org")
+			removeIds = append(removeIds, auth.Id)
+			continue
 		}
+
+		auth.App.SmallImage = ""
+		auth.App.LargeImage = ""
+		auth.App.Documentation = ""
+
+		for authFieldIndex, _ := range auth.Fields {
+			auth.Fields[authFieldIndex].Value = ""
+		}
+
+		newAuth = append(newAuth, auth)
 	}
+
+	workflowappauthgroup.AppAuths = newAuth
 
 	// Remove the invalid app auths
 	for _, removeId := range removeIds {
