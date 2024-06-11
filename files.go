@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"gopkg.in/yaml.v2"
 
 	uuid "github.com/satori/go.uuid"
 	"github.com/google/go-github/v28/github"
@@ -488,6 +489,127 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 
 	return matchingFiles, nil
 }
+
+func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		orgId, err := fileAuthentication(request)
+		if err != nil {
+			log.Printf("[WARNING] Bad file authentication in get sigma rules %s: %s", "sigma", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		user.ActiveOrg.Id = orgId
+		user.Username = "Execution File API"
+	}
+
+	log.Printf("[AUDIT] User '%s' (%s) is trying to get files from namespace %#v", user.Username, user.Id, "sigma")
+
+	ctx := GetContext(request)
+	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, "sigma")
+	if err != nil && len(files) == 0 {
+		log.Printf("[ERROR] Failed to get files: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Error getting files."}`))
+		return
+	}
+
+	sort.Slice(files[:], func(i, j int) bool {
+		return files[i].UpdatedAt > files[j].UpdatedAt
+	})
+
+	type SigmaFileInfo struct {
+		RuleName    string `yaml:"rule"`
+		Description string `yaml:"description"`
+	}
+
+	var sigmaFileInfo []SigmaFileInfo
+
+	for _, file := range files {
+		if file.OrgId == user.ActiveOrg.Id {
+			var fileContent []byte
+
+			if file.Encrypted {
+				if project.Environment == "cloud" || file.StorageArea == "google_storage" {
+					log.Printf("[ERROR] No namespace handler for cloud decryption!")
+					continue
+				} else {
+					Openfile, err := os.Open(file.DownloadPath)
+					if err != nil {
+						log.Printf("[ERROR] Failed to open file %s: %s", file.Filename, err)
+						continue
+					}
+					defer Openfile.Close() 
+
+					allText := []byte{}
+					buf := make([]byte, 1024)
+					for {
+						n, err := Openfile.Read(buf)
+						if err == io.EOF {
+							break
+						}
+
+						if err != nil {
+							log.Printf("[ERROR] Failed to read file %s: %s", file.Filename, err)
+							continue
+						}
+
+						if n > 0 {
+							allText = append(allText, buf[:n]...)
+						}
+					}
+
+					passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+					if len(file.ReferenceFileId) > 0 {
+						passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+					}
+
+					decryptedData, err := HandleKeyDecryption(allText, passphrase)
+					if err != nil {
+						log.Printf("[ERROR] Failed decrypting file %s: %s", file.Filename, err)
+						continue
+					}
+
+					fileContent = []byte(decryptedData)
+				}
+			} else {
+				fileContent, err = ioutil.ReadFile(file.DownloadPath)
+				if err != nil {
+					log.Printf("[ERROR] Failed to read file %s: %s", file.Filename, err)
+					continue
+				}
+			}
+
+			var rule SigmaFileInfo
+			err = yaml.Unmarshal(fileContent, &rule)
+			if err != nil {
+				log.Printf("[ERROR] Failed to parse YAML file %s: %s", file.Filename, err)
+				continue
+			}
+
+			sigmaFileInfo = append(sigmaFileInfo, rule)
+		}
+	}
+
+	responseData, err := json.Marshal(sigmaFileInfo)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal response data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Error processing rules."}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(responseData)
+}
+
 
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
