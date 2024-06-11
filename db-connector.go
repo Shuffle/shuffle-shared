@@ -9511,7 +9511,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	return appAuth, nil
 }
 
-func GetAllWorkflowAppAuthGroupDatastore(ctx context.Context, orgId string) ([]AppAuthenticationGroup, error) {
+func GetAuthGroups(ctx context.Context, orgId string) ([]AppAuthenticationGroup, error) {
 	nameKey := "workflowappauthgroup"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
 

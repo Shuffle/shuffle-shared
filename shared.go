@@ -1922,7 +1922,7 @@ func GetAppAuthenticationGroup(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	ctx := GetContext(request)
-	allAuthGroups, err := GetAllWorkflowAppAuthGroupDatastore(ctx, user.ActiveOrg.Id)
+	allAuthGroups, err := GetAuthGroups(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get all app auth group: %s", err)
 		resp.WriteHeader(401)
@@ -7046,6 +7046,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	// Check every app action and param to see whether they exist
 	allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+	authGroups := []AppAuthenticationGroup{} 
 	newActions = []Action{}
 	for _, action := range workflow.Actions {
 		reservedApps := []string{
@@ -7067,6 +7068,38 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		handleOauth := false
 		if action.AuthenticationId == "authgroups" {
 			log.Printf("[DEBUG] Action %s (%s) in workflow %s (%s) uses authgroups", action.Label, action.ID, workflow.Name, workflow.ID)
+
+			// Check if the authgroups exists
+			if len(workflow.AuthGroups) > 0 && len(authGroups) == 0 {
+				authGroups, err = GetAuthGroups(ctx, user.ActiveOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting authgroups for org %s: %s", user.ActiveOrg.Id, err)
+				} else {
+					log.Printf("[INFO] Found %d authgroups for org %s", len(authGroups), user.ActiveOrg.Id)
+
+					// Validate the workflow groups to see if they exist. Remove if not.
+					newGroups := []string{}
+					for _, group := range workflow.AuthGroups {
+						found := false
+
+						for _, authGroup := range authGroups {
+							if group == authGroup.Id {
+								found = true
+								break
+							}
+						}
+
+						if !found {
+							log.Printf("[WARNING] Authgroup %s doesn't exist. Removing from workflow", group)
+						} else {
+							newGroups = append(newGroups, group)
+						}
+					}
+
+					workflow.AuthGroups = newGroups
+				}
+			}
+
 		} else if len(action.AuthenticationId) > 0 {
 			authFound := false
 			for _, auth := range allAuths {
@@ -18915,17 +18948,22 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	// Look for header 'appauth' with upper/lowercase check
 	authHeader := ""
+	chosenEnvironment := ""
 	for key, value := range request.Header {
 		if strings.ToLower(key) == "appauth" {
 			authHeader = value[0]
-			break
+		}
+
+		if strings.ToLower(key) == "environment" {
+			chosenEnvironment = value[0]
 		}
 	}
 
 	// curl 'http://localhost:5002/api/v1/workflows/{workflow_id}/run' -H 'app_auth: appname=auth_id;appname2=auth_id2'
+	authGroups := []AppAuthenticationGroup{} 
 	allAuths := []AppAuthenticationStorage{}
 	if len(authHeader) > 0 {
-		log.Printf("[DEBUG] Found appauth header in request. Attempting to find matching auth with name/ID '%s'", authHeader)
+		//log.Printf("\n\n\n\n[DEBUG] Found appauth header in request. Attempting to find matching auth with name/ID '%s'\n\n\n\n", authHeader)
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
 			if err != nil {
@@ -18953,16 +18991,15 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if !authFound {
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App auth not found: %s", authId), errors.New("App auth not found")
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App auth not found: %s", authId), errors.New(fmt.Sprintf("App auth '%s' not found for app '%s'", authId, appname))
 			}
 
 			found := false
 			for actionIndex, action := range workflowExecution.Workflow.Actions {
-				if strings.ReplaceAll(strings.ToLower(action.AppName), " ", "_") != appname {
-					continue
+				if strings.ReplaceAll(strings.ToLower(action.AppName), " ", "_") == appname || strings.ReplaceAll(strings.ToLower(action.ID), " ", "_") == appname || strings.ReplaceAll(strings.ToLower(action.AppID), " ", "_") == appname {
+					workflowExecution.Workflow.Actions[actionIndex].AuthenticationId = authId
+					found = true
 				}
-
-				workflowExecution.Workflow.Actions[actionIndex].AuthenticationId = authId
 			}
 
 			if !found {
@@ -19043,8 +19080,31 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		//}
 	}
 
+	// Overwrites environment before validation below
+	if len(chosenEnvironment) > 0 {
+		for actionIndex, _ := range workflowExecution.Workflow.Actions {
+			workflowExecution.Workflow.Actions[actionIndex].Environment = chosenEnvironment
+		}
+	}
+
+	isAuthgroup := false
+	if request != nil {
+		// Check if "authgroups" param exists
+		if authGroups, authGroupsOk := request.URL.Query()["authgroups"]; authGroupsOk {
+			if len(authGroups) > 0 && authGroups[0] == "true" {
+				isAuthgroup = true
+
+				workflowExecution.ExecutionSource = "authgroups"
+			}
+		}
+	}
+		
+
 	org := &Org{}
 	previousEnvironment := ""
+	orgEnvironments := []Environment{}
+
+	subExecutionsDone := false
 	for workflowExecutionIndex, action := range workflowExecution.Workflow.Actions {
 		//action.LargeImage = ""
 		if action.ID == workflowExecution.Start {
@@ -19155,6 +19215,139 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		} else {
 			previousEnvironment = action.Environment
+		}
+
+
+		if action.AuthenticationId == "authgroups" && !subExecutionsDone && workflowExecution.ExecutionSource != "authgroup" && !isAuthgroup {
+
+			log.Printf("[DEBUG] Found authgroups in action %s (%s)", action.Label, action.ID)
+			if len(authGroups) == 0 {
+				authGroups, err = GetAuthGroups(ctx, workflow.OrgId)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting authgroups for org %s: %s", workflow.OrgId, err)
+					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting authgroups for org %s: %s", workflow.OrgId, err), err
+				}
+
+				if len(authGroups) == 0 {
+					log.Printf("[ERROR] No authgroups found for org %s", workflow.OrgId)
+					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No authgroups found for org %s", workflow.OrgId), errors.New("No authgroups exist")
+				}
+			}
+
+			relevantAuthgroups := []AppAuthenticationGroup{}
+			for _, authGroup := range workflow.AuthGroups {
+				found := false
+				for _, group := range authGroups {
+					if group.Id == authGroup {
+						relevantAuthgroups = append(relevantAuthgroups, group)
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					log.Printf("[WARNING] Authgroup %s not found in org %s", authGroup, workflow.OrgId)
+				}
+			}
+
+			if len(relevantAuthgroups) == 0 {
+				log.Printf("[ERROR] No relevant authgroups found for org %s. Do they still exist?", workflow.OrgId)
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No relevant authgroups found for org %s. Do they still exist?", workflow.OrgId), errors.New("No relevant authgroups found for workflow. Do they still exist?")
+			}
+
+			log.Printf("[DEBUG] Found %d relevant auth groups for action %s", len(relevantAuthgroups), action.Label)
+
+			// FIXME: Start doing replication here.
+			// First request (this one) should use the first authgroup
+			// Second and all after should run as new requests that are overwritten with the right auth.
+
+			firstGroup := relevantAuthgroups[0]
+
+			for authgroupindex, authgroup := range relevantAuthgroups {
+
+				if len(orgEnvironments) == 0 {
+					orgEnvironments, err = GetEnvironments(ctx, workflowExecution.Workflow.OrgId)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting environments for org %s: %s", workflow.OrgId, err)
+						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting environments for org %s: %s", workflow.OrgId, err), err
+					}
+				}
+
+				environmentFound := false
+				if authgroup.Environment == "" {
+					// Fallback automatically to the project environment
+					for _, env := range orgEnvironments {
+						if env.Default {
+							authgroup.Environment = env.Name
+						}
+					}
+				}
+
+				for _, env := range orgEnvironments {
+					if strings.ToLower(env.Name) == strings.ToLower(authgroup.Environment)  || env.Id == authgroup.Environment {
+						environmentFound = true
+						break
+					}
+				}
+
+				if !environmentFound {
+					log.Printf("[ERROR] Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id)
+					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id), errors.New(fmt.Sprintf("Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id))
+				}
+
+				for findActionIndex, findAction := range workflowExecution.Workflow.Actions {
+					workflowExecution.Workflow.Actions[findActionIndex].Environment = authgroup.Environment
+
+					if findAction.AuthenticationId != "authgroups" {
+						continue
+					}
+
+					log.Printf("[DEBUG] Found authgroups in action %s (%s)", findAction.Label, findAction.ID)
+
+					// Find the app in the group
+					authFound := false
+					for _, auth := range firstGroup.AppAuths {
+						if strings.ToLower(auth.App.Name) == strings.ToLower(findAction.AppName) || auth.App.ID == findAction.AppID {
+							workflowExecution.Workflow.Actions[findActionIndex].AuthenticationId = auth.Id
+
+							if workflowExecution.Workflow.Actions[findActionIndex].ID == action.ID {
+								action = workflowExecution.Workflow.Actions[findActionIndex]
+							}
+
+
+							authFound = true 
+							break
+						}
+					}
+
+					log.Printf("[DEBUG] New auth ID for %s: %s", findAction.AppName, workflowExecution.Workflow.Actions[findActionIndex].AuthenticationId)
+
+					if !authFound {
+						log.Printf("[ERROR] App %s not found in authgroup %s", findAction.AppName, firstGroup.Id)
+						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id), errors.New(fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id))
+					}
+
+					//action = workflowExecution.Workflow.Actions[workflowExecutionIndex]
+					log.Printf("[DEBUG] Updated action with ID %s to use authgroup %s", action.ID, firstGroup.Id)
+
+				}
+
+				if authgroupindex == 0 {
+					// First one is the current execution.
+					// No need to run as subflow
+					continue
+				} 
+
+
+				// Replication starts here
+				log.Printf("[DEBUG][%s] SHOULD REPLICATE AUTHGROUP ACTION MAPPING into %d groups", workflowExecution.ExecutionId, len(relevantAuthgroups))
+				subExecutionsDone = true 
+				// Send a self-request to execute THIS workflow as a subflow
+				err = executeAuthgroupSubflow(workflowExecution, authgroup)
+				if err != nil {
+					log.Printf("[ERROR] Failed executing authgroup subflow: %s", err)
+				}
+			}
 		}
 
 		if len(action.AuthenticationId) > 0 {
@@ -20036,6 +20229,98 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
+}
+
+func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppAuthenticationGroup) error {
+
+
+	log.Printf("[DEBUG] Starting authgroup subflow execution for %s with authgroup %s", workflowExecution.ExecutionId, authgroup.Label)
+
+	parsedEnvironment := authgroup.Environment
+	parsedAuthIds := ""
+
+	relevantAuth := map[string]string{}
+	for _, auth := range authgroup.AppAuths {
+		if len(auth.App.ID) == 0 {
+			continue
+		}
+
+		relevantAuth[auth.App.ID] = auth.Id
+	}
+
+	for key, value := range relevantAuth {
+		parsedAuthIds += fmt.Sprintf("%s=%s;", key, value)
+	}
+
+	parsedAuthIds = strings.TrimRight(parsedAuthIds, ";")
+
+	backendUrl := os.Getenv("BASE_URL")
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	resultUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, workflowExecution.Workflow.ID) 
+
+	// FIXME: Missing source node (?)
+	queries := fmt.Sprintf("authgroups=true&source_workflow=%s&source_auth=%s&source_execution=%s&startnode=%s", "authgroups", workflowExecution.Authorization, workflowExecution.ExecutionId, workflowExecution.Start)
+
+
+	//if action.AuthenticationId == "authgroups" && !subExecutionsDone && workflowExecution.ExecutionSource != "authgroup" {
+	//sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
+
+	resultUrl += "?" + queries
+
+
+	topClient := GetExternalClient(backendUrl)
+
+	data, err := json.Marshal(workflowExecution)
+	if err != nil {
+		log.Printf("[WARNING] Failed parent init marshal: %s", err)
+		return err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		resultUrl,
+		bytes.NewBuffer([]byte(data)),
+	)
+
+	shuffleAuth := os.Getenv("SHUFFLE_AUTHORIZATION")
+	if len(shuffleAuth) == 0 {
+		log.Printf("[ERROR] No shuffle auth found for subflow execution. Exiting.")
+
+		scheduleKey := os.Getenv("SCHEDULE_KEY")
+		if len(scheduleKey) > 0 {
+			shuffleAuth = scheduleKey
+		}
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", shuffleAuth))
+	req.Header.Set("appauth", parsedAuthIds)
+	req.Header.Set("environment", parsedEnvironment)
+
+	newresp, err := topClient.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed making subflow request (1): %s. Is URL valid: %s", err, resultUrl)
+		return err
+	}
+
+	defer newresp.Body.Close()
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading parent body: %s", err)
+		return err
+	}
+
+	if newresp.StatusCode != 200 {
+		log.Printf("[ERROR] Bad statuscode running authgroup execution (2) with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
+		return errors.New(fmt.Sprintf("Bad statuscode: %d", newresp.StatusCode))
+	}
+
+	//log.Printf("AUTHGROUP RUN BODY (%d): %s", newresp.StatusCode, string(body))
+
+
+	return nil
 }
 
 func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
