@@ -980,38 +980,38 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
             parsed_queries[key.strip()] = value.strip()
 
         return parsed_queries
-
+	
 	def prepare_response(self, request):
-        try:
-            parsedheaders = {}
-            for key, value in request.headers.items():
-                parsedheaders[key] = value
+		try:
+			parsedheaders = {}
+			for key, value in request.headers.items():
+				parsedheaders[key] = value
 
-            cookies = {}
-            if request.cookies:
-                for key, value in request.cookies.items():
-                    cookies[key] = value
+			cookies = {}
+			if request.cookies:
+				for key, value in request.cookies.items():
+					cookies[key] = value
 
 
-            jsondata = request.text
-            try:
-                jsondata = json.loads(jsondata)
-            except:
-                pass
+			jsondata = request.text
+			try:
+				jsondata = json.loads(jsondata)
+			except:
+				pass
 
-            parseddata = {
-                "status": request.status_code,
-                "body": jsondata,
-                "url": request.url,
-                "headers": parsedheaders,
-                "cookies":cookies,
-                "success": True,
-            }
+			parseddata = {
+				"status": request.status_code,
+				"body": jsondata,
+				"url": request.url,
+				"headers": parsedheaders,
+				"cookies":cookies,
+				"success": True,
+			}
 
-            return json.dumps(parseddata)
-        except Exception as e:
-            print(f"[WARNING] Failed in request: {e}")
-            return request.text
+			return json.dumps(parseddata)
+		except Exception as e:
+			print(f"[WARNING] Failed in request: {e}")
+			return request.text
 
     def custom_action(self%s, method="", url="", headers="", queries="", path="", ssl_verify=False, body=""):
         url = self.fix_url(url)
