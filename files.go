@@ -526,9 +526,10 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	type SigmaFileInfo struct {
-		RuleName    string `yaml:"rule"`
-		Description string `yaml:"description"`
-	}
+		RuleName    string `json:"rule" yaml:"rule"`
+		Description string `json:"description" yaml:"description"`
+		IsEnabled   bool `json:"is_enabled"`
+	}	
 
 	var sigmaFileInfo []SigmaFileInfo
 
@@ -592,6 +593,9 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[ERROR] Failed to parse YAML file %s: %s", file.Filename, err)
 				continue
+			}
+			if file.Status == "active" {
+                rule.IsEnabled = true
 			}
 
 			sigmaFileInfo = append(sigmaFileInfo, rule)
