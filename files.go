@@ -526,8 +526,9 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	type SigmaFileInfo struct {
-		RuleName    string `json:"rule" yaml:"rule"`
+		RuleTitle    string `json:"title" yaml:"title"`
 		Description string `json:"description" yaml:"description"`
+		FileId     string   `json:"file_id"`
 		IsEnabled   bool `json:"is_enabled"`
 	}	
 
@@ -594,10 +595,11 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[ERROR] Failed to parse YAML file %s: %s", file.Filename, err)
 				continue
 			}
+			
 			if file.Status == "active" {
                 rule.IsEnabled = true
 			}
-
+			rule.FileId = file.Id
 			sigmaFileInfo = append(sigmaFileInfo, rule)
 		}
 	}
@@ -612,6 +614,79 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(responseData)
+}
+
+func HandleDisableRule(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
+		log.Printf("[WARNING] Bad format for fileId %s", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+
+		orgId, err := fileAuthentication(request)
+		if err != nil {
+			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		user.ActiveOrg.Id = orgId
+		user.Username = "Execution File API"
+	}
+
+	log.Printf("[AUDIT] User '%s' (%s) disabling sigma rule file %s in org %s", user.Username, user.Id, fileId, user.ActiveOrg.Id)
+
+	ctx := GetContext(request)
+	file, err := GetFile(ctx, fileId)
+	if err != nil {
+		log.Printf("[ERROR] File %s not found: %s", fileId, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "File not found"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to delete files: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	file.Status = "inactive"
+	err = SetFile(ctx, *file)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting file to inactive")
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return	
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, fileId)))
+
 }
 
 
