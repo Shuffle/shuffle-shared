@@ -681,8 +681,8 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
-    if action == "disable" {
-        file.Status = "inactive"
+	if action == "disable" {
+		file.Status = "inactive"
 	} else if action == "enable" {
 		file.Status = "active"
 	}
@@ -692,12 +692,29 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[ERROR] Failed to %s file", action)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
-		return	
+		return
+	}
+
+	execType := fmt.Sprintf("%s_SIGMA_FILE", strings.ToUpper(action))
+
+	execRequest := ExecutionRequest{
+		Type:              execType,
+		ExecutionId:       uuid.NewV4().String(),
+		ExecutionSource:   "sigma",
+		ExecutionArgument: file.Filename,
+		Priority:          11,
+	}
+
+	err = SetWorkflowQueue(ctx, execRequest, "default")
+	if err != nil {
+		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, fileId)))
-
 }
 
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
