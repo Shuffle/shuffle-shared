@@ -595,7 +595,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[ERROR] Failed to parse YAML file %s: %s", file.Filename, err)
 				continue
 			}
-			
+
 			if file.Status == "active" {
                 rule.IsEnabled = true
 			}
@@ -616,7 +616,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(responseData)
 }
 
-func HandleDisableRule(resp http.ResponseWriter, request *http.Request) {
+func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -633,6 +633,13 @@ func HandleDisableRule(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		fileId = location[4]
+	}
+
+	var action string
+	if location[5] == "disable_rule" {
+		action = "disable"
+	} else if location[5] == "enable_rule" {
+		action = "enable"
 	}
 
 	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
@@ -657,7 +664,7 @@ func HandleDisableRule(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
-	log.Printf("[AUDIT] User '%s' (%s) disabling sigma rule file %s in org %s", user.Username, user.Id, fileId, user.ActiveOrg.Id)
+	log.Printf("[AUDIT] User '%s' (%s) %s sigma rule file %s in org %s", user.Username, user.Id, action, fileId, user.ActiveOrg.Id)
 
 	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
@@ -674,11 +681,15 @@ func HandleDisableRule(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
+    if action == "disable" {
+        file.Status = "inactive"
+	} else if action == "enable" {
+		file.Status = "active"
+	}
 
-	file.Status = "inactive"
 	err = SetFile(ctx, *file)
 	if err != nil {
-		log.Printf("[ERROR] Failed setting file to inactive")
+		log.Printf("[ERROR] Failed to %s file", action)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return	
@@ -688,7 +699,6 @@ func HandleDisableRule(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, fileId)))
 
 }
-
 
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
