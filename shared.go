@@ -3047,7 +3047,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 
 		// Caching both bad and good apikeys :)
 
-		if len(org_id) > 0 {
+		if len(org_id) > 0 && userdata.ActiveOrg.Id != org_id {
 			found := false
 			for _, org := range userdata.Orgs {
 				if org == org_id {
@@ -3060,11 +3060,10 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return User{}, errors.New("User doesn't have access to this org")
 			}
 
-			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", userdata.Username, userdata.Id, org_id)
+			log.Printf("[AUDIT] Setting user %s (%s) org to %#v FROM %#v for one request", userdata.Username, userdata.Id, org_id, userdata.ActiveOrg.Id)
 			userdata.ActiveOrg.Id = org_id
 			userdata.ActiveOrg.Name = org.Name
 			userdata.ActiveOrg.Image = org.Image
-
 		}
 
 		userdata.SessionLogin = false
@@ -18350,6 +18349,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 
+		authgroupName, authgroupNameOk := request.URL.Query()["authgroup"]
+		if authgroupNameOk {
+			//log.Printf("\n\nAuthgroup: %s\n\n", authgroupName[0])
+			workflowExecution.Authgroup = authgroupName[0]
+		}
+
 		sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
 		if sourceAuthOk {
 			workflowExecution.ExecutionSourceAuth = sourceAuth[0]
@@ -19219,8 +19224,38 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 
 		if action.AuthenticationId == "authgroups" && !subExecutionsDone && workflowExecution.ExecutionSource != "authgroup" && !isAuthgroup {
+			discoveredApikey := ""
+			if len(org.Users) == 0 {
+				org, err = GetOrg(ctx, workflowExecution.Workflow.OrgId)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting org for action %s: %s", action.Label, err)
+				}
+			}
 
-			log.Printf("[DEBUG] Found authgroups in action %s (%s)", action.Label, action.ID)
+			if len(org.Users) != 0 {
+				log.Printf("[DEBUG][%s] Found %d users in org %s", workflowExecution.ExecutionId, len(org.Users), org.Id)
+
+				for _, user := range org.Users {
+					if user.Role != "admin" {
+						continue
+					}
+
+					foundUser, err := GetUser(ctx, user.Id)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting user %s: %s", user.Id, err)
+					}
+
+					if len(foundUser.ApiKey) == 0 {
+						continue
+					}
+
+					log.Printf("[DEBUG][%s] Found apikey for user %s to be used for subexecutions", workflowExecution.ExecutionId, foundUser.Username)
+					discoveredApikey = foundUser.ApiKey
+					break
+				}
+			}
+
+			log.Printf("[DEBUG][%s] Found authgroups in action %s (%s)", workflowExecution.ExecutionId, action.Label, action.ID)
 			if len(authGroups) == 0 {
 				authGroups, err = GetAuthGroups(ctx, workflow.OrgId)
 				if err != nil {
@@ -19255,7 +19290,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No relevant authgroups found for org %s. Do they still exist?", workflow.OrgId), errors.New("No relevant authgroups found for workflow. Do they still exist?")
 			}
 
-			log.Printf("[DEBUG] Found %d relevant auth groups for action %s", len(relevantAuthgroups), action.Label)
+			log.Printf("[DEBUG][%s] Found %d relevant auth groups for action %s", workflowExecution.ExecutionId, len(relevantAuthgroups), action.Label)
 
 			// FIXME: Start doing replication here.
 			// First request (this one) should use the first authgroup
@@ -19302,7 +19337,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						continue
 					}
 
-					log.Printf("[DEBUG] Found authgroups in action %s (%s)", findAction.Label, findAction.ID)
+					log.Printf("[DEBUG][%s] Found authgroups in action %s (%s)", workflowExecution.ExecutionId, findAction.Label, findAction.ID)
 
 					// Find the app in the group
 					authFound := false
@@ -19320,21 +19355,22 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						}
 					}
 
-					log.Printf("[DEBUG] New auth ID for %s: %s", findAction.AppName, workflowExecution.Workflow.Actions[findActionIndex].AuthenticationId)
+					log.Printf("[DEBUG][%s] New auth ID for %s: %s", workflowExecution.ExecutionId, findAction.AppName, workflowExecution.Workflow.Actions[findActionIndex].AuthenticationId)
 
 					if !authFound {
-						log.Printf("[ERROR] App %s not found in authgroup %s", findAction.AppName, firstGroup.Id)
+						log.Printf("[ERROR][%s] App %s not found in authgroup %s", workflowExecution.ExecutionId, findAction.AppName, firstGroup.Id)
 						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id), errors.New(fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id))
 					}
 
 					//action = workflowExecution.Workflow.Actions[workflowExecutionIndex]
-					log.Printf("[DEBUG] Updated action with ID %s to use authgroup %s", action.ID, firstGroup.Id)
+					log.Printf("[DEBUG][%s] Updated action with ID %s to use authgroup %s", workflowExecution.ExecutionId, action.ID, firstGroup.Id)
 
 				}
 
 				if authgroupindex == 0 {
 					// First one is the current execution.
 					// No need to run as subflow
+					workflowExecution.Authgroup = authgroup.Label
 					continue
 				} 
 
@@ -19343,11 +19379,18 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				log.Printf("[DEBUG][%s] SHOULD REPLICATE AUTHGROUP ACTION MAPPING into %d groups", workflowExecution.ExecutionId, len(relevantAuthgroups))
 				subExecutionsDone = true 
 				// Send a self-request to execute THIS workflow as a subflow
-				err = executeAuthgroupSubflow(workflowExecution, authgroup)
+
+				go executeAuthgroupSubflow(workflowExecution, authgroup, discoveredApikey)
+				/*
+				err = executeAuthgroupSubflow(workflowExecution, authgroup, discoveredApikey)
 				if err != nil {
 					log.Printf("[ERROR] Failed executing authgroup subflow: %s", err)
 				}
+				*/
 			}
+
+			//log.Printf("[DEBUG][%s] RETURNING BEFORE ORIGINAL SUBFLOW CAN RUN", workflowExecution.ExecutionId)
+			//return  WorkflowExecution{}, ExecInfo{}, "", errors.New("authgroup")
 		}
 
 		if len(action.AuthenticationId) > 0 {
@@ -20231,8 +20274,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
 }
 
-func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppAuthenticationGroup) error {
-
+func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppAuthenticationGroup, apikey string) error {
+	if len(apikey) == 0 {
+		log.Printf("[ERROR] No admin API key found to handle subflow execution")
+		return errors.New("No API key found for subflow execution")
+	}
 
 	log.Printf("[DEBUG] Starting authgroup subflow execution for %s with authgroup %s", workflowExecution.ExecutionId, authgroup.Label)
 
@@ -20262,7 +20308,11 @@ func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppA
 	resultUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, workflowExecution.Workflow.ID) 
 
 	// FIXME: Missing source node (?)
-	queries := fmt.Sprintf("authgroups=true&source_workflow=%s&source_auth=%s&source_execution=%s&startnode=%s", "authgroups", workflowExecution.Authorization, workflowExecution.ExecutionId, workflowExecution.Start)
+	//queries := fmt.Sprintf("authgroups=true&source_workflow=authgroups&startnode=%s&source_execution=%s", workflowExecution.Start, workflowExecution.ExecutionId)
+
+	urlEncodedLabel := url.QueryEscape(authgroup.Label)
+
+	queries := fmt.Sprintf("authgroups=true&authgroup=%s&source_workflow=%s&startnode=%s&source_execution=%s", urlEncodedLabel, workflowExecution.Workflow.Start, workflowExecution.Start, workflowExecution.ExecutionId)
 
 
 	//if action.AuthenticationId == "authgroups" && !subExecutionsDone && workflowExecution.ExecutionSource != "authgroup" {
@@ -20270,10 +20320,22 @@ func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppA
 
 	resultUrl += "?" + queries
 
+	log.Printf("\n\n\n[DEBUG][%s] Running subflow execution for workflow %s (%s) with URL %s\n\n", workflowExecution.ExecutionId, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID, resultUrl)
+
+	preparedRuntime := ExecutionRequest{
+		Priority: 10,  
+		ExecutionSource: "authgroups", 
+		Start: workflowExecution.Start,
+		WorkflowId: workflowExecution.Workflow.ID, 
+		Environments: []string{parsedEnvironment},
+		ExecutionArgument: workflowExecution.ExecutionArgument, 
+	
+		Authgroup: authgroup.Label, 
+	}
 
 	topClient := GetExternalClient(backendUrl)
 
-	data, err := json.Marshal(workflowExecution)
+	data, err := json.Marshal(preparedRuntime)
 	if err != nil {
 		log.Printf("[WARNING] Failed parent init marshal: %s", err)
 		return err
@@ -20285,39 +20347,39 @@ func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppA
 		bytes.NewBuffer([]byte(data)),
 	)
 
-	shuffleAuth := os.Getenv("SHUFFLE_AUTHORIZATION")
-	if len(shuffleAuth) == 0 {
-		log.Printf("[ERROR] No shuffle auth found for subflow execution. Exiting.")
-
-		scheduleKey := os.Getenv("SCHEDULE_KEY")
-		if len(scheduleKey) > 0 {
-			shuffleAuth = scheduleKey
-		}
+	if len(apikey) == 0 {
+		return errors.New("No API key found for subflow execution")
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", shuffleAuth))
+	if strings.HasPrefix(apikey, "Bearer ") && len(apikey) > 7 {
+		apikey = apikey[7:]
+	}
+
+	req.Header.Set("Org-Identifier", workflowExecution.ExecutionOrg)
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
 	req.Header.Set("appauth", parsedAuthIds)
 	req.Header.Set("environment", parsedEnvironment)
 
 	newresp, err := topClient.Do(req)
 	if err != nil {
-		log.Printf("[ERROR] Failed making subflow request (1): %s. Is URL valid: %s", err, resultUrl)
+		log.Printf("[ERROR] Failed making authgroup subflow request (1): %s. Is URL valid: %s", err, resultUrl)
 		return err
 	}
 
 	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
-		log.Printf("[ERROR] Failed reading parent body: %s", err)
+		log.Printf("[ERROR] Failed reading body response from authgroup exec: %s", err)
 		return err
 	}
+
+	log.Printf("AUTHGROUP RUN BODY (%d): %s", newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
 		log.Printf("[ERROR] Bad statuscode running authgroup execution (2) with URL %s: %d, %s", resultUrl, newresp.StatusCode, string(body))
 		return errors.New(fmt.Sprintf("Bad statuscode: %d", newresp.StatusCode))
 	}
 
-	//log.Printf("AUTHGROUP RUN BODY (%d): %s", newresp.StatusCode, string(body))
 
 
 	return nil

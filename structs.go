@@ -121,6 +121,8 @@ type ExecutionRequest struct {
 	Start             string   `json:"start"`
 	Type              string   `json:"type"`
 	Priority          int64    `json:"priority" datastore:"priority" yaml:"priority"` // Mapped back to workflowexecutions' priority
+
+	Authgroup string `json:"authgroup" datastore:"authgroup"`
 }
 
 type RetStruct struct {
@@ -1061,7 +1063,7 @@ type WorkflowExecution struct {
 	Authorization       string         `json:"authorization" datastore:"authorization"`
 	Result              string         `json:"result" datastore:"result,noindex"`
 	ProjectId           string         `json:"project_id" datastore:"project_id"`
-	Locations           []string       `json:"locations" datastore:"locations"`
+	Locations           []string       `json:"locations,omitempty" datastore:"locations"`
 	Workflow            Workflow       `json:"workflow,omitempty" datastore:"workflow,noindex"`
 	Results             []ActionResult `json:"results" datastore:"results,noindex"`
 	ExecutionVariables  []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
@@ -1074,6 +1076,7 @@ type WorkflowExecution struct {
 	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
 
 	NotificationsCreated int64 `json:"notifications_created" datastore:"notifications_created"`
+	Authgroup 			 string `json:"authgroup" datastore:"authgroup"`
 }
 
 type Position struct {
