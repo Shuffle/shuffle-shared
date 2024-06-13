@@ -3823,7 +3823,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(workflowExecutions) != maxAmount {
-		log.Printf("[DEBUG] Got %d executions for workflow %s (V2). Org %s (%s).", len(workflowExecutions), fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//log.Printf("[DEBUG] Got %d executions for workflow %s (V2). Org %s (%s).", len(workflowExecutions), fileId, user.ActiveOrg.Name, user.ActiveOrg.Id)
 	}
 
 	if len(workflowExecutions) == 0 {
@@ -3982,6 +3982,10 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		for workflowIndex, _ := range newWorkflows {
+			if workflowIndex < 4 {
+				continue
+			}
+
 			if !isSubflow {
 				newWorkflows[workflowIndex].Actions = []Action{}
 				newWorkflows[workflowIndex].Image = ""
@@ -5545,6 +5549,49 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 		return newWorkflow
 	}
 
+	log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
+
+	// Taking care of dedup in case there is a reduction in orgs 
+	newChildWorkflows := []Workflow{}
+	for _, childWorkflow := range childWorkflows {
+		if !ArrayContains(newWorkflow.SuborgDistribution, childWorkflow.OrgId) {
+			continue
+		}
+
+		newChildWorkflows = append(newChildWorkflows, childWorkflow)
+	}
+
+	childWorkflows = newChildWorkflows
+	log.Printf("\n\n\nCHILD WORKFLOWS (2): %d\n\n\n", len(childWorkflows))
+
+	if len(childWorkflows) < len(newWorkflow.SuborgDistribution) {
+		for _, suborgId := range newWorkflow.SuborgDistribution {
+			found := false
+
+			for _, childWorkflow := range childWorkflows {
+				if childWorkflow.OrgId == suborgId {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				log.Printf("\n\n[WARNING] Child workflow of %s (%s) for org %s is not distributed yet. Creating...", newWorkflow.Name, newWorkflow.ID, suborgId)
+					
+				childWorkflow, err := GenerateWorkflowFromParent(ctx, newWorkflow, newWorkflow.OrgId, suborgId)
+				if err != nil {
+					log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, newWorkflow.Name, newWorkflow.ID, err)
+				} else {
+					log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, newWorkflow.Name, newWorkflow.ID)
+
+					childWorkflows = append(childWorkflows, *childWorkflow)
+				}
+			}
+		}
+	}
+
+	log.Printf("\n\n\nCHILD WORKFLOWS (3): %d\n\n\n", len(childWorkflows))
+	waitgroup := sync.WaitGroup{}
 	for _, childWorkflow := range childWorkflows {
 		// Skipping distrib to old ones~
 		if !ArrayContains(newWorkflow.SuborgDistribution, childWorkflow.OrgId) {
@@ -5564,8 +5611,14 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 			continue
 		}
 
-		diffWorkflows(newWorkflow, childWorkflow, true)
+		waitgroup.Add(1)
+		go func(childWorkflow Workflow, newWorkflow Workflow, update bool) {
+			diffWorkflows(childWorkflow, newWorkflow, update)
+			waitgroup.Done()
+		}(childWorkflow, newWorkflow, true)
 	}
+
+	waitgroup.Wait()
 
 	return newWorkflow 
 }
@@ -5581,6 +5634,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	backupsChanged := false
 	inputfieldsChanged := false
+	discoveredEnvironment := ""
 
 	addedActions := []string{}
 	removedActions := []string{}
@@ -5614,9 +5668,59 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		inputfieldsChanged = true
 	}
 
+	// Child workflow env & auth id mapping
+	newWorkflowEnvironment := "cloud"
+	for actionIndex, action := range newWorkflow.Actions {
+		if len(action.Environment) > 0 {
+			discoveredEnvironment = action.Environment
+		}
+
+		// In case of replication
+		newWorkflow.Actions[actionIndex].AuthenticationId = ""
+
+		log.Printf("Looking for OLD authentication for App %#v", action.AppName)
+
+		idFound := false
+		for _, oldWorkflowAction := range oldWorkflow.Actions {
+			if oldWorkflowAction.ID == action.ID {
+				idFound = true 
+				newWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+			}
+		}
+
+		if !idFound {
+			for _, oldWorkflowAction := range oldWorkflow.Actions {
+				if oldWorkflowAction.AppID == action.AppID {
+					newWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+					break
+				}
+			}
+		}
+	}
+
+	for _, action := range oldWorkflow.Actions {
+		if action.Environment != newWorkflowEnvironment {
+			discoveredEnvironment = newWorkflowEnvironment
+			break
+		}
+	}
+
+	if len(discoveredEnvironment) == 0 {
+		discoveredEnvironment = newWorkflowEnvironment
+	}
+
 	for _, newAction := range newWorkflow.Actions {
 		found := false
+
+		if !newAction.ParentControlled {
+			continue
+		}
+
 		for _, oldAction := range oldWorkflow.Actions {
+			if !oldAction.ParentControlled {
+				continue
+			}
+
 			if newAction.ID == oldAction.ID {
 				found = true
 				break
@@ -5630,7 +5734,16 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	for _, oldAction := range oldWorkflow.Actions {
 		found := false
+
+		if !oldAction.ParentControlled {
+			continue
+		}
+
 		for _, newAction := range newWorkflow.Actions {
+			if !newAction.ParentControlled {
+				continue
+			}
+
 			if oldAction.ID == newAction.ID {
 				found = true
 				break
@@ -5643,11 +5756,19 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	for _, newAction := range newWorkflow.Actions {
+		if !newAction.ParentControlled {
+			continue
+		}
+
 		if ArrayContains(addedActions, newAction.ID) || ArrayContains(removedActions, newAction.ID) {
 			continue
 		}
 
 		for _, oldAction := range oldWorkflow.Actions {
+			if !oldAction.ParentControlled {
+				continue
+			}
+
 			if newAction.ID != oldAction.ID {
 				continue
 			}
@@ -5662,8 +5783,16 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	// Triggers
 	for _, newAction := range newWorkflow.Triggers {
+		if !newAction.ParentControlled {
+			continue
+		}
+
 		found := false
 		for _, oldAction := range oldWorkflow.Triggers {
+			if !oldAction.ParentControlled {
+				continue
+			}
+
 			if newAction.ID == oldAction.ID {
 				found = true
 				break
@@ -5676,8 +5805,16 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	for _, oldAction := range oldWorkflow.Triggers{
+		if !oldAction.ParentControlled {
+			continue
+		}
+
 		found := false
 		for _, newAction := range newWorkflow.Triggers{
+			if !newAction.ParentControlled {
+				continue
+			}
+
 			if oldAction.ID == newAction.ID {
 				found = true
 				break
@@ -5690,11 +5827,19 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	for _, newAction := range newWorkflow.Triggers {
+		if !newAction.ParentControlled {
+			continue
+		}
+
 		if ArrayContains(addedTriggers, newAction.ID) || ArrayContains(removedTriggers, newAction.ID) {
 			continue
 		}
 
 		for _, oldAction := range oldWorkflow.Triggers {
+			if !oldAction.ParentControlled {
+				continue
+			}
+
 			if newAction.ID != oldAction.ID {
 				continue
 			}
@@ -5709,8 +5854,16 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	// Branches
 	for _, newBranch := range newWorkflow.Branches {
+		if !newBranch.ParentControlled {
+			continue
+		}
+
 		found := false
 		for _, oldBranch := range oldWorkflow.Branches {
+			if !oldBranch.ParentControlled {
+				continue
+			}
+
 			if newBranch.ID == oldBranch.ID {
 				found = true
 				break
@@ -5723,8 +5876,16 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	for _, oldBranch := range oldWorkflow.Branches {
+		if !oldBranch.ParentControlled {
+			continue
+		}
+
 		found := false
 		for _, newBranch := range newWorkflow.Branches {
+			if !newBranch.ParentControlled {
+				continue
+			}
+
 			if oldBranch.ID == newBranch.ID {
 				found = true
 				break
@@ -5737,11 +5898,19 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	for _, newBranch := range newWorkflow.Branches {
+		if !newBranch.ParentControlled {
+			continue
+		}
+
 		if ArrayContains(addedBranches, newBranch.ID) || ArrayContains(removedBranches, newBranch.ID) {
 			continue
 		}
 
 		for _, oldBranch := range oldWorkflow.Branches {
+			if !oldBranch.ParentControlled {
+				continue
+			}
+
 			if newBranch.ID != oldBranch.ID {
 				continue
 			}
@@ -5755,10 +5924,18 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify 
+	log.Printf("\n ===== Parent: %#v, Child: %#v =====", newWorkflow.ID, oldWorkflow.ID)
 	log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 
 	if update {
-		childWorkflow := oldWorkflow
+		// FIXME: This doesn't work does it?
+		childWorkflow := oldWorkflow 
+
+		log.Printf("\n\nSTART")
+		log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
+		log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
+		log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
+
 		if nameChanged {
 			childWorkflow.Name = newWorkflow.Name
 		}
@@ -5779,8 +5956,58 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 			childWorkflow.InputQuestions = newWorkflow.InputQuestions
 		}
 
+		childActions := []Action{}
+		for _, action := range oldWorkflow.Actions {
+			// Check if it SHOULD be parent controlled
+			for _, newAction := range newWorkflow.Actions {
+				if newAction.ID == action.ID {
+					action.ParentControlled = true
+					break
+				}
+			}
+
+			if action.ParentControlled {
+				continue
+			}
+
+			childActions = append(childActions, action)
+		}
+
+		childTriggers := []Trigger{}
+		for _, trigger := range oldWorkflow.Triggers {
+			for _, newTrigger := range newWorkflow.Triggers {
+				if newTrigger.ID == trigger.ID {
+					trigger.ParentControlled = true
+					break
+				}
+			}
+
+			if trigger.ParentControlled {
+				continue
+			}
+
+			childTriggers = append(childTriggers, trigger)
+		}
+
+		childBranches := []Branch{}
+		for _, branch := range oldWorkflow.Branches {
+			for _, newBranch := range newWorkflow.Branches {
+				if newBranch.ID == branch.ID {
+					branch.ParentControlled = true
+					break
+				}
+			}
+
+			if branch.ParentControlled {
+				continue
+			}
+
+			childBranches = append(childBranches, branch)
+		}
+
+
 		if len(addedActions) > 0 {
-			actions := []Action{} 
+			actions := childActions
 			for _, action := range newWorkflow.Actions {
 				if !ArrayContains(addedActions, action.ID) {
 					continue
@@ -5790,10 +6017,11 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 			}
 
 			childWorkflow.Actions = append(childWorkflow.Actions, actions...)
+			childActions = childWorkflow.Actions
 		}
 
 		if len(removedActions) > 0 {
-			newChildActions := []Action{}
+			newChildActions := childActions
 			for _, action := range childWorkflow.Actions {
 				if ArrayContains(removedActions, action.ID) {
 					continue
@@ -5803,6 +6031,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 			}
 
 			childWorkflow.Actions = newChildActions
+			childActions = childWorkflow.Actions
 		}
 
 		if len(updatedActions) > 0 {
@@ -5822,29 +6051,31 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		}
 
 		if len(addedTriggers) > 0 {
-			actions := []Trigger{}
-			for _, action := range newWorkflow.Triggers {
-				if !ArrayContains(addedTriggers, action.ID) {
+			triggers := childTriggers
+			for _, trigger := range newWorkflow.Triggers {
+				if !ArrayContains(addedTriggers, trigger.ID) {
 					continue
 				}
 
-				actions = append(actions, action)
+				triggers = append(triggers, trigger)
 			}
 
-			childWorkflow.Triggers = append(childWorkflow.Triggers, actions...)
+			childWorkflow.Triggers = append(childWorkflow.Triggers, triggers...)
+			childTriggers = childWorkflow.Triggers
 		}
 
 		if len(removedTriggers) > 0 {
-			newChildActions := []Trigger{}
-			for _, action := range childWorkflow.Triggers {
-				if ArrayContains(removedActions, action.ID) {
+			newChildTriggers := childTriggers
+			for _, trigger := range childWorkflow.Triggers {
+				if ArrayContains(removedTriggers, trigger.ID) {
 					continue
 				}
 
-				newChildActions = append(newChildActions, action)
+				newChildTriggers = append(newChildTriggers, trigger)
 			}
 
-			childWorkflow.Triggers = newChildActions
+			childWorkflow.Triggers = newChildTriggers
+			childTriggers = childWorkflow.Triggers
 		}
 
 		if len(updatedTriggers) > 0 {
@@ -5864,29 +6095,31 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		}
 
 		if len(addedBranches) > 0 {
-			actions := []Branch{}
-			for _, action := range newWorkflow.Branches {
-				if !ArrayContains(addedTriggers, action.ID) {
+			branches := childBranches
+			for _, branch := range newWorkflow.Branches {
+				if !ArrayContains(addedBranches, branch.ID) {
 					continue
 				}
 
-				actions = append(actions, action)
+				branches = append(branches, branch)
 			}
 
-			childWorkflow.Branches = append(childWorkflow.Branches, actions...)
+			childWorkflow.Branches = append(childWorkflow.Branches, branches...)
+			childBranches = childWorkflow.Branches
 		}
 
 		if len(removedBranches) > 0 {
-			newChildActions := []Branch{}
-			for _, action := range childWorkflow.Branches {
-				if ArrayContains(removedActions, action.ID) {
+			newChildBranches := childBranches
+			for _, branch := range childWorkflow.Branches {
+				if ArrayContains(removedBranches, branch.ID) {
 					continue
 				}
 
-				newChildActions = append(newChildActions, action)
+				newChildBranches = append(newChildBranches , branch)
 			}
 
-			childWorkflow.Branches= newChildActions
+			childWorkflow.Branches = newChildBranches
+			childBranches = childWorkflow.Branches
 		}
 
 		if len(updatedBranches) > 0 {
@@ -5902,6 +6135,174 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 			}
 		}
 
+		// Dedup actions, triggers & branches
+		newActions := []Action{}
+		newTriggers := []Trigger{}
+		newBranches := []Branch{}
+		for childActionIndex, childAction := range childWorkflow.Actions {
+			childWorkflow.Actions[childActionIndex].Environment = discoveredEnvironment
+			// Check if the parent workflow has it, and make sure parent controlled is set
+			for _, newAction := range newWorkflow.Actions {
+				if newAction.ID == childAction.ID {
+					newAction.ParentControlled = true
+					childWorkflow.Actions[childActionIndex].ParentControlled = true
+					break
+				}
+			}
+
+			idFound := false
+			for _, oldWorkflowAction := range oldWorkflow.Actions {
+				if oldWorkflowAction.ID == childAction.ID {
+					idFound = true 
+					childWorkflow.Actions[childActionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+				}
+			}
+
+			if !idFound {
+				for _, oldWorkflowAction := range oldWorkflow.Actions {
+					if oldWorkflowAction.AppID == childAction.AppID {
+						childWorkflow.Actions[childActionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+						break
+					}
+				}
+			}
+
+			found := false
+			for _, newAction := range newActions {
+				if newAction.ID == childAction.ID {
+					found = true
+					continue
+				}
+			}
+
+			if !found {
+				newActions = append(newActions, childAction)
+			}
+		}
+
+		for childTriggerIndex, childTrigger := range childWorkflow.Triggers {
+			childWorkflow.Triggers[childTriggerIndex].Environment = discoveredEnvironment
+
+			for _, newTrigger := range newWorkflow.Triggers {
+				if newTrigger.ID == childTrigger.ID {
+					childTrigger.ParentControlled = true
+					childWorkflow.Triggers[childTriggerIndex].ParentControlled = true
+					break
+				}
+			}
+
+
+			// FIXME: Add specific handlers for each type based on oldWorkflow params that may have been locally configured
+			// FIXME: THIS DOES NOT WORK YET FOR TRIGGER FIELD MAPPING TO OLD SETTING
+			if childTrigger.ParentControlled {
+				/*
+				for _, oldTrigger := range oldWorkflow.Triggers {
+					if oldTrigger.ID != childTrigger.ID {
+						continue
+					}
+
+					childTrigger.Status = oldTrigger.Status
+
+					reservedArguments := []string{}
+					if oldTrigger.TriggerType == "SUBFLOW" {
+						reservedArguments = []string{"workflow", "user_apikey", "startnode"}
+					} else if oldTrigger.TriggerType == "USERINPUT" {
+						reservedArguments = []string{"subflow", "sms", "email", "type"}
+					} else if oldTrigger.TriggerType == "SCHEDULE" {
+					} else if oldTrigger.TriggerType == "WEBHOOK" {
+						reservedArguments = []string{"url", "tmp", "auth_headers"}
+					} else if oldTrigger.TriggerType == "PIPELINE" {
+						reservedArguments = []string{"pipeline"}
+					}
+
+					fieldsFound := []string{}
+					for paramIndex, param := range childTrigger.Parameters {
+						if !ArrayContains(reservedArguments, param.Name) {
+							continue
+						}
+
+						fieldsFound = append(fieldsFound, param.Name)
+						for _, oldParam := range oldTrigger.Parameters {
+							if oldParam.Name != param.Name {
+								continue
+							}
+
+							childWorkflow.Triggers[childTriggerIndex].Parameters[paramIndex].Value = oldParam.Value
+							childTrigger.Parameters[paramIndex].Value = oldParam.Value
+							break
+						}
+					}
+
+					if len(fieldsFound) != len(reservedArguments) {
+						for _, field := range reservedArguments {
+							if ArrayContains(fieldsFound, field) {
+								continue
+							}
+
+							oldParamFound := false
+							for _, oldParam := range oldTrigger.Parameters {
+								if oldParam.Name != field {
+									continue
+								}
+
+								oldParamFound = true 
+								childTrigger.Parameters = append(childTrigger.Parameters, oldParam)
+								childWorkflow.Triggers[childTriggerIndex].Parameters = append(childWorkflow.Triggers[childTriggerIndex].Parameters, oldParam)
+							}
+
+							if !oldParamFound {
+								//log.Printf("[DEBUG] MISSING IN OLDPARAM TOO: %s", field)
+							}
+						}
+					}
+				}
+				*/
+			}
+
+			found := false
+			for _, newTrigger := range newTriggers {
+				if newTrigger.ID == childTrigger.ID {
+					found = true
+					continue
+				}
+			}
+
+			if !found {
+				newTriggers = append(newTriggers, childTrigger)
+			}
+		}
+
+		for childBranchIndex, childBranch := range childWorkflow.Branches {
+			for _, newBranch := range newWorkflow.Branches {
+				if newBranch.ID == childBranch.ID || (newBranch.SourceID == childBranch.SourceID && newBranch.DestinationID == childBranch.DestinationID) {
+					childBranch.ParentControlled = true
+					childWorkflow.Branches[childBranchIndex].ParentControlled = true
+					break
+				}
+			}
+
+			found := false
+			for _, newBranch := range newBranches {
+				if newBranch.ID == childBranch.ID {
+					found = true
+					continue
+				}
+			}
+
+			if !found {
+				newBranches = append(newBranches, childBranch)
+			}
+		}
+
+		childWorkflow.Actions = newActions
+		childWorkflow.Triggers = newTriggers
+		childWorkflow.Branches = newBranches
+
+		log.Printf("\n\nEND")
+		log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
+		log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
+		log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
+
 		ctx := context.Background()
 		err := SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
 		if err != nil {
@@ -5910,6 +6311,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
 		}
 
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newWorkflow.ID))
 
@@ -6006,11 +6408,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Owner       string `json:"owner"`
 	}
 
+	/*
 	if len(workflow.ParentWorkflowId) > 0 || len(tmpworkflow.ParentWorkflowId) > 0 {
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Can't save a workflow distributed from your parent org"}`))
 		return 
 	}
+	*/
 
 	correctUser := false
 	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
@@ -7640,6 +8044,23 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if len(workflow.SuborgDistribution) > 0 {
+		//log.Printf("[DEBUG] Diffing based on parent workflow %s", workflow.ID)
+		for actionIndex, _ := range workflow.Actions {
+			workflow.Actions[actionIndex].ParentControlled = true 
+		}
+
+		for triggerIndex, _ := range workflow.Triggers {
+			workflow.Triggers[triggerIndex].ParentControlled = true 
+		}
+
+		for branchIndex, _ := range workflow.Branches {
+			workflow.Branches[branchIndex].ParentControlled = true 
+		}
+
+		workflow = diffWorkflowWrapper(workflow)
+	}
+
 	workflow.UpdatedBy = user.Username
 	if workflow.Public {
 		workflow.SuborgDistribution = []string{}
@@ -7672,9 +8093,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//}
 	}
 
-	if len(workflow.SuborgDistribution) > 0 {
-		workflow = diffWorkflowWrapper(workflow)
-	}
+
 
 	if orgUpdated {
 		err = SetOrg(ctx, *org, org.Id)
@@ -8593,20 +9012,17 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 	return 
 }
 
-func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, user *User, orgId string) (*Workflow, error) {
+func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOrgId, subOrgId string) (*Workflow, error) {
 
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
-
-	DeleteCache(ctx, fmt.Sprintf("%s_workflows", orgId))
-
-
+	DeleteCache(ctx, fmt.Sprintf("%s_workflows", subOrgId))
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
 	var err error
 	parentWorkflowId := workflow.ID
 
 	// Make a copy of the workflow, and set parent/child relationships
 	// Seed random based on the existing workflow + suborg to make sure we only make one
-	seedString := fmt.Sprintf("%s_%s", workflow.ID, user.ActiveOrg.Id)
+	seedString := fmt.Sprintf("%s_%s", workflow.ID, parentOrgId)
 	hash := sha1.New()
 	hash.Write([]byte(seedString))
 	hashBytes := hash.Sum(nil)
@@ -8616,6 +9032,12 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, user *Us
 	newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
+	foundWorkflow, err := GetWorkflow(ctx, newId)
+	if err == nil && foundWorkflow.ID == newId && foundWorkflow.ParentWorkflowId == parentWorkflowId {
+		return foundWorkflow, nil
+	}
+
+
 	if !ArrayContains(workflow.ChildWorkflowIds, newId) {
 		workflow.ChildWorkflowIds = append(workflow.ChildWorkflowIds, newId)
 
@@ -8624,7 +9046,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, user *Us
 		if err != nil {
 			log.Printf("[ERROR] Failed adding new child workflow %s: %s", newId, err)
 		} else {
-			log.Printf("[AUDIT] Added new child workflow of %s for user %s in suborg %s", workflow.ID, user.Username, orgId)
+			log.Printf("[AUDIT] Added new child workflow of %s in suborg %s", workflow.ID, subOrgId)
 		}
 	}
 
@@ -8635,12 +9057,56 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, user *Us
 	newWf.ChildWorkflowIds = []string{}
 	newWf.ParentWorkflowId = parentWorkflowId
 
-	newWf.Org = []OrgMini{user.ActiveOrg}
-	newWf.ExecutingOrg = user.ActiveOrg
-	newWf.OrgId = orgId
+	newWf.Org = []OrgMini{
+		OrgMini{
+			Id: subOrgId,
+		},
+	}
+
+	newWf.OrgId = subOrgId
+	newWf.ExecutingOrg = OrgMini{
+		Id: subOrgId,
+	}
 
 	newWf.Created = 0
 	newWf.Edited = 0
+
+	defaultEnvironment := "cloud"
+	envs, err := GetEnvironments(ctx, subOrgId)
+	for _, env := range envs {
+		if env.Default {
+			defaultEnvironment = env.Name
+			break
+		}
+	}
+
+	for actionIndex, _ := range workflow.Actions {
+		workflow.Actions[actionIndex].ParentControlled = true 
+		workflow.Actions[actionIndex].AuthenticationId = ""
+		workflow.Actions[actionIndex].Environment = defaultEnvironment
+	}
+
+	for triggerIndex, _ := range workflow.Triggers {
+		workflow.Triggers[triggerIndex].ParentControlled = true 
+		workflow.Triggers[triggerIndex].Environment = defaultEnvironment
+
+		// FIXME: How do we manage secondary IDs?
+		// E.g. for webhooks, how do we have a URL correctly, and start/stop properly?
+
+		workflow.Triggers[triggerIndex].Status = "uninitialized"
+		if workflow.Triggers[triggerIndex].TriggerType == "WEBHOOK" { 
+			for paramIndex, param := range workflow.Triggers[triggerIndex].Parameters {
+				if param.Name == "url" {
+					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
+				}
+
+				if param.Name == "tmp" {
+					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
+				}
+			}
+		}
+
+	}
 
 	err = SetWorkflow(ctx, newWf, newWf.ID)
 	if err != nil {
@@ -8728,8 +9194,8 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				if !found {
 
-					log.Printf("\n\n\n[AUDIT] Failed to find existing workflow for user %s in suborg %s. Making replica.\n\n\n", user.Username, orgId)
-					newWf, err := GenerateWorkflowFromParent(ctx, *workflow, &user, orgId)
+					log.Printf("[AUDIT] Failed to find existing workflow for user %s in suborg %s. Making replica.", user.Username, orgId)
+					newWf, err := GenerateWorkflowFromParent(ctx, *workflow, workflow.OrgId, orgId)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting new child workflow %s: %s", newWf.ID, err)
 					} else {

@@ -1120,6 +1120,8 @@ type Action struct {
 	ExecutionDelay    int64                        `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 	CategoryLabel     []string                     `json:"category_label" datastore:"category_label"` // For categorization of the type of node in case it's available
 	Suggestion        bool                         `json:"suggestion" datastore:"suggestion"`         // Whether it was a suggestion in the workflow or not
+
+	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 }
 
 // Added environment for location to execute
@@ -1149,6 +1151,8 @@ type Trigger struct {
 	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
+
+	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 }
 
 type Branch struct {
@@ -1159,6 +1163,8 @@ type Branch struct {
 	HasError      bool        `json:"has_errors" datastore: "has_errors"`
 	Conditions    []Condition `json:"conditions" datastore: "conditions"`
 	Decorator     bool        `json:"decorator" datastore:"decorator"`
+
+	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 }
 
 // Same format for a lot of stuff

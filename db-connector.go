@@ -7784,6 +7784,12 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		}
 	}
 
+	// Handles parent/child workflow relationships
+	if len(workflow.ParentWorkflowId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
+	}
+
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data, 30)
