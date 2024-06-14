@@ -373,7 +373,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				mailbody := Mailcheck{
 					Targets: []string{"lalitdeore12@gmail.com"},
 					Subject: "You have reached the threshold limit of app executions.",
-					Body:    fmt.Sprintf("[Test] You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
+					Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
 				}
 				err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false)
 				if err != nil {
