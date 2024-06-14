@@ -521,16 +521,29 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	disabledRules, err := getDisabledRules(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get disabled rules: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Error getting disabled rules."}`))
+		return
+	}
+
 	sort.Slice(files[:], func(i, j int) bool {
 		return files[i].UpdatedAt > files[j].UpdatedAt
 	})
 
 	type SigmaFileInfo struct {
-		RuleTitle    string `json:"title" yaml:"title"`
+		RuleTitle   string `json:"title" yaml:"title"`
 		Description string `json:"description" yaml:"description"`
-		FileId     string   `json:"file_id"`
-		IsEnabled   bool `json:"is_enabled"`
-	}	
+		FileId      string `json:"file_id"`
+		IsEnabled   bool   `json:"is_enabled"`
+	}
+
+	type SigmaResponse struct {
+		SigmaInfo      []SigmaFileInfo `json:"sigma_info"`
+		FolderDisabled bool            `json:"folder_disabled"`
+	}
 
 	var sigmaFileInfo []SigmaFileInfo
 
@@ -596,15 +609,35 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			if file.Status == "active" {
-                rule.IsEnabled = true
+			isDisabled := disabledRules.DisabledFolder
+			found := false
+			if isDisabled {
+				rule.IsEnabled = false
+			} else{
+			for _, disabledFile := range disabledRules.Files {
+				if disabledFile.Id == file.Id {
+					found = true
+					break
+				}
 			}
+			if found {
+				rule.IsEnabled = false
+			} else {
+				rule.IsEnabled = true
+			}
+		}
+
 			rule.FileId = file.Id
 			sigmaFileInfo = append(sigmaFileInfo, rule)
 		}
 	}
 
-	responseData, err := json.Marshal(sigmaFileInfo)
+	response := SigmaResponse{
+		SigmaInfo:      sigmaFileInfo,
+		FolderDisabled: disabledRules.DisabledFolder,
+	}
+
+	responseData, err := json.Marshal(response)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal response data: %s", err)
 		resp.WriteHeader(500)
