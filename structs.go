@@ -121,6 +121,8 @@ type ExecutionRequest struct {
 	Start             string   `json:"start"`
 	Type              string   `json:"type"`
 	Priority          int64    `json:"priority" datastore:"priority" yaml:"priority"` // Mapped back to workflowexecutions' priority
+
+	Authgroup string `json:"authgroup" datastore:"authgroup"`
 }
 
 type RetStruct struct {
@@ -1062,7 +1064,7 @@ type WorkflowExecution struct {
 	Authorization       string         `json:"authorization" datastore:"authorization"`
 	Result              string         `json:"result" datastore:"result,noindex"`
 	ProjectId           string         `json:"project_id" datastore:"project_id"`
-	Locations           []string       `json:"locations" datastore:"locations"`
+	Locations           []string       `json:"locations,omitempty" datastore:"locations"`
 	Workflow            Workflow       `json:"workflow,omitempty" datastore:"workflow,noindex"`
 	Results             []ActionResult `json:"results" datastore:"results,noindex"`
 	ExecutionVariables  []Variable     `json:"execution_variables,omitempty" datastore:"execution_variables,omitempty"`
@@ -1075,6 +1077,7 @@ type WorkflowExecution struct {
 	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
 
 	NotificationsCreated int64 `json:"notifications_created" datastore:"notifications_created"`
+	Authgroup 			 string `json:"authgroup" datastore:"authgroup"`
 }
 
 type Position struct {
@@ -1118,6 +1121,8 @@ type Action struct {
 	ExecutionDelay    int64                        `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 	CategoryLabel     []string                     `json:"category_label" datastore:"category_label"` // For categorization of the type of node in case it's available
 	Suggestion        bool                         `json:"suggestion" datastore:"suggestion"`         // Whether it was a suggestion in the workflow or not
+
+	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 }
 
 // Added environment for location to execute
@@ -1147,6 +1152,8 @@ type Trigger struct {
 	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
+
+	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 }
 
 type Branch struct {
@@ -1157,6 +1164,8 @@ type Branch struct {
 	HasError      bool        `json:"has_errors" datastore: "has_errors"`
 	Conditions    []Condition `json:"conditions" datastore: "conditions"`
 	Decorator     bool        `json:"decorator" datastore:"decorator"`
+
+	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 }
 
 // Same format for a lot of stuff
@@ -1254,8 +1263,26 @@ type Workflow struct {
 	Hidden       bool   `json:"hidden" datastore:"hidden"`
 	UpdatedBy    string `json:"updated_by" datastore:"updated_by"`
 
+	// Whether it's manually validated or not
 	Validated  bool 	`json:"validated" datastore:"validated"` 
+
+
+	// Distribution system for suborg/parentorg 
+	ParentWorkflowId string `json:"parentorg_workflow" datastore:"parentorg_workflow"`
+	ChildWorkflowIds []string `json:"childorg_workflow_ids" datastore:"childorg_workflow_ids"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+
+	// Config for backup configs
+	// This overrides org settings for the workflow
+	BackupConfig BackupConfig `json:"backup_config" datastore:"backup_config"`
+	AuthGroups  []string     `json:"auth_groups" datastore:"auth_groups"`
+}
+
+type BackupConfig struct {
+	UploadRepo     string `json:"upload_repo" datastore:"upload_repo"`
+	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
+	UploadUsername string `json:"upload_username" datastore:"upload_username"`
+	UploadToken    string `json:"upload_token" datastore:"upload_token"`
 }
 
 type Category struct {
@@ -1376,12 +1403,14 @@ type File struct {
 type AppAuthenticationGroup struct {
 	Active			bool                  `json:"active" datastore:"active"`
 	Label			string                `json:"label" datastore:"label"`
+	Environment		string                `json:"environment" datastore:"environment"`
 	Id				string                `json:"id" datastore:"id"`
-	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths"`	
 	Description		string                `json:"description" datastore:"description"`
 	OrgId			string                `json:"org_id" datastore:"org_id"`
 	Created			int64                 `json:"created" datastore:"created"` 
 	Edited			int64                 `json:"edited" datastore:"edited"`
+
+	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths,noindex"`
 }
 
 type AppAuthenticationStorage struct {
@@ -2211,6 +2240,17 @@ type EnvWrapper struct {
 	PrimaryTerm int         `json:"_primary_term"`
 	Found       bool        `json:"found"`
 	Source      Environment `json:"_source"`
+}
+
+type AuthGroupWrapper struct {
+	Index       string   `json:"_index"`
+	Type        string   `json:"_type"`
+	ID          string   `json:"_id"`
+	Version     int      `json:"_version"`
+	SeqNo       int      `json:"_seq_no"`
+	PrimaryTerm int      `json:"_primary_term"`
+	Found       bool     `json:"found"`
+	Source      AppAuthenticationGroup `json:"_source"`
 }
 
 type WorkflowWrapper struct {

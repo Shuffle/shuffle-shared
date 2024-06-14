@@ -2766,7 +2766,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 	orgs := []Org{}
 	nameKey := "Organizations"
 
-	cacheKey := fmt.Sprintf("%s_childorgs", nameKey, orgId)
+	cacheKey := fmt.Sprintf("%s_childorgs", orgId)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -5723,12 +5723,12 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
-						continue
-					}
+						//log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
+					} else {
+						//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
 
-					//log.Printf("[WARNING] No more apps for %s in org app load? Breaking: %s.", user.Username, err)
-					break
+						break
+					}
 				}
 
 				if innerApp.Name == "Shuffle Subflow" {
@@ -7245,6 +7245,176 @@ func SetOpenseaAsset(ctx context.Context, collection OpenseaAsset, id string, op
 	return nil
 }
 
+func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, error) {
+	var workflows []Workflow
+	var err error
+
+	nameKey := "workflow"
+	cacheKey := fmt.Sprintf("%s_%s_childworkflows", nameKey, originalId)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &workflows)
+			if err == nil {
+
+				sort.Slice(workflows, func(i, j int) bool {
+					return workflows[i].Edited > workflows[j].Edited
+				})
+
+				return workflows, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for workflow: %s", err)
+		}
+	}
+
+	log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"match": map[string]interface{}{
+					"parentorg_workflow": originalId,
+				},
+			},
+		}
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find user query: %s", err)
+			return workflows, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (Get workflows 2): %s", err)
+			return workflows, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return workflows, nil
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return workflows, err
+			} else {
+				// Print the response status and error information.
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return workflows, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return workflows, err
+		}
+
+		wrapped := WorkflowSearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return workflows, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.ID != originalId {
+				continue
+			}
+
+			workflows = append(workflows, hit.Source)
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("parentorg_workflow =", originalId).Limit(50)
+		//if project.Environment != "cloud" {
+		//	query = query.Order("-edited")
+		//}
+
+		cursorStr := ""
+		for {
+			it := project.Dbclient.Run(ctx, query)
+
+			for {
+				innerWorkflow := Workflow{}
+				_, err := it.Next(&innerWorkflow)
+				if err != nil {
+					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					break
+				}
+
+				workflows = append(workflows, innerWorkflow)
+			}
+
+			if err != iterator.Done {
+				//log.Printf("[INFO] Failed fetching results: %v", err)
+				//break
+			}
+
+			// Get the cursor for the next page of results.
+			nextCursor, err := it.Cursor()
+			if err != nil {
+				log.Printf("Cursorerror: %s", err)
+				break
+			} else {
+				nextStr := fmt.Sprintf("%s", nextCursor)
+				if cursorStr == nextStr {
+					break
+				}
+
+				cursorStr = nextStr
+				query = query.Start(nextCursor)
+			}
+		}
+	}
+
+	// Sort by edited
+	sort.Slice(workflows, func(i, j int) bool {
+		return workflows[i].Edited > workflows[j].Edited
+	})
+
+	// Deduplicate based on edited time
+	filtered := []Workflow{}
+	handled := []string{}
+	for _, workflow := range workflows {
+		if ArrayContains(handled, string(workflow.Edited)) {
+			continue
+		}
+
+		handled = append(handled, string(workflow.Edited))
+		filtered = append(filtered, workflow)
+	}
+
+	// Set cache
+	if project.CacheDb {
+		cacheData, err := json.Marshal(workflows)
+		if err != nil {
+			return workflows, nil
+		}
+
+		err = SetCache(ctx, cacheKey, cacheData, 60)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for workflow revisions: %s (not critical)", err)
+		}
+	}
+
+	return workflows, nil
+}
+
 func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, error) {
 	var workflows []Workflow
 	var err error
@@ -7614,6 +7784,12 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		}
 	}
 
+	// Handles parent/child workflow relationships
+	if len(workflow.ParentWorkflowId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
+	}
+
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 		err = SetCache(ctx, cacheKey, data, 30)
@@ -7770,7 +7946,74 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	return nil
 }
 
-func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenticationGroup, id string) error {
+func GetAppAuthGroup(ctx context.Context, id string) (*AppAuthenticationGroup, error) {
+	authGroup := &AppAuthenticationGroup{}
+	nameKey := "workflowappauthgroup"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &authGroup)
+			if err == nil && authGroup.Id != "" {
+				return authGroup, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for authGroup: %s", err)
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return authGroup, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return authGroup, errors.New("Workflow doesn't exist")
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return authGroup, err
+		}
+
+		wrapped := AuthGroupWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return authGroup, err
+		}
+
+		authGroup = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
+		if err := project.Dbclient.Get(ctx, key, authGroup); err != nil {
+			log.Printf("[WARNING] Error getting workflow app auth group %s: %s", id, err)
+			return authGroup, err
+		}
+	}
+
+	if project.CacheDb && authGroup.Id != "" {
+		data, err := json.Marshal(authGroup)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in get auth group: %s", err)
+			return authGroup, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for authGroup '%s': %s", cacheKey, err)
+		}
+	}
+
+	return authGroup, nil
+}
+
+func SetAuthGroupDatastore(ctx context.Context, workflowappauthgroup AppAuthenticationGroup, id string) error {
 	nameKey := "workflowappauthgroup"
 	timeNow := int64(time.Now().Unix())
 	if workflowappauthgroup.Created == 0 {
@@ -7786,33 +8029,66 @@ func SetWorkflowAppAuthGroupDatastore(ctx context.Context, workflowappauthgroup 
 	workflowappauthgroup.Edited = timeNow
 
 	// Check for uniqueness and organization membership
+	newAuth := []AppAuthenticationStorage{}
+	removeIds := []string{}
 	uniqueIds := make(map[string]bool)
-	for index, auth := range workflowappauthgroup.AppAuths {
+	for _, auth := range workflowappauthgroup.AppAuths {
 		// Check uniqueness
 		if _, exists := uniqueIds[auth.Id]; exists {
 			log.Printf("[WARNING] App auth group %s has duplicate app auth id %s", id, auth.Id)
-			return errors.New("Duplicate app auth id")
+			//return errors.New("Duplicate app auth id")
+			removeIds = append(removeIds, auth.Id)
+			continue
 		}
-		uniqueIds[auth.Id] = true
+
 
 		// Fetch real data
+		uniqueIds[auth.Id] = true
 		realAuth, err := GetWorkflowAppAuthDatastore(ctx, auth.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting app auth %s for app auth group %s: %s", auth.Id, id, err)
-			return err
+			removeIds = append(removeIds, auth.Id)
+
+			// Remove the app auth from the slice
+			//workflowappauthgroup.AppAuths = append(workflowappauthgroup.AppAuths[:index], workflowappauthgroup.AppAuths[index+1:]...)
+			continue
 		}
 
 		// Update the slice with real data
-		workflowappauthgroup.AppAuths[index] = *realAuth
+		//workflowappauthgroup.AppAuths[index] = *realAuth
 		auth = *realAuth
 
 		// Check organization membership
-		if auth.OrgId != workflowappauthgroup.OrgId {
+		if realAuth.OrgId != workflowappauthgroup.OrgId {
 			log.Printf("[WARNING] App auth group %s has app auth id %s that doesn't belong to the same org", id, auth.Id)
-			return errors.New("App auth id doesn't belong to the same org")
+			removeIds = append(removeIds, auth.Id)
+			continue
 		}
 
+		auth.App.SmallImage = ""
+		auth.App.LargeImage = ""
+		auth.App.Documentation = ""
+
+		for authFieldIndex, _ := range auth.Fields {
+			auth.Fields[authFieldIndex].Value = ""
+		}
+
+		newAuth = append(newAuth, auth)
 	}
+
+	workflowappauthgroup.AppAuths = newAuth
+
+	// Remove the invalid app auths
+	for _, removeId := range removeIds {
+		for index, auth := range workflowappauthgroup.AppAuths {
+			if auth.Id == removeId {
+				log.Printf("[WARNING] Removed invalid app auth %s from app auth group %s", removeId, id)
+				workflowappauthgroup.AppAuths = append(workflowappauthgroup.AppAuths[:index], workflowappauthgroup.AppAuths[index+1:]...)
+				break
+			}
+		}
+	}
+
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
@@ -9241,7 +9517,7 @@ func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthentica
 	return appAuth, nil
 }
 
-func GetAllWorkflowAppAuthGroupDatastore(ctx context.Context, orgId string) ([]AppAuthenticationGroup, error) {
+func GetAuthGroups(ctx context.Context, orgId string) ([]AppAuthenticationGroup, error) {
 	nameKey := "workflowappauthgroup"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
 
