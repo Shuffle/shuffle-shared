@@ -4171,7 +4171,9 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			go func() {
 				err := propagateOrg(data, false)
 				if err != nil {
-					log.Printf("[ERROR] Failed propagating org %s for region %#v: %s", data.Id, data.Region, err)
+					if !strings.Contains(fmt.Sprintf("%s", err), "no SHUFFLE_PROPAGATE_URL") {
+						log.Printf("[ERROR] Failed propagating org %s for region %#v: %s", data.Id, data.Region, err)
+					}
 				} else {
 					log.Printf("[INFO] Successfully propagated org %s to region %#v", data.Id, data.Region)
 				}
@@ -7618,7 +7620,7 @@ func SetAppRevision(ctx context.Context, app WorkflowApp) error {
 	} else {
 		key := datastore.NameKey(nameKey, app.RevisionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &app); err != nil {
-			log.Printf("[WARNING] Error adding app revision: %s", err)
+			log.Printf("[ERROR] Error adding app revision: %s", err)
 			return err
 		}
 	}

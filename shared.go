@@ -5549,7 +5549,7 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 		return newWorkflow
 	}
 
-	log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
+	//log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
 
 	// Taking care of dedup in case there is a reduction in orgs 
 	newChildWorkflows := []Workflow{}
@@ -5611,6 +5611,7 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 			continue
 		}
 
+		//diffWorkflows(childWorkflow, newWorkflow, true)
 		waitgroup.Add(1)
 		go func(childWorkflow Workflow, newWorkflow Workflow, update bool) {
 			diffWorkflows(childWorkflow, newWorkflow, update)
@@ -5677,8 +5678,6 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 		// In case of replication
 		newWorkflow.Actions[actionIndex].AuthenticationId = ""
-
-		log.Printf("Looking for OLD authentication for App %#v", action.AppName)
 
 		idFound := false
 		for _, oldWorkflowAction := range oldWorkflow.Actions {
@@ -5924,17 +5923,17 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify 
-	log.Printf("\n ===== Parent: %#v, Child: %#v =====", newWorkflow.ID, oldWorkflow.ID)
-	log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
+	//log.Printf("\n ===== Parent: %#v, Child: %#v =====", newWorkflow.ID, oldWorkflow.ID)
+	//log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 
 	if update {
 		// FIXME: This doesn't work does it?
 		childWorkflow := oldWorkflow 
 
-		log.Printf("\n\nSTART")
-		log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
-		log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
-		log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
+		//log.Printf("\n\nSTART")
+		//log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
+		//log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
+		//log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
 
 		if nameChanged {
 			childWorkflow.Name = newWorkflow.Name
@@ -6298,10 +6297,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
 
-		log.Printf("\n\nEND")
-		log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
-		log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
-		log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
+		//log.Printf("\n\nEND")
+		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
+		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
+		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
 
 		ctx := context.Background()
 		err := SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
@@ -6309,12 +6308,18 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
 		} else {
 			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
+
+			SetWorkflowRevision(ctx, childWorkflow)
+			passedOrg := Org{
+				Id: childWorkflow.ExecutingOrg.Id,
+				Name: childWorkflow.ExecutingOrg.Name,
+			}
+			SetGitWorkflow(ctx, childWorkflow, &passedOrg)
 		}
 
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newWorkflow.ID))
-
 	}
 }
 
@@ -15357,7 +15362,12 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
 				} else {
-					log.Printf("[INFO] Added public app %s (%s) to org %s (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					addRemove := "Added"
+					if !activate {
+						addRemove = "Removed"
+					}
+
+					log.Printf("[INFO] %s public app %s (%s) to/from org %s (%s). Activated apps: %d", addRemove, app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id, len(org.ActiveApps))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 
