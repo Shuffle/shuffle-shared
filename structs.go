@@ -1389,6 +1389,11 @@ type File struct {
 	OriginalMd5sum  string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
 }
 
+type DisabledRules struct {
+	Files []File  `json:"files" datastore:"files"`
+	DisabledFolder bool `json:"disabled_folder" datastore:"disabled_folder"`
+}
+
 type AppAuthenticationGroup struct {
 	Active			bool                  `json:"active" datastore:"active"`
 	Label			string                `json:"label" datastore:"label"`
@@ -2349,6 +2354,17 @@ type FileWrapper struct {
 	PrimaryTerm int    `json:"_primary_term"`
 	Found       bool   `json:"found"`
 	Source      File   `json:"_source"`
+}
+
+type DisabledHookWrapper struct {
+	Index       string          `json:"_index"`
+	Type        string			`json:"_type"`
+	ID          string 			`json:"_id"`
+	Version     int   		    `json:"_version"`
+	SeqNo       int   			`json:"_seq_no"`
+	PrimaryTerm int    			`json:"_primary_term"`
+	Found       bool            `json:"found"`
+	Source      DisabledRules   `json:"_source"`
 }
 
 type HookWrapper struct {

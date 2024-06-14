@@ -8977,6 +8977,69 @@ func SetFile(ctx context.Context, file File) error {
 	return nil
 }
 
+func storeDisabledRules(ctx context.Context, file DisabledRules) error {
+
+	nameKey := "disabled_files"
+
+	if project.DbType == "opensearch" {
+		data, err := json.Marshal(file)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling set file: %s", err)
+			return err
+		}
+
+		err = indexEs(ctx, nameKey,"0", data)
+		if err != nil {
+			return err
+		}
+	} else {
+		k := datastore.NameKey(nameKey, "0", nil)
+		if _, err := project.Dbclient.Put(ctx, k, &file); err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func getDisabledRules(ctx context.Context) (*DisabledRules, error) {
+	nameKey := "disabled_rules"
+	disabRules := &DisabledRules{}
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), "0")
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
+			return &DisabledRules{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return &DisabledRules{}, errors.New("rules doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &DisabledRules{}, err
+		}
+
+		wrapped := DisabledHookWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &DisabledRules{}, err
+		}
+
+		disabRules = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, "0", nil)
+		if err := project.Dbclient.Get(ctx, key, disabRules); err != nil {
+			return &DisabledRules{}, err
+		}
+	}
+
+	return disabRules, nil
+}
+
 func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, error) {
 	nameKey := "notifications"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)

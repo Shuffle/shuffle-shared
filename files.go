@@ -682,17 +682,21 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if action == "disable" {
-		file.Status = "inactive"
+		err := disableRule(*file)
+		if err != nil {
+			log.Printf("[ERROR] Failed to %s file", action)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	} else if action == "enable" {
-		file.Status = "active"
-	}
-
-	err = SetFile(ctx, *file)
-	if err != nil {
-		log.Printf("[ERROR] Failed to %s file", action)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+		err := enableRule(*file)
+		if err != nil {
+			log.Printf("[ERROR] Failed to %s file", action)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	execType := fmt.Sprintf("%s_SIGMA_FILE", strings.ToUpper(action))
@@ -715,6 +719,58 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, fileId)))
+}
+
+func disableRule(file File) error {
+	ctx := context.Background()
+	resp, err := getDisabledRules(ctx)
+	if err != nil {
+		if (err.Error() == "rules doesn't exist") {
+			// FIX ME :- code duplication : (
+            disabRules := &DisabledRules{}
+			disabRules.Files = append(disabRules.Files, file)
+			err = storeDisabledRules(ctx, *disabRules)
+			if err != nil {
+				return err
+			}
+		
+			log.Printf("[INFO] file with ID %s is disabled successfully", file.Id)
+			return nil
+		} else {
+           return err
+		}
+	}
+
+	resp.Files = append(resp.Files, file)
+	err = storeDisabledRules(ctx, *resp)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[INFO] file with ID %s is disabled successfully", file.Id)
+	return nil
+}
+
+func enableRule(file File) error {
+	ctx := context.Background()
+	resp, err := getDisabledRules(ctx)
+	if err != nil {
+		return err
+	}
+
+	for i, innerFile := range resp.Files {
+		if innerFile.Id == file.Id {
+			resp.Files = append(resp.Files[:i], resp.Files[i+1:]...)
+		}
+	}
+
+	err = storeDisabledRules(ctx, *resp)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("[INFO] file with ID %s is enabled successfully", file.Id)
+	return nil
 }
 
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
