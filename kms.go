@@ -268,7 +268,19 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		parsedUrl += fmt.Sprintf("?authorization=%s&execution_id=%s", authorization, optionalExecutionId)
 	}
 
-	//log.Printf("\n\nKMS URL: %s\n\n", parsedUrl)
+	// Controls if automatic deletion of the execution should happen
+	shouldDelete := "true"
+	if kmsDebug {
+		shouldDelete = "false"
+	}
+
+	if strings.Contains(parsedUrl, "?") {
+		parsedUrl += fmt.Sprintf("&delete=%s", shouldDelete)
+	} else {
+		parsedUrl += fmt.Sprintf("?delete=%s", shouldDelete)
+	}
+
+	log.Printf("\n\n\n[DEBUG] KMS RUN URL: %s\n\n\n", parsedUrl)
 	req, err := http.NewRequest(
 		"POST", 
 		parsedUrl,
@@ -383,6 +395,7 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 		return "", err
 	}
 
+
 	// We need to check if the response is in the format we expect
 	/*
 	// Without key IS ok.
@@ -391,13 +404,16 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 		return "", errors.New("KMS response does not contain the key 'kms_key'")
 	}
 	*/
-
 	if _, ok := labeledResponse["kms_value"]; !ok {
 		log.Printf("[ERROR] KMS response does not contain the key 'kms_value'")
 		return "", errors.New("KMS response does not contain the key 'kms_value'")
 	}
 
 	// Key isn't even needed lol
+	if len(paramName) > 0 {
+		labeledResponse["kms_key"] = paramName
+	}
+
 	//foundKey := labeledResponse["kms_key"]
 	//log.Printf("\n\n\n[DEBUG] Found KMS value for key: %s\n\n\n", labeledResponse["kms_value"])
 	foundValue := labeledResponse["kms_value"]
@@ -1119,7 +1135,7 @@ func GetOrgspecificParameters(ctx context.Context, org Org, action WorkflowAppAc
 
 		file, err := GetFile(ctx, fileId)
 		if err != nil || file.Status != "active" {
-			log.Printf("[WARNING] File %s NOT found or not active. Status: %#v", fileId, file.Status)
+			//log.Printf("[WARNING] File %s NOT found or not active. Status: %#v", fileId, file.Status)
 			continue
 		}
 

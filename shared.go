@@ -57,6 +57,7 @@ import (
 var project ShuffleStorage
 var baseDockerName = "frikky/shuffle"
 var SSOUrl = ""
+var kmsDebug = false
 
 func RequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -10717,7 +10718,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME: This may be good to auto distribute no matter what
 	// Then maybe the kms problem won't happen
-	//newOrg.Defaults.KmsId = ""
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
 		Name: tmpData.Name,
@@ -20647,7 +20647,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			for actionIndex, action := range workflowExecution.Workflow.Actions {
 				for paramIndex, param := range action.Parameters {
 					// FIXME: Should we allow KMS for ANYthing?
-					if !param.Configuration {
+
+					if !param.Configuration && !kmsDebug {
 						continue
 					}
 
@@ -20669,7 +20670,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						param.Value = param.Value[0 : len(param.Value)-1]
 					}
 
-					param.Value = fmt.Sprintf("%s%s${%s}", param.Value, splitValue, param.Name)
+					if param.Configuration { 
+						param.Value = fmt.Sprintf("%s%s${%s}", param.Value, splitValue, param.Name)
+					}
+
 					if !ArrayContains(findKeys, param.Value) {
 						findKeys = append(findKeys, param.Value)
 					}
@@ -20719,7 +20723,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if len(foundValues) > 0 {
 					for actionIndex, action := range workflowExecution.Workflow.Actions {
 						for paramIndex, param := range action.Parameters {
-							if !param.Configuration {
+							if !param.Configuration && !kmsDebug {
 								continue
 							}
 
@@ -24261,7 +24265,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if value.SkipWorkflow {
-		log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
+		//log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
 
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
@@ -24291,7 +24295,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		// FIXME: Delete disabled for now (April 2nd 2024)
 		// This is due to needing debug capabilities
 		apprunUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", baseUrl, secondAction.AppID)
-
 		if len(request.Header.Get("Authorization")) > 0 {
 			tmpAuth := request.Header.Get("Authorization")
 

@@ -11293,6 +11293,11 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		project.BucketName = bucketName
 	}
 
+	kmsDebugEnabled := os.Getenv("SHUFFLE_KMS_DEBUG")
+	if strings.ToLower(kmsDebugEnabled) == "true" {
+		kmsDebug = true
+	}
+
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
 	log.Printf("[DEBUG] Starting with memcached address '%s' (SHUFFLE_MEMCACHED). If this is empty, fallback to default (appengine / local). Name: '%s'", memcached, environment)
 
