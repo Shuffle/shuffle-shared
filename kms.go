@@ -82,6 +82,7 @@ func SetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key, value 
 func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authorization, optionalExecutionId string) (string, error) {
 	cachedOutput, err := GetKmsCache(ctx, auth, key) 
 	if err == nil && len(cachedOutput) > 0 {
+		log.Printf("[INFO] Found cached KMS key for key '%s'", key)
 		return cachedOutput, nil
 	}
 
@@ -99,8 +100,31 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	// seeing as it has to start with kms(./:), we can remove the first element
 	keys = keys[1:]
 
-	log.Printf("[INFO] Looking to decrypt KMS key '%s' with %d parts", key, len(keys))
 
+	// Associated key is a structure to help with e.g. Hashicorp Vault where keys are used as values (multiple key:values in one)
+	// This is silly instead of just indexing & modifying keys ROFL
+	// Doesn't matter with small for-loop
+	newKeys := []string{}
+	associatedKey := ""
+	for keyIndex, keyPart := range keys {
+		if keyIndex != len(keys) - 1 {
+			newKeys = append(newKeys, keyPart)
+			continue
+		}
+
+		if strings.HasPrefix(keyPart, "${") && strings.HasSuffix(keyPart, "}") {
+			if len(keyPart) < 4 {
+				break
+			}
+
+			associatedKey = keyPart[2:len(keyPart)-1]
+			break
+		}
+	}
+
+
+	keys = newKeys
+	log.Printf("[INFO] Looking to decrypt KMS key '%s' with %d parts. Additional Key: %#v", key, len(keys), associatedKey)
 
 	// 1. Prepare to make sure we have all we need (org, project, app, key)
 	// 2. Decrypt the key
@@ -191,7 +215,6 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 			newkeys = append(newkeys, key)
 		}
 
-		log.Printf("[DEBUG] %d vs %d", len(newkeys), len(requiredParams))
 		keys = newkeys
 	}
 
@@ -210,6 +233,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 
 		SkipWorkflow: true,
 		SkipOutputTranslation: true, // Manually done in the KMS case
+		Environment: auth.Environment,
 	}
 
 	if len(app.Categories) > 0 {
@@ -283,7 +307,7 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	}
 
 	authConfig := fmt.Sprintf("%s,%s,,%s", baseUrl, authorization, optionalExecutionId)
-	output, err := RunKmsTranslation(ctx, body, authConfig)
+	output, err := RunKmsTranslation(ctx, body, authConfig, associatedKey)
 	if err != nil {
 		log.Printf("[ERROR] Failed to translate KMS response (1): %s", err)
 		return "", err
@@ -336,7 +360,7 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 
 // Translates the output of the KMS action to a usable format in the 
 // { "kms_key": "key", "kms_value": "value" } format
-func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig string) (string, error) {
+func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramName string) (string, error) {
 	// We need to parse the response from the KMS action
 	// 1. Find JUST the result data
 	_, marshalledBody, err := FindHttpBody(fullBody)
@@ -345,8 +369,8 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig string) 
 		return "", err
 	}
 
-
-	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig)
+	// Added a filename_prefix to know which field each belongs to
+	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig, fmt.Sprintf("filename_prefix:%s-", paramName))
 	if err != nil {
 		log.Printf("[ERROR] Failed to translate KMS response (2): %s", err)
 		return "", err
@@ -802,7 +826,11 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 	return outputData 
 }
 
-func RunApiQuery(systemMessage, userMessage string) (string, error) {
+func RunAiQuery(systemMessage, userMessage string) (string, error) {
+	if len(systemMessage) > 10000 || len(userMessage) > 10000 {
+		return "", errors.New("Message too long for general usage. Max 10000 characters for system & user message")
+	}
+
 	//log.Printf("[INFO] System message (find API documentation): %s", systemMessage)
 	cnt := 0
 	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
@@ -810,9 +838,10 @@ func RunApiQuery(systemMessage, userMessage string) (string, error) {
 	chatCompletion := openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{},
-		Temperature: 0.8,
-		MaxTokens:   200,
+		Temperature: 0.8, // A tiny bit of creativity 
+		MaxTokens:   500,
 	}
+
 	if len(systemMessage) > 0 {
 		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
 			Role:    openai.ChatMessageRoleSystem,
@@ -868,7 +897,7 @@ func getOpenApiInformation(appname, action string) string {
 	systemMessage := fmt.Sprintf("Output a valid JSON body format for a HTTP request %s in the %s API?", action, appname)
 
 	//log.Printf("[INFO] System message (find API documentation): %s", systemMessage)
-	contentOutput, err = RunApiQuery(systemMessage, "") 
+	contentOutput, err = RunAiQuery(systemMessage, "") 
 	if err != nil {
 		log.Printf("[ERROR] Failed to run API query: %s", err)
 	}
@@ -897,7 +926,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 
 	log.Printf("\n\nBODY CREATE SYSTEM MESSAGE: %s\n\n", systemMessage)
 
-	contentOutput, err := RunApiQuery(systemMessage, userMessage)
+	contentOutput, err := RunAiQuery(systemMessage, userMessage)
 	if err != nil {
 		log.Printf("[ERROR] Failed to run API query: %s", err)
 		return "", err

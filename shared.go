@@ -20613,7 +20613,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		for _, auth := range allAuths {
-			if strings.TrimSpace(strings.ToLower(auth.Label)) == "kms shuffle storage" {
+			if strings.ReplaceAll(strings.TrimSpace(strings.ToLower(auth.Label)), "_", " ")  == "kms shuffle storage" {
 				org.Defaults.KmsId = auth.Id
 				break
 			}
@@ -20640,11 +20640,19 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Use the auth to decrypt
 		if foundAuth.Id == org.Defaults.KmsId {
+			foundAuth.App.LargeImage = ""
+			foundAuth.App.SmallImage = ""
+
 			findKeys := []string{}
-			for _, action := range workflowExecution.Workflow.Actions {
-				for _, param := range action.Parameters {
+			for actionIndex, action := range workflowExecution.Workflow.Actions {
+				for paramIndex, param := range action.Parameters {
+					// FIXME: Should we allow KMS for ANYthing?
 					if !param.Configuration {
 						continue
+					}
+
+					if strings.HasPrefix(param.Value, "/") {
+						param.Value = strings.TrimPrefix(param.Value, "/")
 					}
 
 					// Allow for both kms/ kms. and kms: as prefix
@@ -20652,17 +20660,28 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						continue
 					}
 
-					//findKey := strings.Replace(param.Value, "shuffle_auth.", "", -1)
+					splitValue := "/"
+					if strings.Contains(strings.ToLower(param.Value), "kms:") {
+						splitValue = ":"
+					}
+
+					if strings.HasSuffix(param.Value, splitValue) {
+						param.Value = param.Value[0 : len(param.Value)-1]
+					}
+
+					param.Value = fmt.Sprintf("%s%s${%s}", param.Value, splitValue, param.Name)
 					if !ArrayContains(findKeys, param.Value) {
 						findKeys = append(findKeys, param.Value)
 					}
+
+					workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = param.Value
 				}
 			}
 
 			// Should run all keys goroutines, then go find them again when all are done and replace
 			// Wtf is this garbage
 			if len(findKeys) > 0 {
-				log.Printf("\n\n\n\n[INFO] Found %d auth keys to decrypt from KMS\n\n\n\n", len(findKeys))
+				//log.Printf("\n\n\n\n[INFO] Found %d auth key(s) to decrypt from KMS\n\n\n\n", len(findKeys))
 
 				// Have to set the workflow exec in cache while running this so that access rights exist
 				foundValues := map[string]string{}
@@ -20711,6 +20730,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							if val, ok := foundValues[param.Value]; ok {
 								//log.Printf("[INFO] Replacing value for %s with %s", param.Value, val)
 								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = val
+							} else {
+								// Remove the last /${%s} part if it exists in a key
+								for	mapKey, mapValue:= range foundValues {
+									if strings.HasPrefix(mapKey, param.Value) {
+										workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = mapValue 
+										break
+									}
+								}
 							}
 						}
 					}
@@ -23362,7 +23389,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					log.Printf("[DEBUG] Found category label %s", action.CategoryLabel)
+					log.Printf("[DEBUG] Found category label %#v", action.CategoryLabel)
 					availableLabels = append(availableLabels, action.CategoryLabel[0])
 
 					actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_")
@@ -26931,7 +26958,7 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	cacheIncrementKey := fmt.Sprintf("%s_cacheset", execution.ExecutionId)
  	_, err := GetCache(ctx, cacheIncrementKey)
 	if err == nil {
-		log.Printf("[DEBUG] Cache already incremented for execution %s", execution.ExecutionId)
+		//log.Printf("[DEBUG] Cache already incremented for execution %s", execution.ExecutionId)
 		return
 	}
 
