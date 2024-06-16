@@ -69,7 +69,7 @@ type AllPipelinesWrapper struct {
 
 type QueryInput struct {
 	// Required
-	Query string `json:"query"`
+	Query string `json:"query" datastore:"query,noindex"`
 
 	// Output helpers
 	Id           string `json:"id,omitempty"`

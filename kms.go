@@ -280,7 +280,6 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 		parsedUrl += fmt.Sprintf("?delete=%s", shouldDelete)
 	}
 
-	log.Printf("\n\n\n[DEBUG] KMS RUN URL: %s\n\n\n", parsedUrl)
 	req, err := http.NewRequest(
 		"POST", 
 		parsedUrl,
