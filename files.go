@@ -1,7 +1,7 @@
 package shuffle
 
 /*
-	Handles files within Workflows.of Shuffle
+	Handles files for Shuffle. Uses ID's to reference everything
 */
 
 import (
@@ -30,6 +30,7 @@ import (
 
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
 var orgFileBucket = "shuffle_org_files"
+var maxFileSize = 10000000 // raw 10mb max filesize on cloud
 
 func init() {
 	if len(os.Getenv("SHUFFLE_ORG_BUCKET")) > 0 {
@@ -976,12 +977,27 @@ func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) (
 				}
 			}
 
+
+			// FIXME:
+			// Editing in the following order fails:
+			// url -> apikey
+
+			// Editing in the following order works:
+			// apikey -> url
+
+			// This means apikey should be the reference file ID? 
+			// Problem: It shouldn't edit ALL files when one out of many are edited.
+
+			//log.Printf("[DEBUG] MD5: %s, Original MD5:", file.Md5sum, file.OriginalMd5sum)
+			// If file does not equal the original MD5, it's been edited
+
 			passphrase := fmt.Sprintf("%s_%s", file.OrgId, file.Id)
 			data, err := HandleKeyDecryption(allText, passphrase)
 			if err != nil {
 				// Reference File Id only used as fallback
 				if len(file.ReferenceFileId) > 0 {
 					passphrase = fmt.Sprintf("%s_%s", file.OrgId, file.ReferenceFileId)
+
 					data, err = HandleKeyDecryption(allText, passphrase)
 					if err != nil {
 						log.Printf("[ERROR] Failed decrypting file (4): %s. Continuing anyway, but this WILL cause trouble for the user if the file is encrypted.", err)
@@ -1207,13 +1223,30 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" && len(body) > maxFileSize {
+		log.Printf("[ERROR] Max filesize is 10MB in cloud environment")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb"}`))
+		return
+	}
+
 	file.FileSize = int64(len(body))
 	file.ContentType = http.DetectContentType(body)
 	file.Encrypted = true // not sure about what this does, maybe it has something to do with datastore encrypted column and stores file as encrypted in cloud storage?
 	file.LastEditor = user.Username
 	file.IsEdited = true
 
+	// Change filepath when a file is changed no matter what as to not screw up other files
+	// This makes it so that referencing files are not overwritten even when replicas?
+	// We still point to a reference IF the change goes to an md5sum that is the same as another file
+	file.DownloadPath = fmt.Sprintf("files/%s/global/%s-edited", user.ActiveOrg.Id, file.Id)
+	file.ReferenceFileId = ""
+
 	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+	if len(file.ReferenceFileId) > 0 {
+		parsedKey = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+	}
+
 	fileId, err = uploadFile(ctx, file, parsedKey, body)
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file with ID %s: %s", fileId, err)
@@ -1340,6 +1373,22 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	io.Copy(&buf, parsedFile)
 	contents := buf.Bytes()
 
+	if project.Environment == "cloud" && len(contents) > maxFileSize {
+		file.Status = "maxsize_exceeded"
+		err = SetFile(ctx, *file)
+		if err != nil {
+			log.Printf("Failed setting file to uploading")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to uploading"}`))
+			return
+		}
+
+		log.Printf("[ERROR] Max filesize is 10MB in cloud environment (upload)")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb"}`))
+		return
+	}
+
 	//if len(contents) < 50 && strings.HasSuffix(file.Filename, ".json"){
 	//	log.Printf("\n\n\n\n\nFILE (%s): '''\n%s\n'''\n\n\n\n", file.Filename, string(contents))
 	//}
@@ -1389,6 +1438,11 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 			file.ReferenceFileId = outputFile.Id
 		}
 	} else {
+		log.Printf("[INFO] No similar file found with md5 %s. Original Md5: %s", md5, file.OriginalMd5sum)
+		if len(file.OriginalMd5sum) > 0 && file.OriginalMd5sum != md5 {
+			log.Printf("[DEBUG] Md5 has changed!")
+		}
+
 		if len(encryptionKey) > 0 {
 			newContents := contents
 			newFileValue, err := handleKeyEncryption(contents, encryptionKey)
@@ -1455,7 +1509,7 @@ func uploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 	file.FileSize = int64(len(contents))
 	file.ContentType = http.DetectContentType(contents)
 
-	log.Printf("[INFO] MD5 for file %s (%s) is %s and SHA256 is %s. Type: %s and size: %d", file.Filename, file.Id, file.Md5sum, file.Sha256sum, file.ContentType, file.FileSize)
+	log.Printf("[INFO] MD5 for file %s (%s) is %s Type: %s and size: %d", file.Filename, file.Id, file.Md5sum, file.ContentType, file.FileSize)
 
 	err = SetFile(ctx, *file)
 	if err != nil {

@@ -57,6 +57,7 @@ import (
 var project ShuffleStorage
 var baseDockerName = "frikky/shuffle"
 var SSOUrl = ""
+var kmsDebug = false
 
 func RequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -5860,7 +5861,7 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 		return newWorkflow
 	}
 
-	log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
+	//log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
 
 	// Taking care of dedup in case there is a reduction in orgs 
 	newChildWorkflows := []Workflow{}
@@ -5922,6 +5923,7 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 			continue
 		}
 
+		//diffWorkflows(childWorkflow, newWorkflow, true)
 		waitgroup.Add(1)
 		go func(childWorkflow Workflow, newWorkflow Workflow, update bool) {
 			diffWorkflows(childWorkflow, newWorkflow, update)
@@ -5988,8 +5990,6 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 		// In case of replication
 		newWorkflow.Actions[actionIndex].AuthenticationId = ""
-
-		log.Printf("Looking for OLD authentication for App %#v", action.AppName)
 
 		idFound := false
 		for _, oldWorkflowAction := range oldWorkflow.Actions {
@@ -6235,17 +6235,17 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify 
-	log.Printf("\n ===== Parent: %#v, Child: %#v =====", newWorkflow.ID, oldWorkflow.ID)
-	log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
+	//log.Printf("\n ===== Parent: %#v, Child: %#v =====", newWorkflow.ID, oldWorkflow.ID)
+	//log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 
 	if update {
 		// FIXME: This doesn't work does it?
 		childWorkflow := oldWorkflow 
 
-		log.Printf("\n\nSTART")
-		log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
-		log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
-		log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
+		//log.Printf("\n\nSTART")
+		//log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
+		//log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
+		//log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
 
 		if nameChanged {
 			childWorkflow.Name = newWorkflow.Name
@@ -6609,10 +6609,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
 
-		log.Printf("\n\nEND")
-		log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
-		log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
-		log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
+		//log.Printf("\n\nEND")
+		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
+		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
+		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
 
 		ctx := context.Background()
 		err := SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
@@ -6620,12 +6620,18 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
 		} else {
 			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
+
+			SetWorkflowRevision(ctx, childWorkflow)
+			passedOrg := Org{
+				Id: childWorkflow.ExecutingOrg.Id,
+				Name: childWorkflow.ExecutingOrg.Name,
+			}
+			SetGitWorkflow(ctx, childWorkflow, &passedOrg)
 		}
 
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newWorkflow.ID))
-
 	}
 }
 
@@ -11023,7 +11029,6 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// FIXME: This may be good to auto distribute no matter what
 	// Then maybe the kms problem won't happen
-	//newOrg.Defaults.KmsId = ""
 
 	parentOrg.ChildOrgs = append(parentOrg.ChildOrgs, OrgMini{
 		Name: tmpData.Name,
@@ -15722,7 +15727,12 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
 				} else {
-					log.Printf("[INFO] Added public app %s (%s) to org %s (%s)", app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+					addRemove := "Added"
+					if !activate {
+						addRemove = "Removed"
+					}
+
+					log.Printf("[INFO] %s public app %s (%s) to/from org %s (%s). Activated apps: %d", addRemove, app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id, len(org.ActiveApps))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
 
@@ -20968,7 +20978,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		for _, auth := range allAuths {
-			if strings.TrimSpace(strings.ToLower(auth.Label)) == "kms shuffle storage" {
+			if strings.ReplaceAll(strings.TrimSpace(strings.ToLower(auth.Label)), "_", " ")  == "kms shuffle storage" {
 				org.Defaults.KmsId = auth.Id
 				break
 			}
@@ -20995,11 +21005,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Use the auth to decrypt
 		if foundAuth.Id == org.Defaults.KmsId {
+			foundAuth.App.LargeImage = ""
+			foundAuth.App.SmallImage = ""
+
 			findKeys := []string{}
-			for _, action := range workflowExecution.Workflow.Actions {
-				for _, param := range action.Parameters {
-					if !param.Configuration {
+			for actionIndex, action := range workflowExecution.Workflow.Actions {
+				for paramIndex, param := range action.Parameters {
+					// FIXME: Should we allow KMS for ANYthing?
+
+					if !param.Configuration && !kmsDebug {
 						continue
+					}
+
+					if strings.HasPrefix(param.Value, "/") {
+						param.Value = strings.TrimPrefix(param.Value, "/")
 					}
 
 					// Allow for both kms/ kms. and kms: as prefix
@@ -21007,17 +21026,31 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						continue
 					}
 
-					//findKey := strings.Replace(param.Value, "shuffle_auth.", "", -1)
+					splitValue := "/"
+					if strings.Contains(strings.ToLower(param.Value), "kms:") {
+						splitValue = ":"
+					}
+
+					if strings.HasSuffix(param.Value, splitValue) {
+						param.Value = param.Value[0 : len(param.Value)-1]
+					}
+
+					if param.Configuration { 
+						param.Value = fmt.Sprintf("%s%s${%s}", param.Value, splitValue, param.Name)
+					}
+
 					if !ArrayContains(findKeys, param.Value) {
 						findKeys = append(findKeys, param.Value)
 					}
+
+					workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = param.Value
 				}
 			}
 
 			// Should run all keys goroutines, then go find them again when all are done and replace
 			// Wtf is this garbage
 			if len(findKeys) > 0 {
-				log.Printf("\n\n\n\n[INFO] Found %d auth keys to decrypt from KMS\n\n\n\n", len(findKeys))
+				//log.Printf("\n\n\n\n[INFO] Found %d auth key(s) to decrypt from KMS\n\n\n\n", len(findKeys))
 
 				// Have to set the workflow exec in cache while running this so that access rights exist
 				foundValues := map[string]string{}
@@ -21055,7 +21088,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				if len(foundValues) > 0 {
 					for actionIndex, action := range workflowExecution.Workflow.Actions {
 						for paramIndex, param := range action.Parameters {
-							if !param.Configuration {
+							if !param.Configuration && !kmsDebug {
 								continue
 							}
 
@@ -21066,6 +21099,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							if val, ok := foundValues[param.Value]; ok {
 								//log.Printf("[INFO] Replacing value for %s with %s", param.Value, val)
 								workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = val
+							} else {
+								// Remove the last /${%s} part if it exists in a key
+								for	mapKey, mapValue:= range foundValues {
+									if strings.HasPrefix(mapKey, param.Value) {
+										workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = mapValue 
+										break
+									}
+								}
 							}
 						}
 					}
@@ -23717,7 +23758,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					log.Printf("[DEBUG] Found category label %s", action.CategoryLabel)
+					log.Printf("[DEBUG] Found category label %#v", action.CategoryLabel)
 					availableLabels = append(availableLabels, action.CategoryLabel[0])
 
 					actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_")
@@ -24589,7 +24630,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if value.SkipWorkflow {
-		log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
+		//log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
 
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
@@ -24619,7 +24660,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		// FIXME: Delete disabled for now (April 2nd 2024)
 		// This is due to needing debug capabilities
 		apprunUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", baseUrl, secondAction.AppID)
-
 		if len(request.Header.Get("Authorization")) > 0 {
 			tmpAuth := request.Header.Get("Authorization")
 
@@ -27286,7 +27326,7 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	cacheIncrementKey := fmt.Sprintf("%s_cacheset", execution.ExecutionId)
  	_, err := GetCache(ctx, cacheIncrementKey)
 	if err == nil {
-		log.Printf("[DEBUG] Cache already incremented for execution %s", execution.ExecutionId)
+		//log.Printf("[DEBUG] Cache already incremented for execution %s", execution.ExecutionId)
 		return
 	}
 
