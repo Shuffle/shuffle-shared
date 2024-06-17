@@ -1390,8 +1390,8 @@ type File struct {
 }
 
 type DisabledRules struct {
-	Files []File  `json:"files" datastore:"files"`
-	DisabledFolder bool `json:"disabled_folder" datastore:"disabled_folder"`
+	Files          []File `json:"files" datastore:"files"`
+	DisabledFolder bool   `json:"disabled_folder" datastore:"disabled_folder"`
 }
 
 type AppAuthenticationGroup struct {
@@ -2357,14 +2357,14 @@ type FileWrapper struct {
 }
 
 type DisabledHookWrapper struct {
-	Index       string          `json:"_index"`
-	Type        string			`json:"_type"`
-	ID          string 			`json:"_id"`
-	Version     int   		    `json:"_version"`
-	SeqNo       int   			`json:"_seq_no"`
-	PrimaryTerm int    			`json:"_primary_term"`
-	Found       bool            `json:"found"`
-	Source      DisabledRules   `json:"_source"`
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      DisabledRules `json:"_source"`
 }
 
 type HookWrapper struct {
