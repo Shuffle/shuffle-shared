@@ -725,12 +725,19 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 	} else if action == "enable" {
 		err := enableRule(*file)
 		if err != nil {
-			log.Printf("[ERROR] Failed to %s file", action)
-			resp.WriteHeader(500)
+			if err.Error() != "rules doesn't exist" {
+			log.Printf("[ERROR] Failed to %s file, reason: %s", action, err)
+			resp.WriteHeader(404)
 			resp.Write([]byte(`{"success": false}`))
 			return
+		} else {
+			log.Printf("[ERROR] Failed to %s file", action)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
 		}
 	}
+}
 
 	execType := fmt.Sprintf("%s_SIGMA_FILE", strings.ToUpper(action))
 
