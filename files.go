@@ -522,7 +522,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	disabledRules, err := getDisabledRules(ctx)
-	if err.Error() != "rules doesn't exist" {
+	if err != nil && err.Error() != "rules doesn't exist" {
 		log.Printf("[ERROR] Failed to get disabled rules: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Error getting disabled rules."}`))
@@ -561,7 +561,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 						log.Printf("[ERROR] Failed to open file %s: %s", file.Filename, err)
 						continue
 					}
-					defer Openfile.Close() 
+					defer Openfile.Close()
 
 					allText := []byte{}
 					buf := make([]byte, 1024)
@@ -613,19 +613,19 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 			found := false
 			if isDisabled {
 				rule.IsEnabled = false
-			} else{
-			for _, disabledFile := range disabledRules.Files {
-				if disabledFile.Id == file.Id {
-					found = true
-					break
+			} else {
+				for _, disabledFile := range disabledRules.Files {
+					if disabledFile.Id == file.Id {
+						found = true
+						break
+					}
+				}
+				if found {
+					rule.IsEnabled = false
+				} else {
+					rule.IsEnabled = true
 				}
 			}
-			if found {
-				rule.IsEnabled = false
-			} else {
-				rule.IsEnabled = true
-			}
-		}
 
 			rule.FileId = file.Id
 			sigmaFileInfo = append(sigmaFileInfo, rule)
@@ -726,18 +726,18 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		err := enableRule(*file)
 		if err != nil {
 			if err.Error() != "rules doesn't exist" {
-			log.Printf("[ERROR] Failed to %s file, reason: %s", action, err)
-			resp.WriteHeader(404)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		} else {
-			log.Printf("[ERROR] Failed to %s file", action)
+				log.Printf("[ERROR] Failed to %s file, reason: %s", action, err)
+				resp.WriteHeader(404)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			} else {
+				log.Printf("[ERROR] Failed to %s file, reason: %s", action, err)
 				resp.WriteHeader(500)
 				resp.Write([]byte(`{"success": false}`))
 				return
+			}
 		}
 	}
-}
 
 	execType := fmt.Sprintf("%s_SIGMA_FILE", strings.ToUpper(action))
 
@@ -765,19 +765,19 @@ func disableRule(file File) error {
 	ctx := context.Background()
 	resp, err := getDisabledRules(ctx)
 	if err != nil {
-		if (err.Error() == "rules doesn't exist") {
+		if err.Error() == "rules doesn't exist" {
 			// FIX ME :- code duplication : (
-            disabRules := &DisabledRules{}
+			disabRules := &DisabledRules{}
 			disabRules.Files = append(disabRules.Files, file)
 			err = storeDisabledRules(ctx, *disabRules)
 			if err != nil {
 				return err
 			}
-		
+
 			log.Printf("[INFO] file with ID %s is disabled successfully", file.Id)
 			return nil
 		} else {
-           return err
+			return err
 		}
 	}
 

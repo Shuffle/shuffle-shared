@@ -8979,7 +8979,7 @@ func SetFile(ctx context.Context, file File) error {
 
 func storeDisabledRules(ctx context.Context, file DisabledRules) error {
 
-	nameKey := "disabled_files"
+	nameKey := "disabled_rules"
 
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(file)
@@ -8988,7 +8988,7 @@ func storeDisabledRules(ctx context.Context, file DisabledRules) error {
 			return err
 		}
 
-		err = indexEs(ctx, nameKey,"0", data)
+		err = indexEs(ctx, nameKey, "0", data)
 		if err != nil {
 			return err
 		}
