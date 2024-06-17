@@ -522,7 +522,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	disabledRules, err := getDisabledRules(ctx)
-	if err != nil {
+	if err.Error() != "rules doesn't exist" {
 		log.Printf("[ERROR] Failed to get disabled rules: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Error getting disabled rules."}`))
