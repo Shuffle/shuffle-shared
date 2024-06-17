@@ -665,15 +665,9 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		fileId = location[4]
+		fileId = location[5]
 	}
-
-	var action string
-	if location[5] == "disable_rule" {
-		action = "disable"
-	} else if location[5] == "enable_rule" {
-		action = "enable"
-	}
+	ctx := GetContext(request)
 
 	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
 		log.Printf("[WARNING] Bad format for fileId %s", fileId)
@@ -697,9 +691,6 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
-	log.Printf("[AUDIT] User '%s' (%s) %s sigma rule file %s in org %s", user.Username, user.Id, action, fileId, user.ActiveOrg.Id)
-
-	ctx := GetContext(request)
 	file, err := GetFile(ctx, fileId)
 	if err != nil {
 		log.Printf("[ERROR] File %s not found: %s", fileId, err)
@@ -714,6 +705,48 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
+
+	var action string
+	switch location[6] {
+
+	case "disable_rule":
+		action = "disable"
+	case "enable_rule":
+		action = "enable"
+	case "disable_folder", "enable_folder":
+		action = location[6]
+		rules, err := getDisabledRules(ctx)
+		if err != nil {
+			log.Printf("[WARNING] Cannot disable the folder, reason %s", err)
+			resp.WriteHeader(404)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		if action == "disable_folder" {
+			rules.DisabledFolder = true
+		} else {
+			rules.DisabledFolder = false
+		}
+
+		err = storeDisabledRules(ctx, *rules)
+		if err != nil {
+			log.Printf("[ERROR] Failed to store disabled rules: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		} else {
+			log.Printf("[INFO] Successfully disabled sigma rules")
+			resp.WriteHeader(200)
+			resp.Write([]byte(`{"success": true}`))
+		}
+
+	default:
+		log.Printf("[WARNING] path not found: %s", location[6])
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "message": the URL doesn't exist or is not allowed."}`))
+		return
+	}
+
 	if action == "disable" {
 		err := disableRule(*file)
 		if err != nil {
@@ -739,17 +772,17 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	execType := fmt.Sprintf("%s_SIGMA_FILE", strings.ToUpper(action))
+	var execType string
 
-	execRequest := ExecutionRequest{
-		Type:              execType,
-		ExecutionId:       uuid.NewV4().String(),
-		ExecutionSource:   "sigma",
-		ExecutionArgument: file.Filename,
-		Priority:          11,
+	if action == "disable" {
+		execType = "DISABLE_SIGMA_FILE"
+	} else if action == "enable" || action == "enable_folder" {
+		execType = "CATEGORY_UPDATE"
+	} else if action == "disable_folder" {
+		execType = "DISABLE_SIGMA_FOLDER"
 	}
 
-	err = SetWorkflowQueue(ctx, execRequest, "default")
+	err = setExecRequest(ctx, execType, file.Filename)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
 		resp.WriteHeader(500)
@@ -1153,6 +1186,23 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	io.Copy(resp, buf)
 }
 
+func setExecRequest(ctx context.Context, execType string, fileName string) error {
+
+	execRequest := ExecutionRequest{
+		Type:              execType,
+		ExecutionId:       uuid.NewV4().String(),
+		ExecutionSource:   "SIGMA",
+		ExecutionArgument: fileName,
+		Priority:          11,
+	}
+
+	err := SetWorkflowQueue(ctx, execRequest, "default")
+	if err != nil {
+          return err
+	}
+	return nil
+}
+
 func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1547,6 +1597,16 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
+
+	execType := "CATEGORY_UPDATE"
+	err = setExecRequest(ctx, execType, file.Filename)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
 }
@@ -1687,6 +1747,16 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
+
+	execType := "CATEGORY_UPDATE"
+	err = setExecRequest(ctx, execType, file.Filename)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
 }
