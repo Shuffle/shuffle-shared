@@ -69,7 +69,7 @@ type AllPipelinesWrapper struct {
 
 type QueryInput struct {
 	// Required
-	Query string `json:"query"`
+	Query string `json:"query" datastore:"query,noindex"`
 
 	// Output helpers
 	Id           string `json:"id,omitempty"`
@@ -858,6 +858,7 @@ type Org struct {
 	CloudSyncActive bool         `json:"cloud_sync_active" datastore:"CloudSyncActive"`
 	SyncConfig      SyncConfig   `json:"sync_config" datastore:"sync_config"`
 	SyncFeatures    SyncFeatures `json:"sync_features,omitempty" datastore:"sync_features"`
+	MFARequired     bool         `json:"mfa_required" datastore:"mfa_required"`
 
 	SubscriptionUserId string                `json:"subscription_user_id" datastore:"subscription_user_id"`
 	Subscriptions      []PaymentSubscription `json:"subscriptions" datastore:"subscriptions"`
@@ -929,6 +930,8 @@ type CacheKeyData struct {
 	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
 	Key           string `json:"key" datastore:"Key"`
 	Value         string `json:"value" datastore:"Value,noindex"`
+
+	Created 	  int64 `json:"created" datastore:"Created"`
 	Edited        int64  `json:"edited" datastore:"Edited"`
 
 	FormattedKey        string `json:"formatted_key,omitempty" datastore:"FormattedKey"`
@@ -1430,6 +1433,7 @@ type AppAuthenticationStorage struct {
 	ReferenceWorkflow string                `json:"reference_workflow" datastore:"reference_workflow"`
 	AutoDistribute    bool                  `json:"auto_distribute" datastore:"auto_distribute"`
 
+	Environment string `json:"environment" datastore:"environment"` // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
 	SuborgDistributed bool `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
 }
 

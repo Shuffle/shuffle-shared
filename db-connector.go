@@ -1941,7 +1941,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	}
 
 	if id == "integration" {
-		return workflowApp, errors.New("Integration is for the integration framework. Uses the Shuffle-ai app")
+		return workflowApp, errors.New("App ID 'integration' is for the integration framework. Uses the Shuffle-ai app.")
 	}
 
 	nameKey := "workflowapp"
@@ -4171,7 +4171,9 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			go func() {
 				err := propagateOrg(data, false)
 				if err != nil {
-					log.Printf("[ERROR] Failed propagating org %s for region %#v: %s", data.Id, data.Region, err)
+					if !strings.Contains(fmt.Sprintf("%s", err), "no SHUFFLE_PROPAGATE_URL") {
+						log.Printf("[ERROR] Failed propagating org %s for region %#v: %s", data.Id, data.Region, err)
+					}
 				} else {
 					log.Printf("[INFO] Successfully propagated org %s to region %#v", data.Id, data.Region)
 				}
@@ -7618,7 +7620,7 @@ func SetAppRevision(ctx context.Context, app WorkflowApp) error {
 	} else {
 		key := datastore.NameKey(nameKey, app.RevisionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &app); err != nil {
-			log.Printf("[WARNING] Error adding app revision: %s", err)
+			log.Printf("[ERROR] Error adding app revision: %s", err)
 			return err
 		}
 	}
@@ -7787,7 +7789,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	// Handles parent/child workflow relationships
 	if len(workflow.ParentWorkflowId) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
-		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
 	}
 
 	if project.CacheDb {
@@ -11078,6 +11079,10 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	timeNow := int64(time.Now().Unix())
 	cacheData.Edited = timeNow
 
+	if cacheData.Created == 0 {
+		cacheData.Created = timeNow
+	}
+
 	//cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
 	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
 	if len(cacheId) > 128 {
@@ -11289,6 +11294,11 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	if len(bucketName) > 0 {
 		log.Printf("[DEBUG] Using custom project bucketname: %s", bucketName)
 		project.BucketName = bucketName
+	}
+
+	kmsDebugEnabled := os.Getenv("SHUFFLE_KMS_DEBUG")
+	if strings.ToLower(kmsDebugEnabled) == "true" {
+		kmsDebug = true
 	}
 
 	// docker run -p 11211:11211 --name memcache -d memcached -m 100
