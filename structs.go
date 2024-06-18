@@ -69,7 +69,7 @@ type AllPipelinesWrapper struct {
 
 type QueryInput struct {
 	// Required
-	Query string `json:"query" datastore:"query,noindex"`
+	Query string `json:"query"`
 
 	// Output helpers
 	Id           string `json:"id,omitempty"`
@@ -858,7 +858,6 @@ type Org struct {
 	CloudSyncActive bool         `json:"cloud_sync_active" datastore:"CloudSyncActive"`
 	SyncConfig      SyncConfig   `json:"sync_config" datastore:"sync_config"`
 	SyncFeatures    SyncFeatures `json:"sync_features,omitempty" datastore:"sync_features"`
-	MFARequired     bool         `json:"mfa_required" datastore:"mfa_required"`
 
 	SubscriptionUserId string                `json:"subscription_user_id" datastore:"subscription_user_id"`
 	Subscriptions      []PaymentSubscription `json:"subscriptions" datastore:"subscriptions"`

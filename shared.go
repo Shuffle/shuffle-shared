@@ -98,7 +98,7 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
-	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Authorization, X-Debug-Url")
+	resp.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, X-Requested-With, remember-me, Org-Id, Authorization")
 	resp.Header().Set("Access-Control-Allow-Methods", "POST, GET, PUT, DELETE, PATCH")
 	resp.Header().Set("Access-Control-Allow-Credentials", "true")
 
@@ -165,76 +165,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	var user User
-	var userId string
-	userSettingUpMfa := false
 	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		parts := strings.Split(request.URL.Path, "/")
-		if len(parts) < 5 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Invalid URL path."}`))
-			return
-		}
-
-		MFACode := parts[4]
-
-		// Retrieve user ID and unique code from cache
-		cacheUserId, err := GetCache(ctx, fmt.Sprintf("user_id_%s", MFACode))
-		if err != nil {
-			log.Printf("[ERROR] Failed to retrieve user ID from cache: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user ID from cache."}`))
-			return
-		}
-
-		cacheUniqueCode, err := GetCache(ctx, fmt.Sprintf("mfa_code_%s", MFACode))
-		if err != nil {
-			log.Printf("[ERROR] Failed to retrieve mfa code from cache: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve MFA code from cache."}`))
-			return
-		}
-
-		//if user id and unique code are not empty, user is setting up MFA
-		if len(cacheUserId.([]byte)) > 0 && len(cacheUniqueCode.([]byte)) > 0 {
-			userSettingUpMfa = true
-		}
-
-		if mfaCodeBytes, ok := cacheUniqueCode.([]byte); ok {
-			cacheUniqueCode = string(mfaCodeBytes)
-		}
-
-		//Both unique code present in cache and MFA code token present in url request must match
-		if cacheUniqueCode != MFACode {
-			log.Printf("[ERROR] user_id or uniqueId does not match")
-			resp.WriteHeader(http.StatusBadRequest)
-			resp.Write([]byte(`{"success": false, "reason": "user_id or uniqueId does not match."}`))
-			return
-		}
-
-		if userIdBytes, ok := cacheUserId.([]byte); ok {
-			userId = string(userIdBytes)
-		}
-	}
-
-	var cacheUser *User
-
-	// check if user id received from cache is not empty
-	if len(userId) > 0 && userSettingUpMfa == true {
-		cacheUser, err = GetUser(ctx, userId)
-		if err != nil {
-			log.Printf("[ERROR] Failed to retrieve user from cache: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user from cache."}`))
-			return
-		}
-	}
-
-	//if user id is empty, use the user data from cache
-	if len(user.Id) == 0 {
-		user = *cacheUser
-	}
 
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
@@ -249,10 +180,17 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in get 2fa: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
-		if len(location) <= 4 && userSettingUpMfa == false {
+		if len(location) <= 4 {
 			log.Printf("[ERROR] Path too short: %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
@@ -291,17 +229,9 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	org, err := GetOrg(ctx, user.ActiveOrg.Id)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting org %s: %s", user.ActiveOrg.Id, err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting your org."}`))
-		return
-	}
-
 	// FIXME: Everything should match?
 	// || user.Id != tmpBody.UserId
-	if user.Id != fileId && userSettingUpMfa == false {
+	if user.Id != fileId {
 		log.Printf("[WARNING] Bad ID: %s vs %s", user.Id, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only set 2fa for your own user. Pass field user_id in JSON."}`)))
@@ -333,21 +263,9 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	MFAActive := false
-	if foundUser.MFA.Active == true {
-		foundUser.MFA.Active = false
-		foundUser.MFA.PreviousCode = foundUser.MFA.ActiveCode
-		foundUser.MFA.ActiveCode = ""
-		MFAActive = false
-		log.Printf("[DEBUG] Successfully disable 2FA authentication for user %s (%s)", foundUser.Username, foundUser.Id)
-	} else {
-		foundUser.MFA.Active = true
-		foundUser.MFA.ActiveCode = foundUser.MFA.PreviousCode
-		foundUser.MFA.PreviousCode = ""
-		MFAActive = true
-		log.Printf("[DEBUG] Successfully Enable 2FA authentication for user %s (%s)", foundUser.Username, foundUser.Id)
-	}
-
+	foundUser.MFA.Active = true
+	foundUser.MFA.ActiveCode = foundUser.MFA.PreviousCode
+	foundUser.MFA.PreviousCode = ""
 	err = SetUser(ctx, foundUser, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed SETTING MFA for user %s (%s): %s", foundUser.Username, foundUser.Id, err)
@@ -356,175 +274,10 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// log.Printf("[DEBUG] Successfully enabled 2FA for user %s (%s)", foundUser.Username, foundUser.Id)
+	log.Printf("[DEBUG] Successfully enabled 2FA for user %s (%s)", foundUser.Username, foundUser.Id)
 
-	// If user is setting up MFA, than reset the user session or create a new one
-	if userSettingUpMfa {
-		user.LoginInfo = append(user.LoginInfo, LoginInfo{
-			IP:        GetRequestIp(request),
-			Timestamp: time.Now().Unix(),
-		})
-
-		tutorialsFinished := []Tutorial{}
-		for _, tutorial := range user.PersonalInfo.Tutorials {
-			tutorialsFinished = append(tutorialsFinished, Tutorial{
-				Name: tutorial,
-			})
-		}
-
-		if len(org.SecurityFramework.SIEM.Name) > 0 || len(org.SecurityFramework.Network.Name) > 0 || len(org.SecurityFramework.EDR.Name) > 0 || len(org.SecurityFramework.Cases.Name) > 0 || len(org.SecurityFramework.IAM.Name) > 0 || len(org.SecurityFramework.Assets.Name) > 0 || len(org.SecurityFramework.Intel.Name) > 0 || len(org.SecurityFramework.Communication.Name) > 0 {
-			tutorialsFinished = append(tutorialsFinished, Tutorial{
-				Name: "find_integrations",
-			})
-		}
-
-		for _, tutorial := range org.Tutorials {
-			tutorialsFinished = append(tutorialsFinished, tutorial)
-		}
-
-		//log.Printf("[INFO] Tutorials finished: %v", tutorialsFinished)
-
-		returnValue := HandleInfo{
-			Success:   true,
-			Tutorials: tutorialsFinished,
-		}
-
-		loginData := `{"success": true}`
-		newData, err := json.Marshal(returnValue)
-		if err == nil {
-			loginData = string(newData)
-		}
-
-		if len(user.Session) != 0 {
-			log.Printf("[INFO] User session exists - resetting session")
-			expiration := time.Now().Add(3600 * time.Second)
-
-			newCookie := &http.Cookie{
-				Name:    "session_token",
-				Value:   user.Session,
-				Expires: expiration,
-				Path:    "/",
-			}
-
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-				newCookie.Secure = true
-				newCookie.HttpOnly = true
-			}
-
-			http.SetCookie(resp, newCookie)
-
-			newCookie.Name = "__session"
-			http.SetCookie(resp, newCookie)
-
-			//log.Printf("SESSION LENGTH MORE THAN 0 IN LOGIN: %s", user.Session)
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "session_token",
-				Value:      user.Session,
-				Expiration: expiration.Unix(),
-			})
-
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "__session",
-				Value:      user.Session,
-				Expiration: expiration.Unix(),
-			})
-
-			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, user.Session, expiration.Unix())
-			newData, err := json.Marshal(returnValue)
-			if err == nil {
-				loginData = string(newData)
-			}
-
-			err = SetSession(ctx, user, user.Session)
-			if err != nil {
-				log.Printf("[WARNING] Error adding session to database: %s", err)
-			} else {
-				//log.Printf("[DEBUG] Updated session in backend")
-			}
-
-			user.MFA = foundUser.MFA
-
-			err = SetUser(ctx, &user, false)
-			if err != nil {
-				log.Printf("[ERROR] Failed updating user when setting session (2): %s", err)
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-
-			resp.WriteHeader(200)
-			resp.Write([]byte(loginData))
-			return
-		} else {
-
-			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
-			sessionToken := uuid.NewV4().String()
-			expiration := time.Now().Add(3600 * time.Second)
-			newCookie := &http.Cookie{
-				Name:    "session_token",
-				Value:   sessionToken,
-				Expires: expiration,
-				Path:    "/",
-			}
-
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-				newCookie.Secure = true
-				newCookie.HttpOnly = true
-			}
-
-			// Does it not set both?
-			http.SetCookie(resp, newCookie)
-
-			newCookie.Name = "__session"
-			http.SetCookie(resp, newCookie)
-
-			// ADD TO DATABASE
-			err = SetSession(ctx, user, sessionToken)
-			if err != nil {
-				log.Printf("[DEBUG] Error adding session to database: %s", err)
-			}
-
-			user.Session = sessionToken
-
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "session_token",
-				Value:      sessionToken,
-				Expiration: expiration.Unix(),
-			})
-
-			returnValue.Cookies = append(returnValue.Cookies, SessionCookie{
-				Key:        "__session",
-				Value:      sessionToken,
-				Expiration: expiration.Unix(),
-			})
-			user.MFA = foundUser.MFA
-			err = SetUser(ctx, &user, true)
-			if err != nil {
-				log.Printf("[ERROR] Failed updating user when setting session: %s", err)
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-
-			loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
-			newData, err := json.Marshal(returnValue)
-			if err == nil {
-				loginData = string(newData)
-			}
-		}
-
-		log.Printf("[INFO] %s SUCCESSFULLY LOGGED IN with session %s", user.Username, user.Session)
-
-		resp.WriteHeader(200)
-		resp.Write([]byte(loginData))
-		return
-	}
-
-	response := fmt.Sprintf(`{"success": true, "reason": "Correct code. MFA is now required for this user.", "MFAActive": %v}`, MFAActive)
 	resp.WriteHeader(200)
-	resp.Write([]byte(response))
+	resp.Write([]byte(`{"success": true, "reason": "Correct code. MFA is now required for this user."}`))
 }
 
 func getHOTPToken(secret string, interval int64) (string, error) {
@@ -599,94 +352,28 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	ctx := GetContext(request)
-	var user User
-	var userId string
-	userSettingUpMfa := false
-
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-
-		// Attempt to retrieve user data from cache
-		parts := strings.Split(request.URL.Path, "/")
-		if len(parts) < 5 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Invalid URL path."}`))
-			return
-		}
-
-		MFACode := parts[4]
-
-		// Retrieve user ID and unique code from cache
-		cacheUserId, err := GetCache(ctx, fmt.Sprintf("user_id_%s", MFACode))
-		if err != nil {
-			log.Printf("[ERROR] Failed to retrieve user ID from cache: %s", err)
-			resp.WriteHeader(404)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user ID from cache."}`))
-			return
-		}
-
-		cacheUniqueCode, err := GetCache(ctx, fmt.Sprintf("mfa_code_%s", MFACode))
-		if err != nil {
-			log.Printf("[ERROR] Failed to retrieve mfa code from cache: %s", err)
-			resp.WriteHeader(404)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve MFA code from cache."}`))
-			return
-		}
-
-		//if user id and unique code are not empty, user is setting up MFA
-		if len(cacheUserId.([]byte)) > 0 && len(cacheUniqueCode.([]byte)) > 0 {
-			userSettingUpMfa = true
-		}
-
-		if mfaCodeBytes, ok := cacheUniqueCode.([]byte); ok {
-			cacheUniqueCode = string(mfaCodeBytes)
-		}
-
-		if userIdBytes, ok := cacheUserId.([]byte); ok {
-			userId = string(userIdBytes)
-		}
-
-		//Both unique code present in cache and MFA code token present in url request must match
-		if cacheUniqueCode != MFACode {
-			log.Printf("[ERROR] Invalid user for the MFA code %s", MFACode)
-			resp.WriteHeader(http.StatusBadRequest)
-			resp.Write([]byte(`{"success": false, "reason": "Invalid user for the MFA code."}`))
-			return
-		}
-	}
-
-	var cacheUser *User
-
-	// check if user id received from cache is not empty
-	if len(userId) > 0 && userSettingUpMfa == true {
-		cacheUser, err = GetUser(ctx, userId)
-		if err != nil {
-			log.Printf("[ERROR] Failed to retrieve user from cache: %s", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to retrieve user from cache."}`))
-			return
-		}
-	}
-
-	//if user id is empty, use the user data from cache
-	if len(user.Id) == 0 {
-		user = *cacheUser
+		log.Printf("[ERROR] Api authentication failed in get 2fa: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
-	if location[1] == "api" && userSettingUpMfa == false {
+	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("[ERROR] Path too short: %d", len(location))
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
 		fileId = location[4]
 	}
 
-	if user.Id != fileId && userSettingUpMfa == false {
+	if user.Id != fileId {
 		log.Printf("[WARNING] Bad ID: %s vs %s", user.Id, fileId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only set 2fa for your own user"}`)))
@@ -729,6 +416,8 @@ func HandleGet2fa(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data"}`)))
 		return
 	}
+
+	ctx := GetContext(request)
 	//user.MFA.PreviousCode = authLink
 	user.MFA.PreviousCode = secret
 	err = SetUser(ctx, &user, true)
@@ -4375,6 +4064,8 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(workflow.ParentWorkflowId) > 0 {
+			log.Printf("[DEBUG] Found workflow with parentorg: %s", workflow.ParentWorkflowId)
+
 			removeIds = append(removeIds, workflow.ParentWorkflowId)
 		}
 
@@ -7030,19 +6721,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.Subflows = []Workflow{}
 	}
 
-	if strings.ToLower(workflow.Status) == "test" {
-		workflow.Status = "test"
-	} else if strings.ToLower(workflow.Status) == "prod" {
+	if strings.ToLower(workflow.Status) == "prod" {
 		workflow.Status = "production"
-	} else {
-		if len(workflow.Status) == 0 {
-			workflow.Status = "test"
-		}
+	}
 
-		// Custom statuses allowed with API
-		if len(workflow.Status) > 255 {
-			workflow.Status = workflow.Status[:255]
-		}
+	if workflow.Status != "test" && workflow.Status != "production" {
+		log.Printf("[DEBUG] Defaulted workflow status to test from '%s'. Alternative: prod", workflow.Status)
+		workflow.Status = "test"
 	}
 
 	workflow.Subflows = []Workflow{}
@@ -9594,9 +9279,8 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Getting in here during schemaless is normal
 	if len(workflow.Name) == 0 && len(workflow.ID) == 0 {
-		//log.Printf("[ERROR] Workflow has no name or ID, hence may not exist. Reference ID (maybe from Algolia?: %s)", fileId)
+		log.Printf("[ERROR] Workflow has no name or ID, hence may not exist. Reference ID (maybe from Algolia?: %s)", fileId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found"}`))
 		return
@@ -11229,7 +10913,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		Defaults    Defaults  `json:"defaults" datastore:"defaults"`
 		SSOConfig   SSOConfig `json:"sso_config" datastore:"sso_config"`
 		LeadInfo    []string  `json:"lead_info" datastore:"lead_info"`
-		MFARequired bool      `json:"mfa_required" datastore:"mfa_required"`
 
 		CreatorConfig string              `json:"creator_config" datastore:"creator_config"`
 		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
@@ -12933,54 +12616,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf(`[WARNING] Username %s (%s) has login type set to OpenID (single sign-on).`, userdata.Username, userdata.Id)
 	}
 
-	if len(data.MFACode) == 0 {
-		for _, orgID := range userdata.Orgs {
-			org, err := GetOrg(ctx, orgID)
-			if err != nil {
-				log.Printf("[ERROR] Failed getting org %s during login: %s", orgID, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
-				return
-			}
-			if org.MFARequired {
-				if org.MFARequired && !userdata.MFA.Active {
-					log.Printf("MFA is required for org %s and user has not set up MFA.", orgID)
-
-					// Generate a unique code
-					MFACode := uuid.NewV4().String()
-
-					cacheKey := fmt.Sprintf("user_id_%s", MFACode)
-
-					err := SetCache(ctx, cacheKey, []byte(userdata.Id), 30)
-					if err != nil {
-						log.Printf("[ERROR] Failed setting cache for user %s: %s", userdata.Username, err)
-						resp.WriteHeader(500)
-						resp.Write([]byte(`{"success": false, "reason": "Failed setting cache"}`))
-						return
-					}
-
-					cacheKey = fmt.Sprintf("mfa_code_%s", MFACode)
-					err = SetCache(ctx, cacheKey, []byte(MFACode), 30)
-					if err != nil {
-						log.Printf("[ERROR] Failed setting cache for user %s: %s", userdata.Username, err)
-						resp.WriteHeader(500)
-						resp.Write([]byte(`{"success": false, "reason": "Failed setting cache"}`))
-						return
-					}
-
-					response := fmt.Sprintf(`{"success": true, "reason": "MFA_SETUP", "url": "%s"}`, MFACode)
-					resp.WriteHeader(200)
-					resp.Write([]byte(response))
-					return
-				}
-				log.Printf("MFA is required for org %s. Redirecting.", orgID)
-				resp.WriteHeader(409)
-				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "MFA_REDIRECT"}`)))
-				return
-			}
-		}
-	}
-
 	if userdata.MFA.Active && len(data.MFACode) == 0 {
 		log.Printf(`[DEBUG] Username %s (%s) has MFA activated. Redirecting.`, userdata.Username, userdata.Id)
 		resp.WriteHeader(409)
@@ -14187,7 +13822,6 @@ func runTranslation(ctx context.Context, standard string, inputBody string) {
 }
 
 func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
-	//log.Printf("\n\n[DEBUG] Running execution translation for app '%s' with action '%s' towards standardized data\n\n", actionResult.Action.AppName, actionResult.Action.Name)
 	return
 
 	// Try to unmarshal the data to see if it has a status and if its less than 300
@@ -23543,11 +23177,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just here to verify that the user is logged in
-	if resp != nil {
-		resp.Header().Add("x-execution-url", "")
-		resp.Header().Add("x-apprun-url", "")
-	}
-
 	ctx := GetContext(request)
 	err := ValidateRequestOverload(resp, request)
 	if err != nil {
@@ -23625,7 +23254,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Running category-action '%s' in category '%s' for org %s (%s)", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	log.Printf("\n\n\n[INFO] Running category-action '%s' in category '%s' for org %s (%s)\n\n\n", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	if len(value.Query) > 0 {
 		// Check if app authentication. If so, check if intent is to actually authenticate, or find the actual intent
@@ -23696,7 +23325,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	_ = labelIndex
 
-	log.Printf("[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d", value.Label, value.Category, foundIndex, labelIndex)
+	log.Printf("\n\n[INFO] Found label '%s' in category '%s'. Indexes for category: %d, and label: %d\n\n", value.Label, value.Category, foundIndex, labelIndex)
 
 	newapps, err := GetPrioritizedApps(ctx, user)
 	if err != nil {
@@ -24771,6 +24400,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		// FIXME: Delete disabled for now (April 2nd 2024)
 		// This is due to needing debug capabilities
+		apprunUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=true", baseUrl, secondAction.AppID)
 		if len(request.Header.Get("Authorization")) > 0 {
 			tmpAuth := request.Header.Get("Authorization")
 
@@ -24781,9 +24411,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			authorization = tmpAuth
 		}
 
-		// The app run url to use. Default delete is false
-		shouldDelete := "false"
-		apprunUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=%s", baseUrl, secondAction.AppID, shouldDelete)
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
 			apprunUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", apprunUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
 
@@ -24795,18 +24422,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			apprunUrl = fmt.Sprintf("%s&org_id=%s", apprunUrl, value.OrgId)
 		}
 
+		log.Printf("[DEBUG] Running app with URL: %s", apprunUrl)
+
 		additionalInfo := ""
 		inputQuery := ""
 		originalAppname := selectedApp.Name
 
-		// Add "execution-url" header with a full link
-		//resp.Header().Add("execution-url", fmt.Sprintf("/workflows/%s?execution_id=%s", newWorkflow.ID, optionalExecutionId))
-		resp.Header().Add("x-apprun-url", apprunUrl)
-
 		// Runs attempts up to X times
-		maxAttempts := 7
-		for i := 0; i < maxAttempts; i++ {
-			// The request that goes to the CORRECT app
+		for i := 0; i < 5; i++ {
 			req, err := http.NewRequest(
 				"POST",
 				apprunUrl,
@@ -24836,19 +24459,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			// Ensures frontend has something to debug if things go wrong
-			for key, value := range newresp.Header {
-				if strings.HasSuffix(strings.ToLower(key), "-url") {
-
-					// Remove old ones with the same key
-					if _, ok := resp.Header()[key]; ok {
-						resp.Header().Del(key)
-					}
-
-					resp.Header().Add(key, value[0])
-				}
-			}
-
 			defer newresp.Body.Close()
 			apprunBody, err := ioutil.ReadAll(newresp.Body)
 			if err != nil {
@@ -24865,7 +24475,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			httpOutput, marshalledBody, httpParseErr := FindHttpBody(apprunBody)
+			httpOutput, marshalledBody, err := FindHttpBody(apprunBody)
+
 			parsedTranslation := SchemalessOutput{
 				Success: false,
 				Action:  value.Label,
@@ -24874,8 +24485,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				URL:    httpOutput.Url,
 			}
 
-			marshalledHttpOutput, marshalErr := json.Marshal(httpOutput)
-			if marshalErr == nil {
+			marshalledHttpOutput, err := json.Marshal(httpOutput)
+			if err == nil {
 				if strings.HasPrefix(string(marshalledHttpOutput), "[") {
 					outputArray := []interface{}{}
 					err = json.Unmarshal(marshalledHttpOutput, &outputArray)
@@ -24899,107 +24510,109 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			if httpParseErr == nil && httpOutput.Status < 300 {
-				log.Printf("[DEBUG] Found status from schemaless: %d. Should save the current fields as new base", httpOutput.Status)
+			if err == nil {
+				if httpOutput.Status < 300 {
+					//log.Printf("\n\n\n[DEBUG] Found VALID status: %d. Should save the current fields as new base\n\n\n", httpOutput.Status)
 
-				parsedParameterMap := map[string]interface{}{}
-				for _, param := range secondAction.Parameters {
-					if strings.Contains(param.Value, "&") && strings.Contains(param.Value, "=") {
-						// Split by & and then by =
-						parsedParameterMap[param.Name] = map[string]string{}
-						paramSplit := strings.Split(param.Value, "&")
-						for _, paramValue := range paramSplit {
-							paramValueSplit := strings.Split(paramValue, "=")
-							if len(paramValueSplit) != 2 {
-								continue
+					parsedParameterMap := map[string]interface{}{}
+					for _, param := range secondAction.Parameters {
+						if strings.Contains(param.Value, "&") && strings.Contains(param.Value, "=") {
+							// Split by & and then by =
+							parsedParameterMap[param.Name] = map[string]string{}
+							paramSplit := strings.Split(param.Value, "&")
+							for _, paramValue := range paramSplit {
+								paramValueSplit := strings.Split(paramValue, "=")
+								if len(paramValueSplit) != 2 {
+									continue
+								}
+
+								parsedParameterMap[param.Name].(map[string]string)[paramValueSplit[0]] = paramValueSplit[1]
+							}
+						} else {
+							parsedParameterMap[param.Name] = param.Value
+						}
+
+						// FIXME: Skipping anything but body for now
+						if param.Name != "body" {
+							continue
+						}
+
+						err = uploadParameterBase(ctx, user.ActiveOrg.Id, selectedApp.ID, secondAction.Name, param.Name, param.Value)
+						if err != nil {
+							log.Printf("[WARNING] Failed uploading parameter base for %s: %s", param.Name, err)
+						}
+					}
+
+					if len(fieldHash) > 0 && fieldFileFound == false {
+						inputFieldMap := map[string]interface{}{}
+						for _, field := range value.Fields {
+							inputFieldMap[field.Key] = field.Value
+						}
+
+						/*
+							marshalled1, err := json.Marshal(inputFieldMap)
+							marshalled2, err := json.Marshal(parsedParameterMap)
+							log.Printf("[DEBUG] Input field map: %s", string(marshalled1))
+							log.Printf("[DEBUG] Parsed parameter map: %s", string(marshalled2))
+						*/
+
+						// Finds location of some data in another part of the data. This is to have a predefined location in subsequent requests
+						reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
+						if err != nil {
+							log.Printf("[ERROR] Problem with reversing: %s", err)
+						} else {
+							finishedFields := 0
+							mappedFields := map[string]string{}
+							err = json.Unmarshal([]byte(reversed), &mappedFields)
+							if err == nil {
+								for _, value := range mappedFields {
+									if len(value) > 0 {
+										finishedFields++
+									}
+								}
 							}
 
-							parsedParameterMap[param.Name].(map[string]string)[paramValueSplit[0]] = paramValueSplit[1]
-						}
-					} else {
-						parsedParameterMap[param.Name] = param.Value
-					}
+							//log.Printf("Reversed (%d): %s", finishedFields, reversed)
+							if finishedFields > 0 {
+								timeNow := time.Now().Unix()
 
-					// FIXME: Skipping anything but body for now
-					if param.Name != "body" {
-						continue
-					}
+								fileId := fmt.Sprintf("file_%s", fieldHash)
+								encryptionKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, fileId)
+								folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
+								downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+								file := &File{
+									Id:           fileId,
+									CreatedAt:    timeNow,
+									UpdatedAt:    timeNow,
+									Description:  "",
+									Status:       "active",
+									Filename:     fmt.Sprintf("%s.json", fieldHash),
+									OrgId:        user.ActiveOrg.Id,
+									WorkflowId:   "global",
+									DownloadPath: downloadPath,
+									Subflows:     []string{},
+									StorageArea:  "local",
+									Namespace:    "translation_output",
+									Tags: []string{
+										"autocomplete",
+									},
+								}
 
-					err = uploadParameterBase(ctx, user.ActiveOrg.Id, selectedApp.ID, secondAction.Name, param.Name, param.Value)
-					if err != nil {
-						log.Printf("[WARNING] Failed uploading parameter base for %s: %s", param.Name, err)
-					}
-				}
-
-				if len(fieldHash) > 0 && fieldFileFound == false {
-					inputFieldMap := map[string]interface{}{}
-					for _, field := range value.Fields {
-						inputFieldMap[field.Key] = field.Value
-					}
-
-					/*
-						marshalled1, err := json.Marshal(inputFieldMap)
-						marshalled2, err := json.Marshal(parsedParameterMap)
-						log.Printf("[DEBUG] Input field map: %s", string(marshalled1))
-						log.Printf("[DEBUG] Parsed parameter map: %s", string(marshalled2))
-					*/
-
-					// Finds location of some data in another part of the data. This is to have a predefined location in subsequent requests
-					reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
-					if err != nil {
-						log.Printf("[ERROR] Problem with reversing: %s", err)
-					} else {
-						finishedFields := 0
-						mappedFields := map[string]string{}
-						err = json.Unmarshal([]byte(reversed), &mappedFields)
-						if err == nil {
-							for _, value := range mappedFields {
-								if len(value) > 0 {
-									finishedFields++
+								returnedId, err := uploadFile(ctx, file, encryptionKey, []byte(reversed))
+								if err != nil {
+									log.Printf("[ERROR] Problem uploading file: %s", err)
+								} else {
+									log.Printf("[DEBUG] Uploaded file with ID: %s", returnedId)
 								}
 							}
 						}
-
-						//log.Printf("Reversed (%d): %s", finishedFields, reversed)
-						if finishedFields > 0 {
-							timeNow := time.Now().Unix()
-
-							fileId := fmt.Sprintf("file_%s", fieldHash)
-							encryptionKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, fileId)
-							folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
-							downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
-							file := &File{
-								Id:           fileId,
-								CreatedAt:    timeNow,
-								UpdatedAt:    timeNow,
-								Description:  "",
-								Status:       "active",
-								Filename:     fmt.Sprintf("%s.json", fieldHash),
-								OrgId:        user.ActiveOrg.Id,
-								WorkflowId:   "global",
-								DownloadPath: downloadPath,
-								Subflows:     []string{},
-								StorageArea:  "local",
-								Namespace:    "translation_output",
-								Tags: []string{
-									"autocomplete",
-								},
-							}
-
-							returnedId, err := uploadFile(ctx, file, encryptionKey, []byte(reversed))
-							if err != nil {
-								log.Printf("[ERROR] Problem uploading file: %s", err)
-							} else {
-								log.Printf("[DEBUG] Uploaded file with ID: %s", returnedId)
-							}
-						}
 					}
+
 				}
 			} else {
 				// Parses out data from the output
 				// Reruns the app with the new parameters
-				log.Printf("HTTP PARSE ERR: %#v", httpParseErr)
-				if strings.Contains(strings.ToLower(fmt.Sprintf("%s", httpParseErr)), "status: ") {
+				if strings.Contains(strings.ToLower(fmt.Sprintf("%s", err)), "status: ") {
 					log.Printf("\n\n\n[DEBUG] Found status code in error: %s\n\n\n", err)
 
 					outputString, outputAction, err, additionalInfo := FindNextApiStep(secondAction, apprunBody, additionalInfo, inputQuery, originalAppname)
@@ -25026,9 +24639,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 					} else {
 						log.Printf("[ERROR] Problem in autocorrect (%d):\n%#v\nParams: %d", i, err, len(outputAction.Parameters))
-						if i < maxAttempts-1 {
-							continue
-						}
 					}
 				}
 

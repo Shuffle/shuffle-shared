@@ -2062,7 +2062,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 	}
 
 	if id == "integration" {
-		return workflowApp, errors.New("App ID 'integration' is for the integration framework. Uses the Shuffle-ai app.")
+		return workflowApp, errors.New("Integration is for the integration framework. Uses the Shuffle-ai app")
 	}
 
 	nameKey := "workflowapp"
