@@ -7789,7 +7789,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	// Handles parent/child workflow relationships
 	if len(workflow.ParentWorkflowId) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
-		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
 	}
 
 	if project.CacheDb {
@@ -11079,6 +11078,10 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	nameKey := "org_cache"
 	timeNow := int64(time.Now().Unix())
 	cacheData.Edited = timeNow
+
+	if cacheData.Created == 0 {
+		cacheData.Created = timeNow
+	}
 
 	//cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
 	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
