@@ -4304,7 +4304,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 				newWorkflows[workflowIndex].Image = ""
 			}
 
-			newWorkflows[workflowIndex].Triggers = []Trigger{}
+			//newWorkflows[workflowIndex].Triggers = []Trigger{}
 			newWorkflows[workflowIndex].Branches = []Branch{}
 			newWorkflows[workflowIndex].VisualBranches = []Branch{}
 
@@ -5872,7 +5872,7 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	}
 
 	childWorkflows = newChildWorkflows
-	log.Printf("\n\n\nCHILD WORKFLOWS (2): %d\n\n\n", len(childWorkflows))
+	//log.Printf("\n\n\nCHILD WORKFLOWS (2): %d\n\n\n", len(childWorkflows))
 
 	if len(childWorkflows) < len(newWorkflow.SuborgDistribution) {
 		for _, suborgId := range newWorkflow.SuborgDistribution {
@@ -5900,7 +5900,7 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 		}
 	}
 
-	log.Printf("\n\n\nCHILD WORKFLOWS (3): %d\n\n\n", len(childWorkflows))
+	//log.Printf("\n\n\nCHILD WORKFLOWS (3): %d\n\n\n", len(childWorkflows))
 	waitgroup := sync.WaitGroup{}
 	for _, childWorkflow := range childWorkflows {
 		// Skipping distrib to old ones~
@@ -9253,12 +9253,6 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(workflow.ParentWorkflowId) > 0 {
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Can't duplicate a workflow distributed from your parent org"}`))
-		return
-	}
-
 	// Check workflow.Sharing == private / public / org  too
 	isOwner := false
 	if user.Id != workflow.Owner || len(user.Id) == 0 {
@@ -9282,6 +9276,12 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+	}
+
+	if len(workflow.ParentWorkflowId) > 0 {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Can't duplicate a workflow distributed from a parent org"}`))
+		return
 	}
 
 	newId := uuid.NewV4().String()
@@ -9338,7 +9338,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 	// Make a copy of the workflow, and set parent/child relationships
 	// Seed random based on the existing workflow + suborg to make sure we only make one
-	seedString := fmt.Sprintf("%s_%s", workflow.ID, parentOrgId)
+	seedString := fmt.Sprintf("%s_%s", workflow.ID, subOrgId)
 	hash := sha1.New()
 	hash.Write([]byte(seedString))
 	hashBytes := hash.Sum(nil)
@@ -9510,7 +9510,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if !found {
 
 					log.Printf("[AUDIT] Failed to find existing workflow for user %s in suborg %s. Making replica.", user.Username, orgId)
-					newWf, err := GenerateWorkflowFromParent(ctx, *workflow, workflow.OrgId, orgId)
+					parentWorkflowOrgId := workflow.OrgId
+					childOrgId := orgId
+
+					newWf, err := GenerateWorkflowFromParent(ctx, *workflow, parentWorkflowOrgId, childOrgId)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting new child workflow %s: %s", newWf.ID, err)
 					} else {
@@ -20475,6 +20478,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						//workflowExecution.Status = "ABORTED"
 						//workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
 
+						workflowExecution.NotificationsCreated += 1
 						workflowExecution.Results = append(workflowExecution.Results, ActionResult{
 							Action:        action,
 							ExecutionId:   workflowExecution.ExecutionId,
@@ -20482,11 +20486,20 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							Result:        fmt.Sprintf(`{"success": false, "reason": "Failed running oauth2 request to refresh tokens. Are your credentials and URL correct? Contact support@shuffler.io if this persists.", "details": "%s"}`, strings.ReplaceAll(fmt.Sprintf("%s", err), `"`, `\"`)),
 							StartedAt:     workflowExecution.StartedAt,
 							CompletedAt:   workflowExecution.StartedAt,
-							Status:        "FAILURE",
+							Status:        "SKIPPED",
 						})
 
+						CreateOrgNotification(
+							ctx,
+							fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'. Did the credentials change?", curAuth.Label),
+							fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
+							fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+							workflowExecution.ExecutionOrg,
+							true,
+						)
+
 						// Abort the workflow due to auth being bad
-						return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), nil
+						//return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), nil
 
 					} else {
 						// Resets the params and overwrites with the relevant fields
