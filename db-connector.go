@@ -40,8 +40,6 @@ import (
 	//opensearch "github.com/shuffle/opensearch-go"
 	opensearch "github.com/opensearch-project/opensearch-go"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
-
-	"github.com/sendgrid/sendgrid-go"
 )
 
 var requestCache = cache.New(60*time.Minute, 60*time.Minute)
@@ -162,91 +160,6 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	return executionInfo
 }
 
-func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) error {
-	log.Printf("[DEBUG] In mail sending with subject %s and body length %s. TO: %s", subject, body, toEmail)
-	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
-	srequest.Method = "POST"
-	log.Printf("sendgrid api key: %s", os.Getenv("SENDGRID_API_KEY"))
-
-	type SendgridContent struct {
-		Type  string `json:"type"`
-		Value string `json:"value"`
-	}
-
-	type SendgridEmail struct {
-		Email string `json:"email"`
-	}
-
-	type SendgridPersonalization struct {
-		To      []SendgridEmail `json:"to"`
-		Subject string          `json:"subject"`
-	}
-
-	type sendgridMailBody struct {
-		Personalizations []SendgridPersonalization `json:"personalizations"`
-		From             SendgridEmail             `json:"from"`
-		Content          []SendgridContent         `json:"content"`
-	}
-
-	body = strings.Replace(body, "\n", "<br/>", -1)
-
-	newBody := sendgridMailBody{
-		Personalizations: []SendgridPersonalization{
-			SendgridPersonalization{
-				To:      []SendgridEmail{},
-				Subject: subject,
-			},
-		},
-		From: SendgridEmail{
-			Email: "Shuffle Support <shuffle-support@shuffler.io>",
-			// Email: "lalitdeore00@gmail.com",
-		},
-		Content: []SendgridContent{
-			SendgridContent{
-				Type:  "text/html",
-				Value: body,
-			},
-		},
-	}
-
-	if emailApp {
-		newBody.From.Email = "Shuffle Email App <email-app@shuffler.io>"
-		// newBody.From.Email = "lalitdeore00@gmail.com"
-	}
-
-	for _, email := range toEmail {
-		newBody.Personalizations[0].To = append(newBody.Personalizations[0].To,
-			SendgridEmail{
-				Email: strings.TrimSpace(email),
-			})
-	}
-
-	parsedBody, err := json.Marshal(newBody)
-	if err != nil {
-		log.Printf("[ERROR] Failed to parse JSON in sendmail: %s", err)
-		return err
-	}
-
-	srequest.Body = parsedBody
-
-	log.Printf("[DEBUG] Email: %s\n\n", srequest.Body)
-
-	response, err := sendgrid.API(srequest)
-	if err != nil {
-		log.Println(err)
-	} else {
-		if response.StatusCode >= 300 {
-			log.Printf("[DEBUG] Failed sending mail! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
-		} else {
-			log.Printf("[DEBUG] Successfully sent email! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
-		}
-		return nil
-		//log.Printf(response.Headers)
-	}
-
-	return err
-}
-
 func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint8) *ExecutionInfo {
 
 	appendCustom := false 
@@ -361,17 +274,33 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 	ctx := context.Background()
 	orgId := orgStatistics.OrgId
 
-	org, err := GetOrg(ctx, orgId)
+	//Unmarshal the org details
+	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
+	orgData, err := GetCache(ctx, cacheKey)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting org in increment: %s", err)
+		return orgStatistics
 	}
 
-	log.Printf("Org.Id length is: %v", len(org.Id))
+	var org *Org
+	orgBytes, ok := orgData.([]byte)
+	if !ok {
+		log.Printf("[ERROR] Unexpected data type in cache for org details")
+		return orgStatistics
+	}
+
+	org = new(Org)
+	err = json.Unmarshal(orgBytes, org)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling org in increment: %s", err)
+		return orgStatistics
+	}
+
 	if len(org.Id) > 0 {
 		for index, AlertThreshold := range org.Billing.AlertThreshold {
 			if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
 				mailbody := Mailcheck{
-					Targets: []string{"lalitdeore12@gmail.com"},
+					Targets: []string{org.Org},
 					Subject: "You have reached the threshold limit of app executions.",
 					Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
 				}
@@ -381,10 +310,10 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				}
 				if err == nil {
 					org.Billing.AlertThreshold[index].Email_send = true
-					log.Printf("org threshold is: %+v", org.Billing.AlertThreshold)
 					err = SetOrg(ctx, *org, orgId)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting org in increment: %s", err)
+						return orgStatistics
 					}
 				}
 				log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
@@ -462,6 +391,27 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	if len(amount) > 0 {
 		if amount[0] > 0 {
 			dbDumpInterval = uint8(amount[0])
+		}
+	}
+
+	// Get the org
+	tmpOrgDetail, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org in increment: %s", err)
+		return
+	}
+
+	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
+
+	if tmpOrgDetail.Id != "" {
+		data, err := json.Marshal(tmpOrgDetail)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
+			return
+		}
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
 		}
 	}
 

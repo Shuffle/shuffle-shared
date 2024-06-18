@@ -41,6 +41,7 @@ import (
 
 	"github.com/bradfitz/slice"
 	uuid "github.com/satori/go.uuid"
+	"github.com/sendgrid/sendgrid-go"
 	qrcode "github.com/skip2/go-qrcode"
 
 	"github.com/frikky/kin-openapi/openapi2"
@@ -11374,17 +11375,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 	*/
 
-	//check if billing email updated
-	if tmpData.Billing.Email != org.Billing.Email && len(tmpData.Billing.Email) > 0 {
-		org, err = changeBillingEmail(ctx, org, tmpData.Billing.Email)
-		if err != nil {
-			log.Printf("[ERROR] Failed updating billing email: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	}
-
 	// Update Billing email alert threshold
 	tmpDataAlert := tmpData.Billing.AlertThreshold
 	orgAlertThreshold := org.Billing.AlertThreshold
@@ -11674,94 +11664,86 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 }
 
-func changeBillingEmail(ctx context.Context, org *Org, NewEmail string) (*Org, error) {
-	if len(NewEmail) == 0 {
-		return org, errors.New("email is empty")
+func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) error {
+	log.Printf("[DEBUG] In mail sending with subject %s and body length %s. TO: %s", subject, body, toEmail)
+	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
+	srequest.Method = "POST"
+
+	type SendgridContent struct {
+		Type  string `json:"type"`
+		Value string `json:"value"`
 	}
 
-	stripeKey := os.Getenv("STRIPE_APIKEY")
-	if len(stripeKey) == 0 {
-		return org, errors.New("Stripe key is empty")
+	type SendgridEmail struct {
+		Email string `json:"email"`
 	}
 
-	// Update the email in Stripe
-	userId := org.SubscriptionUserId
-	if len(userId) == 0 {
-		return org, errors.New("Stripe user ID is empty")
+	type SendgridPersonalization struct {
+		To      []SendgridEmail `json:"to"`
+		Subject string          `json:"subject"`
 	}
 
-	// Fetch current email via GET request
-	getUrl := fmt.Sprintf("https://api.stripe.com/v1/customers/%s", userId)
-	req, err := http.NewRequestWithContext(ctx, "GET", getUrl, nil)
+	type sendgridMailBody struct {
+		Personalizations []SendgridPersonalization `json:"personalizations"`
+		From             SendgridEmail             `json:"from"`
+		Content          []SendgridContent         `json:"content"`
+	}
+
+	body = strings.Replace(body, "\n", "<br/>", -1)
+
+	newBody := sendgridMailBody{
+		Personalizations: []SendgridPersonalization{
+			SendgridPersonalization{
+				To:      []SendgridEmail{},
+				Subject: subject,
+			},
+		},
+		From: SendgridEmail{
+			Email: "Shuffle Support <shuffle-support@shuffler.io>",
+		},
+		Content: []SendgridContent{
+			SendgridContent{
+				Type:  "text/html",
+				Value: body,
+			},
+		},
+	}
+
+	if emailApp {
+		newBody.From.Email = "Shuffle Email App <email-app@shuffler.io>"
+	}
+
+	for _, email := range toEmail {
+		newBody.Personalizations[0].To = append(newBody.Personalizations[0].To,
+			SendgridEmail{
+				Email: strings.TrimSpace(email),
+			})
+	}
+
+	parsedBody, err := json.Marshal(newBody)
 	if err != nil {
-		return org, fmt.Errorf("error creating GET request: %v", err)
+		log.Printf("[ERROR] Failed to parse JSON in sendmail: %s", err)
+		return err
 	}
-	req.SetBasicAuth(stripeKey, "")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	srequest.Body = parsedBody
+
+	log.Printf("[DEBUG] Email: %s\n\n", srequest.Body)
+
+	response, err := sendgrid.API(srequest)
 	if err != nil {
-		return org, fmt.Errorf("error making GET request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var getResponse map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&getResponse); err != nil {
-		return org, fmt.Errorf("error decoding GET response: %v", err)
-	}
-
-	prevEmail, ok := getResponse["email"].(string)
-	if !ok {
-		return org, errors.New("failed to fetch current email from response")
-	}
-
-	// Prepare form data for POST request to update email
-	form := url.Values{}
-	form.Set("email", NewEmail)
-
-	// Update email via POST request
-	postUrl := fmt.Sprintf("https://api.stripe.com/v1/customers/%s", userId)
-	req, err = http.NewRequestWithContext(ctx, "POST", postUrl, bytes.NewBufferString(form.Encode()))
-	if err != nil {
-		return org, fmt.Errorf("error creating POST request: %v", err)
-	}
-	req.SetBasicAuth(stripeKey, "")
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Accept", "application/json")
-
-	resp, err = client.Do(req)
-	if err != nil {
-		return org, fmt.Errorf("error making POST request: %v", err)
-	}
-	defer resp.Body.Close()
-
-	var postResponse map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&postResponse); err != nil {
-		return org, fmt.Errorf("error decoding POST response: %v", err)
-	}
-
-	if resp.StatusCode == http.StatusOK {
-		log.Printf("[INFO] Successfully updated billing email for organization %s", org.Id)
-		org.Billing.Email = NewEmail
-
-		// Send email notification to the previous email
-		mailBody := Mailcheck{
-			Targets: []string{prevEmail},
-			Subject: "Shuffle Billing Email Updated",
-			Body:    fmt.Sprintf("Your Shuffle Stripe billing email has been updated to %s. If this action was not done by you, please contact support@shuffler.io", NewEmail),
-		}
-		err = sendMailSendgrid(mailBody.Targets, mailBody.Subject, mailBody.Body, false)
-		if err != nil {
-			log.Printf("[ERROR] Failed to send email to %s: %v", prevEmail, err)
-		}
+		log.Println(err)
 	} else {
-		log.Printf("[ERROR] Failed to update billing email for organization %s: %v", org.Id, postResponse)
-		return org, fmt.Errorf("failed to update billing email: %v", postResponse)
+		if response.StatusCode >= 300 {
+			log.Printf("[DEBUG] Failed sending mail! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		} else {
+			log.Printf("[DEBUG] Successfully sent email! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		}
+		return nil
+		//log.Printf(response.Headers)
 	}
 
-	return org, nil
+	return err
 }
 
 func CheckWorkflowApp(workflowApp WorkflowApp) error {
