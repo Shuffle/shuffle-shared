@@ -863,10 +863,24 @@ func enableRule(file File) error {
 		return err
 	}
 
+	// Check if resp.Files is empty
+	if len(resp.Files) == 0 {
+		log.Printf("[INFO] No disabled rules found.")
+		return nil
+	}
+
+	found := false
 	for i, innerFile := range resp.Files {
 		if innerFile.Id == file.Id {
 			resp.Files = append(resp.Files[:i], resp.Files[i+1:]...)
+			found = true
+			break 
 		}
+	}
+
+	if !found {
+		log.Printf("[INFO] File with ID %s not found in disabled rules", file.Id)
+		return nil
 	}
 
 	err = storeDisabledRules(ctx, *resp)
@@ -874,9 +888,10 @@ func enableRule(file File) error {
 		return err
 	}
 
-	log.Printf("[INFO] file with ID %s is enabled successfully", file.Id)
+	log.Printf("[INFO] File with ID %s is enabled successfully", file.Id)
 	return nil
 }
+
 
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
