@@ -678,7 +678,6 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-
 		orgId, err := fileAuthentication(request)
 		if err != nil {
 			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
@@ -708,42 +707,14 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 
 	var action string
 	switch location[6] {
-
 	case "disable_rule":
 		action = "disable"
 	case "enable_rule":
 		action = "enable"
-	case "disable_folder", "enable_folder":
-		action = location[6]
-		rules, err := getDisabledRules(ctx)
-		if err != nil {
-			log.Printf("[WARNING] Cannot disable the folder, reason %s", err)
-			resp.WriteHeader(404)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-		if action == "disable_folder" {
-			rules.DisabledFolder = true
-		} else {
-			rules.DisabledFolder = false
-		}
-
-		err = storeDisabledRules(ctx, *rules)
-		if err != nil {
-			log.Printf("[ERROR] Failed to store disabled rules: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		} else {
-			log.Printf("[INFO] Successfully disabled sigma rules")
-			resp.WriteHeader(200)
-			resp.Write([]byte(`{"success": true}`))
-		}
-
 	default:
 		log.Printf("[WARNING] path not found: %s", location[6])
 		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "message": the URL doesn't exist or is not allowed."}`))
+		resp.Write([]byte(`{"success": false, "message": "The URL doesn't exist or is not allowed."}`))
 		return
 	}
 
@@ -776,10 +747,8 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 
 	if action == "disable" {
 		execType = "DISABLE_SIGMA_FILE"
-	} else if action == "enable" || action == "enable_folder" {
+	} else if action == "enable" {
 		execType = "CATEGORY_UPDATE"
-	} else if action == "disable_folder" {
-		execType = "DISABLE_SIGMA_FOLDER"
 	}
 
 	err = setExecRequest(ctx, execType, file.Filename)
@@ -792,6 +761,69 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, fileId)))
+}
+
+func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] != "api" || len(location) < 6 {
+		log.Printf("Path too short or incorrect: %s", request.URL.String())
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	action := location[5]
+
+	rules, err := getDisabledRules(ctx)
+	if err != nil {
+		log.Printf("[WARNING] Cannot get the rules, reason %s", err)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if action == "disable_folder" {
+		rules.DisabledFolder = true
+	} else if action == "enable_folder" {
+		rules.DisabledFolder = false
+	} else {
+		log.Printf("[WARNING] path not found: %s", action)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "message": "The URL doesn't exist or is not allowed."}`))
+		return
+	}
+
+	err = storeDisabledRules(ctx, *rules)
+	if err != nil {
+		log.Printf("[ERROR] Failed to store disabled rules: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var execType string
+	if action == "disable_folder" {
+		execType = "DISABLE_SIGMA_FOLDER"
+	} else {
+		execType = "CATEGORY_UPDATE"
+	}
+
+	err = setExecRequest(ctx, execType, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }
 
 func disableRule(file File) error {
@@ -1196,7 +1228,7 @@ func setExecRequest(ctx context.Context, execType string, fileName string) error
 		Priority:          11,
 	}
 
-	err := SetWorkflowQueue(ctx, execRequest, "default")
+	err := SetWorkflowQueue(ctx, execRequest, "shuffle")
 	if err != nil {
           return err
 	}
