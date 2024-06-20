@@ -18666,6 +18666,11 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	//entryPoint := "https://dev-23367303.okta.com/app/dev-23367303_shuffletest_1/exk1vg1j7bYUYEG0k5d7/sso/saml"
 	redirectUrl := "http://localhost:3001/workflows"
 	backendUrl := os.Getenv("SSO_REDIRECT_URL")
+
+	if len(backendUrl) == 0 && project.Environment == "onprem" {
+		backendUrl = "http://localhost:3000"
+	}
+
 	if len(backendUrl) == 0 && len(os.Getenv("BASE_URL")) > 0 {
 		backendUrl = os.Getenv("BASE_URL")
 	}
@@ -18877,7 +18882,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				//log.Printf("SESSION: %s", user.Session)
 
 				expiration := time.Now().Add(3600 * time.Second)
-				if len(user.Session) == 0 {
+				// if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating")
 					sessionToken := uuid.NewV4().String()
 					newCookie := &http.Cookie{
@@ -18916,7 +18921,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 						IP:        GetRequestIp(request),
 						Timestamp: time.Now().Unix(),
 					})
-				}
+				// }
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -18951,7 +18956,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
-				if len(user.Session) == 0 {
+				// if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating")
 					sessionToken := uuid.NewV4().String()
 					newCookie := &http.Cookie{
@@ -18985,7 +18990,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 						IP:        GetRequestIp(request),
 						Timestamp: time.Now().Unix(),
 					})
-				}
+				// }
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
