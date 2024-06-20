@@ -20408,7 +20408,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 						CreateOrgNotification(
 							ctx,
-							fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'. Did the credentials change?", curAuth.Label),
+							fmt.Sprintf("Failed to refresh Oauth2 tokens for auth '%s'. Did the credentials change?", curAuth.Label),
 							fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
 							fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 							workflowExecution.ExecutionOrg,
@@ -24438,7 +24438,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(fieldFileContentMap) > 0 {
-		log.Printf("[DEBUG] Found file content map: %#v", fieldFileContentMap)
+		log.Printf("[DEBUG] Found file content map (Reverse Schemaless): %#v", fieldFileContentMap)
 
 		for key, mapValue := range fieldFileContentMap {
 			if _, ok := mapValue.(string); !ok {
@@ -24723,6 +24723,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		// Runs attempts up to X times
 		maxAttempts := 7 
 		for i := 0; i < maxAttempts; i++ {
+
+			if _, ok := resp.Header()["x-retry-amount-url"]; ok {
+				resp.Header().Add("x-retry-amount-url", fmt.Sprintf("%d", i))
+			}
+
 			// The request that goes to the CORRECT app
 			req, err := http.NewRequest(
 				"POST",
@@ -24791,9 +24796,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				Status: httpOutput.Status,
 				URL:    httpOutput.Url,
 			}
-
 			marshalledHttpOutput, marshalErr := json.Marshal(httpOutput)
 			if marshalErr == nil {
+
 				if strings.HasPrefix(string(marshalledHttpOutput), "[") {
 					outputArray := []interface{}{}
 					err = json.Unmarshal(marshalledHttpOutput, &outputArray)
@@ -24863,6 +24868,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					*/
 
 					// Finds location of some data in another part of the data. This is to have a predefined location in subsequent requests
+					log.Printf("\n\n\nREVERSE TRANSLATING FROM: %s\n\nTO: %s\n\n\n", parsedParameterMap, inputFieldMap)
 					reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
 					if err != nil {
 						log.Printf("[ERROR] Problem with reversing: %s", err)
