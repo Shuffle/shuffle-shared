@@ -270,6 +270,56 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		}
 	}
 
+	//send mail if the app runs more than the set threshold limit
+	ctx := context.Background()
+	orgId := orgStatistics.OrgId
+
+	//Unmarshal the org details
+	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
+	orgData, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org in increment: %s", err)
+		return orgStatistics
+	}
+
+	var org *Org
+	orgBytes, ok := orgData.([]byte)
+	if !ok {
+		log.Printf("[ERROR] Unexpected data type in cache for org details")
+		return orgStatistics
+	}
+
+	org = new(Org)
+	err = json.Unmarshal(orgBytes, org)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling org in increment: %s", err)
+		return orgStatistics
+	}
+
+	if len(org.Id) > 0 {
+		for index, AlertThreshold := range org.Billing.AlertThreshold {
+			if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
+				mailbody := Mailcheck{
+					Targets: []string{org.Org},
+					Subject: "You have reached the threshold limit of app executions.",
+					Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
+				}
+				err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false)
+				if err != nil {
+					log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
+				}
+				if err == nil {
+					org.Billing.AlertThreshold[index].Email_send = true
+					err = SetOrg(ctx, *org, orgId)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting org in increment: %s", err)
+						return orgStatistics
+					}
+				}
+				log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
+			}
+		}
+	}
 	return orgStatistics
 }
 
@@ -341,6 +391,27 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	if len(amount) > 0 {
 		if amount[0] > 0 {
 			dbDumpInterval = uint8(amount[0])
+		}
+	}
+
+	// Get the org
+	tmpOrgDetail, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org in increment: %s", err)
+		return
+	}
+
+	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
+
+	if tmpOrgDetail.Id != "" {
+		data, err := json.Marshal(tmpOrgDetail)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
+			return
+		}
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
 		}
 	}
 
