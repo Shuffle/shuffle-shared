@@ -886,20 +886,8 @@ type Org struct {
 	CreatorId string `json:"creator_id" datastore:"creator_id"`
 	Disabled  bool   `json:"disabled" datastore:"disabled"`
 
-	EulaSigned   bool    `json:"eula_signed" datastore:"eula_signed"`
-	EulaSignedBy string  `json:"eula_signed_by" datastore:"eula_signed_by"`
-	Billing      Billing `json:"Billing" datastore:"Billing"`
-}
-
-type Billing struct {
-	Email          string           `json:"Email" datastore:"Email"`
-	AlertThreshold []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
-}
-
-type AlertThreshold struct {
-	Percentage int  `json:"percentage" datastore:"percentage"`
-	Count      int  `json:"count" datastore:"count"`
-	Email_send bool `json:"Email_send" datastore:"Email_send"`
+	EulaSigned   bool   `json:"eula_signed" datastore:"eula_signed"`
+	EulaSignedBy string `json:"eula_signed_by" datastore:"eula_signed_by"`
 }
 
 // Authentication overrides that times out
