@@ -4283,7 +4283,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(newWorkflows))
-	if project.Environment == "cloud" && len(newWorkflows) > 15 {
+	if project.Environment == "cloud" && len(newWorkflows) > 30 {
 		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		// Check for "subflow" query
@@ -4304,7 +4304,6 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 				newWorkflows[workflowIndex].Image = ""
 			}
 
-			//newWorkflows[workflowIndex].Triggers = []Trigger{}
 			newWorkflows[workflowIndex].Branches = []Branch{}
 			newWorkflows[workflowIndex].VisualBranches = []Branch{}
 
@@ -23926,10 +23925,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		mappedString := fmt.Sprintf("%s-%s", selectedApp.ID, value.Label, strings.Join(sortedKeys, ""))
 		fieldHash = fmt.Sprintf("%x", md5.Sum([]byte(mappedString)))
 		file, err := GetFile(ctx, fmt.Sprintf("file_%s", fieldHash))
+
 		if err != nil {
-			//log.Printf("[DEBUG] Error with getting file in category action: %s", err)
+			log.Printf("[DEBUG] Error with getting file in category action: %s", err)
 		} else {
-			//log.Printf("[DEBUG] Found file in category action: %#v", file)
+			log.Printf("\n\n\n[DEBUG] Found file in category action: %#v. Status: %s. Category: %s\n\n\n", file, file.Status, file.Namespace)
+
 			if file.Status == "active" {
 				fieldFileFound = true
 				fileContent, err := GetFileContent(ctx, file, nil)
@@ -24521,8 +24522,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		break
 	}
 
+	// Finds WHERE in the destination to put the input data
+	// Loops through input fields, then takes the data from them 
 	if len(fieldFileContentMap) > 0 {
-		log.Printf("[DEBUG] Found file content map (Reverse Schemaless): %#v", fieldFileContentMap)
+		log.Printf("\n\n[DEBUG] Found file content map (Reverse Schemaless): %#v\n\n", fieldFileContentMap)
 
 		for key, mapValue := range fieldFileContentMap {
 			if _, ok := mapValue.(string); !ok {
@@ -24807,8 +24810,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		maxAttempts := 7
 		for i := 0; i < maxAttempts; i++ {
 
-			if _, ok := resp.Header()["x-retry-amount-url"]; ok {
-				resp.Header().Add("x-retry-amount-url", fmt.Sprintf("%d", i))
+			// Sends back how many translations happened
+			// -url is just for the app to parse it :(
+			attemptString := "x-translation-attempt-url"
+			if _, ok := resp.Header()[attemptString]; ok {
+				resp.Header().Set(attemptString, fmt.Sprintf("%d", i+1))
+			} else {
+				resp.Header().Add(attemptString, fmt.Sprintf("%d", i+1))
 			}
 
 			// The request that goes to the CORRECT app
@@ -24847,10 +24855,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 					// Remove old ones with the same key
 					if _, ok := resp.Header()[key]; ok {
-						resp.Header().Del(key)
+						resp.Header().Set(key, value[0])
+					} else {
+						resp.Header().Add(key, value[0])
 					}
-
-					resp.Header().Add(key, value[0])
 				}
 			}
 
@@ -24878,7 +24886,37 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				Status: httpOutput.Status,
 				URL:    httpOutput.Url,
 			}
+
+			for _, param := range secondAction.Parameters {
+				if param.Name == "body" && len(param.Value) > 0 {
+					translatedBodyString := "x-translated-body-url"
+					if _, ok := resp.Header()[translatedBodyString]; ok {
+						resp.Header().Set(translatedBodyString, param.Value)
+					} else {
+						resp.Header().Add(translatedBodyString, param.Value)
+					}
+				}
+
+				if param.Name == "queries" && len(param.Value) > 0 {
+					translatedQueryString := "x-translated-query-url"
+					if _, ok := resp.Header()[translatedQueryString]; ok {
+						resp.Header().Set(translatedQueryString, param.Value)
+					} else {
+						resp.Header().Add(translatedQueryString, param.Value)
+					}
+				}
+			}
+
+
 			marshalledHttpOutput, marshalErr := json.Marshal(httpOutput)
+
+			responseBodyString := "x-raw-response-url"
+			if _, ok := resp.Header()[responseBodyString]; ok {
+				resp.Header().Set(responseBodyString, string(marshalledHttpOutput))
+			} else {
+				resp.Header().Add(responseBodyString, string(marshalledHttpOutput))
+			}
+
 			if marshalErr == nil {
 
 				if strings.HasPrefix(string(marshalledHttpOutput), "[") {
@@ -24911,7 +24949,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				for _, param := range secondAction.Parameters {
 					if strings.Contains(param.Value, "&") && strings.Contains(param.Value, "=") {
 						// Split by & and then by =
-						parsedParameterMap[param.Name] = map[string]string{}
+						parsedParameterMap[param.Name] = map[string]interface{}{}
 						paramSplit := strings.Split(param.Value, "&")
 						for _, paramValue := range paramSplit {
 							paramValueSplit := strings.Split(paramValue, "=")
@@ -24919,7 +24957,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 								continue
 							}
 
-							parsedParameterMap[param.Name].(map[string]string)[paramValueSplit[0]] = paramValueSplit[1]
+							parsedParameterMap[param.Name].(map[string]interface{})[paramValueSplit[0]] = paramValueSplit[1]
 						}
 					} else {
 						parsedParameterMap[param.Name] = param.Value
@@ -24942,32 +24980,32 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						inputFieldMap[field.Key] = field.Value
 					}
 
-					/*
-						marshalled1, err := json.Marshal(inputFieldMap)
-						marshalled2, err := json.Marshal(parsedParameterMap)
-						log.Printf("[DEBUG] Input field map: %s", string(marshalled1))
-						log.Printf("[DEBUG] Parsed parameter map: %s", string(marshalled2))
-					*/
-
 					// Finds location of some data in another part of the data. This is to have a predefined location in subsequent requests
-					log.Printf("\n\n\nREVERSE TRANSLATING FROM: %s\n\nTO: %s\n\n\n", parsedParameterMap, inputFieldMap)
+					//log.Printf("\n\n\nREVERSE TRANSLATING FROM: %s\n\nTO: %s\n\n\n", parsedParameterMap, inputFieldMap)
 					reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
+					//reversed, err := schemaless.ReverseTranslate(inputFieldMap, parsedParameterMap)
 					if err != nil {
 						log.Printf("[ERROR] Problem with reversing: %s", err)
 					} else {
+						log.Printf("[DEBUG] Raw reverse: %s", reversed)
+
 						finishedFields := 0
-						mappedFields := map[string]string{}
+						mappedFields := map[string]interface{}{}
 						err = json.Unmarshal([]byte(reversed), &mappedFields)
 						if err == nil {
 							for _, value := range mappedFields {
-								if len(value) > 0 {
+								if _, ok := value.(string); ok && len(value.(string)) > 0 {
 									finishedFields++
+								} else {
+									log.Printf("[DEBUG] Found non-string value: %#v", value)
 								}
 							}
 						}
 
-						//log.Printf("Reversed (%d): %s", finishedFields, reversed)
-						if finishedFields > 0 {
+						log.Printf("Reversed fields (%d): %s", finishedFields, reversed)
+						if finishedFields == 0 {
+						} else {
+
 							timeNow := time.Now().Unix()
 
 							fileId := fmt.Sprintf("file_%s", fieldHash)
