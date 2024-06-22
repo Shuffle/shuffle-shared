@@ -2667,7 +2667,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// 1: Loop all workflows
-	workflows, err := GetAllWorkflowsByQuery(ctx, user)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
 		resp.WriteHeader(401)
@@ -2859,7 +2859,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	// 1: Loop all workflows
 	// 2: Stop all running executions (manually abort)
-	workflows, err := GetAllWorkflowsByQuery(ctx, user)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
 		resp.WriteHeader(401)
@@ -4233,7 +4233,22 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	var workflows []Workflow
 
-	workflows, err = GetAllWorkflowsByQuery(ctx, user)
+	maxAmount := 250 
+	top, topOk := request.URL.Query()["top"]
+	if topOk && len(top) > 0 {
+		val, err := strconv.Atoi(top[0])
+		if err == nil {
+			maxAmount = val
+		}
+	}
+
+	cursor := ""
+	cursorList, cursorOk := request.URL.Query()["cursor"]
+	if cursorOk && len(cursorList) > 0 {
+		cursor = cursorList[0]
+	}
+
+	workflows, err = GetAllWorkflowsByQuery(ctx, user, maxAmount, cursor)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
 		resp.WriteHeader(400)
@@ -4300,7 +4315,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !isSubflow {
-				newWorkflows[workflowIndex].Actions = []Action{}
+				//newWorkflows[workflowIndex].Actions = []Action{}
 				newWorkflows[workflowIndex].Image = ""
 			}
 
@@ -4575,7 +4590,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	wg.Add(4)
 
 	go func() {
-		workflows, err := GetAllWorkflowsByQuery(ctx, user)
+		workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 		if err != nil {
 			wg.Done()
 			errChan <- err
@@ -5679,7 +5694,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if err == nil {
 		//log.Printf("Getting Org workflows")
 
-		workflows, err := GetAllWorkflowsByQuery(ctx, user)
+		workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 		if err == nil {
 			updated := false
 			for tutorialIndex, tutorial := range org.Tutorials {
@@ -9490,7 +9505,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] User %s is accessing workflow %s from a suborg that has access (get workflow)", user.Username, workflow.ID)
 
 			// Check local workflows to see if a local version of the workflow exists. Should NOT be able to see the parents' workflow directly (?)
-			workflows, err := GetAllWorkflowsByQuery(ctx, user)
+			workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 			if err != nil {
 				log.Printf("[WARNING] Failed getting workflows in get workflow with suborg distrib. Auth should fail.: %s", err)
 			} else {
@@ -12783,7 +12798,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	// Starting caching of the username
 	// This is to make it faster later :)
-	go GetAllWorkflowsByQuery(context.Background(), userdata)
+	go GetAllWorkflowsByQuery(context.Background(), userdata, 250, "")
 	go GetPrioritizedApps(context.Background(), userdata)
 
 	/*
@@ -14288,7 +14303,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					log.Printf("[INFO][%s] Userinput subflow failed. Should abort workflow or continue execution by default?", actionResult.ExecutionId)
 
 				} else {
-					log.Printf("\n\n[INFO][%s] Userinput subflow succeeded. Should continue execution by default? Value: %s\n\n", actionResult.ExecutionId, actionResult.Result)
+					log.Printf("[INFO][%s] Userinput subflow succeeded. Should continue execution by default?", actionResult.ExecutionId)
 
 					// FIXME:
 					// 1. What should happen on cloud?
@@ -19325,7 +19340,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		sourceExecution, sourceExecutionOk := request.URL.Query()["source_execution"]
-
 		referenceExecution, referenceExecutionOk := request.URL.Query()["reference_execution"]
 		if referenceExecutionOk {
 			sourceExecutionOk = true
@@ -19578,7 +19592,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 
 				if result.Status == "WAITING" {
-					log.Printf("[INFO][%s] Found result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
+					log.Printf("[INFO][%s] Found relevant User Input result: %s (%s)", result.ExecutionId, result.Action.Label, result.Action.ID)
 
 					var userinputResp UserInputResponse
 					err = json.Unmarshal([]byte(result.Result), &userinputResp)
@@ -19592,6 +19606,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					userinputResp.ClickInfo.Time = time.Now().Unix()
 					userinputResp.ClickInfo.IP = GetRequestIp(request)
 					userinputResp.ClickInfo.Note = ""
+
+					// Check if the "note" parameter exists in the request
+					execArg := request.URL.Query().Get("execution_argument")
+					if len(execArg) > 0 {
+						userinputResp.ClickInfo.Note = execArg
+					}
+
+					note := request.URL.Query().Get("note")
+					if len(note) > 0 {
+						userinputResp.ClickInfo.Note = note
+					}
 
 					user, err := HandleApiAuthentication(nil, request)
 					if err == nil && user.Username != "" {
@@ -26004,7 +26029,7 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 	// 2. Suggest public workflows (cloud)
 	// 3. Use workflow template (local)
 	var updated bool
-	workflows, err := GetAllWorkflowsByQuery(ctx, user)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
 		log.Printf("[WARNING] No workflows found for user %s (2)", user.Id)
 		return org, orgUpdated
@@ -26625,7 +26650,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	// Get workflows
 	user.ActiveOrg.Id = org.Id
 	user.ActiveOrg.Name = org.Name
-	workflows, err := GetAllWorkflowsByQuery(ctx, user)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
 		resp.WriteHeader(500)
@@ -26714,7 +26739,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 func AssignAuthEverywhere(ctx context.Context, auth *AppAuthenticationStorage, user User) error {
 	log.Printf("[INFO] Should set authentication config")
-	baseWorkflows, err := GetAllWorkflowsByQuery(ctx, user)
+	baseWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil && len(baseWorkflows) == 0 {
 		log.Printf("Getall error in auth update: %s", err)
 		return err

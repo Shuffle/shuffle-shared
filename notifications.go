@@ -1014,6 +1014,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+
 	err = CreateOrgNotification(
 		ctx,
 		notification.Title,
@@ -1022,6 +1023,9 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		orgId,
 		false,
 	)
+
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.ActiveOrg.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", "notifications", user.Id))
 
 	if err != nil {
 		log.Printf("[ERROR] Failed creating notification in create notification api: %s", err)
