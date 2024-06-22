@@ -6743,6 +6743,11 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
+	log.Printf("[DEBUG] Making ALL input questions required for %s", workflow.ID)
+	for qIndex, _ := range workflow.InputQuestions {
+		workflow.InputQuestions[qIndex].Required = true
+	}
+
 	correctUser := false
 	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
 		log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
@@ -19616,6 +19621,84 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					note := request.URL.Query().Get("note")
 					if len(note) > 0 {
 						userinputResp.ClickInfo.Note = note
+					}
+
+					// FIXME: Validate their input if they answered or not
+					foundTrigger := Trigger{}
+					for _, trigger := range workflow.Triggers {
+						if trigger.ID == result.Action.ID {
+							foundTrigger = trigger
+							break
+						}
+					}
+
+					questions := []string{}
+					dedupedQuestions := []string{}
+
+					actualQuestions := []InputQuestion{}
+					for _, param := range foundTrigger.Parameters {
+						if param.Name != "input_questions" {
+							continue
+						}
+
+
+						err = json.Unmarshal([]byte(param.Value), &questions)
+						if err != nil {
+							log.Printf("[ERROR] Failed unmarshalling input questions in %s in workflow %s: %s", foundTrigger.ID, workflow.ID, err)
+							continue
+						}
+
+						for _, question := range questions {
+							question := strings.ToLower(strings.TrimSpace(question))
+							if ArrayContains(dedupedQuestions, question) {
+								continue
+							}
+
+							dedupedQuestions = append(dedupedQuestions, question)
+							for _, inputQ := range workflow.InputQuestions { 
+								if strings.ToLower(strings.TrimSpace(inputQ.Name)) == question {
+									actualQuestions = append(actualQuestions, inputQ)
+								}
+							}
+						}
+
+						break
+					}
+
+					if len(dedupedQuestions) > 0 { 
+						mappedAnswer := map[string]string{}
+						if len(userinputResp.ClickInfo.Note) > 0 {
+							err = json.Unmarshal([]byte(userinputResp.ClickInfo.Note), &mappedAnswer)
+							if err != nil {
+								log.Printf("[ERROR] Failed unmarshalling userinput note: %s", err)
+							} 
+
+							for _, actualQuestion := range actualQuestions {
+								/*
+								// FIXME: Required check here
+								if actualQuestion.Required == false {
+									continue
+								}
+								*/
+
+								found := false
+								for key, value := range mappedAnswer {
+									if strings.ToLower(strings.TrimSpace(actualQuestion.Value)) != strings.ToLower(strings.TrimSpace(key)) {
+										continue
+									}
+
+									if len(value) > 0 {
+										found = true
+									}
+
+									break
+								}
+
+								if !found {
+									return *oldExecution, ExecInfo{}, "Answer all questions first.", errors.New("Answer all questions first")
+								}
+							}
+						}
 					}
 
 					user, err := HandleApiAuthentication(nil, request)
