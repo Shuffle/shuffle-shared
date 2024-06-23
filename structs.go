@@ -1390,8 +1390,10 @@ type File struct {
 }
 
 type DisabledRules struct {
-	Files          []File `json:"files" datastore:"files"`
-	DisabledFolder bool   `json:"disabled_folder" datastore:"disabled_folder"`
+	Files          []File  `json:"files"        datastore:"files"`
+	DisabledFolder bool    `json:"disabled_folder" datastore:"disabled_folder"`
+	IsTenzirActive string    `json:"tenzir_active"  datastore:"tenzir_active"`
+	LastActive     string  `json:"last_active" datastore:"last_active"`
 }
 
 type AppAuthenticationGroup struct {
