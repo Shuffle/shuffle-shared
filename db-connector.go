@@ -8977,7 +8977,7 @@ func SetFile(ctx context.Context, file File) error {
 	return nil
 }
 
-func storeDisabledRules(ctx context.Context, file DisabledRules) error {
+func StoreDisabledRules(ctx context.Context, file DisabledRules) error {
 
 	nameKey := "disabled_rules"
 
@@ -9003,7 +9003,7 @@ func storeDisabledRules(ctx context.Context, file DisabledRules) error {
 	return nil
 }
 
-func getDisabledRules(ctx context.Context) (*DisabledRules, error) {
+func GetDisabledRules(ctx context.Context) (*DisabledRules, error) {
 	nameKey := "disabled_rules"
 	disabRules := &DisabledRules{}
 	if project.DbType == "opensearch" {

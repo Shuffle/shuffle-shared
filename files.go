@@ -521,7 +521,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	disabledRules, err := getDisabledRules(ctx)
+	disabledRules, err := GetDisabledRules(ctx)
 	if err != nil && err.Error() != "rules doesn't exist" {
 		log.Printf("[ERROR] Failed to get disabled rules: %s", err)
 		resp.WriteHeader(500)
@@ -543,6 +543,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	type SigmaResponse struct {
 		SigmaInfo      []SigmaFileInfo `json:"sigma_info"`
 		FolderDisabled bool            `json:"folder_disabled"`
+		isTenzirActive bool            `json:"is_tenzir_active"`
 	}
 
 	var sigmaFileInfo []SigmaFileInfo
@@ -632,9 +633,18 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	var isTenzirAlive bool
+	if time.Now().Unix() > disabledRules.LastActive+30 {
+		isTenzirAlive = false
+	} else {
+		isTenzirAlive = true
+	}
+
+
 	response := SigmaResponse{
 		SigmaInfo:      sigmaFileInfo,
 		FolderDisabled: disabledRules.DisabledFolder,
+		isTenzirActive: isTenzirAlive,
 	}
 
 	responseData, err := json.Marshal(response)
@@ -780,7 +790,7 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	action := location[5]
 
-	rules, err := getDisabledRules(ctx)
+	rules, err := GetDisabledRules(ctx)
 	if err != nil {
 		log.Printf("[WARNING] Cannot get the rules, reason %s", err)
 		resp.WriteHeader(404)
@@ -799,7 +809,7 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	err = storeDisabledRules(ctx, *rules)
+	err = StoreDisabledRules(ctx, *rules)
 	if err != nil {
 		log.Printf("[ERROR] Failed to store disabled rules: %s", err)
 		resp.WriteHeader(500)
@@ -828,13 +838,13 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 
 func disableRule(file File) error {
 	ctx := context.Background()
-	resp, err := getDisabledRules(ctx)
+	resp, err := GetDisabledRules(ctx)
 	if err != nil {
 		if err.Error() == "rules doesn't exist" {
 			// FIX ME :- code duplication : (
 			disabRules := &DisabledRules{}
 			disabRules.Files = append(disabRules.Files, file)
-			err = storeDisabledRules(ctx, *disabRules)
+			err = StoreDisabledRules(ctx, *disabRules)
 			if err != nil {
 				return err
 			}
@@ -847,7 +857,7 @@ func disableRule(file File) error {
 	}
 
 	resp.Files = append(resp.Files, file)
-	err = storeDisabledRules(ctx, *resp)
+	err = StoreDisabledRules(ctx, *resp)
 	if err != nil {
 		return err
 	}
@@ -858,7 +868,7 @@ func disableRule(file File) error {
 
 func enableRule(file File) error {
 	ctx := context.Background()
-	resp, err := getDisabledRules(ctx)
+	resp, err := GetDisabledRules(ctx)
 	if err != nil {
 		return err
 	}
@@ -883,7 +893,7 @@ func enableRule(file File) error {
 		return nil
 	}
 
-	err = storeDisabledRules(ctx, *resp)
+	err = StoreDisabledRules(ctx, *resp)
 	if err != nil {
 		return err
 	}
