@@ -831,6 +831,7 @@ type LeadInfo struct {
 	Student    bool `json:"student,omitempty" datastore:"student"`
 	Lead       bool `json:"lead,omitempty" datastore:"lead"`
 	POV        bool `json:"pov,omitempty" datastore:"pov"`
+	TestingShuffle bool `json:"testing_shuffle,omitempty" datastore:"testing_shuffle"`
 	DemoDone   bool `json:"demo_done,omitempty" datastore:"demo_done"`
 	Customer   bool `json:"customer,omitempty" datastore:"customer"`
 	OpenSource bool `json:"opensource,omitempty" datastore:"opensource"`

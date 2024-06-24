@@ -4298,7 +4298,7 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(newWorkflows))
-	if project.Environment == "cloud" && len(newWorkflows) > 30 {
+	if project.Environment == "cloud" && len(newWorkflows) > 40 {
 		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		// Check for "subflow" query
@@ -11453,6 +11453,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		newLeadinfo := LeadInfo{}
 
 		for _, lead := range tmpData.LeadInfo {
+			if lead == "testing shuffle" || lead == "testing_shuffle" {
+				newLeadinfo.TestingShuffle = true
+			}
+
 			if lead == "contacted" {
 				newLeadinfo.Contacted = true
 			}
