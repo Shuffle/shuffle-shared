@@ -628,12 +628,18 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		_, err := GetCache(ctx, cacheKey) 
 		if err == nil {
 			// Avoiding duplicates for the same workflow+execution
-			//log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
+			if project.Environment != "cloud" {
+				log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
+			}
+
 			return nil
 
 		} else {
-			//log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
-			err := SetCache(ctx, cacheKey, []byte("1"), 31)
+			if project.Environment != "cloud" {
+				log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
+			}
+
+			err := SetCache(ctx, cacheKey, []byte("1"), 5)
 			if err != nil {
 				log.Printf("[ERROR] Failed saving cached notification %s: %s", cacheKey, err)
 			}
@@ -671,7 +677,6 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		log.Printf("[WARNING] Error getting org %s in createOrgNotification: %s", orgId, err)
 		return err
 	}
-
 
 	generatedId := uuid.NewV4().String()
 	mainNotification := Notification{
@@ -725,6 +730,9 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 	if len(matchingNotifications) > 0 {
 		// FIXME: This may have bugs for old workflows with new users (not being rediscovered)
+		if project.Environment != "cloud" {
+			log.Printf("[INFO] Reopening notification with title %#v for users in org %s", title, orgId)
+		}
 
 		usersHandled := []string{}
 		// Make sure to only reopen one per user
@@ -1014,7 +1022,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
+	log.Printf("[DEBUG] User %s (%s) in org %s (%s) is creating notification '%s'", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id, notification.Title)
 	err = CreateOrgNotification(
 		ctx,
 		notification.Title,
@@ -1033,8 +1041,6 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed creating notification"}`))
 		return
 	}
-
-	log.Printf("[DEBUG] User %s (%s) created notification %s", user.Username, user.Id, notification.Title)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
