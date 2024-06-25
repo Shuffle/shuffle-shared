@@ -974,7 +974,8 @@ func HandleSaveSelectedRules(resp http.ResponseWriter, request *http.Request) {
 
 	triggerId := location[4]
 
-	var selectedRules SelectedSigmaRules
+	selectedRules := SelectedSigmaRules{}
+	
 	decoder := json.NewDecoder(request.Body)
 	err = decoder.Decode(&selectedRules)
 	if err != nil {
@@ -986,12 +987,10 @@ func HandleSaveSelectedRules(resp http.ResponseWriter, request *http.Request) {
 
 	err = StoreSelectedRules(request.Context(), triggerId, selectedRules)
 	if err != nil {
-		if err.Error() != "rules doesnt exists" {
 			log.Printf("[ERROR] Error storing selected rules for %s: %s", triggerId, err)
 			resp.WriteHeader(http.StatusInternalServerError)
 			resp.Write([]byte(`{"success": false}`))
 			return
-		}
 	}
 
 	responseData, err := json.Marshal(selectedRules)
