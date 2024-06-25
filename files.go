@@ -6,10 +6,10 @@ package shuffle
 
 import (
 	"archive/zip"
-	"encoding/base64"
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,10 +23,11 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"gopkg.in/yaml.v2"
 
-	uuid "github.com/satori/go.uuid"
 	"github.com/google/go-github/v28/github"
+	uuid "github.com/satori/go.uuid"
 )
 
 var basepath = os.Getenv("SHUFFLE_FILE_LOCATION")
@@ -534,6 +535,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	type SigmaFileInfo struct {
+		FileName string  `json:"file_name" yaml:"file_name"`
 		RuleTitle   string `json:"title" yaml:"title"`
 		Description string `json:"description" yaml:"description"`
 		FileId      string `json:"file_id"`
@@ -629,6 +631,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			rule.FileId = file.Id
+			rule.Filename = file.Filename
 			sigmaFileInfo = append(sigmaFileInfo, rule)
 		}
 	}
