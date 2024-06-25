@@ -1428,7 +1428,20 @@ type AppAuthenticationGroup struct {
 	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths,noindex"`
 }
 
+type AuthValidation struct {
+	Valid 		bool   `json:"valid" datastore:"valid"`
+	ChangedAt 	int64 `json:"changed_at" datastore:"changed_at"`
+
+	LastValid   int64 `json:"last_valid" datastore:"last_valid"`
+
+	// For the last update, which did it
+	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
+	ExecutionId string `json:"execution_id" datastore:"execution_id"`
+	NodeId      string `json:"node_id" datastore:"node_id"`
+}
+
 type AppAuthenticationStorage struct {
+
 	Active            bool                  `json:"active" datastore:"active"`
 	Label             string                `json:"label" datastore:"label"`
 	Id                string                `json:"id" datastore:"id"`
@@ -1448,6 +1461,8 @@ type AppAuthenticationStorage struct {
 
 	Environment string `json:"environment" datastore:"environment"` // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
 	SuborgDistributed bool `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
+
+	Validation 		AuthValidation `json:"validation" datastore:"validation"`
 }
 
 type PasswordChange struct {
