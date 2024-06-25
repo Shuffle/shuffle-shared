@@ -897,51 +897,114 @@ func enableRule(file File) error {
 	return nil
 }
 
-func HandleGetSelectedRules (resp http.ResponseWriter, request *http.Request) {
+func HandleGetSelectedRules(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+	_, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get env stats executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var triggerId string
+	location := strings.Split(request.URL.String(), "/")
+	if len(location) < 5 || location[1] != "api" {
+		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	triggerId = location[4]
+
+	selectedRules, err := GetSelectedRules(request.Context(), triggerId)
+	if err != nil {
+		if err.Error() != "rules doesnt exists" {
+			log.Printf("[ERROR] Error getting selected rules for %s: %s", triggerId, err)
+			resp.WriteHeader(http.StatusInternalServerError)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	responseData, err := json.Marshal(selectedRules)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal response data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(responseData)
+}
+
+func HandleSaveSelectedRules(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
-	// 1. Check user directly
-	// 2. Check workflow execution authorization
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
-		if err != nil {
-			log.Printf("[ERROR] Bad file authentication in get: %s", err)
-			resp.WriteHeader(401)
+		log.Printf("[WARNING] Api authentication failed in save selected rules: %s", err)
+		resp.WriteHeader(http.StatusUnauthorized)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to save rules: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	if len(location) < 5 || location[1] != "api" {
+		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	triggerId := location[4]
+
+	var selectedRules SelectedSigmaRules
+	decoder := json.NewDecoder(request.Body)
+	err = decoder.Decode(&selectedRules)
+	if err != nil {
+		log.Printf("[ERROR] Failed to decode request body: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid request body"}`))
+		return
+	}
+
+	err = StoreSelectedRules(request.Context(), triggerId, selectedRules)
+	if err != nil {
+		if err.Error() != "rules doesnt exists" {
+			log.Printf("[ERROR] Error storing selected rules for %s: %s", triggerId, err)
+			resp.WriteHeader(http.StatusInternalServerError)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
 	}
 
-	var triggerId string
-	location := strings.Split(request.URL.String(), "/")
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			log.Printf("[INFO] Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
+	responseData, err := json.Marshal(selectedRules)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal response data: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
 
-		triggerId = location[4]
-	} 
-
-selectedRules, err := GetSelectedRules(ctx, triggerId)
-
-if err != nil && err.Error() != "rules doesnt exists" {
-	//log the error then send the intern server error and then you can return
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(responseData)
 }
-
-//now you can send the data ....
-         
-	log.Printf("[INFO] Successfully got file meta for %s", triggerId)
-	resp.WriteHeader(200)
-	resp.Write([]byte(""))
-}
-
 
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
