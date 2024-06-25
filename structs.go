@@ -1393,7 +1393,19 @@ type DisabledRules struct {
 	Files          []File  `json:"files"        datastore:"files"`
 	DisabledFolder bool    `json:"disabled_folder" datastore:"disabled_folder"`
 	IsTenzirActive string    `json:"tenzir_active"  datastore:"tenzir_active"`
-	LastActive     string  `json:"last_active" datastore:"last_active"`
+	LastActive     int64  `json:"last_active" datastore:"last_active"`
+}
+
+type SelectedSigmaRules struct {
+     SelectedRules []SigmaFileInfo  `json:"selected_rules" datastore:"selected_rules"`
+}
+
+type SigmaFileInfo struct {
+	FileName string  `json:"file_name" yaml:"file_name"`
+	RuleTitle   string `json:"title" yaml:"title"`
+	Description string `json:"description" yaml:"description"`
+	FileId      string `json:"file_id"`
+	IsEnabled   bool   `json:"is_enabled"`
 }
 
 type AppAuthenticationGroup struct {
@@ -2367,6 +2379,17 @@ type DisabledHookWrapper struct {
 	PrimaryTerm int           `json:"_primary_term"`
 	Found       bool          `json:"found"`
 	Source      DisabledRules `json:"_source"`
+}
+
+type SelectedRulesWrapper struct {
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      SelectedSigmaRules `json:"_source"`
 }
 
 type HookWrapper struct {

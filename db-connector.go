@@ -9040,6 +9040,69 @@ func GetDisabledRules(ctx context.Context) (*DisabledRules, error) {
 	return disabRules, nil
 }
 
+func StoreSelectedRules(ctx context.Context, TriggerId string, rules SelectedSigmaRules) error {
+
+		nameKey := "selected_rules"
+	
+		if project.DbType == "opensearch" {
+			data, err := json.Marshal(rules)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling set file: %s", err)
+				return err
+			}
+	
+			err = indexEs(ctx, nameKey, TriggerId, data)
+			if err != nil {
+				return err
+			}
+		} else {
+			k := datastore.NameKey(nameKey, TriggerId, nil)
+			if _, err := project.Dbclient.Put(ctx, k, &rules); err != nil {
+				log.Println(err)
+				return err
+			}
+		}
+	
+		return nil
+}
+
+func GetSelectedRules(ctx context.Context, TriggerId string) (*SelectedSigmaRules, error) {
+	nameKey := "selected_rules"
+	selectedRules := &SelectedSigmaRules{}
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), TriggerId)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
+			return &SelectedSigmaRules{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return &SelectedSigmaRules{}, errors.New("rules doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &SelectedSigmaRules{}, err
+		}
+
+		wrapped := SelectedRulesWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &SelectedSigmaRules{}, err
+		}
+
+		selectedRules = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, TriggerId, nil)
+		if err := project.Dbclient.Get(ctx, key, selectedRules); err != nil {
+			return &SelectedSigmaRules{}, err
+		}
+	}
+
+	return selectedRules, nil
+}
+
 func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, error) {
 	nameKey := "notifications"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)

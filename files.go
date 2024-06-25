@@ -534,18 +534,10 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 		return files[i].UpdatedAt > files[j].UpdatedAt
 	})
 
-	type SigmaFileInfo struct {
-		FileName string  `json:"file_name" yaml:"file_name"`
-		RuleTitle   string `json:"title" yaml:"title"`
-		Description string `json:"description" yaml:"description"`
-		FileId      string `json:"file_id"`
-		IsEnabled   bool   `json:"is_enabled"`
-	}
-
 	type SigmaResponse struct {
 		SigmaInfo      []SigmaFileInfo `json:"sigma_info"`
 		FolderDisabled bool            `json:"folder_disabled"`
-		isTenzirActive bool            `json:"is_tenzir_active"`
+		IsTenzirActive bool            `json:"is_tenzir_active"`
 	}
 
 	var sigmaFileInfo []SigmaFileInfo
@@ -631,7 +623,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			rule.FileId = file.Id
-			rule.Filename = file.Filename
+			rule.FileName = file.Filename
 			sigmaFileInfo = append(sigmaFileInfo, rule)
 		}
 	}
@@ -647,7 +639,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	response := SigmaResponse{
 		SigmaInfo:      sigmaFileInfo,
 		FolderDisabled: disabledRules.DisabledFolder,
-		isTenzirActive: isTenzirAlive,
+		IsTenzirActive: isTenzirAlive,
 	}
 
 	responseData, err := json.Marshal(response)
@@ -903,6 +895,51 @@ func enableRule(file File) error {
 
 	log.Printf("[INFO] File with ID %s is enabled successfully", file.Id)
 	return nil
+}
+
+func HandleGetSelectedRules (resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// 1. Check user directly
+	// 2. Check workflow execution authorization
+	_, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] INITIAL Api authentication failed in file deletion: %s", err)
+		if err != nil {
+			log.Printf("[ERROR] Bad file authentication in get: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	var triggerId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("[INFO] Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		triggerId = location[4]
+	} 
+
+selectedRules, err := GetSelectedRules(ctx, triggerId)
+
+if err != nil && err.Error() != "rules doesnt exists" {
+	//log the error then send the intern server error and then you can return
+}
+
+//now you can send the data ....
+         
+	log.Printf("[INFO] Successfully got file meta for %s", triggerId)
+	resp.WriteHeader(200)
+	resp.Write([]byte(""))
 }
 
 
