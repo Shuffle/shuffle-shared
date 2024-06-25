@@ -10942,7 +10942,7 @@ func HandleUserConsultation(resp http.ResponseWriter, request *http.Request) {
 
 	email := []string{org.Org}
 	Subject := "Thank you for your consultation request"
-	Message := fmt.Sprintf("This is confirmation that we have received your consultation request. You have requested a consultation for %v hours. We will get back to you shortly. <br> Best Regards <br>Shuffle Team", tmpData.Consultation)
+	Message := fmt.Sprintf("Hi there, Thank you for submitting request for shuffle consultaion. This is confirmation that we have received your consultation request. You have requested a consultation for %v hours. We will get back to you shortly. <br> <br> Best Regards <br>Shuffle Team", tmpData.Consultation)
 
 	err = sendMailSendgrid(email, Subject, Message, false)
 	if err != nil {
