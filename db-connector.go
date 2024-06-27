@@ -1084,6 +1084,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return nil
 	}
 
+
 	// Deleting cache so that listing can work well
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflowExecution.WorkflowId))
@@ -1100,6 +1101,12 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		if rand.Intn(5) != 1 {
 			return nil
 		}
+	}
+
+	if newexec.Status == "FINISHED" || newexec.Status == "ABORTED" {
+		// Handles stat updates
+		go checkExecutionStatus(ctx, *newexec)
+
 	}
 
 	// New struct, to not add body, author etc
@@ -9553,6 +9560,7 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 	return files, nil
 }
 
+// Gets a specific auth for an org
 func GetWorkflowAppAuthDatastore(ctx context.Context, id string) (*AppAuthenticationStorage, error) {
 	nameKey := "workflowappauth"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)

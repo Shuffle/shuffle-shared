@@ -3834,7 +3834,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		requestRefreshUrl := fmt.Sprintf("%s", refreshUrl)
 		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
 
-		log.Printf("[DEBUG] Refresh URL: %s?%s", requestRefreshUrl, refreshData)
+		//log.Printf("[DEBUG] Refresh URL: %s?%s", requestRefreshUrl, refreshData)
 
 		req, err := http.NewRequest(
 			"POST",

@@ -7880,6 +7880,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			// ID first, then name + version
 			// If it can't find param, it will swap it over farther down
 			for _, app := range workflowapps {
+				if app.ID == "" {
+					break
+				}
+
 				if app.ID == action.AppID {
 					curapp = app
 					break
@@ -7887,7 +7891,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if curapp.ID == "" && action.AppID != "integration" {
-				log.Printf("[WARNING] Didn't find the App ID for %s", action.AppID)
+				log.Printf("[WARNING] Didn't find the App ID for action %s '%s'", action.Label, action.AppID)
 				for _, app := range workflowapps {
 					if app.ID == action.AppID {
 						curapp = app
@@ -27921,4 +27925,146 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(body)
+}
+
+// Updates statuses in relevant areas according to what happened in the workflow run
+func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
+
+	// Check if this is already done
+	if exec.Status != "FINISHED" && exec.Status != "ABORTED" {
+		return
+	}
+
+	// FIXME: Skipping subexecs, as they are usually not relevant by themselves
+	if len(exec.ExecutionParent) > 0 {
+		return
+	}
+
+	// Create cache as to whether this has been ran in the last minute
+	cacheKey := fmt.Sprintf("execstatus_%s", exec.ExecutionId)
+	_, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		//log.Printf("[DEBUG][%s] Execution status already checked", exec.ExecutionId)
+		return
+	}
+
+	// Set cache for 1 minute
+	SetCache(ctx, cacheKey, []byte{1}, 1)
+
+
+	log.Printf("\n\n[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d\n\n", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
+	orgId := exec.ExecutionOrg
+	allAuth, err := GetAllWorkflowAppAuth(ctx, orgId) 
+	if err != nil {
+		log.Printf("[ERROR] Failed getting all auths for org during stat checks %s: %s", orgId, err)
+		return 
+	}
+
+	workflow, err := GetWorkflow(ctx, exec.Workflow.ID)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting real workflow for %s: %s", exec.Workflow.ID, err)
+		return
+	}
+
+	_ = allAuth
+
+	handledAuth := []string{}
+	for _, result := range exec.Results {
+		// FIXME: Skipping anything that outright fails right now
+		if result.Status != "SUCCESS" {
+			continue
+		}
+
+		found := false
+		foundAction := Action{}
+		for _, action := range workflow.Actions {
+			if action.ID != result.Action.ID {
+				continue
+			}
+
+			// Check if this is an authentication action
+			if action.AuthenticationId == "" {
+				break
+			}
+
+			found = true
+			foundAction = action
+			break
+		}
+
+		if !found {
+			continue
+		}
+
+		if ArrayContains(handledAuth, foundAction.AuthenticationId) {
+			continue
+		}
+
+		unmarshalledHttp := HTTPOutput{} 
+		err := json.Unmarshal([]byte(result.Result), &unmarshalledHttp)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
+			continue
+		}
+
+		isValid := false
+		if unmarshalledHttp.Success == true {
+			if unmarshalledHttp.Status >= 200 && unmarshalledHttp.Status < 300 {
+				isValid = true
+			}
+		}
+
+		log.Printf("[DEBUG][%s] Checking result for %s", exec.ExecutionId, result.Action.Label)
+		handledAuth = append(handledAuth, foundAction.AuthenticationId)
+
+		for _, auth := range allAuth {
+			if auth.Id != foundAction.AuthenticationId {
+				continue
+			}
+
+			authUpdated := false
+			// Check if the auth is still valid
+			if !isValid {
+				// Check if existing is valid or not
+				// if auth.Validation.V == false {
+				// 	//log.Printf("[DEBUG] Auth %s is already invalid", auth.Id)
+				if auth.Validation.Valid {
+					auth.Validation.Valid = false
+				
+					authUpdated = true 
+				}
+
+				// Making sure it's set once, with tests
+				if auth.Validation.ChangedAt == 0 {
+					authUpdated = true
+				}
+			} else {
+				// New is valid if here. If already valid, do nothing 
+				if !auth.Validation.Valid {
+					auth.Validation.Valid = true
+					authUpdated = true
+				}
+			}
+
+			if authUpdated {
+				timenow := time.Now().Unix() * 1000
+
+				auth.Validation.ChangedAt = timenow
+				if auth.Validation.Valid {
+					auth.Validation.LastValid = timenow
+				}
+
+				auth.Validation.WorkflowId = workflow.ID
+				auth.Validation.ExecutionId = exec.ExecutionId 
+				auth.Validation.NodeId = result.Action.ID
+
+				err = SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
+				if err != nil {
+					log.Printf("[ERROR] Failed updating auth at end of workflow run %s: %s", auth.Id, err)
+				} else {
+					log.Printf("[DEBUG] Updated auth %s for workflow %s", auth.Id, workflow.ID)
+				}
+			}
+		}
+	}
 }
