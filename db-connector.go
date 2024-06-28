@@ -602,8 +602,6 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount...int) {
 				num += byte(incrementAmount)
 				//num += []byte{2}
 
-				log.Printf("NEW NUM: %d", num)
-
 				if num >= dbDumpInterval {
 					// Memcache dump first to keep the counter going for other executions
 					num = 0
