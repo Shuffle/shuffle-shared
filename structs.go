@@ -2564,6 +2564,7 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
+	Sub   string `json:"sub"`
 	Email string `json:"email"`
 }
 
