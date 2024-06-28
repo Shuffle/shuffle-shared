@@ -2564,7 +2564,7 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub string `json:"sub"`
+	Email string `json:"email"`
 }
 
 type OpenidResp struct {
@@ -3461,6 +3461,7 @@ type IdTokenCheck struct {
 	Tid   string `json:"tid"`
 	Uti   string `json:"uti"`
 	Ver   string `json:"ver"`
+	Email string `json:"email"`
 	Org   Org    `json:"org"`
 }
 
