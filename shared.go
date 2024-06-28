@@ -19065,9 +19065,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
 
 				//log.Printf("SESSION: %s", user.Session)
-				if project.Environment == "cloud" {
-					user.ActiveOrg.Id = matchingOrgs[0].Id
-				}
+				// if project.Environment == "cloud" {
+				// 	user.ActiveOrg.Id = matchingOrgs[0].Id
+				// }
 
 				user.ActiveOrg = OrgMini{
 					Name: matchingOrgs[0].Name,
