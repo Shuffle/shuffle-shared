@@ -8036,20 +8036,27 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if authRequired && fieldsFilled > 1 {
-						foundErr := fmt.Sprintf("Action %s (%s) requires authentication (1)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("\n\n[DEBUG] Adding auth error 1: %s\n\n", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
-							//continue
+						}
+
+						if !ArrayContains(action.Errors, foundErr) {
+							action.Errors = append(action.Errors, foundErr)
 						}
 					} else if authRequired && fieldsFilled == 1 {
-						foundErr := fmt.Sprintf("Action %s (%s) requires authentication (2)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
 							//continue
+						}
+
+						if !ArrayContains(action.Errors, foundErr) {
+							action.Errors = append(action.Errors, foundErr)
 						}
 					}
 				}
@@ -8087,10 +8094,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
-										thisError = fmt.Sprintf("Action %s (%s) requires authentication (3)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+										thisError = fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 									}
 
-									action.Errors = append(action.Errors, thisError)
+									if !ArrayContains(action.Errors, thisError) {
+										action.Errors = append(action.Errors, thisError)
+									}
 
 									errorFound := false
 									for errIndex, oldErr := range workflow.Errors {
@@ -27936,9 +27945,11 @@ func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
 	}
 
 	// FIXME: Skipping subexecs, as they are usually not relevant by themselves
+	/*
 	if len(exec.ExecutionParent) > 0 {
 		return
 	}
+	*/
 
 	// Create cache as to whether this has been ran in the last minute
 	cacheKey := fmt.Sprintf("execstatus_%s", exec.ExecutionId)
@@ -28067,4 +28078,75 @@ func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
 			}
 		}
 	}
+}
+
+// Checks & validates workflow based on last few runs~
+func GetWorkflowValidation(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		// Added org-reader as the user should be able to read everything in an org
+		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow revisions)", user.Username, workflow.ID)
+
+			// Only for Read-Only. No executions or impersonations.
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
+
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow revisions). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	// FIXME: Check last 10 executions + notifications if they 
+	// Make sure it adds subflows as well and highlights failing apps
+
+	// Access is granted -> get revisions
+	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
+	resp.WriteHeader(500)
 }
