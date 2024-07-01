@@ -11630,6 +11630,9 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures = tmpData.SyncFeatures
 		org.SyncFeatures.Editing = false
 	}
+	if (len(tmpData.Billing.Consultation.Hours) > 0 || len(tmpData.Billing.Consultation.Minutes) > 0) && user.SupportAccess {
+		org.Billing.Consultation = tmpData.Billing.Consultation
+	}
 
 	// Built a system around this now, which checks for the actual org.
 	// if requestdata.Environment == "cloud" && project.Environment != "cloud" {
