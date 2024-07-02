@@ -6762,14 +6762,19 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 				log.Printf("[WARNING] Error parsing the response body: %s", err)
 				return ExecutionRequestWrapper{}, err
 			} else {
-				// Print the response status and error information.
-				log.Printf("[%s] %s: %s",
-					res.Status(),
-					e["error"].(map[string]interface{})["type"],
-					e["error"].(map[string]interface{})["reason"],
-				)
+				// Check if "error" key exists and is of the expected type
+				if errInfo, ok := e["error"].(map[string]interface{}); ok {
+					log.Printf("[%s] %s: %s",
+						res.Status(),
+						errInfo["type"],
+						errInfo["reason"],
+					)
+				} else {
+					log.Printf("[ERROR] Unexpected error format: %v", e["error"])
+				}
 			}
 		}
+		
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return ExecutionRequestWrapper{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
