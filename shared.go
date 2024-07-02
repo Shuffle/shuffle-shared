@@ -4603,6 +4603,42 @@ func HandleGetHooks(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(newjson)
 }
 
+func HandleConnectSiem(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in conenct siem: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "org reader dont have permission"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	execType := "START_TENZIR"
+	err = SetExecRequest(ctx, execType, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+
+
+}
+
 func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {

@@ -756,7 +756,7 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 		execType = "CATEGORY_UPDATE"
 	}
 
-	err = setExecRequest(ctx, execType, file.Filename)
+	err = SetExecRequest(ctx, execType, file.Filename)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
 		resp.WriteHeader(500)
@@ -819,7 +819,7 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 		execType = "CATEGORY_UPDATE"
 	}
 
-	err = setExecRequest(ctx, execType, "")
+	err = SetExecRequest(ctx, execType, "")
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
 		resp.WriteHeader(500)
@@ -1345,7 +1345,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	io.Copy(resp, buf)
 }
 
-func setExecRequest(ctx context.Context, execType string, fileName string) error {
+func SetExecRequest(ctx context.Context, execType string, fileName string) error {
 
 	execRequest := ExecutionRequest{
 		Type:              execType,
@@ -1758,7 +1758,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
 
 	execType := "CATEGORY_UPDATE"
-	err = setExecRequest(ctx, execType, file.Filename)
+	err = SetExecRequest(ctx, execType, file.Filename)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
 		resp.WriteHeader(500)
@@ -1906,15 +1906,16 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
-
+  
+	if file.Namespace == "sigma" {
 	execType := "CATEGORY_UPDATE"
-	err = setExecRequest(ctx, execType, file.Filename)
+	err = SetExecRequest(ctx, execType, file.Filename)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
-	}
+	}}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
