@@ -1103,8 +1103,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	if newexec.Status == "FINISHED" || newexec.Status == "ABORTED" {
 		// Handles stat updates
-		go checkExecutionStatus(ctx, *newexec)
-
+		newexec = checkExecutionStatus(ctx, newexec)
 	}
 
 	// New struct, to not add body, author etc
@@ -1441,6 +1440,17 @@ func sanitizeString(input string) string {
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (WorkflowExecution, bool) {
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
+
+	cacheKey := fmt.Sprintf("validation_%s", workflowExecution.ExecutionId)
+	validationData, err := GetCache(ctx, cacheKey)
+	if err == nil {
+
+		cacheData := []byte(validationData.([]uint8))
+		err = json.Unmarshal(cacheData, &workflowExecution.Workflow.Validation)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling cache data for execution status (2): %s", err)
+		}
+	}
 
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
@@ -3017,6 +3027,18 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			}
 		}
 	}
+
+	
+	validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
+	if err == nil {
+
+		cacheData := []byte(validationData.([]uint8))
+		err = json.Unmarshal(cacheData, &workflow.Validation)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling cache data for execution status (4): %s", err)
+		}
+	}
+
 
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
@@ -12501,8 +12523,6 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			//RunTextClassifier(ctx, workflowExecution)
 
 			// Enrich IPs and the like by finding stuff with regex
-			RunCacheCleanup(ctx, workflowExecution)
-			RunIOCFinder(ctx, workflowExecution)
 
 			comparisonTime := workflowExecution.CompletedAt - workflowExecution.StartedAt
 

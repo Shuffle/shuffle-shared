@@ -923,7 +923,7 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] INITIAL Api authentication failed in Create notification api: %s", err)
+		//log.Printf("[AUDIT] INITIAL Api authentication failed in Create notification api: %s", err)
 
 		// Allows for execution authorization 
 		if len(notification.ExecutionId) == 0 {
@@ -1001,13 +1001,8 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		user.ActiveOrg.Id = exec.OrgId 
-		/*
-		else len(notification.OrgId) > 0 {
-			orgId = notification.OrgId
-			user.ActiveOrg.Id = notification.OrgId
-		}
-		*/
+		user.ActiveOrg.Id = orgId
+		notification.OrgId = orgId
 	}
 
 	if user.Role == "org-reader" {

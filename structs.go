@@ -1428,10 +1428,24 @@ type AppAuthenticationGroup struct {
 	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths,noindex"`
 }
 
+type ValidationProblem struct {
+	Order   int    `json:"order" datastore:"order"`
+
+	ActionId string `json:"action_id" datastore:"action_id"`
+	AppId    string `json:"app_id" datastore:"app_id"`
+	AppName  string `json:"app_name" datastore:"app_name"`
+	Error    string `json:"error" datastore:"error"`
+
+	Type string `json:"type" datastore:"type"`
+	WorkflowId string `json:"workflow_id,omitempty" datastore:"workflow_id"`
+
+	// Wait for results or not. IF it's waiting for result, then order is swapped in UI
+	Waiting bool `json:"waiting" datastore:"waiting"`
+}
+
 type TypeValidation struct {
 	Valid 		bool   `json:"valid" datastore:"valid"`
 	ChangedAt 	int64 `json:"changed_at" datastore:"changed_at"`
-
 	LastValid   int64 `json:"last_valid" datastore:"last_valid"`
 
 	// For the last update, which did it
@@ -1439,7 +1453,8 @@ type TypeValidation struct {
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 	NodeId      string `json:"node_id" datastore:"node_id"`
 
-	Errors 		[]string `json:"errors" datastore:"errors"`
+	Problems 	[]ValidationProblem `json:"errors" datastore:"errors"`
+	SubflowApps []ValidationProblem `json:"subflow_apps" datastore:"subflow_apps"`
 }
 
 type AppAuthenticationStorage struct {
@@ -3940,6 +3955,8 @@ type HTTPOutput struct {
 	Headers map[string]string      `json:"headers"`
 	Cookies map[string]string      `json:"cookies"`
 	Errors  []string               `json:"errors"`
+
+	Reason  string 				   `json:"reason,omitempty"`
 }
 
 type SnappStep struct {
