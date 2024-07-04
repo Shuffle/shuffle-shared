@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -487,9 +488,28 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 			log.Printf("[WARNING] Failed setting cache for getfiles on github '%s': %s", cacheKey, err)
 		}
 	}
-
+  
 	return matchingFiles, nil
 }
+
+func LoadStandardFromGithub2(client *github.Client, owner, repo, path string) ([]*github.RepositoryContent, error) {
+	ctx := context.Background()
+
+	// Fetch the contents of the specified path from the repository
+	_, files, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting files from GitHub: %s", err)
+		return nil, err
+	}
+
+	if len(files) == 0 {
+		log.Printf("[ERROR] No files found in path '%s' in the repository '%s/%s'", path, owner, repo)
+		return nil, nil
+	}
+
+	return files, nil
+}
+
 
 func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -2430,4 +2450,151 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func HandleDownloadRemoteFiles2(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Just need to be logged in
+	// FIXME - should have some permissions?
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in load files: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("Wrong user (%s) when downloading from github", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Downloading remotely requires admin"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error reading request body: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type tmpStruct struct {
+		URL    string `json:"url"`
+		Field1 string `json:"field_1"` // Username
+		Field2 string `json:"field_2"` // Password
+		Field3 string `json:"field_3"` // Branch
+		Path   string `json:"path"`
+	}
+
+	var input tmpStruct
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Printf("Error unmarshaling request body: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	client := github.NewClient(nil)
+	urlSplit := strings.Split(input.URL, "/")
+	if len(urlSplit) < 5 {
+		log.Printf("[ERROR] Invalid URL when downloading: %s", input.URL)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	owner := urlSplit[3]
+	repo := urlSplit[4]
+	path := input.Path
+
+	log.Printf("[DEBUG] Loading files from GitHub: %s/%s/%s", owner, repo, path)
+
+	files, err := LoadStandardFromGithub2(client, owner, repo, path)
+	if err != nil || len(files) == 0 {
+		log.Printf("[DEBUG] Failed to load files from GitHub: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(files) > 50 {
+		files = files[:50]
+	}
+
+	if len(basepath) == 0 {
+		basepath = "files"
+	}
+
+	ctx := GetContext(request)
+	for _, item := range files {
+		fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, *item.Path, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get file %s: %s", *item.Path, err)
+			continue
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(*fileContent.Content)
+		if err != nil {
+			log.Printf("[ERROR] Failed decoding file %s: %s", *item.Path, err)
+			continue
+		}
+
+		timeNow := time.Now().Unix()
+		fileId := uuid.NewV5(uuid.NamespaceOID, *item.Path).String()
+		//folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
+		downloadPath := fmt.Sprintf("%s/%s", basepath, fileId)
+
+		if err := os.MkdirAll(filepath.Dir(downloadPath), os.ModePerm); err != nil {
+			
+		}
+
+		file := File{
+			Id:           fileId,
+			CreatedAt:    timeNow,
+			UpdatedAt:    timeNow,
+			Description:  "",
+			Status:       "active",
+			Filename:     *item.Name,
+			OrgId:        user.ActiveOrg.Id,
+			WorkflowId:   "global",
+			DownloadPath: downloadPath,
+			Subflows:     []string{},
+			StorageArea:  "local",
+			Namespace:    path,
+			Tags: []string{
+				"standard",
+			},
+		}
+
+		if project.Environment == "cloud" {
+			file.StorageArea = "google_storage"
+		}
+
+		var buf bytes.Buffer
+		io.Copy(&buf, bytes.NewReader(decoded))
+		contents := buf.Bytes()
+		file.FileSize = int64(len(contents))
+		file.ContentType = http.DetectContentType(contents)
+		file.OriginalMd5sum = Md5sum(contents)
+
+		buf.Reset()
+
+		parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
+		fileId, err = uploadFile(ctx, &file, parsedKey, contents)
+		if err != nil {
+			log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
+			continue
+		}
+
+		log.Printf("[DEBUG] Uploaded file %s with ID %s in category %#v", file.Filename, fileId, path)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }
