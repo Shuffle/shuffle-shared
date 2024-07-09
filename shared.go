@@ -28164,6 +28164,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 				continue
 			}
 
+			// FIXME: Use generic icon here?
 			if subAction.AppName == "Integration Framework" {
 				for _, param := range subAction.Parameters {
 					if param.Name == "app_name" {
