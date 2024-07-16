@@ -11630,6 +11630,9 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures = tmpData.SyncFeatures
 		org.SyncFeatures.Editing = false
 	}
+	if (len(tmpData.Billing.Consultation.Hours) > 0 || len(tmpData.Billing.Consultation.Minutes) > 0) && user.SupportAccess {
+		org.Billing.Consultation = tmpData.Billing.Consultation
+	}
 
 	// Built a system around this now, which checks for the actual org.
 	// if requestdata.Environment == "cloud" && project.Environment != "cloud" {
@@ -28322,4 +28325,101 @@ func GetWorkflowValidation(resp http.ResponseWriter, request *http.Request) {
 	// Access is granted -> get revisions
 	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
 	resp.WriteHeader(500)
+}
+func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in private training", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+		log.Printf("[DEBUG] Redirecting training request to main site handler (shuffler.io). Project: %s", gceProject)
+		RedirectUserRequest(resp, request)
+		return
+	}
+
+	User, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in private training: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	type TrainingData struct {
+		OrgId    string `json:"org_id" datastore:"org_id"`
+		Training string `json:"trainingMembers" datastore:"trainingMembers"`
+		Message  string `json:"message" datastore:"message"`
+	}
+
+	var tmpData TrainingData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling test: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(tmpData.OrgId) == 0 || len(tmpData.Training) == 0 {
+		log.Printf("[WARNING] Missing org_id or training in private training request")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Missing org_id or training"}`))
+		return
+	}
+
+	//Get user org
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", tmpData.OrgId, err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	email := []string{org.Org}
+	Subject := "Thank you for your private training request"
+	Message := fmt.Sprintf("Hi there, Thank you for submitting request for shuffle private training. This is confirmation that we have received your private training request. You have requested a private training for %v members. We will get back to you shortly. <br> <br> Best Regards <br>Shuffle Team", tmpData.Training)
+
+	err = sendMailSendgrid(email, Subject, Message, false)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending mail: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//Send mail to the shuffle support
+	email = []string{"support@shuffler.io"}
+	Subject = fmt.Sprintf("Private training request")
+	Message = fmt.Sprintf("Private training request : <br>Org id: %v <br> Org Name: %v  <br>Username: %v <br> Training Members: %v <br>Customer: %v <br> Message: %v", org.Id, org.Name, User.Username, tmpData.Training, org.LeadInfo.Customer, tmpData.Message)
+
+	err = sendMailSendgrid(email, Subject, Message, false)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending mail: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[INFO] Private training request from %s for %s members. Message: %s", org.Org, tmpData.Training, tmpData.Message)
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true}`))
 }
