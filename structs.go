@@ -1280,7 +1280,7 @@ type Workflow struct {
 
 	// Whether it's manually validated or not
 	Validated  bool 	`json:"validated" datastore:"validated"` 
-
+	Validation 		TypeValidation `json:"validation" datastore:"validation"`
 
 	// Distribution system for suborg/parentorg 
 	ParentWorkflowId string `json:"parentorg_workflow" datastore:"parentorg_workflow"`
@@ -1428,16 +1428,33 @@ type AppAuthenticationGroup struct {
 	AppAuths		[]AppAuthenticationStorage `json:"app_auths" datastore:"app_auths,noindex"`
 }
 
-type AuthValidation struct {
+type ValidationProblem struct {
+	Order   int    `json:"order" datastore:"order"`
+
+	ActionId string `json:"action_id" datastore:"action_id"`
+	AppId    string `json:"app_id" datastore:"app_id"`
+	AppName  string `json:"app_name" datastore:"app_name"`
+	Error    string `json:"error" datastore:"error"`
+
+	Type string `json:"type" datastore:"type"`
+	WorkflowId string `json:"workflow_id,omitempty" datastore:"workflow_id"`
+
+	// Wait for results or not. IF it's waiting for result, then order is swapped in UI
+	Waiting bool `json:"waiting" datastore:"waiting"`
+}
+
+type TypeValidation struct {
 	Valid 		bool   `json:"valid" datastore:"valid"`
 	ChangedAt 	int64 `json:"changed_at" datastore:"changed_at"`
-
 	LastValid   int64 `json:"last_valid" datastore:"last_valid"`
 
 	// For the last update, which did it
 	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 	NodeId      string `json:"node_id" datastore:"node_id"`
+
+	Problems 	[]ValidationProblem `json:"errors" datastore:"errors"`
+	SubflowApps []ValidationProblem `json:"subflow_apps" datastore:"subflow_apps"`
 }
 
 type AppAuthenticationStorage struct {
@@ -1462,7 +1479,7 @@ type AppAuthenticationStorage struct {
 	Environment string `json:"environment" datastore:"environment"` // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
 	SuborgDistributed bool `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
 
-	Validation 		AuthValidation `json:"validation" datastore:"validation"`
+	Validation 		TypeValidation `json:"validation" datastore:"validation"`
 }
 
 type PasswordChange struct {
@@ -3938,6 +3955,8 @@ type HTTPOutput struct {
 	Headers map[string]string      `json:"headers"`
 	Cookies map[string]string      `json:"cookies"`
 	Errors  []string               `json:"errors"`
+
+	Reason  string 				   `json:"reason,omitempty"`
 }
 
 type SnappStep struct {

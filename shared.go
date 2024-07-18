@@ -8036,20 +8036,27 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if authRequired && fieldsFilled > 1 {
-						foundErr := fmt.Sprintf("Action %s (%s) requires authentication (1)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("\n\n[DEBUG] Adding auth error 1: %s\n\n", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
-							//continue
+						}
+
+						if !ArrayContains(action.Errors, foundErr) {
+							action.Errors = append(action.Errors, foundErr)
 						}
 					} else if authRequired && fieldsFilled == 1 {
-						foundErr := fmt.Sprintf("Action %s (%s) requires authentication (2)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
 							//continue
+						}
+
+						if !ArrayContains(action.Errors, foundErr) {
+							action.Errors = append(action.Errors, foundErr)
 						}
 					}
 				}
@@ -8087,10 +8094,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								} else {
 									thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 									if actionParam.Configuration && len(action.AuthenticationId) == 0 {
-										thisError = fmt.Sprintf("Action %s (%s) requires authentication (3)", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+										thisError = fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 									}
 
-									action.Errors = append(action.Errors, thisError)
+									if !ArrayContains(action.Errors, thisError) {
+										action.Errors = append(action.Errors, thisError)
+									}
 
 									errorFound := false
 									for errIndex, oldErr := range workflow.Errors {
@@ -14672,7 +14681,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
-			childNodes = FindChildNodes(workflowExecution, actionResult.Action.ID, []string{}, []string{})
+			childNodes = FindChildNodes(workflowExecution.Workflow, actionResult.Action.ID, []string{}, []string{})
 			//log.Printf("[DEBUG][%s] FOUND %d CHILDNODES\n\n", workflowExecution.ExecutionId, len(childNodes))
 			for _, nodeId := range childNodes {
 				log.Printf("[DEBUG][%s] Checking if node %s is already in results", workflowExecution.ExecutionId, nodeId)
@@ -15635,13 +15644,13 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 
 // Finds the child nodes of a node in execution and returns them
 // Used if e.g. a node in a branch is exited, and all children have to be stopped
-func FindChildNodes(workflowExecution WorkflowExecution, nodeId string, parents, handledBranches []string) []string {
+func FindChildNodes(workflow Workflow, nodeId string, parents, handledBranches []string) []string {
 	allChildren := []string{nodeId}
 
 	// 1. Find children of this specific node
 	// 2. Find the children of those nodes etc.
 	// 3. Sort it in the right order to handle merges properly
-	for _, branch := range workflowExecution.Workflow.Branches {
+	for _, branch := range workflow.Branches {
 		if branch.SourceID == nodeId {
 			if ArrayContains(parents, branch.DestinationID) {
 				continue
@@ -15656,7 +15665,7 @@ func FindChildNodes(workflowExecution WorkflowExecution, nodeId string, parents,
 			allChildren = append(allChildren, branch.DestinationID)
 
 			handledBranches = append(handledBranches, branch.ID)
-			childNodes := FindChildNodes(workflowExecution, branch.DestinationID, parents, handledBranches)
+			childNodes := FindChildNodes(workflow, branch.DestinationID, parents, handledBranches)
 			for _, bottomChild := range childNodes {
 				found := false
 
@@ -16380,7 +16389,7 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 		Workflow: *workflow,
 	}
 
-	childNodes := FindChildNodes(workflowExecution, workflowAction, []string{}, []string{})
+	childNodes := FindChildNodes(workflowExecution.Workflow, workflowAction, []string{}, []string{})
 	//log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
 	newActions := []Action{}
 	branches := []Branch{}
@@ -17148,7 +17157,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			for _, key := range allkeys {
 				tmpkey := strings.ReplaceAll(strings.Trim(strings.ToLower(key.Key), " "), " ", "_")
 
-				log.Printf("%s vs %s", tmpkey, searchkey)
+				//log.Printf("%s vs %s", tmpkey, searchkey)
 				if tmpkey == searchkey {
 					log.Printf("\n\n[INFO] Found key %s for org %s\n\n", key.Key, org.Id)
 					cacheData = &key
@@ -19296,6 +19305,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		return WorkflowExecution{}, ExecInfo{}, "Failed unmarshal during execution", err
 	}
 
+
 	if len(workflow.OrgId) > 0 {
 		workflowExecution.ExecutionOrg = workflow.OrgId
 		workflowExecution.OrgId = workflow.OrgId
@@ -20132,7 +20142,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-	childNodes := FindChildNodes(workflowExecution, workflowExecution.Start, []string{}, []string{})
+	workflowExecution.Workflow.Validation = TypeValidation{} 
+
+	childNodes := FindChildNodes(workflowExecution.Workflow, workflowExecution.Start, []string{}, []string{})
 
 	//topic := "workflows"
 	startFound := false
@@ -22965,7 +22977,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		} else if len(parents[nextAction]) > 0 {
 			// Wait for parents to finish executing
 			skippedCnt := 0
-			childNodes := FindChildNodes(workflowExecution, nextAction, []string{}, []string{})
+			childNodes := FindChildNodes(workflowExecution.Workflow, nextAction, []string{}, []string{})
 			for _, parent := range parents[nextAction] {
 				// Check if the parent is also a child. This can ensure continueation no matter what
 				if ArrayContains(childNodes, parent) {
@@ -27826,47 +27838,78 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 }
 
 // Updates statuses in relevant areas according to what happened in the workflow run
-func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
+func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *WorkflowExecution {
 
 	// Check if this is already done
 	if exec.Status != "FINISHED" && exec.Status != "ABORTED" {
-		return
+		return exec
 	}
 
 	// FIXME: Skipping subexecs, as they are usually not relevant by themselves
+	/*
 	if len(exec.ExecutionParent) > 0 {
-		return
+		return exec
 	}
+	*/
 
 	// Create cache as to whether this has been ran in the last minute
-	cacheKey := fmt.Sprintf("execstatus_%s", exec.ExecutionId)
-	_, err := GetCache(ctx, cacheKey)
+	cacheKey := fmt.Sprintf("validation_%s", exec.ExecutionId)
+	validationData, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		//log.Printf("[DEBUG][%s] Execution status already checked", exec.ExecutionId)
-		return
+
+		cacheData := []byte(validationData.([]uint8))
+		err = json.Unmarshal(cacheData, &exec.Workflow.Validation)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling cache data for execution status: %s", err)
+		}
+
+		//log.Printf("\n\n[DEBUG][%s] Execution status already checked. Validation: %#v\n\n", exec.ExecutionId, exec.Workflow.Validation)
+
+		return exec
 	}
 
-	// Set cache for 1 minute
-	SetCache(ctx, cacheKey, []byte{1}, 1)
+	go RunCacheCleanup(ctx, *exec)
+	go RunIOCFinder(ctx, *exec)
 
 
-	log.Printf("\n\n[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d\n\n", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
+	log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
 	orgId := exec.ExecutionOrg
 	allAuth, err := GetAllWorkflowAppAuth(ctx, orgId) 
 	if err != nil {
 		log.Printf("[ERROR] Failed getting all auths for org during stat checks %s: %s", orgId, err)
-		return 
+		return exec
 	}
 
+	// FIXME: Is this necessary? 
 	workflow, err := GetWorkflow(ctx, exec.Workflow.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting real workflow for %s: %s", exec.Workflow.ID, err)
-		return
+		return exec
 	}
 
-	_ = allAuth
+	// Make sure it only handles/keeps the relevant actions
+	// This helps us make sure we don't look into random actions that aren't directly connected
+	childNodes := FindChildNodes(exec.Workflow, exec.Start, []string{}, []string{})
+	newActions := []Action{}
+	for _, action := range workflow.Actions {
+		if exec.Start == action.ID {
+			newActions = append(newActions, action)
+			continue
+		}
+
+		if ArrayContains(childNodes, action.ID) {
+			newActions = append(newActions, action)
+			continue
+		}
+	}
+
+	originalActions := workflow.Actions
+	workflow.Actions = newActions
+
+	authenticationProblems := []ValidationProblem{}
 
 	handledAuth := []string{}
+	timenow := time.Now().Unix() * 1000
 	for _, result := range exec.Results {
 		// FIXME: Skipping anything that outright fails right now
 		if result.Status != "SUCCESS" {
@@ -27880,8 +27923,31 @@ func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
 				continue
 			}
 
+			authRequired := false
+			for _, param := range action.Parameters {
+
+				// If authentication + has no value
+				if param.Configuration {
+					if len(param.Value) == 0 {
+						authRequired = true
+					}
+				}
+			}
+
+
 			// Check if this is an authentication action
-			if action.AuthenticationId == "" {
+			if authRequired && action.AuthenticationId == "" {
+				// Check if authentication is required
+
+				authenticationProblems = append(authenticationProblems, ValidationProblem{
+					ActionId: action.ID,
+					AppId:  action.AppID,
+					AppName: action.AppName,
+					Error:  "No authentication specified",
+
+					Type: "authentication",
+				})
+
 				break
 			}
 
@@ -27894,7 +27960,11 @@ func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
 			continue
 		}
 
-		if ArrayContains(handledAuth, foundAction.AuthenticationId) {
+		if len(foundAction.AuthenticationId) > 0 && ArrayContains(handledAuth, foundAction.AuthenticationId) {
+			continue
+		}
+
+		if (foundAction.AppName == "Shuffle Tools" || strings.ToLower(foundAction.AppName) == "http") {
 			continue
 		}
 
@@ -27909,10 +27979,44 @@ func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
 		if unmarshalledHttp.Success == true {
 			if unmarshalledHttp.Status >= 200 && unmarshalledHttp.Status < 300 {
 				isValid = true
+			} else if unmarshalledHttp.Status != 0 {
+				validationProblem := ValidationProblem{
+					ActionId: foundAction.ID,
+					AppId:   foundAction.AppID,
+					AppName: foundAction.AppName,
+					Error:  fmt.Sprintf("Status %d for action %s. Are the fields correct?", unmarshalledHttp.Status, foundAction.Label),
+					
+					Type: "configuration",
+				}
+
+				if unmarshalledHttp.Status == 401 {
+					validationProblem.Type = "authentication"
+				}
+
+				if unmarshalledHttp.Status == 403 {
+					validationProblem.Type = "authorization"
+				}
+
+				authenticationProblems = append(authenticationProblems, validationProblem)
 			}
+
+		} else {
+			if len(unmarshalledHttp.Reason) > 0 {
+				validationProblem := ValidationProblem{
+					ActionId: foundAction.ID,
+					AppId:   foundAction.AppID,
+					AppName: foundAction.AppName,
+					Error:  "Action failed: " + unmarshalledHttp.Reason,
+					Type: "configuration",
+				}
+
+				authenticationProblems = append(authenticationProblems, validationProblem)
+			}
+
+			// FIXME: What do we do here if there is no reason?
 		}
 
-		log.Printf("[DEBUG][%s] Checking result for %s", exec.ExecutionId, result.Action.Label)
+		//log.Printf("[DEBUG][%s] Checking result for %s", exec.ExecutionId, result.Action.Label)
 		handledAuth = append(handledAuth, foundAction.AuthenticationId)
 
 		for _, auth := range allAuth {
@@ -27945,7 +28049,6 @@ func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
 			}
 
 			if authUpdated {
-				timenow := time.Now().Unix() * 1000
 
 				auth.Validation.ChangedAt = timenow
 				if auth.Validation.Valid {
@@ -27965,4 +28068,258 @@ func checkExecutionStatus(ctx context.Context, exec WorkflowExecution) {
 			}
 		}
 	}
+
+
+	// FIXME: Check status from subflows as well
+	// Maybe subflows should update the parent?
+	// What if the subflow is a child of startnode, but didn't run?
+	// Then we just need a previous status..?
+	// SOMETHING has to run the update back to the parent to ensure
+	// subflows are accounted for
+	workflow.Validation.SubflowApps = []ValidationProblem{}
+	for _, trigger := range workflow.Triggers {
+		if trigger.TriggerType != "SUBFLOW" {
+			continue
+		}
+
+		if !ArrayContains(childNodes, trigger.ID) {
+			continue
+		}
+
+		// Replace with the apps of the subflow?
+		log.Printf("SUBFLOW: %#v", trigger.ID)
+
+		foundWorkflow := ""
+		startNode := ""
+		waitForResults := false
+		for _, param := range trigger.Parameters {
+			if param.Name == "workflow" {
+				foundWorkflow = param.Value
+			}
+
+			if param.Name == "startnode" {
+				startNode = param.Value
+			}
+
+			if param.Name == "check_result" {
+				waitForResults = strings.ToLower(param.Value) == "true"
+			}
+		}
+
+		if foundWorkflow == "" {
+			continue
+		}
+
+		log.Printf("[DEBUG] Getting workflow %s for subflow check", foundWorkflow)
+		subflow, err := GetWorkflow(ctx, foundWorkflow)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting subflow %s for workflow %s: %s", foundWorkflow, workflow.ID, err)
+			continue
+		}
+
+		if startNode == "" {
+			startNode = workflow.Start
+		}
+
+		// FIXME: Look for subvalues of this one again in this ones' subflow
+
+		// Check for actions in the subflow
+		subChildNodes := FindChildNodes(*subflow, startNode, []string{}, []string{})
+		log.Printf("[DEBUG] Found %d child nodes for subflow %s", len(subChildNodes), subflow.ID)
+
+		// FIXME: May be a problem here with sub-sub workflows etc.
+		// Something about always being one workflow behind
+		if len(subflow.Validation.SubflowApps) > 0 {
+			for _, subProblem := range subflow.Validation.SubflowApps {
+				// We keep appending for each level 
+				// This is a shitty solution, but is parsable :))
+				if strings.HasSuffix(subProblem.Type, "subflow_app") {
+					subProblem.Type = fmt.Sprintf("subflow_%s", subProblem.Type)
+				}
+
+				subProblem.Order = strings.Count(subProblem.Type, "subflow_")
+				subProblem.WorkflowId = subflow.ID // Override due to frontend utilization
+				workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, subProblem)
+			}
+		}
+
+		for _, subAction := range subflow.Actions {
+			found := false
+			for _, childNode := range subChildNodes {
+				if childNode == subAction.ID {
+					found = true
+					break
+				}
+			}
+
+			if subAction.ID == startNode {
+				found = true
+			}
+
+			if !found {
+				continue
+			}
+
+			if subAction.AppName == "Shuffle Workflow" || subAction.AppName == "Shuffle Tools" || strings.ToLower(subAction.AppName) == "http" {
+				continue
+			}
+
+			// FIXME: Use generic icon here?
+			if subAction.AppName == "Integration Framework" {
+				for _, param := range subAction.Parameters {
+					if param.Name == "app_name" {
+						subAction.AppName = param.Value
+						break
+					}
+				}
+			}
+
+			validationProblem := ValidationProblem{
+				ActionId: subAction.ID,
+				AppId:   subAction.AppID,
+				AppName: subAction.AppName,
+				Error:  trigger.ID,
+				Type: "subflow_app",
+
+				WorkflowId: subflow.ID,
+				Waiting: waitForResults,
+			}
+
+			workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, validationProblem)
+		}
+	}
+
+	// Dedup subflowapps
+	newApps := []ValidationProblem{}
+	for _, app := range workflow.Validation.SubflowApps {
+		found := false
+
+		for _, newApp := range newApps {
+			if newApp.ActionId == app.ActionId {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			newApps = append(newApps, app)
+		}
+	}
+
+	workflow.Validation.SubflowApps = newApps
+
+	workflowChanged := false
+	workflow.Validation.Problems = authenticationProblems
+	if len(workflow.Validation.Problems) > 0 {
+		workflow.Validation.Valid = false
+	} else { 
+		workflow.Validation.Valid = true
+	}
+
+	// FIXME: Set the right stuff for the workflow here as well
+	workflow.Validation.ChangedAt = timenow
+	if workflow.Validation.Valid { 
+		workflow.Validation.LastValid = timenow 
+		workflow.Validation.ExecutionId = exec.ExecutionId
+	}
+	
+
+	// Updating the workflow to show the right status every time for now
+	workflowChanged = true
+	workflow.Validation.ExecutionId = exec.ExecutionId
+	if workflowChanged {
+		workflow.Actions = originalActions
+
+		err = SetWorkflow(ctx, *workflow, workflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed updating workflow from execution validator. This is NOT critical as we keep cache %s: %s", workflow.ID, err)
+		}
+	}
+
+	exec.Workflow.Validation = workflow.Validation
+	marshalledValidation, err := json.Marshal(workflow.Validation)
+	if err != nil {
+		return exec
+	}
+
+	SetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID), marshalledValidation, 1440)
+	SetCache(ctx, cacheKey, marshalledValidation, 1)
+
+	// ALWAYS have correct exec id for current execution, but not always in workflow
+
+
+	log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to %#v\n\n", exec.ExecutionId, len(workflow.Validation.Problems), workflow.Validation)
+
+	return exec
+}
+
+// Checks & validates workflow based on last few runs~
+func GetWorkflowValidation(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		// Added org-reader as the user should be able to read everything in an org
+		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow revisions)", user.Username, workflow.ID)
+
+			// Only for Read-Only. No executions or impersonations.
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
+
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow revisions). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	// FIXME: Check last 10 executions + notifications if they 
+	// Make sure it adds subflows as well and highlights failing apps
+
+	// Access is granted -> get revisions
+	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
+	resp.WriteHeader(500)
 }
