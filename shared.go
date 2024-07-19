@@ -1685,7 +1685,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !originalAuth.Active {
-
 				// Forcing it active
 				appAuth.Active = true
 
@@ -1704,7 +1703,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			if appAuth.Type != "oauth2" && appAuth.Type != "oauth" && appAuth.Type != "oauth2-app" {
+			//if appAuth.Type != "oauth2" && appAuth.Type != "oauth" && appAuth.Type != "oauth2-app" {
 				for fieldIndex, field := range appAuth.Fields {
 					if !strings.Contains(field.Value, "Secret. Replaced") {
 						continue
@@ -1779,8 +1778,8 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 				// Setting this to ensure that any new config is encrypted anew
 				appAuth.Encrypted = false
-			} else {
-			}
+			//} else {
+			//}
 		} else {
 			// ID sometimes used in creation as well
 
@@ -20495,10 +20494,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
-						log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
-						setField = false
-						//fieldLength = 0
-						break
+						if field.Key != "access_token" {
+							log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+							setField = false
+							//fieldLength = 0
+							break
+						} else {
+							continue
+						}
 					}
 
 					// Remove / at end of urls
