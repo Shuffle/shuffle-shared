@@ -2,7 +2,6 @@ package shuffle
 
 import (
 	"encoding/json"
-	"errors"
 	"context"
 	"fmt"
 	"io/ioutil"
@@ -141,12 +140,12 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	//parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
 	parsedId := strings.ToLower(pipeline.Environment)
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
-	existingQueue, err := GetWorkflowQueue(ctx, parsedId, 10)
+	existingQueue, _ := GetWorkflowQueue(ctx, parsedId, 10)
 	for _, queue := range existingQueue.Data {
 		if strings.HasPrefix(queue.Type, "PIPELINE") {
 			log.Printf("[WARNING] Pipeline type already exists: %s", formattedType)
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`)))
+			resp.Write([]byte(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`))
 			return
 		}
 	}
@@ -176,7 +175,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	} else if startCommand == "STOP" {
 
 		pipelineInfo.Status = "stopped"
-		err = setPipelineTrigger(ctx, *pipelineInfo)
+		err = savePipelineData(ctx, *pipelineInfo)
 		if err != nil {
 			log.Printf("[ERROR] Failed to stop the pipeline with trigger id: %s, reason: %s", pipelineInfo.TriggerId, err)
 			resp.WriteHeader(500)
@@ -196,8 +195,9 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		pipelineData.Status = "running"
 		pipelineData.TriggerId = pipeline.TriggerId
 		pipelineData.StartNode = pipeline.StartNode
+		pipelineData.Url = pipeline.Url
 
-		err = setPipelineTrigger(ctx, pipelineData)
+		err = savePipelineData(ctx, pipelineData)
 		if err != nil {
 			log.Printf("[ERROR] Failed to create the pipeline with trigger id: %s, reason: %s", pipeline.TriggerId, err)
 			resp.WriteHeader(500)
@@ -216,29 +216,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Pipeline will be created"}`)))
-}
-
-
-func setPipelineTrigger(ctx context.Context, pipeline Pipeline) error{
-
-	input := pipeline.Command
-	index := strings.Index(input, "to ")
-
-	if index == -1 {
-		return errors.New("url not found")
-	}
-	extractedURL := input[index+len("to "):]
-	extractedURL = strings.TrimSpace(extractedURL)
-
-	pipeline.Url =  extractedURL
-	err := savePipelineData(ctx, pipeline)
-
-	if err != nil  {
-		return err
-	}
-
-   return nil
+	resp.Write([]byte(`{"success": true, "reason": "Pipeline will be created"}`))
 }
 
 func deletePipeline(ctx context.Context, pipeline Pipeline) error {
@@ -252,7 +230,7 @@ func deletePipeline(ctx context.Context, pipeline Pipeline) error {
 
 	err = DeleteKey(ctx, "pipelines", pipeline.TriggerId)
 	if err != nil {
-		log.Printf("[WARNING] Error deleting pipeline %s, reason: %s", pipeline.TriggerId)
+		log.Printf("[WARNING] Error deleting pipeline %s, reason: %s", pipeline.TriggerId, err)
 		return err
 	}
 
