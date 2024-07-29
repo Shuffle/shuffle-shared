@@ -649,7 +649,7 @@ func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	var isTenzirAlive bool
-	if time.Now().Unix() > disabledRules.LastActive+30 {
+	if time.Now().Unix() > disabledRules.LastActive+10 {
 		isTenzirAlive = false
 	} else {
 		isTenzirAlive = true
@@ -773,7 +773,7 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 	if action == "disable" {
 		execType = "DISABLE_SIGMA_FILE"
 	} else if action == "enable" {
-		execType = "CATEGORY_UPDATE"
+		execType = "ENABLE_SIGMA_FILE"
 	}
 
 	err = SetExecRequest(ctx, execType, file.Filename)
@@ -2452,7 +2452,7 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 }
 
-func HandleDownloadRemoteFiles2(resp http.ResponseWriter, request *http.Request) {
+func HandleEnhancedDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
