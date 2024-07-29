@@ -21,6 +21,7 @@ type PipelineRequest struct {
 	Environment string `json:"environment"`
 	WorkflowId  string `json:"workflow_id"`
 	StartNode   string `json:"start_node"`
+	Url         string `json:"url"`
 
 	PipelineId 	string `json:"pipeline_id"`
 	TriggerId	string `json:"trigger_id"`
