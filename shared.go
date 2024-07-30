@@ -15841,10 +15841,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if project.Environment == "cloud" && gceProject != "shuffler" {
-		go loadAppConfigFromMain(fileId) 
-	}
-
 	org := &Org{}
 	added := false
 	if app.Sharing || app.Public || !activate {
@@ -15939,6 +15935,11 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 
 	// If onprem, it should autobuild the container(s) from here
+	if project.Environment == "cloud" && gceProject != "shuffler" {
+		go loadAppConfigFromMain(fileId) 
+
+		RedirectUserRequest(resp, request) 
+	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
