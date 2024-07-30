@@ -12411,16 +12411,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
 
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
@@ -12440,19 +12430,44 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	app, err := GetApp(ctx, fileId, User{}, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
+
+		if project.Environment == "cloud" {
+			// Checking if it's a special region. All user-specific requests should
+			// Update local stash here?
+			// Load config & update
+			go loadAppConfigFromMain(fileId)
+
+			// go through shuffler.io and not subdomains
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
+
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
 		return
 	}
 
+	// FIXME: Should we redirect here?
+	if app.Public { 
+		if project.Environment == "cloud" {
+			// Checking if it's a special region. All user-specific requests should
+			// go through shuffler.io and not subdomains
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
+	}
+
 	log.Printf("[INFO] Successfully got app %s", fileId)
 
 	app.ReferenceUrl = ""
-	type AppParser struct {
-		Success bool   `json:"success"`
-		OpenAPI []byte `json:"openapi"`
-		App     []byte `json:"app"`
-	}
 
 	//app.Activate = true
 	data, err := json.Marshal(app)
@@ -13679,6 +13694,13 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		selectedTrigger = trigger
 		for _, param := range trigger.Parameters {
 			if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+				// Check if the .# exists, without .#0 or .#1 for digits
+				log.Printf("\n\n[DEBUG] IN LOOP CHECK RESULT\n\n")
+				//re := regexp.MustCompile(`\.\#(\d+)`)
+				//if re.MatchString(param.Value) {
+				//	log.Printf("\n\n\n[DEBUG][%s] Found a loop in the subflow. Not mapping subflow result back to parent workflow. Trigger: %#v\n\n\n", subflowExecutionId, selectedTrigger.ID)
+				//}
+
 				isLooping = true
 			}
 
@@ -15819,6 +15841,10 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if project.Environment == "cloud" && gceProject != "shuffler" {
+		go loadAppConfigFromMain(fileId) 
+	}
+
 	org := &Org{}
 	added := false
 	if app.Sharing || app.Public || !activate {
@@ -16274,9 +16300,13 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[WARNING] Yaml error (4): %s", err)
 
-				resp.WriteHeader(422)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
-				return
+				if strings.Contains(fmt.Sprintf("%s", err), "cannot unmarshal") {
+					log.Printf("[WARNING] Failed unmarshaling v2 data: %s - this is allowed.", err)
+				} else {
+					resp.WriteHeader(422)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
+					return
+				}
 			} else {
 				log.Printf("Found valid yaml!")
 			}

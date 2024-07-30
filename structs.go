@@ -3998,3 +3998,10 @@ type Training struct {
 	ID	  string `json:"id"`
 	SignupTime int64 `json:"signupTime"`
 }
+
+
+type AppParser struct {
+	Success bool   `json:"success"`
+	OpenAPI []byte `json:"openapi"`
+	App     []byte `json:"app"`
+}
