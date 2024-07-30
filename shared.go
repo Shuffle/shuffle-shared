@@ -23464,6 +23464,23 @@ func GetExternalClient(baseUrl string) *http.Client {
 		InsecureSkipVerify: skipSSLVerify,
 	}
 
+	log.Printf("[INFO] Reading self signed certificate from %s (env: CERT_PATH)", os.Getenv("CERT_PATH"))
+
+	caCert, err := ioutil.ReadFile(os.Getenv("CERT_PATH"))
+	if err == nil {
+		rootCAs, _ := x509.SystemCertPool()
+		if rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
+		if ok := rootCAs.AppendCertsFromPEM(caCert); ok {
+			transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
+		}
+	}
+	if err != nil {
+		log.Printf("[ERROR] Error reading the certificate %s", err)
+	}
+
+
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
 	} else {
