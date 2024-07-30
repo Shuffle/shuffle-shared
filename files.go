@@ -785,7 +785,7 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s"}`, fileId)))
+	resp.Write([]byte((`{"success": true}`)))
 }
 
 func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
