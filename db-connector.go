@@ -6911,14 +6911,19 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 				log.Printf("[WARNING] Error parsing the response body: %s", err)
 				return ExecutionRequestWrapper{}, err
 			} else {
-				// Print the response status and error information.
-				log.Printf("[%s] %s: %s",
-					res.Status(),
-					e["error"].(map[string]interface{})["type"],
-					e["error"].(map[string]interface{})["reason"],
-				)
+				// Check if "error" key exists and is of the expected type
+				if errInfo, ok := e["error"].(map[string]interface{}); ok {
+					log.Printf("[%s] %s: %s",
+						res.Status(),
+						errInfo["type"],
+						errInfo["reason"],
+					)
+				} else {
+					log.Printf("[ERROR] Unexpected error format: %v", e["error"])
+				}
 			}
 		}
+		
 
 		if res.StatusCode != 200 && res.StatusCode != 201 {
 			return ExecutionRequestWrapper{}, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
@@ -9146,6 +9151,132 @@ func SetFile(ctx context.Context, file File) error {
 
 
 	return nil
+}
+
+func StoreDisabledRules(ctx context.Context, file DisabledRules) error {
+
+	nameKey := "disabled_rules"
+
+	if project.DbType == "opensearch" {
+		data, err := json.Marshal(file)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling set file: %s", err)
+			return err
+		}
+
+		err = indexEs(ctx, nameKey, "0", data)
+		if err != nil {
+			return err
+		}
+	} else {
+		k := datastore.NameKey(nameKey, "0", nil)
+		if _, err := project.Dbclient.Put(ctx, k, &file); err != nil {
+			log.Println(err)
+			return err
+		}
+	}
+
+	return nil
+}
+
+func GetDisabledRules(ctx context.Context) (*DisabledRules, error) {
+	nameKey := "disabled_rules"
+	disabRules := &DisabledRules{}
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), "0")
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
+			return &DisabledRules{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return &DisabledRules{}, errors.New("rules doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &DisabledRules{}, err
+		}
+
+		wrapped := DisabledHookWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &DisabledRules{}, err
+		}
+
+		disabRules = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, "0", nil)
+		if err := project.Dbclient.Get(ctx, key, disabRules); err != nil {
+			return &DisabledRules{}, err
+		}
+	}
+
+	return disabRules, nil
+}
+
+func StoreSelectedRules(ctx context.Context, TriggerId string, rules SelectedSigmaRules) error {
+
+		nameKey := "selected_rules"
+	
+		if project.DbType == "opensearch" {
+			data, err := json.Marshal(rules)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling set file: %s", err)
+				return err
+			}
+	
+			err = indexEs(ctx, nameKey, TriggerId, data)
+			if err != nil {
+				return err
+			}
+		} else {
+			k := datastore.NameKey(nameKey, TriggerId, nil)
+			if _, err := project.Dbclient.Put(ctx, k, &rules); err != nil {
+				log.Println(err)
+				return err
+			}
+		}
+	
+		return nil
+}
+
+func GetSelectedRules(ctx context.Context, TriggerId string) (*SelectedSigmaRules, error) {
+	nameKey := "selected_rules"
+	selectedRules := &SelectedSigmaRules{}
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), TriggerId)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
+			return &SelectedSigmaRules{}, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return &SelectedSigmaRules{}, errors.New("rules doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return &SelectedSigmaRules{}, err
+		}
+
+		wrapped := SelectedRulesWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return &SelectedSigmaRules{}, err
+		}
+
+		selectedRules = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, TriggerId, nil)
+		if err := project.Dbclient.Get(ctx, key, selectedRules); err != nil {
+			return &SelectedSigmaRules{}, err
+		}
+	}
+
+	return selectedRules, nil
 }
 
 func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, error) {

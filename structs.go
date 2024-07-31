@@ -21,6 +21,7 @@ type PipelineRequest struct {
 	Environment string `json:"environment"`
 	WorkflowId  string `json:"workflow_id"`
 	StartNode   string `json:"start_node"`
+	Url         string `json:"url"`
 
 	PipelineId 	string `json:"pipeline_id"`
 	TriggerId	string `json:"trigger_id"`
@@ -1422,6 +1423,25 @@ type File struct {
 	OriginalMd5sum  string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
 }
 
+type DisabledRules struct {
+	Files          []File  `json:"files"        datastore:"files"`
+	DisabledFolder bool    `json:"disabled_folder" datastore:"disabled_folder"`
+	IsTenzirActive string    `json:"tenzir_active"  datastore:"tenzir_active"`
+	LastActive     int64  `json:"last_active" datastore:"last_active"`
+}
+
+type SelectedSigmaRules struct {
+     SelectedRules []SigmaFileInfo  `json:"selected_rules" datastore:"selected_rules"`
+}
+
+type SigmaFileInfo struct {
+	FileName string  `json:"file_name" yaml:"file_name"`
+	RuleTitle   string `json:"title" yaml:"title"`
+	Description string `json:"description" yaml:"description"`
+	FileId      string `json:"file_id"`
+	IsEnabled   bool   `json:"is_enabled"`
+}
+
 type AppAuthenticationGroup struct {
 	Active			bool                  `json:"active" datastore:"active"`
 	Label			string                `json:"label" datastore:"label"`
@@ -2416,6 +2436,28 @@ type FileWrapper struct {
 	PrimaryTerm int    `json:"_primary_term"`
 	Found       bool   `json:"found"`
 	Source      File   `json:"_source"`
+}
+
+type DisabledHookWrapper struct {
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      DisabledRules `json:"_source"`
+}
+
+type SelectedRulesWrapper struct {
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      SelectedSigmaRules `json:"_source"`
 }
 
 type HookWrapper struct {
