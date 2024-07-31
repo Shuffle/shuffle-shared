@@ -4110,7 +4110,6 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 			parsedState, err := base64.StdEncoding.DecodeString(token.Nonce)
 			if err != nil {
 				log.Printf("[ERROR] Failed state split: %s", err)
-				continue
 			}
 
 			foundOrg := ""
@@ -4155,7 +4154,7 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 				return IdTokenCheck{}, err
 			}
 			// Validating the user itself
-			if token.Aud == org.SSOConfig.OpenIdClientId && foundChallenge == org.SSOConfig.OpenIdClientSecret {
+			if token.Aud == org.SSOConfig.OpenIdClientId || foundChallenge == org.SSOConfig.OpenIdClientSecret {
 				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")
 				token.Org = *org
 				return token, nil

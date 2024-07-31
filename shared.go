@@ -18420,6 +18420,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					openidUser.Sub = token.Sub
+					openidUser.Email = token.Email
 					org = &token.Org
 					skipValidation = true
 
@@ -18570,21 +18571,21 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	*/
 
-	if len(openidUser.Sub) == 0 {
+	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
 		log.Printf("[WARNING] No user found in openid login (2)")
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	if project.Environment == "cloud" {
-		log.Printf("[WARNING] Openid SSO is not implemented for cloud yet. User %s", openidUser.Sub)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud Openid is not available yet"}`)))
-		return
-	}
+	// if project.Environment == "cloud" {
+	// 	log.Printf("[WARNING] Openid SSO is not implemented for cloud yet. User %s", openidUser.Sub)
+	// 	resp.WriteHeader(401)
+	// 	resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud Openid is not available yet"}`)))
+	// 	return
+	// }
 
-	userName := strings.ToLower(strings.TrimSpace(openidUser.Sub))
+	userName := strings.ToLower(strings.TrimSpace(openidUser.Email))
 	if !strings.Contains(userName, "@") {
 		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
 	}
@@ -19079,10 +19080,10 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					})
 
 					user.Session = sessionToken
-					user.LoginInfo = append(user.LoginInfo, LoginInfo{
-						IP:        GetRequestIp(request),
-						Timestamp: time.Now().Unix(),
-					})
+				// user.LoginInfo = append(user.LoginInfo, LoginInfo{
+				// 	IP:        GetRequestIp(request),
+				// 	Timestamp: time.Now().Unix(),
+				// })
 				// }
 				err = SetUser(ctx, &user, false)
 				if err != nil {
