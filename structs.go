@@ -235,6 +235,7 @@ type WorkflowAppActionParameter struct {
 	SkipMulticheck bool             `json:"skip_multicheck" datastore:"skip_multicheck" yaml:"skip_multicheck"`
 	ValueReplace   []Valuereplace   `json:"value_replace" datastore:"value_replace,noindex" yaml:"value_replace,omitempty"`
 	UniqueToggled  bool             `json:"unique_toggled" datastore:"unique_toggled" yaml:"unique_toggled"`
+	Error          string           `json:"error" datastore:"error" yaml:"error"`
 }
 
 type Valuereplace struct {
