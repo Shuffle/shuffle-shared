@@ -190,7 +190,7 @@ func GetUsecaseData() string {
 	return (`[
     {
         "name": "1. Collect",
-        "color": "#c51152",
+        "color": "#FB47A0",
         "list": [
             {
                 "name": "Email management",
