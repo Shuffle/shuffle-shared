@@ -895,12 +895,18 @@ type Org struct {
 type Billing struct {
 	Email          string           `json:"Email" datastore:"Email"`
 	AlertThreshold []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
+	Consultation   Consultation     `json:"Consultation" datastore:"Consultation"`
 }
 
 type AlertThreshold struct {
 	Percentage int  `json:"percentage" datastore:"percentage"`
 	Count      int  `json:"count" datastore:"count"`
 	Email_send bool `json:"Email_send" datastore:"Email_send"`
+}
+
+type Consultation struct {
+	Hours   string `json:"hours" datastore:"hours"`
+	Minutes string `json:"minutes" datastore:"minutes"`
 }
 
 // Authentication overrides that times out
@@ -3993,4 +3999,11 @@ type Training struct {
 	Username string `json:"username"`
 	ID	  string `json:"id"`
 	SignupTime int64 `json:"signupTime"`
+}
+
+
+type AppParser struct {
+	Success bool   `json:"success"`
+	OpenAPI []byte `json:"openapi"`
+	App     []byte `json:"app"`
 }

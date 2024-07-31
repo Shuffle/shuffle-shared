@@ -3580,11 +3580,17 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
-	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure.com") && !strings.Contains(refreshData, "resource="){
+
+	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure") && !strings.Contains(refreshData, "resource="){
 		// Add "resource" for microsoft hings
 		refreshData += "&resource=https://management.azure.com"
 	}
 
+	/*
+	if strings.Contains(refreshData, "client_credentials") && strings.Contains (refreshData, "azure") && !strings.Contains(refreshData, "resource="){
+		refreshData += "&resource=https://management.azure.com"
+	}
+	*/
 
 	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %#v. URL: %#v", refreshData, tokenUrl)
 

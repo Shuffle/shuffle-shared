@@ -11435,7 +11435,7 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 		CacheDb:       cacheDb,
 		DbType:        dbType,
 		CloudUrl:      cloudRunUrl,
-		BucketName:    "shuffler.appspot.com",
+		BucketName:    fmt.Sprintf("%s.appspot.com", gceProject),
 	}
 
 	bucketName := os.Getenv("SHUFFLE_ORG_BUCKET")

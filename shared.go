@@ -1685,7 +1685,6 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if !originalAuth.Active {
-
 				// Forcing it active
 				appAuth.Active = true
 
@@ -1704,7 +1703,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			if appAuth.Type != "oauth2" && appAuth.Type != "oauth" && appAuth.Type != "oauth2-app" {
+			//if appAuth.Type != "oauth2" && appAuth.Type != "oauth" && appAuth.Type != "oauth2-app" {
 				for fieldIndex, field := range appAuth.Fields {
 					if !strings.Contains(field.Value, "Secret. Replaced") {
 						continue
@@ -1779,8 +1778,8 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 
 				// Setting this to ensure that any new config is encrypted anew
 				appAuth.Encrypted = false
-			} else {
-			}
+			//} else {
+			//}
 		} else {
 			// ID sometimes used in creation as well
 
@@ -11631,6 +11630,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.Editing = false
 	}
 
+	if (len(tmpData.Billing.Consultation.Hours) > 0 || len(tmpData.Billing.Consultation.Minutes) > 0) && user.SupportAccess {
+		org.Billing.Consultation = tmpData.Billing.Consultation
+	}
+
 	// Built a system around this now, which checks for the actual org.
 	// if requestdata.Environment == "cloud" && project.Environment != "cloud" {
 	//if project.Environment != "cloud" && len(org.SSOConfig.SSOEntrypoint) > 0 && len(org.ManagerOrgs) == 0 {
@@ -12408,16 +12411,6 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if project.Environment == "cloud" {
-		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
 
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
@@ -12437,19 +12430,44 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	app, err := GetApp(ctx, fileId, User{}, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app %s (app config): %s", fileId, err)
+
+		if project.Environment == "cloud" {
+			// Checking if it's a special region. All user-specific requests should
+			// Update local stash here?
+			// Load config & update
+			go loadAppConfigFromMain(fileId)
+
+			// go through shuffler.io and not subdomains
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
+
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
 		return
 	}
 
+	// FIXME: Should we redirect here?
+	if app.Public { 
+		if project.Environment == "cloud" {
+			// Checking if it's a special region. All user-specific requests should
+			// go through shuffler.io and not subdomains
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
+	}
+
 	log.Printf("[INFO] Successfully got app %s", fileId)
 
 	app.ReferenceUrl = ""
-	type AppParser struct {
-		Success bool   `json:"success"`
-		OpenAPI []byte `json:"openapi"`
-		App     []byte `json:"app"`
-	}
 
 	//app.Activate = true
 	data, err := json.Marshal(app)
@@ -13676,6 +13694,13 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		selectedTrigger = trigger
 		for _, param := range trigger.Parameters {
 			if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+				// Check if the .# exists, without .#0 or .#1 for digits
+				log.Printf("\n\n[DEBUG] IN LOOP CHECK RESULT\n\n")
+				//re := regexp.MustCompile(`\.\#(\d+)`)
+				//if re.MatchString(param.Value) {
+				//	log.Printf("\n\n\n[DEBUG][%s] Found a loop in the subflow. Not mapping subflow result back to parent workflow. Trigger: %#v\n\n\n", subflowExecutionId, selectedTrigger.ID)
+				//}
+
 				isLooping = true
 			}
 
@@ -15910,6 +15935,11 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
 
 	// If onprem, it should autobuild the container(s) from here
+	if project.Environment == "cloud" && gceProject != "shuffler" {
+		go loadAppConfigFromMain(fileId) 
+
+		RedirectUserRequest(resp, request) 
+	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
@@ -16271,9 +16301,13 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[WARNING] Yaml error (4): %s", err)
 
-				resp.WriteHeader(422)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
-				return
+				if strings.Contains(fmt.Sprintf("%s", err), "cannot unmarshal") {
+					log.Printf("[WARNING] Failed unmarshaling v2 data: %s - this is allowed.", err)
+				} else {
+					resp.WriteHeader(422)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed reading openapi2: %s"}`, err)))
+					return
+				}
 			} else {
 				log.Printf("Found valid yaml!")
 			}
@@ -20496,10 +20530,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
 					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
 					if err != nil {
-						log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
-						setField = false
-						//fieldLength = 0
-						break
+						if field.Key != "access_token" {
+							log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+							setField = false
+							//fieldLength = 0
+							break
+						} else {
+							continue
+						}
 					}
 
 					// Remove / at end of urls
@@ -28323,4 +28361,101 @@ func GetWorkflowValidation(resp http.ResponseWriter, request *http.Request) {
 	// Access is granted -> get revisions
 	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
 	resp.WriteHeader(500)
+}
+func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in private training", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+		log.Printf("[DEBUG] Redirecting training request to main site handler (shuffler.io). Project: %s", gceProject)
+		RedirectUserRequest(resp, request)
+		return
+	}
+
+	User, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in private training: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	type TrainingData struct {
+		OrgId    string `json:"org_id" datastore:"org_id"`
+		Training string `json:"trainingMembers" datastore:"trainingMembers"`
+		Message  string `json:"message" datastore:"message"`
+	}
+
+	var tmpData TrainingData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling test: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(tmpData.OrgId) == 0 || len(tmpData.Training) == 0 {
+		log.Printf("[WARNING] Missing org_id or training in private training request")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Missing org_id or training"}`))
+		return
+	}
+
+	//Get user org
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", tmpData.OrgId, err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	email := []string{User.Username}
+	Subject := "Thank you for your private training request"
+	Message := fmt.Sprintf("Hi there, Thank you for submitting request for shuffle private training. This is confirmation that we have received your private training request. You have requested a private training for %v members. We will get back to you shortly. <br> <br> Best Regards <br>Shuffle Team", tmpData.Training)
+
+	err = sendMailSendgrid(email, Subject, Message, false)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending mail: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//Send mail to the shuffle support
+	email = []string{"support@shuffler.io"}
+	Subject = fmt.Sprintf("Private training request")
+	Message = fmt.Sprintf("Private training request : <br>Org id: %v <br> Org Name: %v  <br>Username: %v <br> Training Members: %v <br>Customer: %v <br> Message: %v", org.Id, org.Name, User.Username, tmpData.Training, org.LeadInfo.Customer, tmpData.Message)
+
+	err = sendMailSendgrid(email, Subject, Message, false)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending mail: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[INFO] Private training request from %s for %s members. Message: %s", org.Org, tmpData.Training, tmpData.Message)
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true}`))
 }
