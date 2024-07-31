@@ -345,11 +345,12 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(info.DailyStatistics) > 0 {
-		// Should remove the FIRST day as it's very scewed
+		/*
+		   // Should remove the FIRST day as it's very skewed
 		// Do this based on the Timestamp (date)
 		skipIndex := 0
 		lowestTimestamp := info.DailyStatistics[0].Date
-		for _, timestamp := range info.DailyStatistics{
+		   for _, timestamp := range info.DailyStatistics {
 			if timestamp.Date.Before(lowestTimestamp) {
 				lowestTimestamp = timestamp.Date
 			}
@@ -358,6 +359,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		if skipIndex >= 0 {
 			info.DailyStatistics = append(info.DailyStatistics[:skipIndex], info.DailyStatistics[skipIndex+1:]...)
 		}
+		*/
 
 		// Sort the array
 		sort.Slice(info.DailyStatistics, func(i, j int) bool {
