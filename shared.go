@@ -23512,7 +23512,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 		httpProxy = overrideHttpProxy
 	}
 
-	if len(overrideHttpsProxy) > 0 && strings.ToLower(overrideHttpProxy) != "noproxy" {
+	if len(overrideHttpsProxy) > 0 && strings.ToLower(overrideHttpsProxy) != "noproxy" {
 		httpsProxy = overrideHttpsProxy
 	}
 
