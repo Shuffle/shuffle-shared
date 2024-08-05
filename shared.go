@@ -20367,6 +20367,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if action.AuthenticationId == "authgroups" && !subExecutionsDone && workflowExecution.ExecutionSource != "authgroup" && !isAuthgroup {
+			// FIXME: Check if this action IS under the startnode or not
+			childNodes := FindChildNodes(workflowExecution.Workflow, workflowExecution.Start, []string{}, []string{})
+			if workflowExecution.Start != action.ID && !ArrayContains(childNodes, action.ID) {
+				log.Printf("[DEBUG][%s] Skipping action %s as it's not under the startnode, and uses authgroups", workflowExecution.ExecutionId, action.Label)
+				continue
+			}
+
+
 			discoveredApikey := ""
 			if len(org.Users) == 0 {
 				org, err = GetOrg(ctx, workflowExecution.Workflow.OrgId)
@@ -20408,7 +20416,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 				if len(authGroups) == 0 {
 					log.Printf("[ERROR] No authgroups found for org %s", workflow.OrgId)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No authgroups found for org %s", workflow.OrgId), errors.New("No authgroups exist")
+					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No authgroups found for org %s", workflow.OrgId), errors.New("No authgroups exist. Create them by going to: /admin?tab=app_auth")
 				}
 			}
 
