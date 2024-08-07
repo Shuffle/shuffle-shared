@@ -12471,7 +12471,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			// Checking if it's a special region. All user-specific requests should
 			// Update local stash here?
 			// Load config & update
-			go loadAppConfigFromMain(fileId)
+			// go loadAppConfigFromMain(fileId)
 
 			// go through shuffler.io and not subdomains
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
@@ -15972,7 +15972,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	// If onprem, it should autobuild the container(s) from here
 	if project.Environment == "cloud" && gceProject != "shuffler" {
-		go loadAppConfigFromMain(fileId) 
+		// go loadAppConfigFromMain(fileId) 
 
 		RedirectUserRequest(resp, request) 
 	}
