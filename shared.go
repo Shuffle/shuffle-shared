@@ -159,6 +159,12 @@ func randStr(strSize int, randType string) string {
 	return string(bytes)
 }
 
+func isLoop(arg string) bool {
+    pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
+    re := regexp.MustCompile(pattern)
+    return strings.Contains(arg, "$") && re.MatchString(arg)
+}
+
 func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -13730,7 +13736,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 		selectedTrigger = trigger
 		for _, param := range trigger.Parameters {
-			if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+			if param.Name == "argument" && isLoop(param.Value) {
 				// Check if the .# exists, without .#0 or .#1 for digits
 				log.Printf("\n\n[DEBUG] IN LOOP CHECK RESULT\n\n")
 				//re := regexp.MustCompile(`\.\#(\d+)`)
@@ -13769,7 +13775,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			foundResult.Action = action
 
 			for _, param := range action.Parameters {
-				if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+				if param.Name == "argument" && isLoop(param.Value) {
 					isLooping = true
 				}
 
@@ -18243,7 +18249,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 						setExecution = false
 					}
 
-					if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+					if param.Name == "argument" && isLoop(param.Value) {
 						isLooping = true
 					}
 
@@ -19491,7 +19497,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					//$Get_Offenses.# -> Allow to run more
 					for _, param := range trigger.Parameters {
 						if param.Name == "argument" {
-							if strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+							if isLoop(param.Value) {
 								allowContinuation = true
 								break
 							}
@@ -19515,7 +19521,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						//$Get_Offenses.# -> Allow to run more
 						for _, param := range action.Parameters {
 							if param.Name == "argument" {
-								if strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+								if isLoop(param.Value) {
 									allowContinuation = true
 									break
 								}
