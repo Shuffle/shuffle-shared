@@ -11307,6 +11307,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		SyncFeatures SyncFeatures `json:"sync_features" datastore:"sync_features"`
 		Billing      Billing      `json:"billing" datastore:"billing"`
+
+		UsecaseAttempt  string 	  `json:"usecase_attempt" datastore:"usecase_attempt"`
 	}
 
 	var tmpData ReturnData

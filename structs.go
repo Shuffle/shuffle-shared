@@ -14,6 +14,15 @@ type AppContext struct {
 	Example         string `json:"example,omitempty" datastore:"example,noindex"`
 }
 
+type LogRequest struct {
+	Timestamp int64 `json:"timestamp"`
+
+	Method string `json:"method"`
+	URL   string`json:"url"`
+	Header map[string][]string `json:"header"`
+	Referer string `json:"referer"`
+}
+
 type PipelineRequest struct {
 	Name	   	string `json:"name"`
 	Type 		string `json:"type"`
