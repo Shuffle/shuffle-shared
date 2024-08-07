@@ -12476,6 +12476,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			// go through shuffler.io and not subdomains
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				go loadAppConfigFromMain(fileId)
 				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
 				RedirectUserRequest(resp, request)
 				return
@@ -15972,7 +15973,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 
 	// If onprem, it should autobuild the container(s) from here
 	if project.Environment == "cloud" && gceProject != "shuffler" {
-		// go loadAppConfigFromMain(fileId) 
+		go loadAppConfigFromMain(fileId) 
 
 		RedirectUserRequest(resp, request) 
 	}
