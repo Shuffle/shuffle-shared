@@ -3580,11 +3580,17 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
-	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure.com") && !strings.Contains(refreshData, "resource="){
+
+	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure") && !strings.Contains(refreshData, "resource="){
 		// Add "resource" for microsoft hings
 		refreshData += "&resource=https://management.azure.com"
 	}
 
+	/*
+	if strings.Contains(refreshData, "client_credentials") && strings.Contains (refreshData, "azure") && !strings.Contains(refreshData, "resource="){
+		refreshData += "&resource=https://management.azure.com"
+	}
+	*/
 
 	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %#v. URL: %#v", refreshData, tokenUrl)
 
@@ -4104,7 +4110,6 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 			parsedState, err := base64.StdEncoding.DecodeString(token.Nonce)
 			if err != nil {
 				log.Printf("[ERROR] Failed state split: %s", err)
-				continue
 			}
 
 			foundOrg := ""
@@ -4149,7 +4154,7 @@ func VerifyIdToken(ctx context.Context, idToken string) (IdTokenCheck, error) {
 				return IdTokenCheck{}, err
 			}
 			// Validating the user itself
-			if token.Aud == org.SSOConfig.OpenIdClientId && foundChallenge == org.SSOConfig.OpenIdClientSecret {
+			if token.Aud == org.SSOConfig.OpenIdClientId || foundChallenge == org.SSOConfig.OpenIdClientSecret {
 				log.Printf("[DEBUG] Correct token aud & challenge - successful login!")
 				token.Org = *org
 				return token, nil

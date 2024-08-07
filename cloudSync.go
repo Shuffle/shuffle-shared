@@ -697,7 +697,7 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 
 	//req.Body = ioutil.NopCloser(bytes.NewReader(body))
 	url := fmt.Sprintf("%s://%s%s", proxyScheme, proxyHost, req.RequestURI)
-	log.Printf("[DEBUG] Request (%s) request URL: %s. More: %s", req.Method, url, req.URL.String())
+	//log.Printf("[DEBUG] Request (%s) request URL: %s. More: %s", req.Method, url, req.URL.String())
 
 	proxyReq, err := http.NewRequest(req.Method, url, bytes.NewReader(body))
 	if err != nil {
@@ -978,4 +978,142 @@ func CreateFs(basepath, pathname string) (billy.Filesystem, error) {
 		})
 
 	return fs, err
+}
+
+
+func loadAppConfigFromMain(fileId string) {
+	// Send request to /api/v1/apps/{fileId}/config
+	// Parse out the config and add it to the database
+	ctx := context.Background()
+
+	app, err := GetApp(ctx, fileId, User{}, false)
+	if err == nil && len(app.Name) > 0 && len(app.ID) > 0 {
+		log.Printf("[INFO] Found app %s (%s) for config loading. Running cross-region DOWNLOAD shuffler.io->local", app.Name, app.ID)
+	}
+
+	app.ID = fileId
+
+	backendHost := fmt.Sprintf("https://shuffler.io")
+	appApi := fmt.Sprintf("%s/api/v1/apps/%s/config", backendHost, fileId)
+	client := &http.Client{}
+	req, err := http.NewRequest(
+		"GET", 
+		appApi, 
+		nil,
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed creating request for app config: %s", err)
+		return
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting app config: %s", err)
+		return
+	}
+
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed getting app config for ID %s: %d", fileId, resp.StatusCode)
+		return
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading app config: %s", err)
+		return
+	}
+
+	newApp := AppParser{}
+	err = json.Unmarshal(body, &newApp)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshaling app config: %s", err)
+		return
+	}
+
+	//log.Printf("[INFO] Got app config: %s", string(body))
+	if !newApp.Success {
+		log.Printf("[ERROR] No success in app config for id %s", fileId)
+		return
+	}
+
+	if len(newApp.App) == 0 {
+		log.Printf("[ERROR] No app found for id %s", app.ID)
+	} else {
+
+		err = json.Unmarshal(newApp.App, &app)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshaling app for id %s: %s", app.ID, err)
+			return
+		}
+
+		err = SetWorkflowAppDatastore(ctx, *app, app.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving app for id %s: %s", app.ID, err)
+		}
+	}
+
+	if len(newApp.OpenAPI) == 0 {
+		log.Printf("[ERROR] No openapi found for id %s", app.ID)
+	} else {
+		// Save the data to the database with the ParsedOpenApi struct
+		parsedOpenApi := ParsedOpenApi{}
+		err = json.Unmarshal(newApp.OpenAPI, &parsedOpenApi)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshaling openapi for id %s: %s", app.ID, err)
+			return
+		}
+
+		err = SetOpenApiDatastore(ctx, parsedOpenApi.ID, parsedOpenApi)
+		if err != nil {
+			log.Printf("[ERROR] Failed saving openapi for id %s: %s", app.ID, err)
+		}
+
+		// FIXME: Send it to get built as well as cloud function
+		// What is the function for this? Maybe just send localhost/api/ request?
+		// Run verify openapi here (?)
+
+		baseurl := "http://localhost:5002"
+		if os.Getenv("BASE_URL") != "" {
+			baseurl = os.Getenv("BASE_URL")
+		}
+
+		if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+			baseurl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		fullUrl := fmt.Sprintf("%s/api/v1/verify_swagger", baseurl)
+		req, err := http.NewRequest(
+			"POST",
+			fullUrl,
+			bytes.NewBuffer(newApp.OpenAPI),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed creating request for openapi verification: %s", err)
+			return
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed verifying openapi: %s", err)
+			return
+		}
+
+		defer resp.Body.Close()
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed building openapi for ID %s: %d", fileId, resp.StatusCode)
+			return
+		}
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading openapi verification: %s", err)
+			return
+		}
+
+		log.Printf("[INFO] OpenAPI build: %s", string(body))
+	}
 }

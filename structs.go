@@ -21,6 +21,7 @@ type PipelineRequest struct {
 	Environment string `json:"environment"`
 	WorkflowId  string `json:"workflow_id"`
 	StartNode   string `json:"start_node"`
+	Url         string `json:"url"`
 
 	PipelineId 	string `json:"pipeline_id"`
 	TriggerId	string `json:"trigger_id"`
@@ -235,6 +236,7 @@ type WorkflowAppActionParameter struct {
 	SkipMulticheck bool             `json:"skip_multicheck" datastore:"skip_multicheck" yaml:"skip_multicheck"`
 	ValueReplace   []Valuereplace   `json:"value_replace" datastore:"value_replace,noindex" yaml:"value_replace,omitempty"`
 	UniqueToggled  bool             `json:"unique_toggled" datastore:"unique_toggled" yaml:"unique_toggled"`
+	Error          string           `json:"error" datastore:"error" yaml:"error"`
 }
 
 type Valuereplace struct {
@@ -895,12 +897,18 @@ type Org struct {
 type Billing struct {
 	Email          string           `json:"Email" datastore:"Email"`
 	AlertThreshold []AlertThreshold `json:"AlertThreshold" datastore:"AlertThreshold"`
+	Consultation   Consultation     `json:"Consultation" datastore:"Consultation"`
 }
 
 type AlertThreshold struct {
 	Percentage int  `json:"percentage" datastore:"percentage"`
 	Count      int  `json:"count" datastore:"count"`
 	Email_send bool `json:"Email_send" datastore:"Email_send"`
+}
+
+type Consultation struct {
+	Hours   string `json:"hours" datastore:"hours"`
+	Minutes string `json:"minutes" datastore:"minutes"`
 }
 
 // Authentication overrides that times out
@@ -1413,6 +1421,25 @@ type File struct {
 	IsEdited        bool     `json:"isedited" datastore:"isedited"`
 	LastEditor      string   `json:"lasteditor" datastore:"lasteditor"`
 	OriginalMd5sum  string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
+}
+
+type DisabledRules struct {
+	Files          []File  `json:"files"        datastore:"files"`
+	DisabledFolder bool    `json:"disabled_folder" datastore:"disabled_folder"`
+	IsTenzirActive string    `json:"tenzir_active"  datastore:"tenzir_active"`
+	LastActive     int64  `json:"last_active" datastore:"last_active"`
+}
+
+type SelectedSigmaRules struct {
+     SelectedRules []SigmaFileInfo  `json:"selected_rules" datastore:"selected_rules"`
+}
+
+type SigmaFileInfo struct {
+	FileName string  `json:"file_name" yaml:"file_name"`
+	RuleTitle   string `json:"title" yaml:"title"`
+	Description string `json:"description" yaml:"description"`
+	FileId      string `json:"file_id"`
+	IsEnabled   bool   `json:"is_enabled"`
 }
 
 type AppAuthenticationGroup struct {
@@ -2411,6 +2438,28 @@ type FileWrapper struct {
 	Source      File   `json:"_source"`
 }
 
+type DisabledHookWrapper struct {
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      DisabledRules `json:"_source"`
+}
+
+type SelectedRulesWrapper struct {
+	Index       string        `json:"_index"`
+	Type        string        `json:"_type"`
+	ID          string        `json:"_id"`
+	Version     int           `json:"_version"`
+	SeqNo       int           `json:"_seq_no"`
+	PrimaryTerm int           `json:"_primary_term"`
+	Found       bool          `json:"found"`
+	Source      SelectedSigmaRules `json:"_source"`
+}
+
 type HookWrapper struct {
 	Index       string `json:"_index"`
 	Type        string `json:"_type"`
@@ -2581,7 +2630,8 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub string `json:"sub"`
+	Sub   string `json:"sub"`
+	Email string `json:"email"`
 }
 
 type OpenidResp struct {
@@ -3478,6 +3528,7 @@ type IdTokenCheck struct {
 	Tid   string `json:"tid"`
 	Uti   string `json:"uti"`
 	Ver   string `json:"ver"`
+	Email string `json:"email"`
 	Org   Org    `json:"org"`
 }
 
@@ -3991,4 +4042,11 @@ type Training struct {
 	Username string `json:"username"`
 	ID	  string `json:"id"`
 	SignupTime int64 `json:"signupTime"`
+}
+
+
+type AppParser struct {
+	Success bool   `json:"success"`
+	OpenAPI []byte `json:"openapi"`
+	App     []byte `json:"app"`
 }
