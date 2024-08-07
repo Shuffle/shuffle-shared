@@ -18626,7 +18626,12 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if !strings.Contains(userName, "@") {
 		log.Printf("[ERROR] Bad username, but allowing due to OpenID: %s. Full Subject: %#v", userName, openidUser)
 	}
+
 	redirectUrl := "https://shuffler.io/workflows"
+
+	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+		redirectUrl = os.Getenv("SSO_REDIRECT_URL")
+	}
 
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
