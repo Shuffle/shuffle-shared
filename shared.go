@@ -22302,6 +22302,10 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		//return
 	} else {
 		usecase.Success = true
+
+		if len(usecase.Name) == 0 {
+			usecase.Name = name
+		}
 	}
 
 	if len(user.ActiveOrg.Id) > 0 && usecase.Name != "Reporting" && len(usecase.Name) > 3 {
