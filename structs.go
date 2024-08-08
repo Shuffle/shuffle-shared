@@ -1285,7 +1285,10 @@ type Workflow struct {
 	RevisionId     string          `json:"revision_id" yaml:"revision_id"`
 	Subflows       []Workflow      `json:"subflows,omitempty" yaml:"subflows"`
 	UsecaseIds     []string        `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
+
 	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
+	InputMarkdown string          `json:"input_markdown" datastore:"input_markdown,noindex"`
+	//OutputMarkdown string         `json:"output_markdown" datastore:"output_markdown,noindex"`
 
 	Blogpost     string `json:"blogpost" yaml:"blogpost"`
 	Video        string `json:"video" yaml:"video"`
