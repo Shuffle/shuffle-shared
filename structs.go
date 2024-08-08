@@ -886,14 +886,16 @@ type Org struct {
 	PartnerInfo       PartnerInfo `json:"partner_info" datastore:"partner_info"`
 	SSOConfig         SSOConfig   `json:"sso_config" datastore:"sso_config"`
 	SecurityFramework Categories  `json:"security_framework" datastore:"security_framework,noindex"`
+
+	Interests 		  []Priority  `json:"interests" datastore:"interests"`
 	Priorities        []Priority  `json:"priorities" datastore:"priorities,noindex"`
 	MainPriority      string      `json:"main_priority" datastore:"main_priority"`
+
 	Region            string      `json:"region" datastore:"region"`
 	RegionUrl         string      `json:"region_url" datastore:"region_url"`
 	Tutorials         []Tutorial  `json:"tutorials" datastore:"tutorials"`
 	LeadInfo          LeadInfo    `json:"lead_info,omitempty" datastore:"lead_info"`
 	OrgAuth OrgAuth `json:"org_auth" datastore:"org_auth"`
-
 
 	CreatorId string `json:"creator_id" datastore:"creator_id"`
 	Disabled  bool   `json:"disabled" datastore:"disabled"`
@@ -2600,6 +2602,7 @@ type HandleInfo struct {
 	ActiveOrg          OrgMini         `json:"active_org"`
 	EthInfo            EthInfo         `json:"eth_info,omitempty"`
 	ChatDisabled       bool            `json:"chat_disabled"`
+	Interests 		   []Priority      `json:"interests"`
 	Priorities         []Priority      `json:"priorities"`
 	Cookies            []SessionCookie `json:"cookies"`
 	AppExecutionsLimit int64           `json:"app_execution_limit"`

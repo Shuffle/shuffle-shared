@@ -11968,7 +11968,8 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 				log.Printf("[INFO] Error in usecase loading. Migrating usecase to new workflow handler.")
 				err = nil
 			} else {
-				return usecase, err
+				// Let it cache. No point in DB searching every time
+				//return usecase, err
 			}
 		}
 	}

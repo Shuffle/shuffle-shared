@@ -11314,8 +11314,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 		SyncFeatures SyncFeatures `json:"sync_features" datastore:"sync_features"`
 		Billing      Billing      `json:"billing" datastore:"billing"`
-
-		UsecaseAttempt  string 	  `json:"usecase_attempt" datastore:"usecase_attempt"`
 	}
 
 	var tmpData ReturnData
@@ -22271,7 +22269,7 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get usecase (1). Continuing anyway: %s", err)
 		//resp.WriteHeader(401)
@@ -22304,6 +22302,33 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 		//return
 	} else {
 		usecase.Success = true
+	}
+
+	if len(user.ActiveOrg.Id) > 0 && usecase.Name != "Reporting" && len(usecase.Name) > 3 {
+		org, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil && len(org.Id) > 0 {
+			found := false
+			for _, interest := range org.Interests {
+				if interest.Name != usecase.Name {
+					continue
+				}
+
+				found = true
+				break
+			}
+
+			if !found {
+				log.Printf("[DEBUG] Updating org %s with usecase %s as interesting", user.ActiveOrg.Id, usecase.Name)
+				org.Interests = append(org.Interests, Priority{
+					Name        : usecase.Name,
+					Description: fmt.Sprintf("User %s (%s) has shown interest in this usecase", user.Username, user.Id),
+					Type        : "usecase",
+					Active      : true,
+				})
+
+				SetOrg(ctx, *org, org.Id)
+			}
+		}
 	}
 
 	// Hardcoding until we have something good for open source + cloud
