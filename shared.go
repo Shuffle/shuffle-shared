@@ -4194,6 +4194,13 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		workflowExecutions[index].Workflow.Image = ""
 		workflowExecutions[index].Workflow.Triggers = newTriggers
 
+		if workflowExecutions[index].Status != "EXECUTION" && workflowExecutions[index].Workflow.Validation.Valid == false && len(workflowExecutions[index].Workflow.Validation.Problems) == 0 && len(workflowExecutions[index].Workflow.Validation.SubflowApps) == 0 {
+			validation, err := GetExecutionValidation(ctx, workflowExecutions[index].ExecutionId)
+			if err == nil {
+				workflowExecutions[index].Workflow.Validation = validation
+			}
+		}
+
 		// Would like to omit the whole thing :thinking:
 		//workflowExecutions[index].Workflow = Workflow{}
 	}
@@ -28025,7 +28032,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 				}
 			}
 
-
 			// Check if this is an authentication action
 			if authRequired && action.AuthenticationId == "" {
 				// Check if authentication is required
@@ -28055,9 +28061,11 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			continue
 		}
 
+		/*
 		if (foundAction.AppName == "Shuffle Tools" || strings.ToLower(foundAction.AppName) == "http") {
 			continue
 		}
+		*/
 
 		unmarshalledHttp := HTTPOutput{} 
 		err := json.Unmarshal([]byte(result.Result), &unmarshalledHttp)
@@ -28098,6 +28106,16 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 					AppId:   foundAction.AppID,
 					AppName: foundAction.AppName,
 					Error:  "Action failed: " + unmarshalledHttp.Reason,
+					Type: "configuration",
+				}
+
+				authenticationProblems = append(authenticationProblems, validationProblem)
+			} else {
+				validationProblem := ValidationProblem{
+					ActionId: foundAction.ID,
+					AppId:   foundAction.AppID,
+					AppName: foundAction.AppName,
+					Error:  "Success is false: Check node for more failure details",
 					Type: "configuration",
 				}
 
@@ -28333,13 +28351,14 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		return exec
 	}
 
-	SetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID), marshalledValidation, 1440)
-	SetCache(ctx, cacheKey, marshalledValidation, 1)
+	// Force them to work without parent context management
+	backgroundContext := context.Background()
+	go SetCache(backgroundContext, fmt.Sprintf("validation_workflow_%s", workflow.ID), marshalledValidation, 1440)
+	go SetCache(backgroundContext, cacheKey, marshalledValidation, 120)
 
 	// ALWAYS have correct exec id for current execution, but not always in workflow
 
-
-	log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to %#v\n\n", exec.ExecutionId, len(workflow.Validation.Problems), workflow.Validation)
+	//log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to '%s'\n\n", exec.ExecutionId, len(workflow.Validation.Problems), marshalledValidation) 
 
 	return exec
 }

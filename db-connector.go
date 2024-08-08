@@ -1102,7 +1102,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	if newexec.Status == "FINISHED" || newexec.Status == "ABORTED" {
-		// Handles stat updates
+		// Handles stat updates. Upgrading status to prevent timeouts for first iter of this
+		ctx = context.Background()
 		newexec = checkExecutionStatus(ctx, newexec)
 	}
 
@@ -1437,20 +1438,38 @@ func sanitizeString(input string) string {
 	return input
 }
 
+func GetExecutionValidation(ctx context.Context, executionId string) (TypeValidation, error) {
+	validation := TypeValidation{}
+
+	cacheKey := fmt.Sprintf("validation_%s", executionId)
+	validationData, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		//log.Printf("\n\nFound cachekey for %#v\n\n", cacheKey)
+
+		cacheData := []byte(validationData.([]uint8))
+		err = json.Unmarshal(cacheData, &validation)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling cache data for execution status (2): %s", err)
+			return validation, err
+		}
+	} else {
+		//log.Printf("\n\n Can't find cachekey for %#v\n\n", cacheKey)
+	}
+
+	return validation, nil
+}
+
 func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (WorkflowExecution, bool) {
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	cacheKey := fmt.Sprintf("validation_%s", workflowExecution.ExecutionId)
-	validationData, err := GetCache(ctx, cacheKey)
-	if err == nil {
-
-		cacheData := []byte(validationData.([]uint8))
-		err = json.Unmarshal(cacheData, &workflowExecution.Workflow.Validation)
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling cache data for execution status (2): %s", err)
+	if workflowExecution.Status != "EXECUTING" {
+		validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
+		if err == nil {
+			workflowExecution.Workflow.Validation = validation
 		}
 	}
+
 
 	// Make sure to not having missing items in the execution
 	lastexecVar := map[string]ActionResult{}
@@ -3031,7 +3050,6 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	
 	validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
 	if err == nil {
-
 		cacheData := []byte(validationData.([]uint8))
 		err = json.Unmarshal(cacheData, &workflow.Validation)
 		if err != nil {
