@@ -19375,6 +19375,40 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 
 // New execution with firestore
 func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *http.Request, maxExecutionDepth int64) (WorkflowExecution, ExecInfo, string, error) {
+	// Check the URL for the workflow ID itself
+	if request != nil { // && len(workflow.Actions) == 0 {
+
+		// Parse out the the workflow ID from the url
+		splitUrl := strings.Split(request.URL.Path, "/")
+		if len(splitUrl) == 6 {
+			foundId := splitUrl[4]
+
+			if len(foundId) == 36 {
+				if workflow.ID != foundId { 
+					log.Printf("[DEBUG] Updating Workflow ID from '%s' to '%s'", workflow.ID, foundId)
+					workflow.ID = foundId
+				}
+				
+				newWorkflow, err := GetWorkflow(ctx, workflow.ID)
+				if err == nil && len(newWorkflow.ID) == 36 && len(newWorkflow.Actions) > 0 {
+					workflow = *newWorkflow
+				}
+			}
+		}
+	}
+
+	// Try again if there is no request available? These are backups if we don't have the data
+	if len(workflow.ID) == 36 && len(workflow.Actions) == 0 {
+		newWorkflow, err := GetWorkflow(ctx, workflow.ID)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting workflow for execution: %s", err)
+		} else {
+			if len(newWorkflow.ID) > 0 && len(newWorkflow.Actions) > 0 {
+				workflow = *newWorkflow
+			}
+		}
+	}
+
 	workflowBytes, err := json.Marshal(workflow)
 	if err != nil {
 		log.Printf("[WARNING] Failed workflow unmarshal in execution: %s", err)
@@ -28099,8 +28133,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		unmarshalledHttp := HTTPOutput{} 
 		err := json.Unmarshal([]byte(result.Result), &unmarshalledHttp)
 		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
-			continue
+			//log.Printf("[WARNING] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
+			//continue
 		}
 
 		isValid := false
