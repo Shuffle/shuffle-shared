@@ -23590,24 +23590,23 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
-	} else {
-		if len(httpProxy) > 0 {
-			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+    }
+	if len(httpProxy) > 0 {
+	    log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 
-			url_i := url.URL{}
-			url_proxy, err := url_i.Parse(httpProxy)
-			if err == nil {
-				transport.Proxy = http.ProxyURL(url_proxy)
-			}
+		url_i := url.URL{}
+		url_proxy, err := url_i.Parse(httpProxy)
+		if err == nil {
+		    transport.Proxy = http.ProxyURL(url_proxy)
 		}
-		if len(httpsProxy) > 0 {
-			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+	}
+	if len(httpsProxy) > 0 {
+	    log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
 
-			url_i := url.URL{}
-			url_proxy, err := url_i.Parse(httpsProxy)
-			if err == nil {
-				transport.Proxy = http.ProxyURL(url_proxy)
-			}
+		url_i := url.URL{}
+		url_proxy, err := url_i.Parse(httpsProxy)
+		if err == nil {
+		    transport.Proxy = http.ProxyURL(url_proxy)
 		}
 	}
 
