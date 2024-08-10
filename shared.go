@@ -19429,6 +19429,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.OrgId = workflow.OrgId
 	}
 
+	if len(workflow.ExecutingOrg.Id) == 0 && len(workflow.OrgId) > 0 {
+		workflow.ExecutingOrg.Id = workflow.OrgId
+	}
+
 	makeNew := true
 	parentExecution := &WorkflowExecution{}
 	start, startok := request.URL.Query()["start"]
@@ -20251,7 +20255,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if !startnodeFound {
-		log.Printf("[WARNING] Couldn't find startnode %s among %d actions. Remapping to %s", workflowExecution.Start, len(workflowExecution.Workflow.Actions), newStartnode)
+		log.Printf("[ERROR] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
 
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
@@ -20601,16 +20605,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			curAuth := AppAuthenticationStorage{Id: ""}
 			authIndex := -1
 			for innerIndex, auth := range allAuths {
-				if auth.Id == action.AuthenticationId {
-					authIndex = innerIndex
-					curAuth = auth
-					break
+				if auth.Id != action.AuthenticationId {
+					continue
 				}
+
+				authIndex = innerIndex
+				curAuth = auth
+				break
 			}
 
 			if len(curAuth.Id) == 0 {
-				//continue
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s'. Please re-authenticate the app.", action.AuthenticationId, action.AppName))
+				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
 			}
 
 			if curAuth.Encrypted {
@@ -24041,11 +24046,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if foundCategory.Name == "" && value.AppName == "" {
 		log.Printf("[DEBUG] No category found AND no app name set in category action for user %s (%s). Returning", user.Username, user.Id)
 
+		parsedText := fmt.Sprintf("Help us set up an app in the '%s' category for you first", foundAppType)
+		if len(foundAppType) == 0 {
+			parsedText = "Please find the app you would like to use, OR be more explicit about what app you want to use in your request"
+		}
+
 		structuredFeedback := StructuredCategoryAction{
 			Success:  false,
 			Action:   "select_category",
 			Category: foundAppType,
-			Reason:   fmt.Sprintf("Help us set up an app in the '%s' category for you first", foundAppType),
+			Reason:   parsedText,
 		}
 
 		jsonBytes, err := json.Marshal(structuredFeedback)
@@ -24123,47 +24133,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			// If we DONT have a category app already
 			if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
-				//log.Printf("[DEBUG] Found app: %s vs %s (%s)", app.Name, value.AppName, app.ID)
-				availableLabels = []string{}
-				selectedApp = app
-
-				for _, action := range app.Actions {
-					if len(action.CategoryLabel) == 0 {
-						continue
-					} else {
-						//log.Printf("[DEBUG] Found label %s", action.CategoryLabel)
-
-						availableLabels = append(availableLabels, action.CategoryLabel[0])
-					}
-
-					if len(value.ActionName) > 0 && action.Name != value.ActionName {
-						continue
-					}
-
-					// For now just finding the first one
-					if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_") == strings.ReplaceAll(strings.ToLower(value.Label), " ", "_") {
-						selectedAction = action
-
-						for _, category := range categories {
-							if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
-								selectedCategory = category
-								break
-							}
-						}
-
-						//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
-						break
-					}
-				}
+				log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(selectedApp, value.Label, true)
 
 				break
 			} else if selectedApp.ID == "" && len(value.AppName) > 0 && (strings.Contains(strings.ToLower(app.Name), strings.ToLower(value.AppName)) || strings.Contains(strings.ToLower(value.AppName), strings.ToLower(app.Name))) {
 				selectedApp = app
+
 				log.Printf("[WARNING] Set selected app to partial match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
-
 				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(selectedApp, value.Label, true)
-
-				
 			}
 		}
 	}
@@ -24193,7 +24171,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		if failed {
 			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an app with the name or ID '%s'. Please make sure the app is already activated for your organization."}`, value.AppName)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an app with the name or ID '%s'. Explain more clearly what app you would like to run with."}`, value.AppName)))
 			return
 		}
 	}
@@ -24509,7 +24487,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Success:  false,
 			Action:   "app_authentication",
 			Category: discoveredCategory,
-			Reason:   fmt.Sprintf("Help us set up app '%s' for you first. If you want to skip this, fill in empty fields and submit it.", selectedApp.Name),
+			Reason:   fmt.Sprintf("Help us authenticate '%s' for you first.", selectedApp.Name),
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -25684,7 +25662,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(workflowExecution.ExecutionId) == 0 {
-		log.Printf("[ERROR] Failed running the app. Raw: %s", string(executionBody))
+		log.Printf("[ERROR] Failed running app %s (%s) in org %s (%s). Raw: %s", selectedApp.Name, selectedApp.ID, org.Name, org.Id, string(executionBody))
 		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed running the app. Contact support@shuffler.io if this persists."}`)))
 		return
@@ -25753,32 +25731,29 @@ func GetActionFromLabel(app WorkflowApp, label string, fixLabels bool) (Workflow
 			continue
 		}
 
-		log.Printf("[DEBUG] Found category label %#v", action.CategoryLabel)
-		availableLabels = append(availableLabels, action.CategoryLabel[0])
 
-		actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_")
-		if actionCategory == lowercaseLabel || strings.HasPrefix(actionCategory, lowercaseLabel) {
-			selectedAction = action
+		for labelIndex, _ := range action.CategoryLabel {
+			availableLabels = append(availableLabels, action.CategoryLabel[labelIndex])
+			actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[labelIndex]), " ", "_")
 
-			for _, category := range categories {
-				if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
-					selectedCategory = category
-					break
+			if actionCategory == lowercaseLabel || strings.HasPrefix(actionCategory, lowercaseLabel) {
+				selectedAction = action
+
+				for _, category := range categories {
+					if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
+						selectedCategory = category
+						break
+					}
 				}
 			}
-
-			// Not breaking to make sure availableLabels is kept. 
-			// This is fine as loops are small anyway
-			//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
-			//break
 		}
 	}
 
 	// FIXME: If selectedAction isn't chosen, then we need to try to discover it in the app
 	if len(selectedAction.ID) == 0 {
-		log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Try to autodiscover and update the app?\n\n", app.Name, app.ID, label)
-
 		if fixLabels == true {
+			//log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Autodiscovering and updating the app!!!\n\n", app.Name, app.ID, label)
+
 			// Make it FORCE look for a specific label if it exists, otherwise
 			// try any 
 			newApp := AutofixAppLabels(app, label)

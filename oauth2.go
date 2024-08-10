@@ -3782,7 +3782,6 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	// To send: POST
 	// URL sample: https://login.microsoftonline.com/b6eb57ed-ecfc-4af2-b0ff-467a2e2c806f/oauth2/v2.0/token
 	// Data to be sent: requestData formatted?
-
 	v, err := query.Values(requestData)
 	if err != nil {
 		log.Printf("[ERROR] Failed parsing Oauth2 values: %s", err)
@@ -3793,8 +3792,23 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		refresh = false
 	}
 
-	client := GetExternalClient(url)
+	// Look for {tenant in the URL. If it's found, find the next } after it, then replace it with 'common'
+	// This is to make sure to handle tenant things for microsoft
+	if strings.Contains(strings.ToLower(url), "{tenant") {
+		//log.Printf("[DEBUG] Found tenant in URL: %s", url)
+		tenantPos := strings.Index(strings.ToLower(url), "{tenant")
 
+		if tenantPos >= 0 {
+			tenantEnd := strings.Index(url[tenantPos:], "}")
+			if tenantEnd >= 0 {
+				url = url[:tenantPos] + "common" + url[tenantPos+tenantEnd+1:]
+				//log.Printf("[DEBUG] Replaced tenant in URL: %s", url)
+			}
+		}
+	}
+
+
+	client := GetExternalClient(url)
 	respBody := []byte{}
 	if !refresh {
 		req, err := http.NewRequest(
@@ -3840,8 +3854,21 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 		requestRefreshUrl := fmt.Sprintf("%s", refreshUrl)
 		refreshData := fmt.Sprintf("grant_type=refresh_token&refresh_token=%s&scope=%s&client_id=%s&client_secret=%s", refreshToken, strings.Replace(requestData.Scope, " ", "%20", -1), requestData.ClientId, requestData.ClientSecret)
 
-		//log.Printf("[DEBUG] Refresh URL: %s?%s", requestRefreshUrl, refreshData)
+		// This is to make sure to handle tenant things for microsoft
+		if strings.Contains(strings.ToLower(requestRefreshUrl), "{tenant") {
+			//log.Printf("[DEBUG] Found tenant in URL: %s", url)
+			tenantPos := strings.Index(strings.ToLower(requestRefreshUrl), "{tenant")
 
+			if tenantPos >= 0 {
+				tenantEnd := strings.Index(requestRefreshUrl[tenantPos:], "}")
+				if tenantEnd >= 0 {
+					requestRefreshUrl = requestRefreshUrl[:tenantPos] + "common" + requestRefreshUrl[tenantPos+tenantEnd+1:]
+					//log.Printf("[DEBUG] Replaced tenant in URL: %s", requestRefreshUrl)
+				}
+			}
+		}
+
+		//log.Printf("[DEBUG] Refresh URL: %s?%s", requestRefreshUrl, refreshData)
 		req, err := http.NewRequest(
 			"POST",
 			requestRefreshUrl,
