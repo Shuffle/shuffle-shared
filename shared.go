@@ -23853,7 +23853,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if len(authorization) == 0 || len(executionId) == 0 {
 			log.Printf("[AUDIT] Api authentication failed in run category action: %s", err)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+			resp.Write([]byte(`{"success": false, "reason": "Authentication failed. Sign up first."}`))
 			return
 		}
 
@@ -23913,7 +23913,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("[INFO] Running category-action '%s' in category '%s' for org %s (%s)", value.Label, value.Category, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	log.Printf("[INFO] Running category-action '%s' in category '%s' with app %s for org %s (%s)", value.Label, value.Category, value.AppName, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	if len(value.Query) > 0 {
 		// Check if app authentication. If so, check if intent is to actually authenticate, or find the actual intent
@@ -23922,11 +23922,21 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if value.Label == "use_app" {
+	if value.Label == "discover_app" {
 		for _, field := range value.Fields {
 			if field.Key == "action" {
-				log.Printf("[INFO] NOT IMPLEMENTED: Changing to action label '%s' from use_app", field.Value)
+				log.Printf("[INFO] NOT IMPLEMENTED: Changing to action label '%s' from discover_app", field.Value)
 				//value.Label = field.Value
+				break
+			}
+		}
+	}
+
+	if len(value.AppName) == 0 {
+		for _, field := range value.Fields {
+			lowerkey := strings.ReplaceAll(strings.ToLower(field.Key), " ", "_")
+			if lowerkey == "appname" || lowerkey == "app_name" {
+				value.AppName = field.Value
 				break
 			}
 		}
@@ -24151,41 +24161,41 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp = app
 				log.Printf("[WARNING] Set selected app to partial match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
 
-				availableLabels = []string{}
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(selectedApp, value.Label, true)
 
-				lowercaseLabel := strings.ReplaceAll(strings.ToLower(value.Label), " ", "_")
-				for _, action := range app.Actions {
-					if len(action.CategoryLabel) == 0 {
-						continue
-					}
-
-					log.Printf("[DEBUG] Found category label %#v", action.CategoryLabel)
-					availableLabels = append(availableLabels, action.CategoryLabel[0])
-
-					actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_")
-					if actionCategory == lowercaseLabel || strings.HasPrefix(actionCategory, lowercaseLabel) {
-						selectedAction = action
-
-						for _, category := range categories {
-							if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
-								selectedCategory = category
-								break
-							}
-						}
-
-						//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
-						break
-					}
-				}
+				
 			}
 		}
 	}
 
 	if len(selectedApp.ID) == 0 {
 		log.Printf("[WARNING] Couldn't find app with ID or name '%s' active in org %s (%s)", value.AppName, user.ActiveOrg.Name, user.ActiveOrg.Id)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an app with the name or ID '%s'. Please make sure the app is already activated for your organization."}`, value.AppName)))
-		return
+		failed := true 
+		if project.Environment == "cloud" {
+			foundApp, err := HandleAlgoliaAppSearch(ctx, value.AppName)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting app with ID or name '%s' in category action: %s", value.AppName, err)
+			} else if err == nil && len(foundApp.ObjectID) > 0 {
+				log.Printf("\n\n[INFO] Found app %s (%s) for name %s in Algolia\n\n", foundApp.Name, foundApp.ObjectID, value.AppName) 
+
+				tmpApp, err := GetApp(ctx, foundApp.ObjectID, user, false)
+				if err == nil {
+					selectedApp = *tmpApp
+					failed = false 
+
+					log.Printf("[DEBUG] Got app %s with %d actions", selectedApp.Name, len(selectedApp.Actions))
+					selectedAction, selectedCategory, availableLabels = GetActionFromLabel(selectedApp, value.Label, true)
+				}
+			} else {
+				log.Printf("[DEBUG] Found app with ID or name '%s' in Algolia: %#v", value.AppName, foundApp)
+			}
+		}
+
+		if failed {
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding an app with the name or ID '%s'. Please make sure the app is already activated for your organization."}`, value.AppName)))
+			return
+		}
 	}
 
 	fieldHash := ""
@@ -24213,10 +24223,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		// Md5 based on sortedKeys. Could subhash key search work?
 		mappedString := fmt.Sprintf("%s-%s", selectedApp.ID, value.Label, strings.Join(sortedKeys, ""))
 		fieldHash = fmt.Sprintf("%x", md5.Sum([]byte(mappedString)))
-		file, err := GetFile(ctx, fmt.Sprintf("file_%s", fieldHash))
+		discoverFile := fmt.Sprintf("file_%s", fieldHash)
+		file, err := GetFile(ctx, discoverFile)
 
 		if err != nil {
-			log.Printf("[DEBUG] Error with getting file in category action: %s", err)
+			log.Printf("[DEBUG] Error with getting file '%s' in category action autorun: %s", discoverFile, err)
 		} else {
 			log.Printf("\n\n\n[DEBUG] Found file in category action: %#v. Status: %s. Category: %s\n\n\n", file, file.Status, file.Namespace)
 
@@ -24245,10 +24256,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(selectedAction.Name) == 0 {
-		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'. If authentication/use_app, ignore this.", value.Label, selectedApp.Name)
+	if len(selectedAction.Name) == 0 && value.Label != "discover_app" {
+		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'. If authentication/discover_app, ignore this.", value.Label, selectedApp.Name)
 
-		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "use_app" {
+		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "discover_app" {
 			resp.WriteHeader(500)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding action '%s' labeled in app '%s'. If this is wrong, please contact support@shuffler.io"}`, value.Label, strings.ReplaceAll(selectedApp.Name, "_", " "))))
 			return
@@ -24486,7 +24497,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !requiresAuth {
-			log.Printf("\n\n[ERROR] App %s doesn't require auth, but we are still sending back with auth requires\n\n", selectedApp.Name)
+			log.Printf("\n\n[ERROR] App '%s' doesn't require auth, but we are still sending back with auth requires\n\n", selectedApp.Name)
 		}
 
 		// Reducing size drastically as it isn't really necessary
@@ -24521,7 +24532,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	// Send back with SUCCESS as we already have an authentication
 	// Use the labels to show what Jira can do
-	if value.Label == "app_authentication" || value.Label == "authenticate_app" || value.Label == "use_app" {
+	if value.Label == "app_authentication" || value.Label == "authenticate_app" || value.Label == "discover_app" {
 		ifSuccess := true
 		reason := fmt.Sprintf("Please authenticate with %s", selectedApp.Name)
 
@@ -25725,6 +25736,60 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(jsonParsed)
 }
 
+func GetActionFromLabel(app WorkflowApp, label string, fixLabels bool) (WorkflowAppAction, AppCategory, []string) {
+
+	availableLabels := []string{}
+	selectedCategory := AppCategory{}
+	selectedAction := WorkflowAppAction{}
+
+	if len(app.ID) == 0 || len(app.Actions) == 0 {
+		return selectedAction, selectedCategory, availableLabels
+	}
+
+	categories := GetAllAppCategories()
+	lowercaseLabel := strings.ReplaceAll(strings.ToLower(label), " ", "_")
+	for _, action := range app.Actions {
+		if len(action.CategoryLabel) == 0 {
+			continue
+		}
+
+		log.Printf("[DEBUG] Found category label %#v", action.CategoryLabel)
+		availableLabels = append(availableLabels, action.CategoryLabel[0])
+
+		actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[0]), " ", "_")
+		if actionCategory == lowercaseLabel || strings.HasPrefix(actionCategory, lowercaseLabel) {
+			selectedAction = action
+
+			for _, category := range categories {
+				if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
+					selectedCategory = category
+					break
+				}
+			}
+
+			// Not breaking to make sure availableLabels is kept. 
+			// This is fine as loops are small anyway
+			//log.Printf("[INFO] Found label %s in app %s. ActionName: %s", value.Label, app.Name, action.Name)
+			//break
+		}
+	}
+
+	// FIXME: If selectedAction isn't chosen, then we need to try to discover it in the app
+	if len(selectedAction.ID) == 0 {
+		log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Try to autodiscover and update the app?\n\n", app.Name, app.ID, label)
+
+		if fixLabels == true {
+			// Make it FORCE look for a specific label if it exists, otherwise
+			// try any 
+			newApp := AutofixAppLabels(app, label)
+
+			return GetActionFromLabel(newApp, label, false) 
+		}
+	}
+
+	return selectedAction, selectedCategory, availableLabels
+}
+
 func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -25734,7 +25799,7 @@ func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
 	// Just here to verify that the user is logged in
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in run category action: %s", err)
+		log.Printf("[AUDIT] Api authentication failed GET category actions: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
 		return
@@ -26306,7 +26371,6 @@ func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated
 				continue
 			}
 
-			//log.Printf("%s:%s = %s", action.AppName, action.AppVersion, action.Category)
 			if org.SecurityFramework.Communication.Name == "" && (action.Category == "Communication" || action.Category == "email") {
 				orgUpdated = true
 				org.SecurityFramework.Communication = Category{

@@ -1242,3 +1242,68 @@ func FixContentOutput(contentOutput string) string {
 
 	return contentOutput
 }
+
+func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
+	if len(app.ID) == 0 || len(app.Name) == 0 {
+		log.Printf("[ERROR] No app ID or name found in AutofixAppLabels")
+		return app
+	}
+
+	if len(app.Actions) == 0 {
+		log.Printf("[ERROR] No actions found in AutofixAppLabels for app %s (%s)", app.Name, app.ID)
+		return app
+	}
+
+	if len(label) == 0 {
+		log.Printf("[ERROR] No label found in AutofixAppLabels for app %s (%s)", app.Name, app.ID)
+		return app
+	}
+
+	log.Printf("[DEBUG] Running app fix with ONLY one label for app %s (%s) with %d actions: %s", app.Name, app.ID, len(app.Actions), label)
+
+	// Check if the app has any actions
+	foundCategory := AppCategory{}
+	availableCategories := GetAppCategories()
+	for _, category := range availableCategories {
+		lowercaseCategory := strings.ToLower(category.Name)
+		if len(app.Categories) == 0 {
+			break
+		}
+
+		for _, appCategory := range app.Categories {
+			if strings.ToLower(appCategory) != lowercaseCategory {
+				continue
+			}
+
+			foundCategory = category
+			break
+		}
+
+		if len(foundCategory.Name) > 0 {
+			break
+		}
+	}
+
+	if len(foundCategory.ActionLabels) > 0 { 
+		log.Printf("[DEBUG] Found category %s for app %s (%s) based on app categories", foundCategory.Name, app.Name, app.ID)
+
+		// Fix it based on this
+
+	} else {
+		log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label", app.Name, app.ID)
+
+		for _, category := range availableCategories {
+			for _, actionLabel := range category.ActionLabels {
+				if strings.ToLower(actionLabel) != strings.ToLower(label) {
+					continue
+				}
+
+				log.Printf("[DEBUG] Found category %s for app %s (%s) based on label %s", category, app.Name, app.ID, label)
+				app.Categories = append(app.Categories, category.Name)
+				break
+			}
+		}
+	}
+
+	return app
+}
