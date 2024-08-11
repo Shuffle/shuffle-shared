@@ -3693,6 +3693,7 @@ type CategoryAction struct {
 
 	// Optional~
 	AppVersion     string         `json:"app_version"`
+	AppId 		   string         `json:"app_id"`
 	ActionName     string         `json:"action_name"`
 	Category       string         `json:"category"`
 	OptionalFields []Valuereplace `json:"optional_fields"`

@@ -23937,6 +23937,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if len(value.AppId) > 0 && len(value.AppName) == 0 {
+		value.AppName = value.AppId
+	}
+
 	if len(value.AppName) == 0 {
 		for _, field := range value.Fields {
 			lowerkey := strings.ReplaceAll(strings.ToLower(field.Key), " ", "_")
@@ -24458,7 +24462,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(foundAuthenticationId) == 0 {
-		log.Printf("\n\n[WARNING] Couldn't find auth for app %s\n\n", selectedApp.Name)
+		log.Printf("[WARNING] Couldn't find auth for app %s in org %s (%s)", selectedApp.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		requiresAuth := false
 		for _, action := range selectedApp.Actions {
@@ -24487,7 +24491,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Success:  false,
 			Action:   "app_authentication",
 			Category: discoveredCategory,
-			Reason:   fmt.Sprintf("Help us authenticate '%s' for you first.", selectedApp.Name),
+			Reason:   fmt.Sprintf("Authenticate %s first.", selectedApp.Name),
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
