@@ -172,7 +172,7 @@ func HandleStreamWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	conn, ok := resp.(http.Flusher)
 	if !ok {
-		log.Printf("[ERROR] Flusher error: %s", ok)
+		log.Printf("[ERROR] Flusher error: %t", ok)
 		http.Error(resp, "Streaming supported on AppEngine", http.StatusInternalServerError)
 		return
 	}

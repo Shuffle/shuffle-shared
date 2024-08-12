@@ -574,7 +574,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount...int) {
 
 			item := &gomemcache.Item{
 				Key:        key,
-				Value:      []byte(string(incrementAmount)),
+				Value:      []byte(fmt.Sprintf("%d", incrementAmount)),
 				Expiration: 86400,
 			}
 
@@ -589,7 +589,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount...int) {
 			if item == nil || item.Value == nil {
 				item = &gomemcache.Item{
 					Key:        key,
-					Value:      []byte(string(incrementAmount)),
+					Value:      []byte(fmt.Sprintf("%d", incrementAmount)),
 					Expiration: 86400,
 				}
 
@@ -7548,11 +7548,11 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 	filtered := []Workflow{}
 	handled := []string{}
 	for _, workflow := range workflows {
-		if ArrayContains(handled, string(workflow.Edited)) {
+		if ArrayContains(handled, fmt.Sprintf("%d", workflow.Edited)) {
 			continue
 		}
 
-		handled = append(handled, string(workflow.Edited))
+		handled = append(handled, fmt.Sprintf("%d", workflow.Edited))
 		filtered = append(filtered, workflow)
 	}
 
@@ -7718,11 +7718,11 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 	filtered := []Workflow{}
 	handled := []string{}
 	for _, workflow := range workflows {
-		if ArrayContains(handled, string(workflow.Edited)) {
+		if ArrayContains(handled, fmt.Sprintf("%d", workflow.Edited)) {
 			continue
 		}
 
-		handled = append(handled, string(workflow.Edited))
+		handled = append(handled, fmt.Sprintf("%d", workflow.Edited))
 		filtered = append(filtered, workflow)
 	}
 
@@ -12673,7 +12673,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 				err := CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Workflow %s took too long to run. Time taken: %d seconds", workflowExecution.Workflow.Name, comparisonTime),
-					fmt.Sprintf("This notification is made when the execution takes more than 10 minutes.", workflowExecution.Workflow.Name, comparisonTime),
+					fmt.Sprintf("This notification is made when the execution takes more than 10 minutes."),
 					fmt.Sprintf("/workflows/%s?execution_id=%s&view=executions", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
 					workflowExecution.ExecutionOrg,
 					true,

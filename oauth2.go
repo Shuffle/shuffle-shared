@@ -285,7 +285,7 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 
 	body, err = json.Marshal(parsedEmail)
 	if err != nil {
-		log.Println("[WARNING] Failed to marshal data from emails: %s", err)
+		log.Printf("[WARNING] Failed to marshal data from emails: %s", err)
 		return string(body)
 	}
 
@@ -481,7 +481,7 @@ func HandleNewGithubRegister(resp http.ResponseWriter, request *http.Request) {
 
 	_, err = HandleAlgoliaCreatorUpload(ctx, user, false, false)
 	if err != nil {
-		log.Printf("[ERROR] Failed making user %s' information public")
+		log.Printf("[ERROR] Failed making user %s' information public", user.Username)
 	}
 
 	log.Printf("Successful client setup for github?")
@@ -2559,7 +2559,7 @@ func handleIndividualEmailUploads(ctx context.Context, gmailClient *http.Client,
 	mail.Type = "new"
 	mappedData, err := json.Marshal(mail)
 	if err != nil {
-		log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s", err)
+		log.Printf("[WARNING] Failed to Marshal mail to send to webhook: %s", err)
 		return message, err
 	}
 
@@ -2911,7 +2911,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 				mail.Type = "thread"
 				mappedData, err := json.Marshal(mail)
 				if err != nil {
-					log.Println("[WARNING] Failed to Marshal mail to send to webhook: %s (2)", err)
+					log.Printf("[WARNING] Failed to Marshal mail to send to webhook: %s (2)", err)
 					resp.WriteHeader(401)
 					continue
 				}
@@ -3665,7 +3665,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	}
 
 	if strings.Contains(string(body), "error") {
-		log.Printf("\n\n[ERROR] Oauth2 app RESPONSE: %s\n\nencoded: %#v", string(body))
+		log.Printf("\n\n[ERROR] Oauth2 app RESPONSE: %s\n\n", string(body))
 	}
 
 	// Parse out data like {"access_token":"ddpGSlBV4GhNhToPTLjHZSwbqRH6JUIv0QYPo6CW62NfAr","token_type":"Bearer","expires_in":1870}
