@@ -160,9 +160,12 @@ func randStr(strSize int, randType string) string {
 }
 
 func isLoop(arg string) bool {
-    pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
-    re := regexp.MustCompile(pattern)
-    return strings.Contains(arg, "$") && re.MatchString(arg)
+    if strings.Contains(arg,"$") && strings.Contains(arg, ".#") {
+        pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
+        re := regexp.MustCompile(pattern)
+        return strings.Contains(arg, "$") && re.MatchString(arg)
+    }
+    return false
 }
 
 func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
