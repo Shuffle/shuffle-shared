@@ -22367,6 +22367,7 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 					Description: fmt.Sprintf("User %s (%s) has shown interest in this usecase", user.Username, user.Id),
 					Type        : "usecase",
 					Active      : true,
+					Time: 		time.Now().Unix(),
 				})
 
 				SetOrg(ctx, *org, org.Id)
