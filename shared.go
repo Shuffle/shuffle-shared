@@ -164,9 +164,7 @@ func isLoop(arg string) bool {
         return true
     }
 
-    if strings.Contains(arg,"$") {
-        clean := regexp.MustCompile(`\s+`)
-        arg = clean.ReplaceAllString(arg, "")
+    if strings.Contains(arg,"$") && strings.Contains(arg, ".#") {
         pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
         re := regexp.MustCompile(pattern)
         return strings.Contains(arg, "$") && re.MatchString(arg)
