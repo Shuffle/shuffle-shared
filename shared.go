@@ -160,7 +160,13 @@ func randStr(strSize int, randType string) string {
 }
 
 func isLoop(arg string) bool {
-    if strings.Contains(arg,"$") && strings.Contains(arg, ".#") {
+    if strings.Contains(arg, "$") && (strings.HasSuffix(arg, ".#") || strings.Contains(arg, ".#.")){
+        return true
+    }
+
+    if strings.Contains(arg,"$") {
+        clean := regexp.MustCompile(`\s+`)
+        arg = clean.ReplaceAllString(arg, "")
         pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
         re := regexp.MustCompile(pattern)
         return strings.Contains(arg, "$") && re.MatchString(arg)
