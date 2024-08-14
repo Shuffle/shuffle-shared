@@ -1932,7 +1932,19 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("\n[WARNING] Failed getting oauth2 application permission token: %s\n\n", err)
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed authorization. Is your client ID, client secret and scope correct? Raw: %s"}`, strings.Replace(err.Error(), "\"", "\\\"", -1))))
+
+			parsedOutput := ResultChecker{
+				Success: false,
+				Reason:  fmt.Sprintf("Failed auth. Is your Client ID, Client Secret and Scopes correct?\n\nError: %s", err),
+			}
+
+			marshalledOutput, err := json.Marshal(parsedOutput)
+			if err != nil {
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed authorization. Is your client ID, client secret and scope correct? Raw: %s"}`, strings.Replace(err.Error(), "\"", "\\\"", -1))))
+				return
+			}
+
+			resp.Write(marshalledOutput)
 			return
 		}
 
@@ -3359,7 +3371,6 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		// Caching both bad and good apikeys :)
-
 		if len(org_id) > 0 && userdata.ActiveOrg.Id != org_id {
 			found := false
 			for _, org := range userdata.Orgs {
@@ -3370,7 +3381,15 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 
 			if !found {
-				return User{}, errors.New("User doesn't have access to this org")
+				// VERY specific override to allow ONLY support users in Shuffle to see info for an org to help them out. 
+				// FIXME: Should this be allowed for API as well? May just be session based (?)
+				if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+					found = true
+				}
+			}
+
+			if !found {
+				return User{}, errors.New(fmt.Sprintf("(2) User doesn't have access to this org", org_id))
 			}
 
 			log.Printf("[AUDIT] Setting user %s (%s) org to %#v FROM %#v for one request", userdata.Username, userdata.Id, org_id, userdata.ActiveOrg.Id)
@@ -3507,7 +3526,14 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			}
 
 			if !found {
-				return User{}, errors.New("User doesn't have access to this org")
+				// VERY specific override to allow ONLY support users in Shuffle to see info for an org to help them out
+				if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+					found = true
+				}
+			}
+
+			if !found {
+				return User{}, errors.New(fmt.Sprintf("(1) User doesn't have access to this org (%s)", org_id))
 			}
 
 			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", user.Username, user.Id, org_id)
@@ -7010,6 +7036,12 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				resp.Write([]byte(fmt.Sprintf(`{"success": true, "new_id": "%s"}`, workflow.ID)))
 				return
 			}
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			// Re-added this as in most cases when our users or customers need help, it makes it
+			// so we can finalize the workflow for them
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s (save workflow)", user.Username, workflow.ID)
+
+			workflow.ID = tmpworkflow.ID
 		} else if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
 			log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID
@@ -7515,7 +7547,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Automatically adding new apps
+	// Automatically adding new apps from imports
 	if len(newOrgApps) > 0 {
 		log.Printf("[WARNING] Adding new apps to org: %s", newOrgApps)
 
@@ -7537,18 +7569,18 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			if added {
 				orgUpdated = true
-				//err = SetOrg(ctx, *org, org.Id)
-				//if err != nil {
-				//	log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
-				//} else {
-				//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+				log.Printf("[DEBUG] Org updated with new apps: %s", org.ActiveApps)
+
 				//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
-				DeleteCache(ctx, "all_apps")
 				DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 				DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+				DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+				DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+
+				//DeleteCache(ctx, "all_apps")
 			}
 			//}
 		}
