@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"sync"
@@ -23659,6 +23661,38 @@ func GetExternalClient(baseUrl string) *http.Client {
 		MinVersion:         tls.VersionTLS11,
 		InsecureSkipVerify: skipSSLVerify,
 	}
+
+	rootCAs, _ := x509.SystemCertPool()
+	if rootCAs == nil {
+		rootCAs = x509.NewCertPool()
+	}
+
+	if os.Getenv("SHUFFLE_CERT_DIR") == "" {
+		os.Setenv("SHUFFLE_CERT_DIR", "certs/")
+	}
+
+	certDir := os.Getenv("SHUFFLE_CERT_DIR")
+
+	log.Printf("[INFO] Reading self signed certificates from %s dir", certDir)
+
+	files, err := os.ReadDir(certDir)
+	if err == nil && os.Getenv("SHUFFLE_CERT_DIR") != "" {
+		for _, file := range files {
+			if !file.IsDir() {
+				certPath := filepath.Join(certDir, file.Name())
+				caCert, err := os.ReadFile(certPath)
+				if err != nil {
+					log.Printf("[ERROR] Error reading the certificate %s: %s", file.Name(), err)
+				} else {
+					if ok := rootCAs.AppendCertsFromPEM(caCert); ok {
+						log.Printf("[INFO] Successfully appended certificate: %s", file.Name())
+					}
+				}
+			}
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
+	}
+
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
