@@ -489,13 +489,11 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
 				// This might suck lol
-				//key := "?"
-				//if strings.Contains(url, "?") {
-				//	key = "&"
-				//}
+				//authenticationSetup = fmt.Sprintf("if apikey != \" \": params[\"%s\"] = requests.utils.quote(apikey)", swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
 
-				//authenticationSetup = fmt.Sprintf("if apikey != \" \": url+=f\"%s%s={apikey}\"", key, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
-				authenticationSetup = fmt.Sprintf("if apikey != \" \": params[\"%s\"] = requests.utils.quote(apikey)", swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+				trimmedDescription := strings.Trim(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, " ")
+
+				authenticationSetup = fmt.Sprintf("if apikey != \" \":\n            if apikey.startswith(\"%s\"):\n                params[\"%s\"] = requests.utils.quote(apikey)\n            else:\n                apikey = apikey.replace(\"%s\", \"\", -1).strip()\n                params[\"%s\"] = requests.utils.quote(f\"%s{apikey}\")", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description)
 			}
 
 		} else if swagger.Components.SecuritySchemes["Oauth2"] != nil {
@@ -812,8 +810,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 		verifyWrapper,
 		extraHeaders,
 		extraQueries,
-		headerParserCode,
 		authenticationSetup,
+		headerParserCode,
 		queryData,
 		queryParserCode,
 		bodyFormatter,
@@ -866,12 +864,15 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
 				if len(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description) > 0 {
 					trimmedDescription := strings.Trim(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, " ")
 
-					authenticationSetup = fmt.Sprintf("if apikey != \" \":\n    if apikey.startswith(\"%s\"):\n        parsed_headers[\"%s\"] = apikey\n    else:\n        apikey = apikey.replace(\"%s\", \"\", -1).strip()\n        parsed_headers[\"%s\"] = f\"%s{apikey}\"", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description)
+					authenticationSetup = fmt.Sprintf("if apikey != \" \":\n            if apikey.startswith(\"%s\"):\n                parsed_headers[\"%s\"] = apikey\n            else:\n                apikey = apikey.replace(\"%s\", \"\", -1).strip()\n                parsed_headers[\"%s\"] = f\"%s{apikey}\"", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description)
 				}
 
 			} else if swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.In == "query" {
 		
-				authenticationSetup = fmt.Sprintf("if apikey != \" \": parsed_queries[\"%s\"] = requests.utils.quote(apikey)", swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+				//authenticationSetup = fmt.Sprintf("if apikey != \" \": parsed_queries[\"%s\"] = requests.utils.quote(apikey)", swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name)
+				trimmedDescription := strings.Trim(swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, " ")
+
+				authenticationSetup = fmt.Sprintf("if apikey != \" \":\n            if apikey.startswith(\"%s\"):\n                parsed_queries[\"%s\"] = requests.utils.quote(apikey)\n            else:\n                apikey = apikey.replace(\"%s\", \"\", -1).strip()\n                parsed_queries[\"%s\"] = requests.utils.quote(f\"%s{apikey}\")", trimmedDescription, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Name, swagger.Components.SecuritySchemes["ApiKeyAuth"].Value.Description)
 			}
 
 		} else if swagger.Components.SecuritySchemes["Oauth2"] != nil {
@@ -887,9 +888,14 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
 	}
 
 	pythonCode := fmt.Sprintf(`		
-    def fix_url(self, url):
+    def fix_url(self, url, path=False):
         if "hhttp" in url:
             url = url.replace("hhttp", "http")
+
+        if url.startswith("http//"): 
+            url = url.replace("http//", "http://")
+        if url.startswith("https//"): 
+            url = url.replace("https//", "https://")
 
         if "http:/" in url and not "http://" in url:
             url = url.replace("http:/", "http://", -1)
@@ -899,7 +905,7 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
             url = url.replace("http:///", "http://", -1)
         if "https:///" in url:
             url = url.replace("https:///", "https://", -1)
-        if not "http://" in url and not "http" in url:
+        if not path and not "http://" in url and not "http" in url:
             url = f"http://{url}"
 
         return url
@@ -1000,18 +1006,19 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
                 pass
 
             parseddata = {
-				"status": request.status_code,
-				"body": jsondata,
-				"url": request.url,
-				"headers": parsedheaders,
-				"cookies":cookies,
-				"success": True,
-			}
+                "status": request.status_code,
+                "body": jsondata,
+                "url": request.url,
+                "headers": parsedheaders,
+                "cookies":cookies,
+                "success": True,
+            }
 
             return json.dumps(parseddata)
         except Exception as e:
             print(f"[WARNING] Failed in request: {e}")
             return request.text
+
 
     def custom_action(self%s, method="", url="", headers="", queries="", path="", ssl_verify=False, body=""):
         url = self.fix_url(url)
@@ -1022,15 +1029,35 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
             self.logger.error(e)
             return {"error": str(e)}
 
+        if not path:
+            path = "/"
+
+        path = self.fix_url(path, path=True)
+        if path and path.startswith(url):
+            path = path.replace(url, "", 1)
+
         if path and not path.startswith('/'):
             path = '/' + path
 
         url += path
 
-        parsed_headers = self.parse_headers(headers)
-        parsed_queries = self.parse_queries(queries)
+        parsed_headers = {}
+        parsed_queries = {}
 
         %s
+
+        # Allows overwriting of existing headers with custom input ones
+        additional_headers = self.parse_headers(headers)
+        try:
+            parsed_headers.update(additional_headers)
+        except Exception as e:
+            print(f"Header parse error: {e}")
+
+        additional_queries = self.parse_queries(queries)
+        try:
+            parsed_queries.update(additional_queries)
+        except Exception as e:
+            print(f"Query parse error: {e}")
         
         ssl_verify = self.checkverify(ssl_verify)
 
@@ -1050,6 +1077,8 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
             self.logger.error(f"Request failed: {e}")
             return {"error": f"Request failed: {e}"}
     `, authenticationParameter, authenticationSetup, authenticationAddin)
+
+	log.Printf("Pythoncode: %s", pythonCode)
 
 	return pythonCode
 }
