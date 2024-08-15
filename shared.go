@@ -16310,16 +16310,6 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 		OpenAPI        string `datastore:"openapi" json:"openapi" yaml:"openapi"`
 	}
 
-	//body = []byte(`swagger: "2.0"`)
-	//body = []byte(`swagger: '1.0'`)
-	//newbody := string(body)
-	//newbody = strings.TrimSpace(newbody)
-	//body = []byte(newbody)
-	//log.Printf(string(body))
-	//tmpbody, err := yaml.YAMLToJSON(body)
-	//log.Printf(err)
-	//log.Printf(string(tmpbody))
-
 	// This has to be done in a weird way because Datastore doesn't
 	// support map[string]interface and similar (openapi3.Swagger)
 	var version versionCheck
@@ -16333,7 +16323,7 @@ func ValidateSwagger(resp http.ResponseWriter, request *http.Request) {
 	isJson := false
 	err = json.Unmarshal(body, &version)
 	if err != nil {
-		log.Printf("[WARNING] Json upload err: %s", err)
+		log.Printf("[WARNING] Json API upload err: %s", err)
 
 		body = []byte(strings.Replace(string(body), "\\/", "/", -1))
 		err = yaml.Unmarshal(body, &version)
