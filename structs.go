@@ -1446,11 +1446,11 @@ type DisabledRules struct {
 	LastActive     int64  `json:"last_active" datastore:"last_active"`
 }
 
-type SelectedSigmaRules struct {
-	SelectedRules []SigmaFileInfo `json:"selected_rules" datastore:"selected_rules"`
+type SelectedDetectionRules struct {
+	SelectedRules []DetectionFileInfo `json:"detection_rules" datastore:"detection_rules"`
 }
 
-type SigmaFileInfo struct {
+type DetectionFileInfo struct {
 	FileName    string `json:"file_name" yaml:"file_name"`
 	RuleTitle   string `json:"title" yaml:"title"`
 	Description string `json:"description" yaml:"description"`
@@ -2472,7 +2472,7 @@ type SelectedRulesWrapper struct {
 	SeqNo       int                `json:"_seq_no"`
 	PrimaryTerm int                `json:"_primary_term"`
 	Found       bool               `json:"found"`
-	Source      SelectedSigmaRules `json:"_source"`
+	Source      SelectedDetectionRules `json:"_source"`
 }
 
 type HookWrapper struct {

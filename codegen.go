@@ -1078,8 +1078,6 @@ func GetCustomActionCode(swagger *openapi3.Swagger, api WorkflowApp) string{
             return {"error": f"Request failed: {e}"}
     `, authenticationParameter, authenticationSetup, authenticationAddin)
 
-	log.Printf("Pythoncode: %s", pythonCode)
-
 	return pythonCode
 }
 
