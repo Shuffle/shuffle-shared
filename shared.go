@@ -23667,11 +23667,11 @@ func GetExternalClient(baseUrl string) *http.Client {
 		rootCAs = x509.NewCertPool()
 	}
 
-	if os.Getenv("SHUFFLE_CERT_DIR") == "" {
-		os.Setenv("SHUFFLE_CERT_DIR", "certs/")
-	}
+    certDir := "/certs/"
 
-	certDir := os.Getenv("SHUFFLE_CERT_DIR")
+	if os.Getenv("SHUFFLE_CERT_DIR") != "" {
+        certDir = os.Getenv("SHUFFLE_CERT_DIR")
+	}
 
 	log.Printf("[INFO] Reading self signed certificates from %s dir", certDir)
 
