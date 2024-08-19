@@ -6824,6 +6824,11 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	env = strings.ReplaceAll(env, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
+	if project.Environment == "cloud" {
+		//log.Printf("[DEBUG] Adding execution to queue: %s", nameKey)
+	}
+
+
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(executionRequest)
@@ -8823,8 +8828,9 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 			if err == nil && len(hook.Id) > 0 {
 				return hook, nil
 			} else {
-				//log.Printf("[ERROR] Failed unmarshalling cache for hook: %s", err)
-				return hook, errors.New(fmt.Sprintf("No good cache for hook %s", hookId))
+				if len(hook.Id) == 0 && len(cacheData) > 0 {
+					return hook, errors.New(fmt.Sprintf("No good cache for hook %s", hookId))
+				}
 			}
 		} else {
 			//log.Printf("[DEBUG] Failed getting cache for hook: %s", err)
@@ -8834,10 +8840,8 @@ func GetHook(ctx context.Context, hookId string) (*Hook, error) {
 
 	var err error
 	if project.DbType == "opensearch" {
-		//log.Printf("GETTING ES USER %s",
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), hookId)
 		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
 			return &Hook{}, err
 		}

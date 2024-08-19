@@ -836,7 +836,7 @@ type Priority struct {
 	URL         string `json:"url" datastore:"url"`
 	Severity    int    `json:"severity" datastore:"severity"` // 1 = high, 2 = mid, 3 = low
 
-	Time 		int64 `json:"time" datastore:"time"`
+	Time int64 `json:"time" datastore:"time"`
 }
 
 type LeadInfo struct {
@@ -2465,13 +2465,13 @@ type DisabledHookWrapper struct {
 }
 
 type SelectedRulesWrapper struct {
-	Index       string             `json:"_index"`
-	Type        string             `json:"_type"`
-	ID          string             `json:"_id"`
-	Version     int                `json:"_version"`
-	SeqNo       int                `json:"_seq_no"`
-	PrimaryTerm int                `json:"_primary_term"`
-	Found       bool               `json:"found"`
+	Index       string                 `json:"_index"`
+	Type        string                 `json:"_type"`
+	ID          string                 `json:"_id"`
+	Version     int                    `json:"_version"`
+	SeqNo       int                    `json:"_seq_no"`
+	PrimaryTerm int                    `json:"_primary_term"`
+	Found       bool                   `json:"found"`
 	Source      SelectedDetectionRules `json:"_source"`
 }
 
@@ -3695,7 +3695,7 @@ type CategoryAction struct {
 
 	// Optional~
 	AppVersion     string         `json:"app_version"`
-	AppId 		   string         `json:"app_id"`
+	AppId          string         `json:"app_id"`
 	ActionName     string         `json:"action_name"`
 	Category       string         `json:"category"`
 	OptionalFields []Valuereplace `json:"optional_fields"`
@@ -4065,4 +4065,13 @@ type AppParser struct {
 	Success bool   `json:"success"`
 	OpenAPI []byte `json:"openapi"`
 	App     []byte `json:"app"`
+}
+
+type DetectionResponse struct {
+	DetectionName     string              `json:"detection_name"`
+	Category          string              `json:"category"`
+	OrgId             string              `json:"org_id"`
+	DetectionInfo     []DetectionFileInfo `json:"detection_info"`
+	FolderDisabled    bool                `json:"folder_disabled"`
+	IsConnectorActive bool                `json:"is_connector_active"`
 }

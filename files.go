@@ -438,7 +438,7 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 	ctx := context.Background()
 	files := []*github.RepositoryContent{}
 
-	cacheKey := fmt.Sprintf("github_%s_%s_%s", owner, repo, path)
+	cacheKey := fmt.Sprintf("github_%s_%s_%s_%s", owner, repo, path, filename)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -458,20 +458,22 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 		}
 	}
 
+	log.Printf("\n\n[DEBUG] Got %d file(s): %s\n\n", len(files), path)
+
 	if len(files) == 0 {
 		log.Printf("[ERROR] No files found in namespace '%s' on Github - Used for integration framework", path)
 		return []*github.RepositoryContent{}, nil
 	}
 
-	if len(filename) == 0 {
-		return []*github.RepositoryContent{}, nil
-	}
-
-	matchingFiles := []*github.RepositoryContent{}
-	for _, item := range files {
-		if len(filename) > 0 && strings.HasPrefix(*item.Name, filename) {
-			matchingFiles = append(matchingFiles, item)
+	if len(filename) > 0 {
+		matchingFiles := []*github.RepositoryContent{}
+		for _, item := range files {
+			if len(filename) > 0 && strings.HasPrefix(*item.Name, filename) {
+				matchingFiles = append(matchingFiles, item)
+			}
 		}
+
+		files = matchingFiles
 	}
 
 	if project.CacheDb {
@@ -487,24 +489,6 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 		}
 	}
   
-	return matchingFiles, nil
-}
-
-func LoadStandardFromGithub2(client *github.Client, owner, repo, path string) ([]*github.RepositoryContent, error) {
-	ctx := context.Background()
-
-	// Fetch the contents of the specified path from the repository
-	_, files, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting files from GitHub: %s", err)
-		return nil, err
-	}
-
-	if len(files) == 0 {
-		log.Printf("[ERROR] No files found in path '%s' in the repository '%s/%s'", path, owner, repo)
-		return nil, nil
-	}
-
 	return files, nil
 }
 
@@ -762,7 +746,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		var filedata = []byte{}
 		if file.Encrypted {
 			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-				log.Printf("[ERROR] No namespace handler for cloud decryption!")
+				log.Printf("[ERROR] No namespace handler for cloud decryption (files)!")
 			} else {
 				Openfile, err := os.Open(file.DownloadPath)
 				defer Openfile.Close() //Close after function return
@@ -846,23 +830,6 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	resp.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zip", namespace))
 	resp.Header().Set("Content-Type", FileContentType)
 	io.Copy(resp, buf)
-}
-
-func SetExecRequest(ctx context.Context, execType string, fileName string) error {
-
-	execRequest := ExecutionRequest{
-		Type:              execType,
-		ExecutionId:       uuid.NewV4().String(),
-		ExecutionSource:   "SIGMA",
-		ExecutionArgument: fileName,
-		Priority:          11,
-	}
-
-	err := SetWorkflowQueue(ctx, execRequest, "shuffle")
-	if err != nil {
-          return err
-	}
-	return nil
 }
 
 func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
@@ -1292,13 +1259,15 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
 
-	execType := "CATEGORY_UPDATE"
-	err = SetExecRequest(ctx, execType, file.Filename)
-	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	if file.Namespace == "sigma" {
+		execType := "CATEGORY_UPDATE"
+		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, file.Filename, "SIGMA", "SHUFFLE_DISCOVER")
+		if err != nil {
+			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	resp.WriteHeader(200)
@@ -1459,14 +1428,15 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
   
 	if file.Namespace == "sigma" {
-	execType := "CATEGORY_UPDATE"
-	err = SetExecRequest(ctx, execType, file.Filename)
-	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}}
+		execType := "CATEGORY_UPDATE"
+		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, file.Filename, "SIGMA", "SHUFFLE_DISCOVER")
+		if err != nil {
+			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
@@ -1870,13 +1840,12 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		Field2 string `json:"field_2"` // Password
 		Field3 string `json:"field_3"` // Branch
 		Path  string `json:"path"` 
-
 	}
 
 	var input tmpStruct
 	err = json.Unmarshal(body, &input)
 	if err != nil {
-		log.Printf("Error with unmarshal tmpBody: %s", err)
+		log.Printf("[DEBUG] Error with unmarshal tmpBody: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -1905,8 +1874,7 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
-	log.Printf("[DEBUG] Loading standard from github: %s/%s/%s", owner, repo, path)
-
+	log.Printf("[DEBUG] Loading standard with git: %s/%s/%s", owner, repo, path)
 	files, err := LoadStandardFromGithub(client, owner, repo, path, "") 
 	if err != nil {
 		log.Printf("[DEBUG] Failed to load standard from github: %s", err)
@@ -1914,6 +1882,8 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	log.Printf("[DEBUG] Found %d files in %s/%s/%s", len(files), owner, repo, path)
 
 	if len(files) > 50 {
 		files = files[:50]
