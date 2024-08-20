@@ -1687,7 +1687,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 	// Check if finished too?
 	finalWorkflowExecution := SanitizeExecution(workflowExecution)
-	if workflowExecution.Status == "EXECUTING" && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
+	if (workflowExecution.Status == "WAITING" || workflowExecution.Status == "EXECUTING") && len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extra {
 
 		skipFinished := false
 		for _, result := range workflowExecution.Results {
@@ -1698,8 +1698,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 
 		if !skipFinished {
-			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented).", workflowExecution.ExecutionId)
-
+			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented) - just returning for now for parent function to handle.", workflowExecution.ExecutionId)
 			finalWorkflowExecution.Status = "FINISHED"
 			dbsave = true
 			if finalWorkflowExecution.CompletedAt == 0 {
@@ -1749,7 +1748,6 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	if finalWorkflowExecution.Status == "ABORTED" {
 		finalWorkflowExecution.Result = finalWorkflowExecution.Workflow.DefaultReturnValue
 	} else if (len(finalWorkflowExecution.Result) == 0 || finalWorkflowExecution.Result == finalWorkflowExecution.Workflow.DefaultReturnValue) && finalWorkflowExecution.Status == "FINISHED" {
-		//log.Printf("\n\n[DEBUG] Finding new response value\n\n")
 		lastResult := ""
 		lastCompleted := int64(-1)
 		for _, result := range finalWorkflowExecution.Results {
@@ -2689,7 +2687,7 @@ func GetEnvironment(ctx context.Context, id, orgId string) (*Environment, error)
 			return env, err
 		}
 
-		log.Printf("[DEBUG] Got %d environments for id: %s", len(wrapped.Hits.Hits), id)
+		//log.Printf("[DEBUG] Got %d environments for id: %s", len(wrapped.Hits.Hits), id)
 
 		if len(wrapped.Hits.Hits) == 1 && len(orgId) == 0 {
 			env = &wrapped.Hits.Hits[0].Source
@@ -4452,12 +4450,12 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
 	if len(value) == 0 {
-		log.Printf("[WARNING] Couldn't delete %s because value (id) must be longer than 0", entity)
+		//log.Printf("[WARNING] Couldn't delete %s because value (id) must be longer than 0", entity)
 		return errors.New("Value to delete must be larger than 0")
 	}
 
 	if project.DbType == "opensearch" {
-		log.Printf("[DEBUG] Deleting from index '%s' with item '%s' from opensearch", entity, value)
+		//log.Printf("[DEBUG] Deleting from index '%s' with item '%s' from opensearch", entity, value)
 
 		res, err := project.Es.Delete(strings.ToLower(GetESIndexPrefix(entity)), value)
 
@@ -4468,7 +4466,7 @@ func DeleteKey(ctx context.Context, entity string, value string) error {
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			log.Printf("[WARNING] Couldn't delete %s:%s. Status: %d", entity, value, res.StatusCode)
+			//log.Printf("[WARNING] Couldn't delete %s:%s. Status: %d", entity, value, res.StatusCode)
 			return nil
 		}
 
@@ -10395,22 +10393,24 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 
 	// Gets the correct one from cache to make it appear to be correct everywhere
 	for execIndex, execution := range executions {
-		if execution.Status == "EXECUTING" {
-			// Get the right one from cache
-			newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
-			if err == nil {
-				// Set the execution as well in the database
-				if newexec.Status != execution.Status {
+		if execution.Status != "EXECUTING" {
+			continue
+		}
 
-					if project.Environment == "cloud" {
-						go SetWorkflowExecution(ctx, *newexec, true)
-					} else {
-						SetWorkflowExecution(ctx, *newexec, false)
-					}
+		// Get the right one from cache
+		newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+		if err == nil {
+			// Set the execution as well in the database
+			if newexec.Status != execution.Status {
+
+				if project.Environment == "cloud" {
+					go SetWorkflowExecution(ctx, *newexec, true)
+				} else {
+					SetWorkflowExecution(ctx, *newexec, false)
 				}
-
-				executions[execIndex] = *newexec
 			}
+
+			executions[execIndex] = *newexec
 		}
 	}
 
@@ -12597,8 +12597,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
-	log.Printf("[INFO][%s] Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
-
+	log.Printf("[INFO][%s] Workflow Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
 		invalidResults := 0

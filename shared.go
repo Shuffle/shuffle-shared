@@ -171,6 +171,7 @@ func isLoop(arg string) bool {
         re := regexp.MustCompile(pattern)
         return strings.Contains(arg, "$") && re.MatchString(arg)
     }
+
     return false
 }
 
@@ -4188,6 +4189,10 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	for index, execution := range workflowExecutions {
+		if project.Environment != "cloud" && execution.Status != "FINISHED" && execution.Status != "ABORTED" {
+			execution, _ = Fixexecution(ctx, execution) 
+		}
+
 		newResults := []ActionResult{}
 		newActions := []Action{}
 		newTriggers := []Trigger{}
@@ -15018,7 +15023,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
+			log.Printf("\n\n[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -15088,7 +15093,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							streamUrl = fmt.Sprintf("http://%s:33333/api/v1/streams", os.Getenv("WORKER_HOSTNAME"))
 						}
 
-						log.Printf("[DEBUG] OPTIMIZED: %s, PORT: %s", os.Getenv("SHUFFLE_OPTIMIZED"), os.Getenv("WORKER_PORT"))
 						if os.Getenv("SHUFFLE_OPTIMIZED") == "true" && len(os.Getenv("WORKER_PORT")) > 0 {
 							streamUrl = fmt.Sprintf("http://localhost:%s/api/v1/streams", os.Getenv("WORKER_PORT"))
 						} else if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -15255,34 +15259,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		workflowExecution.Results = append(workflowExecution.Results, actionResult)
 	}
 
-	// FIXME: Have a check for skippednodes and their parents
-	/*
-		for resultIndex, result := range workflowExecution.Results {
-			if result.Status != "SKIPPED" {
-				continue
-			}
-
-			// Checks if all parents are skipped or failed. Otherwise removes them from the results
-			for _, branch := range workflowExecution.Workflow.Branches {
-				if branch.DestinationID == result.Action.ID {
-					for _, subresult := range workflowExecution.Results {
-						if subresult.Action.ID == branch.SourceID {
-							if subresult.Status != "SKIPPED" && subresult.Status != "FAILURE" {
-								log.Printf("SUBRESULT PARENT STATUS: %s", subresult.Status)
-								log.Printf("Should remove resultIndex: %d", resultIndex)
-
-								workflowExecution.Results = append(workflowExecution.Results[:resultIndex], workflowExecution.Results[resultIndex+1:]...)
-
-								break
-							}
-						}
-					}
-				}
-			}
-		}
-	*/
 	// Auto fixing and ensuring the same isn't ran multiple times?
-
 	extraInputs := 0
 	for _, trigger := range workflowExecution.Workflow.Triggers {
 		if trigger.Name == "User Input" && trigger.AppName == "User Input" {
@@ -18178,36 +18155,38 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 	// Finds if subflow HAS a value when it should, otherwise it's not being set
 	for _, result := range execution.Results {
 		//log.Printf("%s = %s", result.Action.AppName, result.Status)
-		if result.Action.AppName == "shuffle-subflow" {
-			if result.Status == "SKIPPED" {
+		if result.Action.AppName != "shuffle-subflow" {
+			continue
+		}
+
+		if result.Status == "SKIPPED" {
+			continue
+		}
+
+		for _, trigger := range baseExecution.Workflow.Triggers {
+			if trigger.ID != result.Action.ID {
 				continue
 			}
 
-			for _, trigger := range baseExecution.Workflow.Triggers {
-				if trigger.ID != result.Action.ID {
-					continue
-				}
+			for _, param := range trigger.Parameters {
+				if param.Name == "check_result" && param.Value == "true" {
+					//log.Printf("Found check as true!")
 
-				for _, param := range trigger.Parameters {
-					if param.Name == "check_result" && param.Value == "true" {
-						//log.Printf("Found check as true!")
-
-						var subflowData SubflowData
-						err = json.Unmarshal([]byte(result.Result), &subflowData)
-						if err != nil {
-							log.Printf("Failed unmarshal in subflow check for %s: %s", result.Result, err)
-						} else if len(subflowData.Result) == 0 {
-							log.Printf("There is no result yet. Don't save?")
-						} else {
-							//log.Printf("There is a result: %s", result.Result)
-						}
-
-						break
+					var subflowData SubflowData
+					err = json.Unmarshal([]byte(result.Result), &subflowData)
+					if err != nil {
+						log.Printf("Failed unmarshal in subflow check for %s: %s", result.Result, err)
+					} else if len(subflowData.Result) == 0 {
+						log.Printf("There is no result yet. Don't save?")
+					} else {
+						//log.Printf("There is a result: %s", result.Result)
 					}
-				}
 
-				break
+					break
+				}
 			}
+
+			break
 		}
 	}
 
@@ -19454,18 +19433,18 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	var workflowExecution WorkflowExecution
 	workflowBytes, err := json.Marshal(workflow)
 	if err != nil {
 		log.Printf("[WARNING] Failed workflow unmarshal in execution: %s", err)
-		return WorkflowExecution{}, ExecInfo{}, "", err
+		return workflowExecution, ExecInfo{}, "", err
 	}
 
 	//log.Printf(workflow)
-	var workflowExecution WorkflowExecution
 	err = json.Unmarshal(workflowBytes, &workflowExecution.Workflow)
 	if err != nil {
 		log.Printf("[WARNING] Failed prepare execution unmarshaling: %s", err)
-		return WorkflowExecution{}, ExecInfo{}, "Failed unmarshal during execution", err
+		return workflowExecution, ExecInfo{}, "Failed unmarshal during execution", err
 	}
 
 	if len(workflow.OrgId) > 0 {
@@ -19484,7 +19463,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		body, err := ioutil.ReadAll(request.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed request POST read: %s", err)
-			return WorkflowExecution{}, ExecInfo{}, "Failed getting body", err
+			return workflowExecution, ExecInfo{}, "Failed getting body", err
 		}
 
 		// This one doesn't really matter.
@@ -19705,7 +19684,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					execution.Start = newStartnode
 				} else {
 					log.Printf("[ERROR] Action %s was NOT found, and no other startnode found! Exiting execution.", execution.Start)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Startnode %s was not found in actions", workflow.Start), errors.New(fmt.Sprintf("Startnode %s was not found in actions", workflow.Start))
+					return workflowExecution, ExecInfo{}, fmt.Sprintf("Startnode %s was not found in actions", workflow.Start), errors.New(fmt.Sprintf("Startnode %s was not found in actions", workflow.Start))
 				}
 			}
 		} else if len(execution.Start) > 0 {
@@ -19732,17 +19711,17 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
 				log.Printf("[INFO] Failed getting execution (execution) %s: %s", referenceId[0], err)
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
 			if oldExecution.Workflow.ID != workflow.ID {
 				log.Printf("[INFO] Wrong workflowid!")
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Bad workflow ID in get %s", referenceId), errors.New("Bad workflow ID")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("Bad workflow ID in get %s", referenceId), errors.New("Bad workflow ID")
 			}
 
 			if authorization[0] != oldExecution.Authorization {
 				log.Printf("[AUDIT][%s] Wrong authorization for execution during userinput! %s vs %s", referenceId[0], authorization[0], oldExecution.Authorization)
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Bad authorization in get %s", referenceId), errors.New("Bad authorization key")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("Bad authorization in get %s", referenceId), errors.New("Bad authorization key")
 			}
 
 			if len(start) == 0 {
@@ -19757,15 +19736,14 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			if len(start) == 0 {
 				log.Printf("[ERROR] No start node found for workflow %s during workflow continuation", workflow.ID)
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("No start node found for workflow continuation %s", workflow.ID), errors.New("No start node found for workflow continuation")
 			}
 
 			//log.Printf("Result len: %d", len(oldExecution.Results))
 			newResults := []ActionResult{}
 			foundresult := ActionResult{}
 			for _, result := range oldExecution.Results {
-				//log.Printf("Action: %s - %s", result.Action.ID, start[0])
-
+				log.Printf("\n\n[DEBUG] Action: %s: %s. Start: %s\n\n", result.Action.ID, result.Status, start[0])
 				if result.Action.ID == start[0] {
 					if result.Status == "ABORTED" {
 						log.Printf("[INFO] Found aborted result: %s (%s)", result.Action.Label, result.Action.ID)
@@ -19775,7 +19753,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							oldExecution.CompletedAt = time.Now().Unix()
 							SetWorkflowExecution(ctx, *oldExecution, true)
 
-							return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution %s was already aborted", oldExecution.ExecutionId), errors.New("Execution already aborted")
+							return workflowExecution, ExecInfo{}, fmt.Sprintf("Execution %s was already aborted", oldExecution.ExecutionId), errors.New("Execution already aborted")
 						}
 					}
 				}
@@ -19787,7 +19765,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					err = json.Unmarshal([]byte(result.Result), &userinputResp)
 					// Error here should just be warnings
 					if err != nil {
-						log.Printf("[ERROR][%s] Failed unmarshalling userinput (not critical): %s", result.ExecutionId, err)
+						log.Printf("[WARNING][%s] Failed unmarshalling userinput (not critical): %s", result.ExecutionId, err)
 					}
 
 					//if err == nil {
@@ -19897,7 +19875,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					}
 
 					result.CompletedAt = int64(time.Now().Unix()) * 1000
-					log.Printf("[INFO][%s] Setting result to %s", oldExecution.ExecutionId, result.Action.Label)
+					log.Printf("[INFO][%s] Setting result to %s. Answer: %#v", oldExecution.ExecutionId, result.Action.Label, answer)
 
 					sendSelfRequest := false
 					if answer[0] == "false" {
@@ -19909,7 +19887,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					// Should send result to self?
 					fullMarshal, err := json.Marshal(result)
-					if err == nil {
+					log.Printf("[DEBUG] Result to send: %s", string(fullMarshal))
+
+					if err != nil {
+						log.Printf("[ERROR][%s] Failed marshalling userinput result: %s", oldExecution.ExecutionId, err)
+					} else { 
 						actionCacheId := fmt.Sprintf("%s_%s_result", result.ExecutionId, result.Action.ID)
 						err = SetCache(ctx, actionCacheId, fullMarshal, 35)
 						if err != nil {
@@ -19918,7 +19900,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 						// FIXME: Should send result to self?
 						// Maybe that is ONLY if on cloud?
-						if strings.ToLower(result.Action.Environment) != "cloud" {
+						if sendSelfRequest == false && strings.ToLower(result.Action.Environment) != "cloud" {
 							log.Printf("[DEBUG][%s] SETTING user input result, and re-adding it to queue IF not in worker. Environment: %s", result.ExecutionId, result.Action.Environment)
 							if project.Environment == "worker" {
 								log.Printf("\n\n[DEBUG][%s] Worker user input restart. What do? Should we ever reach this point?\n\n", project.Environment)
@@ -19971,23 +19953,42 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						}
 
 						if sendSelfRequest || strings.ToLower(result.Action.Environment) == "cloud" {
-							log.Printf("[DEBUG][%s] Sending User Input result to self because we are on cloud env/action is skipped", result.ExecutionId)
-
 							backendUrl := os.Getenv("BASE_URL")
-							if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+							if project.Environment != "cloud" {
+								port := 5001
+								if os.Getenv("BACKEND_PORT") != "" {
+									// Read it to int
+									newPort, err := strconv.Atoi(os.Getenv("BACKEND_PORT"))
+									if err != nil {
+										log.Printf("[ERROR] Failed converting BACKEND_PORT to int: %s", err)
+									} else {
+										port = newPort
+									}
+								}
+
+								// Selfrequest
+								backendUrl = fmt.Sprintf("http://localhost:%d", port)
+							}
+
+	
+							if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 								backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 							}
 
+							// Overrides all the things
 							if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 								backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 							}
 
+							// Noproxy as it's a local request
 							topClient := &http.Client{
 								Transport: &http.Transport{
 									Proxy: nil,
 								},
 							}
+
 							streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
+							log.Printf("[DEBUG][%s] Sending User Input result to self because we are on cloud env/action is skipped. URL: %#v", result.ExecutionId, streamUrl)
 							req, err := http.NewRequest(
 								"POST",
 								streamUrl,
@@ -19996,19 +19997,19 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 							if err != nil {
 								log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
-								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
+								return workflowExecution, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
 							}
 
 							newresp, err := topClient.Do(req)
 							if err != nil {
 								log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
-								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
+								return workflowExecution, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
 							}
 
 							defer newresp.Body.Close()
 						}
 
-						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution (%s) action skipped", oldExecution.ExecutionId), errors.New("User Input: Execution action skipped!")
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Execution (%s) action skipped", oldExecution.ExecutionId), errors.New("User Input: Execution action skipped!")
 					}
 
 					foundresult = result
@@ -20030,31 +20031,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			} else {
 				log.Printf("[WARNING][%s] No job to rerun for user input as a WAITING node was not found", oldExecution.ExecutionId)
 
-				return WorkflowExecution{}, ExecInfo{}, "", errors.New("Already Clicked")
+				return workflowExecution, ExecInfo{}, "", errors.New("Already Clicked")
 			}
-
-			//if err != nil {
-			/*
-				oldExecution.Results = newResults
-				err = SetWorkflowExecution(ctx, *oldExecution, true)
-				if err != nil {
-					log.Printf("[WARNING] Error saving workflow execution actionresult setting: %s", err)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed setting workflowexecution actionresult in execution: %s", err), err
-				}
-
-				if foundresult.Action.AppName != "" {
-					b, err := json.Marshal(foundresult)
-					if err != nil {
-						log.Printf("[ERROR] Error marshalling actionresult: %s", err)
-					} else {
-						log.Printf("[INFO] Sending user input result: %s", string(b))
-						ResendActionResult(b, 4)
-					}
-				} else {
-					log.Printf("[INFO] No WAITING node found")
-					return *oldExecution, ExecInfo{}, "", errors.New("User Input: Already finished")
-				}
-			*/
 
 			// Add new execution to queue?
 			//if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -20069,11 +20047,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			oldExecution, err := GetWorkflowExecution(ctx, referenceId[0])
 			if err != nil {
 				log.Printf("[ERROR] Failed getting execution (execution) %s: %s", referenceId[0], err)
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting execution ID %s because it doesn't exist.", referenceId[0]), err
 			}
 
 			if oldExecution.Status != "WAITING" {
-				return WorkflowExecution{}, ExecInfo{}, "", errors.New("Workflow is no longer with status waiting. Can't continue.")
+				return workflowExecution, ExecInfo{}, "", errors.New("Workflow is no longer with status waiting. Can't continue.")
 			}
 
 			if startok {
@@ -20110,7 +20088,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if workflowExecution.SubExecutionCount >= maxExecutionDepth {
-		return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Max subflow of %d reached", maxExecutionDepth), err
+		return workflowExecution, ExecInfo{}, fmt.Sprintf("Max subflow of %d reached", maxExecutionDepth), err
 	}
 
 	if workflowExecution.Priority == 0 {
@@ -20153,7 +20131,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// FIXME - regex uuid, and check if already exists?
 	if len(workflowExecution.ExecutionId) != 36 {
 		log.Printf("Invalid uuid: %s", workflowExecution.ExecutionId)
-		return WorkflowExecution{}, ExecInfo{}, "Invalid uuid", err
+		return workflowExecution, ExecInfo{}, "Invalid uuid", err
 	}
 
 	// FIXME - find owner of workflow
@@ -20233,7 +20211,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if !authFound {
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App auth not found: %s", authId), errors.New(fmt.Sprintf("App auth '%s' not found for app '%s'", authId, appname))
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("App auth not found: %s", authId), errors.New(fmt.Sprintf("App auth '%s' not found for app '%s'", authId, appname))
 			}
 
 			found := false
@@ -20303,7 +20281,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
 		} else {
-			return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Startnode couldn't be found"), errors.New("Startnode isn't defined in this workflow..")
+			return workflowExecution, ExecInfo{}, fmt.Sprintf("Startnode couldn't be found"), errors.New("Startnode isn't defined in this workflow..")
 		}
 	}
 
@@ -20504,12 +20482,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				authGroups, err = GetAuthGroups(ctx, workflow.OrgId)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting authgroups for org %s: %s", workflow.OrgId, err)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting authgroups for org %s: %s", workflow.OrgId, err), err
+					return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting authgroups for org %s: %s", workflow.OrgId, err), err
 				}
 
 				if len(authGroups) == 0 {
 					log.Printf("[ERROR] No authgroups found for org %s", workflow.OrgId)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No authgroups found for org %s", workflow.OrgId), errors.New("No authgroups exist. Create them by going to: /admin?tab=app_auth")
+					return workflowExecution, ExecInfo{}, fmt.Sprintf("No authgroups found for org %s", workflow.OrgId), errors.New("No authgroups exist. Create them by going to: /admin?tab=app_auth")
 				}
 			}
 
@@ -20531,7 +20509,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 			if len(relevantAuthgroups) == 0 {
 				log.Printf("[ERROR] No relevant authgroups found for org %s. Do they still exist?", workflow.OrgId)
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("No relevant authgroups found for org %s. Do they still exist?", workflow.OrgId), errors.New("No relevant authgroups found for workflow. Do they still exist?")
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("No relevant authgroups found for org %s. Do they still exist?", workflow.OrgId), errors.New("No relevant authgroups found for workflow. Do they still exist?")
 			}
 
 			log.Printf("[DEBUG][%s] Found %d relevant auth groups for action %s", workflowExecution.ExecutionId, len(relevantAuthgroups), action.Label)
@@ -20548,7 +20526,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					orgEnvironments, err = GetEnvironments(ctx, workflowExecution.Workflow.OrgId)
 					if err != nil {
 						log.Printf("[ERROR] Failed getting environments for org %s: %s", workflow.OrgId, err)
-						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Failed getting environments for org %s: %s", workflow.OrgId, err), err
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("Failed getting environments for org %s: %s", workflow.OrgId, err), err
 					}
 				}
 
@@ -20571,7 +20549,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 				if !environmentFound {
 					log.Printf("[ERROR] Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id), errors.New(fmt.Sprintf("Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id))
+					return workflowExecution, ExecInfo{}, fmt.Sprintf("Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id), errors.New(fmt.Sprintf("Environment %s not found for authgroup %s", authgroup.Environment, authgroup.Id))
 				}
 
 				for findActionIndex, findAction := range workflowExecution.Workflow.Actions {
@@ -20602,7 +20580,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					if !authFound {
 						log.Printf("[ERROR][%s] App %s not found in authgroup %s", workflowExecution.ExecutionId, findAction.AppName, firstGroup.Id)
-						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id), errors.New(fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id))
+						return workflowExecution, ExecInfo{}, fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id), errors.New(fmt.Sprintf("App %s not found in authgroup %s", findAction.AppName, firstGroup.Id))
 					}
 
 					//action = workflowExecution.Workflow.Actions[workflowExecutionIndex]
@@ -20632,7 +20610,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			//log.Printf("[DEBUG][%s] RETURNING BEFORE ORIGINAL SUBFLOW CAN RUN", workflowExecution.ExecutionId)
-			//return  WorkflowExecution{}, ExecInfo{}, "", errors.New("authgroup")
 		}
 
 		if len(action.AuthenticationId) > 0 {
@@ -20640,7 +20617,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
 				if err != nil {
 					log.Printf("[ERROR] Api authentication failed in get all app auth for ID %s: %s", workflow.ExecutingOrg.Id, err)
-					return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Api authentication failed in get all app auth for %s: %s", workflow.ExecutingOrg.Id, err), err
+					return workflowExecution, ExecInfo{}, fmt.Sprintf("Api authentication failed in get all app auth for %s: %s", workflow.ExecutingOrg.Id, err), err
 				}
 			}
 
@@ -20657,7 +20634,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if len(curAuth.Id) == 0 {
-				return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
+				return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
 			}
 
 			if curAuth.Encrypted {
@@ -20808,7 +20785,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						)
 
 						// Abort the workflow due to auth being bad
-						//return workflowExecution, ExecInfo{}, fmt.Sprintf("Oauth2 failed to initialize"), nil
 
 					} else {
 						// Resets the params and overwrites with the relevant fields
@@ -21131,7 +21107,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			workflowExecution.Start = workflowExecution.Workflow.Actions[0].ID
 		} else {
 			log.Printf("[ERROR] Startnode %s doesn't exist!!", workflowExecution.Start)
-			return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Workflow action %s doesn't exist in workflow", workflowExecution.Start), errors.New(fmt.Sprintf(`Workflow start node "%s" doesn't exist. Exiting!`, workflowExecution.Start))
+			return workflowExecution, ExecInfo{}, fmt.Sprintf("Workflow action %s doesn't exist in workflow", workflowExecution.Start), errors.New(fmt.Sprintf(`Workflow start node "%s" doesn't exist. Exiting!`, workflowExecution.Start))
 		}
 	}
 
@@ -21153,8 +21129,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		allEnvironments, err := GetEnvironments(ctx, workflowExecution.ExecutionOrg)
 		if err != nil {
-			log.Printf("Failed finding environments: %s", err)
-			return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Workflow environments not found for this org"), errors.New(fmt.Sprintf("Workflow environments not found for this org"))
+			log.Printf("[ERROR][%s] Failed finding environments for %s: %s", workflowExecution.ExecutionId, workflowExecution.ExecutionOrg, err)
+			return workflowExecution, ExecInfo{}, fmt.Sprintf("Workflow environments not found for this org"), errors.New(fmt.Sprintf("Workflow environments not found for this org"))
 		}
 
 		for _, curenv := range allEnvironments {
@@ -21166,12 +21142,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	} else {
 		log.Printf("[ERROR] No org identified for execution of %s. Returning", workflowExecution.Workflow.ID)
-		return WorkflowExecution{}, ExecInfo{}, "No org identified for execution", errors.New("No org identified for execution")
+		return workflowExecution, ExecInfo{}, "No org identified for execution", errors.New("No org identified for execution")
 	}
 
 	if len(allEnvs) == 0 {
 		log.Printf("[ERROR] No active environments found for org: %s", workflowExecution.ExecutionOrg)
-		return WorkflowExecution{}, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No active env found for org %s", workflowExecution.ExecutionOrg))
+		return workflowExecution, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No active env found for org %s", workflowExecution.ExecutionOrg))
 	}
 
 	// Check if the actions are children of the startnode?
@@ -21191,7 +21167,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					onpremExecution = true
 				} else {
 					log.Printf("[ERROR] No handler for environment type %s", env.Type)
-					return WorkflowExecution{}, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No handler for environment type %s", env.Type))
+					return workflowExecution, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No handler for environment type %s", env.Type))
 				}
 				break
 			}
@@ -21202,7 +21178,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
 				log.Printf("[WARNING] Couldn't find environment %s. Maybe it's inactive?", action.Environment)
-				return WorkflowExecution{}, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env %s in org %s", action.Environment, workflowExecution.ExecutionOrg))
+				return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env %s in org %s", action.Environment, workflowExecution.ExecutionOrg))
 			}
 		}
 
@@ -28159,7 +28135,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	// FIXME: Is this necessary?
 	workflow, err := GetWorkflow(ctx, exec.Workflow.ID)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting real workflow for %s: %s", exec.Workflow.ID, err)
+		log.Printf("[ERROR] Failed getting workflow for %s: %s (exec status)", exec.Workflow.ID, err)
 		return exec
 	}
 
