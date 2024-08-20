@@ -296,27 +296,35 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 		return orgStatistics
 	}
 
+	//send mail if the app runs more than the set threshold limit
+	emailSend := false
 	if len(org.Id) > 0 {
 		for index, AlertThreshold := range org.Billing.AlertThreshold {
 			if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
-				mailbody := Mailcheck{
-					Targets: []string{org.Org},
-					Subject: "You have reached the threshold limit of app executions.",
-					Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
+				for _, user := range org.Users {
+					if user.Role == "admin" {
+						mailbody := Mailcheck{
+							Targets: []string{user.Username},
+							Subject: "You have reached the threshold limit of app executions",
+							Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
+						}
+						err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false)
+						if err != nil {
+							log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
+						} else {
+							emailSend = true
+						}
+					}
 				}
-				err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false)
-				if err != nil {
-					log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
-				}
-				if err == nil {
+				if emailSend {
 					org.Billing.AlertThreshold[index].Email_send = true
 					err = SetOrg(ctx, *org, orgId)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting org in increment: %s", err)
 						return orgStatistics
 					}
+					log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
 				}
-				log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
 			}
 		}
 	}
