@@ -23646,35 +23646,37 @@ func GetExternalClient(baseUrl string) *http.Client {
 		InsecureSkipVerify: skipSSLVerify,
 	}
 
-	rootCAs, _ := x509.SystemCertPool()
-	if rootCAs == nil {
-		rootCAs = x509.NewCertPool()
-	}
+	if project.Environment != "cloud" {
+		rootCAs, _ := x509.SystemCertPool()
+		if rootCAs == nil {
+			rootCAs = x509.NewCertPool()
+		}
 
-    certDir := "/certs/"
+		certDir := "/certs/"
 
-	if os.Getenv("SHUFFLE_CERT_DIR") != "" {
-        certDir = os.Getenv("SHUFFLE_CERT_DIR")
-	}
+		if os.Getenv("SHUFFLE_CERT_DIR") != "" {
+			certDir = os.Getenv("SHUFFLE_CERT_DIR")
+		}
 
-	log.Printf("[INFO] Reading self signed certificates from %s dir", certDir)
+		log.Printf("[INFO] Reading self signed certificates from %s dir", certDir)
 
-	files, err := os.ReadDir(certDir)
-	if err == nil && os.Getenv("SHUFFLE_CERT_DIR") != "" {
-		for _, file := range files {
-			if !file.IsDir() {
-				certPath := filepath.Join(certDir, file.Name())
-				caCert, err := os.ReadFile(certPath)
-				if err != nil {
-					log.Printf("[ERROR] Error reading the certificate %s: %s", file.Name(), err)
-				} else {
-					if ok := rootCAs.AppendCertsFromPEM(caCert); ok {
-						log.Printf("[INFO] Successfully appended certificate: %s", file.Name())
+		files, err := os.ReadDir(certDir)
+		if err == nil && os.Getenv("SHUFFLE_CERT_DIR") != "" {
+			for _, file := range files {
+				if !file.IsDir() {
+					certPath := filepath.Join(certDir, file.Name())
+					caCert, err := os.ReadFile(certPath)
+					if err != nil {
+						log.Printf("[ERROR] Error reading the certificate %s: %s", file.Name(), err)
+					} else {
+						if ok := rootCAs.AppendCertsFromPEM(caCert); ok {
+							log.Printf("[INFO] Successfully appended certificate: %s", file.Name())
+						}
 					}
 				}
 			}
+			transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
 		}
-		transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
 	}
 
 
