@@ -13836,7 +13836,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			foundResult.Action = action
 
 			for _, param := range action.Parameters {
-				if param.Name == "argument" && isLoop(param.Value) {
+				if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 					isLooping = true
 				}
 
@@ -18274,7 +18274,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 						setExecution = false
 					}
 
-					if param.Name == "argument" && isLoop(param.Value) {
+					if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 						isLooping = true
 					}
 
@@ -19559,7 +19559,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					//$Get_Offenses.# -> Allow to run more
 					for _, param := range trigger.Parameters {
 						if param.Name == "argument" {
-							if isLoop(param.Value) {
+							if strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 								allowContinuation = true
 								break
 							}
@@ -19583,7 +19583,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						//$Get_Offenses.# -> Allow to run more
 						for _, param := range action.Parameters {
 							if param.Name == "argument" {
-								if isLoop(param.Value) {
+								if strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 									allowContinuation = true
 									break
 								}
