@@ -1219,7 +1219,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
-		log.Println("[ERROR] Failed reading file body: %s", err)
+		log.Printf("[ERROR] Failed reading file body: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to read data"}`)))
 		return

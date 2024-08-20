@@ -161,6 +161,19 @@ func randStr(strSize int, randType string) string {
 	return string(bytes)
 }
 
+func isLoop(arg string) bool {
+    if strings.Contains(arg, "$") && (strings.HasSuffix(arg, ".#") || strings.Contains(arg, ".#.")){
+        return true
+    }
+
+    if strings.Contains(arg,"$") && strings.Contains(arg, ".#") {
+        pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
+        re := regexp.MustCompile(pattern)
+        return strings.Contains(arg, "$") && re.MatchString(arg)
+    }
+    return false
+}
+
 func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -1843,7 +1856,7 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				org.ActiveApps = append(org.ActiveApps, app.ID)
 				err = SetOrg(ctx, *org, org.Id)
 				if err != nil {
-					log.Printf("[WARNING] Failed setting app %s for org %s during appauth", org.Id)
+					log.Printf("[WARNING] Failed setting app %s for org %s during appauth", app.ID, org.Id)
 				} else {
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
@@ -3741,7 +3754,7 @@ func GetAction(workflowExecution WorkflowExecution, id, environment string) Acti
 				Label:          trigger.Label,
 				ExecutionDelay: trigger.ExecutionDelay,
 			}
-			log.Printf("[DEBUG] Found trigger to be ran as app (?): %s!", trigger)
+			log.Printf("[DEBUG] Found trigger to be ran as app (?): %v!", trigger)
 		}
 	}
 
@@ -7246,7 +7259,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				if env.Name == action.Environment {
 					found = true
 					if env.Archived {
-						log.Printf("[DEBUG] Environment %s is archived. Changing to default.")
+						log.Printf("[DEBUG] Environment %s is archived. Changing to default.", env.Name)
 						action.Environment = defaultEnv
 					}
 
@@ -9935,7 +9948,7 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[ERROR] Failed getting org '%s' in delete user: %s", foundUser.ActiveOrg.Id, err)
 		} else {
 			if foundUserOrg.SSOConfig.SSORequired && !ArrayContains(foundUser.ValidatedSessionOrgs, foundUserOrg.Id) {
-				log.Printf("[AUDIT] User %s (%s) does not have an active session in org with forced SSO %s, so forcing a re-login (aka logout).", foundUser.ActiveOrg.Id)
+				log.Printf("[AUDIT] User %s (%s) does not have an active session in org with forced SSO %s, so forcing a re-login (aka logout).", foundUser.Username, foundUser.Id, foundUser.ActiveOrg.Id)
 				foundUser.Session = ""
 				foundUser.ValidatedSessionOrgs = []string{}
 			}
@@ -10245,7 +10258,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if tmpfields.Sharing != app.Sharing {
-		log.Printf("[INFO] Changing app sharing for %s to %s", app.ID, tmpfields.Sharing)
+		log.Printf("[INFO] Changing app sharing for %s to %t", app.ID, tmpfields.Sharing)
 		app.Sharing = tmpfields.Sharing
 
 		if project.Environment != "cloud" {
@@ -10410,7 +10423,7 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if (app.Public || app.Sharing) && project.Environment == "cloud" {
-		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed. Public: %s, Sharing: %s", app.Name, app.Public, app.Sharing)
+		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed. Public: %t, Sharing: %t", app.Name, app.Public, app.Sharing)
 
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Stop sharing it first, then delete it."}`))
@@ -10549,7 +10562,7 @@ func HandleKeyValueCheck(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if workflowExecution.Status != "EXECUTING" {
-		log.Printf("[INFO] Workflow isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
+		log.Printf("[INFO] Workflow (%s) isn't executing and shouldn't be searching", workflowExecution.ExecutionId)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "Workflow isn't executing"}`))
 		return
@@ -12662,7 +12675,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				parentapp, err := GetApp(ctx, app.PublishedId, user, false)
 				if err == nil {
 					if parentapp.Owner == user.Id {
-						log.Printf("[AUDIT] Parent app owner %s got access to child app %s (%s)", user.Username, user.Id, app.Name, app.ID)
+						log.Printf("[AUDIT] Parent app owner %s (%s) got access to child app %s (%s)", user.Username, user.Id, app.Name, app.ID)
 						exit = false
 						//app, err := GetApp(ctx, fileId, User{}, false)
 					}
@@ -13749,7 +13762,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 	if newresp.StatusCode != 200 {
 		log.Printf("[ERROR] Bad statuscode setting subresult (1) with URL %s: %d, %s. Input data: %s", resultUrl, newresp.StatusCode, string(body), string(data))
-		return errors.New(fmt.Sprintf("Bad statuscode: %s", newresp.StatusCode))
+		return errors.New(fmt.Sprintf("Bad statuscode: %d", newresp.StatusCode))
 	}
 
 	err = json.Unmarshal(body, &newExecution)
@@ -13779,7 +13792,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 		selectedTrigger = trigger
 		for _, param := range trigger.Parameters {
-			if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+			if param.Name == "argument" && isLoop(param.Value) {
 				// Check if the .# exists, without .#0 or .#1 for digits
 				log.Printf("\n\n[DEBUG] IN LOOP CHECK RESULT\n\n")
 				//re := regexp.MustCompile(`\.\#(\d+)`)
@@ -13818,7 +13831,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			foundResult.Action = action
 
 			for _, param := range action.Parameters {
-				if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+				if param.Name == "argument" && isLoop(param.Value) {
 					isLooping = true
 				}
 
@@ -14093,13 +14106,13 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		)
 
 		if err != nil {
-			log.Printf("[ERROR] Error building subflow request: %s", subflowExecutionId, err)
+			log.Printf("[ERROR] Error building subflow (%s) request: %s", subflowExecutionId, err)
 			return err
 		}
 
 		newresp, err := topClient.Do(req)
 		if err != nil {
-			log.Printf("[ERROR] Error running subflow request: %s", subflowExecutionId, err)
+			log.Printf("[ERROR] Error running subflow (%s) request: %s", subflowExecutionId, err)
 			return err
 		}
 
@@ -14339,7 +14352,7 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 
 		parsedStatus := status.(float64)
 		if parsedStatus >= 300 {
-			log.Printf("[DEBUG] Found status in action result: %d", parsedStatus)
+			log.Printf("[DEBUG] Found status in action result: %f", parsedStatus)
 			return
 		}
 	} else {
@@ -15201,7 +15214,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						// Sets the value for the variable
 
 						if len(actionResult.Result) > 0 {
-							log.Printf("\n\n[DEBUG] SET EXEC VAR\n\n", execvar.Name)
+							log.Printf("\n\n[DEBUG] SET EXEC VAR %s\n\n", execvar.Name)
 							workflowExecution.ExecutionVariables[index].Value = actionResult.Result
 						} else {
 							log.Printf("\n\n[DEBUG] SKIPPING EXEC VAR\n\n")
@@ -16856,7 +16869,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	cacheKey, err = url.QueryUnescape(strings.Trim(cacheKey, " "))
 	if err != nil {
-		log.Printf("[WARNING] Failed to unescape cache key %s: %s", err)
+		log.Printf("[WARNING] Failed to unescape cache key %s: %s", cacheKey,err)
 		cacheKey = strings.Trim(cacheKey, " ")
 	}
 
@@ -18282,7 +18295,7 @@ func RunFixParentWorkflowResult(ctx context.Context, execution WorkflowExecution
 						setExecution = false
 					}
 
-					if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+					if param.Name == "argument" && isLoop(param.Value) {
 						isLooping = true
 					}
 
@@ -19567,7 +19580,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					//$Get_Offenses.# -> Allow to run more
 					for _, param := range trigger.Parameters {
 						if param.Name == "argument" {
-							if strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+							if isLoop(param.Value) {
 								allowContinuation = true
 								break
 							}
@@ -19591,7 +19604,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						//$Get_Offenses.# -> Allow to run more
 						for _, param := range action.Parameters {
 							if param.Name == "argument" {
-								if strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+								if isLoop(param.Value) {
 									allowContinuation = true
 									break
 								}
@@ -19908,7 +19921,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						if strings.ToLower(result.Action.Environment) != "cloud" {
 							log.Printf("[DEBUG][%s] SETTING user input result, and re-adding it to queue IF not in worker. Environment: %s", result.ExecutionId, result.Action.Environment)
 							if project.Environment == "worker" {
-								log.Printf("\n\n[DEBUG][%s] Worker user input restart. What do? Should we ever reach this point?\n\n")
+								log.Printf("\n\n[DEBUG][%s] Worker user input restart. What do? Should we ever reach this point?\n\n", project.Environment)
 							} else {
 
 								updateMade := true
@@ -19983,19 +19996,19 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 							if err != nil {
 								log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
-								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
+								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
 							}
 
 							newresp, err := topClient.Do(req)
 							if err != nil {
 								log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
-								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
+								return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
 							}
 
 							defer newresp.Body.Close()
 						}
 
-						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution action skipped", oldExecution.ExecutionId), errors.New("User Input: Execution action skipped!")
+						return WorkflowExecution{}, ExecInfo{}, fmt.Sprintf("Execution (%s) action skipped", oldExecution.ExecutionId), errors.New("User Input: Execution action skipped!")
 					}
 
 					foundresult = result
@@ -24265,7 +24278,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		value.Fields = newFields
 
 		// Md5 based on sortedKeys. Could subhash key search work?
-		mappedString := fmt.Sprintf("%s-%s", selectedApp.ID, value.Label, strings.Join(sortedKeys, ""))
+		mappedString := fmt.Sprintf("%s %s-%s", selectedApp.ID, value.Label, strings.Join(sortedKeys, ""))
 		fieldHash = fmt.Sprintf("%x", md5.Sum([]byte(mappedString)))
 		discoverFile := fmt.Sprintf("file_%s", fieldHash)
 		file, err := GetFile(ctx, discoverFile)
