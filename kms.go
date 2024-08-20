@@ -1240,5 +1240,147 @@ func FixContentOutput(contentOutput string) string {
 		}
 	}
 
+	contentOutput = strings.Trim(contentOutput, " ")
+	contentOutput = strings.Trim(contentOutput, "\n")
+	contentOutput = strings.Trim(contentOutput, "\t")
+
 	return contentOutput
+}
+
+func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
+	if len(app.ID) == 0 || len(app.Name) == 0 {
+		log.Printf("[ERROR] No app ID or name found in AutofixAppLabels")
+		return app
+	}
+
+	if len(app.Actions) == 0 {
+		log.Printf("[ERROR] No actions found in AutofixAppLabels for app %s (%s)", app.Name, app.ID)
+		return app
+	}
+
+	// FIXME: This should NOT be necessary. 
+	// If there is no label, we should automatically try to catch it
+	// Maybe if category is not defined as well
+	if len(label) == 0 {
+		log.Printf("[ERROR] No label found in AutofixAppLabels for app %s (%s)", app.Name, app.ID)
+		return app
+	}
+
+	log.Printf("[DEBUG] Running app fix with ONLY one label for app %s (%s) with %d actions: %s", app.Name, app.ID, len(app.Actions), label)
+
+	// Check if the app has any actions
+	foundCategory := AppCategory{}
+	availableCategories := GetAppCategories()
+	for _, category := range availableCategories {
+		lowercaseCategory := strings.ToLower(category.Name)
+		if len(app.Categories) == 0 {
+			break
+		}
+
+		for _, appCategory := range app.Categories {
+			if strings.ToLower(appCategory) != lowercaseCategory {
+				continue
+			}
+
+			foundCategory = category
+			break
+		}
+
+		if len(foundCategory.Name) > 0 {
+			break
+		}
+	}
+
+	if len(foundCategory.ActionLabels) == 0 {
+		log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label, then using that category in app setup", app.Name, app.ID)
+
+		for _, category := range availableCategories {
+			for _, actionLabel := range category.ActionLabels {
+				if strings.ToLower(actionLabel) != strings.ToLower(label) {
+					continue
+				}
+
+				foundCategory = category
+				app.Categories = append(app.Categories, category.Name)
+				break
+			}
+		}
+	}
+
+	if len(foundCategory.ActionLabels) == 0 { 
+		log.Printf("[ERROR] No category found for app %s (%s) based on label %s", app.Name, app.ID, label)
+		return app
+	}
+
+	// FIXME: Run AI here to check based on the label which action may be matching
+	//log.Printf("[DEBUG] Found category %s for app %s (%s) based on app categories", foundCategory.Name, app.Name, app.ID)
+	systemMessage := fmt.Sprintf(`Find which action is most likely to be used based on the label '%s'. If any match, return their exact name and if none match, write "none" as the name. Return in the JSON format {"action": "action name"}`, label)
+	userMessage := "The available actions are as follows:\n"
+
+	for _, action := range app.Actions {
+		userMessage += fmt.Sprintf("Action: %s\n", action.Name)	
+	}
+
+	output, err := RunAiQuery(systemMessage, userMessage) 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+		return app
+	} 
+
+	type ActionStruct struct {
+		Action string `json:"action"`
+	}
+
+	output = FixContentOutput(output) 
+
+	actionStruct := ActionStruct{}
+	err = json.Unmarshal([]byte(output), &actionStruct)
+	if err != nil {
+		log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
+	}
+
+	if len(actionStruct.Action) == 0 {
+		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (1)", app.Name, app.ID, label)
+		return app
+	}
+
+	//log.Printf("[DEBUG] Found action %s for app %s (%s) based on label %s", actionStruct.Action, app.Name, app.ID, label)
+
+	updatedIndex := -1
+	newname := strings.Trim(strings.ToLower(strings.Replace(actionStruct.Action, " ", "_", -1)), " ")
+	for actionIndex, action := range app.Actions {
+		if strings.Trim(strings.ToLower(strings.Replace(action.Name, " ", "_", -1)), " ") != newname {
+			continue
+		}
+
+		// Avoid duplicates in case validation system fails
+		foundLabel := false
+		for _, categoryLabel := range action.CategoryLabel {
+			if strings.ToLower(categoryLabel) != strings.ToLower(label) {
+				foundLabel = true
+				break
+			}
+		}
+
+		if foundLabel {
+			break
+		}
+
+		updatedIndex = actionIndex
+		app.Actions[actionIndex].CategoryLabel = append(app.Actions[actionIndex].CategoryLabel, label)
+
+		log.Printf("[DEBUG] Adding label %s to action %s in app %s (%s). New labels: %#v", label, action.Name, app.Name, app.ID, app.Actions[actionIndex].CategoryLabel)
+		break
+	}
+
+	// FIXME: Add the label to the OpenAPI action as well?
+	if updatedIndex >= 0 {
+		go SetWorkflowAppDatastore(context.Background(), app, app.ID)
+
+		log.Printf("\n\n\n[WARNING] Updated app %s (%s) with label %s. SHOULD update OpenAPI action as well\n\n\n", app.Name, app.ID, label)
+	} else {
+		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (2). GPT error most likely. Output: %s", app.Name, app.ID, label, output)
+	}
+
+	return app
 }

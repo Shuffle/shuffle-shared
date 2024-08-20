@@ -19,13 +19,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v2"
 
 	"github.com/google/go-github/v28/github"
 	uuid "github.com/satori/go.uuid"
@@ -441,7 +438,7 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 	ctx := context.Background()
 	files := []*github.RepositoryContent{}
 
-	cacheKey := fmt.Sprintf("github_%s_%s_%s", owner, repo, path)
+	cacheKey := fmt.Sprintf("github_%s_%s_%s_%s", owner, repo, path, filename)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -461,20 +458,22 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 		}
 	}
 
+	log.Printf("\n\n[DEBUG] Got %d file(s): %s\n\n", len(files), path)
+
 	if len(files) == 0 {
 		log.Printf("[ERROR] No files found in namespace '%s' on Github - Used for integration framework", path)
 		return []*github.RepositoryContent{}, nil
 	}
 
-	if len(filename) == 0 {
-		return []*github.RepositoryContent{}, nil
-	}
-
-	matchingFiles := []*github.RepositoryContent{}
-	for _, item := range files {
-		if len(filename) > 0 && strings.HasPrefix(*item.Name, filename) {
-			matchingFiles = append(matchingFiles, item)
+	if len(filename) > 0 {
+		matchingFiles := []*github.RepositoryContent{}
+		for _, item := range files {
+			if len(filename) > 0 && strings.HasPrefix(*item.Name, filename) {
+				matchingFiles = append(matchingFiles, item)
+			}
 		}
+
+		files = matchingFiles
 	}
 
 	if project.CacheDb {
@@ -490,540 +489,7 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 		}
 	}
   
-	return matchingFiles, nil
-}
-
-func LoadStandardFromGithub2(client *github.Client, owner, repo, path string) ([]*github.RepositoryContent, error) {
-	ctx := context.Background()
-
-	// Fetch the contents of the specified path from the repository
-	_, files, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting files from GitHub: %s", err)
-		return nil, err
-	}
-
-	if len(files) == 0 {
-		log.Printf("[ERROR] No files found in path '%s' in the repository '%s/%s'", path, owner, repo)
-		return nil, nil
-	}
-
 	return files, nil
-}
-
-
-func HandleGetSigmaRules(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		orgId, err := fileAuthentication(request)
-		if err != nil {
-			log.Printf("[WARNING] Bad file authentication in get sigma rules %s: %s", "sigma", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		user.ActiveOrg.Id = orgId
-		user.Username = "Execution File API"
-	}
-
-	log.Printf("[AUDIT] User '%s' (%s) is trying to get files from namespace %#v", user.Username, user.Id, "sigma")
-
-	ctx := GetContext(request)
-	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, "sigma")
-	if err != nil && len(files) == 0 {
-		log.Printf("[ERROR] Failed to get files: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Error getting files."}`))
-		return
-	}
-
-	disabledRules, err := GetDisabledRules(ctx)
-	if err != nil && err.Error() != "rules doesn't exist" {
-		log.Printf("[ERROR] Failed to get disabled rules: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Error getting disabled rules."}`))
-		return
-	}
-
-	sort.Slice(files[:], func(i, j int) bool {
-		return files[i].UpdatedAt > files[j].UpdatedAt
-	})
-
-	type SigmaResponse struct {
-		SigmaInfo      []SigmaFileInfo `json:"sigma_info"`
-		FolderDisabled bool            `json:"folder_disabled"`
-		IsTenzirActive bool            `json:"is_tenzir_active"`
-	}
-
-	var sigmaFileInfo []SigmaFileInfo
-
-	for _, file := range files {
-		if file.OrgId == user.ActiveOrg.Id {
-			var fileContent []byte
-
-			if file.Encrypted {
-				if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-					log.Printf("[ERROR] No namespace handler for cloud decryption!")
-					continue
-				} else {
-					Openfile, err := os.Open(file.DownloadPath)
-					if err != nil {
-						log.Printf("[ERROR] Failed to open file %s: %s", file.Filename, err)
-						continue
-					}
-					defer Openfile.Close()
-
-					allText := []byte{}
-					buf := make([]byte, 1024)
-					for {
-						n, err := Openfile.Read(buf)
-						if err == io.EOF {
-							break
-						}
-
-						if err != nil {
-							log.Printf("[ERROR] Failed to read file %s: %s", file.Filename, err)
-							continue
-						}
-
-						if n > 0 {
-							allText = append(allText, buf[:n]...)
-						}
-					}
-
-					passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-					if len(file.ReferenceFileId) > 0 {
-						passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
-					}
-
-					decryptedData, err := HandleKeyDecryption(allText, passphrase)
-					if err != nil {
-						log.Printf("[ERROR] Failed decrypting file %s: %s", file.Filename, err)
-						continue
-					}
-
-					fileContent = []byte(decryptedData)
-				}
-			} else {
-				fileContent, err = ioutil.ReadFile(file.DownloadPath)
-				if err != nil {
-					log.Printf("[ERROR] Failed to read file %s: %s", file.Filename, err)
-					continue
-				}
-			}
-
-			var rule SigmaFileInfo
-			err = yaml.Unmarshal(fileContent, &rule)
-			if err != nil {
-				log.Printf("[ERROR] Failed to parse YAML file %s: %s", file.Filename, err)
-				continue
-			}
-
-			isDisabled := disabledRules.DisabledFolder
-			found := false
-			if isDisabled {
-				rule.IsEnabled = false
-			} else {
-				for _, disabledFile := range disabledRules.Files {
-					if disabledFile.Id == file.Id {
-						found = true
-						break
-					}
-				}
-				if found {
-					rule.IsEnabled = false
-				} else {
-					rule.IsEnabled = true
-				}
-			}
-
-			rule.FileId = file.Id
-			rule.FileName = file.Filename
-			sigmaFileInfo = append(sigmaFileInfo, rule)
-		}
-	}
-
-	var isTenzirAlive bool
-	if time.Now().Unix() > disabledRules.LastActive+10 {
-		isTenzirAlive = false
-	} else {
-		isTenzirAlive = true
-	}
-
-
-	response := SigmaResponse{
-		SigmaInfo:      sigmaFileInfo,
-		FolderDisabled: disabledRules.DisabledFolder,
-		IsTenzirActive: isTenzirAlive,
-	}
-
-	responseData, err := json.Marshal(response)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal response data: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Error processing rules."}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(responseData)
-}
-
-func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	var fileId string
-	location := strings.Split(request.URL.String(), "/")
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		fileId = location[5]
-	}
-	ctx := GetContext(request)
-
-	if len(fileId) != 36 && !strings.HasPrefix(fileId, "file_") {
-		log.Printf("[WARNING] Bad format for fileId %s", fileId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Badly formatted fileId"}`))
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		orgId, err := fileAuthentication(request)
-		if err != nil {
-			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		user.ActiveOrg.Id = orgId
-		user.Username = "Execution File API"
-	}
-
-	file, err := GetFile(ctx, fileId)
-	if err != nil {
-		log.Printf("[ERROR] File %s not found: %s", fileId, err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "File not found"}`))
-		return
-	}
-
-	if user.Role == "org-reader" {
-		log.Printf("[WARNING] Org-reader doesn't have access to delete files: %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
-		return
-	}
-
-	var action string
-	switch location[6] {
-	case "disable_rule":
-		action = "disable"
-	case "enable_rule":
-		action = "enable"
-	default:
-		log.Printf("[WARNING] path not found: %s", location[6])
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "message": "The URL doesn't exist or is not allowed."}`))
-		return
-	}
-
-	if action == "disable" {
-		err := disableRule(*file)
-		if err != nil {
-			log.Printf("[ERROR] Failed to %s file", action)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	} else if action == "enable" {
-		err := enableRule(*file)
-		if err != nil {
-			if err.Error() != "rules doesn't exist" {
-				log.Printf("[ERROR] Failed to %s file, reason: %s", action, err)
-				resp.WriteHeader(404)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			} else {
-				log.Printf("[ERROR] Failed to %s file, reason: %s", action, err)
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-		}
-	}
-
-	var execType string
-
-	if action == "disable" {
-		execType = "DISABLE_SIGMA_FILE"
-	} else if action == "enable" {
-		execType = "ENABLE_SIGMA_FILE"
-	}
-
-	err = SetExecRequest(ctx, execType, file.Filename)
-	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte((`{"success": true}`)))
-}
-
-func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	if location[1] != "api" || len(location) < 6 {
-		log.Printf("Path too short or incorrect: %s", request.URL.String())
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	ctx := GetContext(request)
-	action := location[5]
-
-	rules, err := GetDisabledRules(ctx)
-	if err != nil {
-		log.Printf("[WARNING] Cannot get the rules, reason %s", err)
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if action == "disable_folder" {
-		rules.DisabledFolder = true
-	} else if action == "enable_folder" {
-		rules.DisabledFolder = false
-	} else {
-		log.Printf("[WARNING] path not found: %s", action)
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "message": "The URL doesn't exist or is not allowed."}`))
-		return
-	}
-
-	err = StoreDisabledRules(ctx, *rules)
-	if err != nil {
-		log.Printf("[ERROR] Failed to store disabled rules: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	var execType string
-	if action == "disable_folder" {
-		execType = "DISABLE_SIGMA_FOLDER"
-	} else {
-		execType = "CATEGORY_UPDATE"
-	}
-
-	err = SetExecRequest(ctx, execType, "")
-	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
-}
-
-func disableRule(file File) error {
-	ctx := context.Background()
-	resp, err := GetDisabledRules(ctx)
-	if err != nil {
-		if err.Error() == "rules doesn't exist" {
-			// FIX ME :- code duplication : (
-			disabRules := &DisabledRules{}
-			disabRules.Files = append(disabRules.Files, file)
-			err = StoreDisabledRules(ctx, *disabRules)
-			if err != nil {
-				return err
-			}
-
-			log.Printf("[INFO] file with ID %s is disabled successfully", file.Id)
-			return nil
-		} else {
-			return err
-		}
-	}
-
-	resp.Files = append(resp.Files, file)
-	err = StoreDisabledRules(ctx, *resp)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("[INFO] file with ID %s is disabled successfully", file.Id)
-	return nil
-}
-
-func enableRule(file File) error {
-	ctx := context.Background()
-	resp, err := GetDisabledRules(ctx)
-	if err != nil {
-		return err
-	}
-
-	// Check if resp.Files is empty
-	if len(resp.Files) == 0 {
-		log.Printf("[INFO] No disabled rules found.")
-		return nil
-	}
-
-	found := false
-	for i, innerFile := range resp.Files {
-		if innerFile.Id == file.Id {
-			resp.Files = append(resp.Files[:i], resp.Files[i+1:]...)
-			found = true
-			break 
-		}
-	}
-
-	if !found {
-		log.Printf("[INFO] File with ID %s not found in disabled rules", file.Id)
-		return nil
-	}
-
-	err = StoreDisabledRules(ctx, *resp)
-	if err != nil {
-		return err
-	}
-
-	log.Printf("[INFO] File with ID %s is enabled successfully", file.Id)
-	return nil
-}
-
-func HandleGetSelectedRules(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-	_, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get env stats executions: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	var triggerId string
-	location := strings.Split(request.URL.String(), "/")
-	if len(location) < 5 || location[1] != "api" {
-		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	triggerId = location[4]
-
-	selectedRules, err := GetSelectedRules(request.Context(), triggerId)
-	if err != nil {
-		if err.Error() != "rules doesnt exists" {
-			log.Printf("[ERROR] Error getting selected rules for %s: %s", triggerId, err)
-			resp.WriteHeader(http.StatusInternalServerError)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	}
-
-	responseData, err := json.Marshal(selectedRules)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal response data: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false"}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(responseData)
-}
-
-func HandleSaveSelectedRules(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in save selected rules: %s", err)
-		resp.WriteHeader(http.StatusUnauthorized)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if user.Role == "org-reader" {
-		log.Printf("[WARNING] Org-reader doesn't have access to save rules: %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(http.StatusForbidden)
-		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	if len(location) < 5 || location[1] != "api" {
-		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	triggerId := location[4]
-
-	selectedRules := SelectedSigmaRules{}
-	
-	decoder := json.NewDecoder(request.Body)
-	err = decoder.Decode(&selectedRules)
-	if err != nil {
-		log.Printf("[ERROR] Failed to decode request body: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Invalid request body"}`))
-		return
-	}
-
-	err = StoreSelectedRules(request.Context(), triggerId, selectedRules)
-	if err != nil {
-			log.Printf("[ERROR] Error storing selected rules for %s: %s", triggerId, err)
-			resp.WriteHeader(http.StatusInternalServerError)
-			resp.Write([]byte(`{"success": false}`))
-			return
-	}
-
-	responseData, err := json.Marshal(selectedRules)
-	if err != nil {
-		log.Printf("[ERROR] Failed to marshal response data: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.WriteHeader(http.StatusOK)
-	resp.Write(responseData)
 }
 
 func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
@@ -1280,7 +746,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		var filedata = []byte{}
 		if file.Encrypted {
 			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-				log.Printf("[ERROR] No namespace handler for cloud decryption!")
+				log.Printf("[ERROR] No namespace handler for cloud decryption (files)!")
 			} else {
 				Openfile, err := os.Open(file.DownloadPath)
 				defer Openfile.Close() //Close after function return
@@ -1364,23 +830,6 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	resp.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zip", namespace))
 	resp.Header().Set("Content-Type", FileContentType)
 	io.Copy(resp, buf)
-}
-
-func SetExecRequest(ctx context.Context, execType string, fileName string) error {
-
-	execRequest := ExecutionRequest{
-		Type:              execType,
-		ExecutionId:       uuid.NewV4().String(),
-		ExecutionSource:   "SIGMA",
-		ExecutionArgument: fileName,
-		Priority:          11,
-	}
-
-	err := SetWorkflowQueue(ctx, execRequest, "shuffle")
-	if err != nil {
-          return err
-	}
-	return nil
 }
 
 func HandleGetFileContent(resp http.ResponseWriter, request *http.Request) {
@@ -1810,13 +1259,15 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Successfully edited file ID %s", file.Id)
 
-	execType := "CATEGORY_UPDATE"
-	err = SetExecRequest(ctx, execType, file.Filename)
-	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
+	if file.Namespace == "sigma" {
+		execType := "CATEGORY_UPDATE"
+		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, file.Filename, "SIGMA", "SHUFFLE_DISCOVER")
+		if err != nil {
+			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	resp.WriteHeader(200)
@@ -1977,14 +1428,15 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Successfully uploaded file ID %s", file.Id)
   
 	if file.Namespace == "sigma" {
-	execType := "CATEGORY_UPDATE"
-	err = SetExecRequest(ctx, execType, file.Filename)
-	if err != nil {
-		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}}
+		execType := "CATEGORY_UPDATE"
+		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, file.Filename, "SIGMA", "SHUFFLE_DISCOVER")
+		if err != nil {
+			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
@@ -2388,13 +1840,12 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		Field2 string `json:"field_2"` // Password
 		Field3 string `json:"field_3"` // Branch
 		Path  string `json:"path"` 
-
 	}
 
 	var input tmpStruct
 	err = json.Unmarshal(body, &input)
 	if err != nil {
-		log.Printf("Error with unmarshal tmpBody: %s", err)
+		log.Printf("[DEBUG] Error with unmarshal tmpBody: %s", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -2423,8 +1874,7 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
-	log.Printf("[DEBUG] Loading standard from github: %s/%s/%s", owner, repo, path)
-
+	log.Printf("[DEBUG] Loading standard with git: %s/%s/%s", owner, repo, path)
 	files, err := LoadStandardFromGithub(client, owner, repo, path, "") 
 	if err != nil {
 		log.Printf("[DEBUG] Failed to load standard from github: %s", err)
@@ -2432,6 +1882,8 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	log.Printf("[DEBUG] Found %d files in %s/%s/%s", len(files), owner, repo, path)
 
 	if len(files) > 50 {
 		files = files[:50]
@@ -2504,151 +1956,4 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
-}
-
-func HandleEnhancedDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	// Just need to be logged in
-	// FIXME - should have some permissions?
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in load files: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if user.Role != "admin" {
-		log.Printf("Wrong user (%s) when downloading from github", user.Username)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Downloading remotely requires admin"}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("Error reading request body: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	type tmpStruct struct {
-		URL    string `json:"url"`
-		Field1 string `json:"field_1"` // Username
-		Field2 string `json:"field_2"` // Password
-		Field3 string `json:"field_3"` // Branch
-		Path   string `json:"path"`
-	}
-
-	var input tmpStruct
-	err = json.Unmarshal(body, &input)
-	if err != nil {
-		log.Printf("Error unmarshaling request body: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	client := github.NewClient(nil)
-	urlSplit := strings.Split(input.URL, "/")
-	if len(urlSplit) < 5 {
-		log.Printf("[ERROR] Invalid URL when downloading: %s", input.URL)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	owner := urlSplit[3]
-	repo := urlSplit[4]
-	path := input.Path
-
-	log.Printf("[DEBUG] Loading files from GitHub: %s/%s/%s", owner, repo, path)
-
-	files, err := LoadStandardFromGithub2(client, owner, repo, path)
-	if err != nil || len(files) == 0 {
-		log.Printf("[DEBUG] Failed to load files from GitHub: %s", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if len(files) > 50 {
-		files = files[:50]
-	}
-
-	if len(basepath) == 0 {
-		basepath = "files"
-	}
-
-	ctx := GetContext(request)
-	for _, item := range files {
-		fileContent, _, _, err := client.Repositories.GetContents(ctx, owner, repo, *item.Path, nil)
-		if err != nil {
-			log.Printf("[ERROR] Failed to get file %s: %s", *item.Path, err)
-			continue
-		}
-
-		decoded, err := base64.StdEncoding.DecodeString(*fileContent.Content)
-		if err != nil {
-			log.Printf("[ERROR] Failed decoding file %s: %s", *item.Path, err)
-			continue
-		}
-
-		timeNow := time.Now().Unix()
-		fileId := uuid.NewV5(uuid.NamespaceOID, *item.Path).String()
-		//folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
-		downloadPath := fmt.Sprintf("%s/%s", basepath, fileId)
-
-		if err := os.MkdirAll(filepath.Dir(downloadPath), os.ModePerm); err != nil {
-			
-		}
-
-		file := File{
-			Id:           fileId,
-			CreatedAt:    timeNow,
-			UpdatedAt:    timeNow,
-			Description:  "",
-			Status:       "active",
-			Filename:     *item.Name,
-			OrgId:        user.ActiveOrg.Id,
-			WorkflowId:   "global",
-			DownloadPath: downloadPath,
-			Subflows:     []string{},
-			StorageArea:  "local",
-			Namespace:    path,
-			Tags: []string{
-				"standard",
-			},
-		}
-
-		if project.Environment == "cloud" {
-			file.StorageArea = "google_storage"
-		}
-
-		var buf bytes.Buffer
-		io.Copy(&buf, bytes.NewReader(decoded))
-		contents := buf.Bytes()
-		file.FileSize = int64(len(contents))
-		file.ContentType = http.DetectContentType(contents)
-		file.OriginalMd5sum = Md5sum(contents)
-
-		buf.Reset()
-
-		parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-		fileId, err = uploadFile(ctx, &file, parsedKey, contents)
-		if err != nil {
-			log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
-			continue
-		}
-
-		log.Printf("[DEBUG] Uploaded file %s with ID %s in category %#v", file.Filename, fileId, path)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
 }

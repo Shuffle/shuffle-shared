@@ -138,15 +138,19 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	//parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
-	parsedId := strings.ToLower(pipeline.Environment)
+	parsedEnv := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-")), user.ActiveOrg.Id)
+	if project.Environment != "cloud" {
+		parsedEnv = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(pipeline.Environment, " ", "-"), "_", "-"))
+	}
+
 	formattedType := fmt.Sprintf("PIPELINE_%s", startCommand)
-	existingQueue, _ := GetWorkflowQueue(ctx, parsedId, 10)
+	existingQueue, _ := GetWorkflowQueue(ctx, parsedEnv, 10)
 	for _, queue := range existingQueue.Data {
 		if strings.HasPrefix(queue.Type, "PIPELINE") {
-			log.Printf("[WARNING] Pipeline type already exists: %s", formattedType)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`))
-			return
+			//log.Printf("[WARNING] Pipeline type already exists: %s", formattedType)
+			//resp.WriteHeader(400)
+			//resp.Write([]byte(`{"success": false, "reason": "Pipeline type already exists. Please wait for existing Pipeline request to be fullfilled by Orborus (could take a few seconds)."}`))
+			//return
 		}
 	}
 
@@ -207,7 +211,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		log.Printf("[INFO] Set up pipeline with trigger ID %s and environment %s", pipeline.TriggerId, pipeline.Environment)
 	}
 
-	err = SetWorkflowQueue(ctx, execRequest, parsedId)
+	err = SetWorkflowQueue(ctx, execRequest, parsedEnv)
 	if err != nil {
 		log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
 		resp.WriteHeader(500)
