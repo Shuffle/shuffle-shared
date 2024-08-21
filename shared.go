@@ -23610,21 +23610,10 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 }
 
 func GetExternalClient(baseUrl string) *http.Client {
-	httpProxy := os.Getenv("HTTP_PROXY")
-	httpsProxy := os.Getenv("HTTPS_PROXY")
-
 	// Look for internal proxy instead
 	// in case apps need a different one: https://jamboard.google.com/d/1KNr4JJXmTcH44r5j_5goQYinIe52lWzW-12Ii_joi-w/viewer?mtt=9r8nrqpnbz6z&f=0
-
-	overrideHttpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
-	overrideHttpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
-	if len(overrideHttpProxy) > 0 && strings.ToLower(overrideHttpProxy) != "noproxy" {
-		httpProxy = overrideHttpProxy
-	}
-
-	if len(overrideHttpsProxy) > 0 && strings.ToLower(overrideHttpsProxy) != "noproxy" {
-		httpsProxy = overrideHttpsProxy
-	}
+	httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
+	httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
 
 	transport := http.DefaultTransport.(*http.Transport)
 	transport.MaxIdleConnsPerHost = 100
@@ -23682,7 +23671,26 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
+        if len(httpProxy) > 0 {
+			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+		if len(httpsProxy) > 0 {
+			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpsProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
 	} else {
+        // keeping this here for now
 		if len(httpProxy) > 0 {
 			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 
