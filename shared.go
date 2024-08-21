@@ -13797,7 +13797,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 		selectedTrigger = trigger
 		for _, param := range trigger.Parameters {
-			if param.Name == "argument" && isLoop(param.Value) {
+			if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
 				// Check if the .# exists, without .#0 or .#1 for digits
 				log.Printf("\n\n[DEBUG] IN LOOP CHECK RESULT\n\n")
 				//re := regexp.MustCompile(`\.\#(\d+)`)
@@ -13836,7 +13836,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			foundResult.Action = action
 
 			for _, param := range action.Parameters {
-				if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+				if param.Name == "argument" && isLoop(param.Value) {
 					isLooping = true
 				}
 
