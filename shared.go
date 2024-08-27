@@ -23609,6 +23609,39 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	return workflowExecution, relevantActions
 }
 
+func HandleInternalProxy(handler *http.Client) *http.Client {
+	httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
+	httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
+
+	transport := &http.Transport{}
+
+	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && (strings.ToLower(httpProxy) != "noproxy" || strings.ToLower(httpsProxy) != "noproxy") {
+		if len(httpProxy) > 0 && strings.ToLower(httpProxy) != "noproxy" {
+			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+
+		if len(httpsProxy) > 0 && strings.ToLower(httpsProxy) != "noproxy" {
+			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpsProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+	}
+
+	handler.Transport = transport
+
+	return handler
+}
+
 func GetExternalClient(baseUrl string) *http.Client {
 	// Look for internal proxy instead
 	// in case apps need a different one: https://jamboard.google.com/d/1KNr4JJXmTcH44r5j_5goQYinIe52lWzW-12Ii_joi-w/viewer?mtt=9r8nrqpnbz6z&f=0
