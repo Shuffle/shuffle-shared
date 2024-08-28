@@ -68,16 +68,10 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		orgId, err := fileAuthentication(request)
-		if err != nil {
-			log.Printf("[WARNING] Bad file authentication in get sigma rules %s: %s", "sigma", err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		user.ActiveOrg.Id = orgId
-		user.Username = "Execution File API"
+		log.Printf("[WARNING] Api authentication failed in get detection rules: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	// Extract detection_type
@@ -89,8 +83,8 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	detectionType := location[4]
-	log.Printf("[AUDIT] User '%s' (%s) is trying to get files from namespace %#v", user.Username, user.Id, detectionType)
+	detectionType := strings.ToLower(location[4])
+	log.Printf("[AUDIT] User '%s' (%s) is trying to get detections from namespace %#v", user.Username, user.Id, detectionType)
 
 	ctx := GetContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, detectionType)
@@ -222,6 +216,17 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 		IsConnectorActive: isTenzirAlive,
 	}
 
+	detections := GetPublicDetections()
+	for _, detection := range detections {
+		if strings.ToLower(detection.DetectionName) != strings.ToLower(response.DetectionName) {
+			continue
+		}
+
+		response.Category = detection.Category
+		response.DownloadRepo = detection.DownloadRepo
+		break
+	}
+
 	responseData, err := json.Marshal(response)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal response data: %s", err)
@@ -263,16 +268,10 @@ func HandleToggleRule(resp http.ResponseWriter, request *http.Request) {
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		orgId, err := fileAuthentication(request)
-		if err != nil {
-			log.Printf("[WARNING] Bad user & file authentication in get for ID %s: %s", fileId, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		user.ActiveOrg.Id = orgId
-		user.Username = "Execution File API"
+		log.Printf("[WARNING] Api authentication failed in toggle rule: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	file, err := GetFile(ctx, fileId)
@@ -741,4 +740,32 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 	go DeleteCache(ctx, fmt.Sprintf("environments_%s", orgId))
 
 	return nil
+}
+
+func HandleListDetectionCategories(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	/*
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get detection rules: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	*/
+
+	publicDetections := GetPublicDetections() 
+	data, err := json.Marshal(publicDetections)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(data)
 }

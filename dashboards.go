@@ -3,8 +3,8 @@ package shuffle
 import (
 	"fmt"
 	"log"
-	"strings"
 	"sort"
+	"strings"
 
 	"encoding/json"
 	"io/ioutil"
@@ -326,7 +326,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	if user.SupportAccess {
 		log.Printf("[AUDIT] User %s (%s) is getting org stats for %s (%s) with support access", user.Username, user.Id, org.Name, orgId)
 		userFound = true
-	} 
+	}
 
 	if !userFound {
 		log.Printf("[WARNING] User %s isn't a part of org %s (get)", user.Id, org.Id)
@@ -346,19 +346,19 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 	if len(info.DailyStatistics) > 0 {
 		/*
-		   // Should remove the FIRST day as it's very skewed
-		// Do this based on the Timestamp (date)
-		skipIndex := 0
-		lowestTimestamp := info.DailyStatistics[0].Date
-		   for _, timestamp := range info.DailyStatistics {
-			if timestamp.Date.Before(lowestTimestamp) {
-				lowestTimestamp = timestamp.Date
+			   // Should remove the FIRST day as it's very skewed
+			// Do this based on the Timestamp (date)
+			skipIndex := 0
+			lowestTimestamp := info.DailyStatistics[0].Date
+			   for _, timestamp := range info.DailyStatistics {
+				if timestamp.Date.Before(lowestTimestamp) {
+					lowestTimestamp = timestamp.Date
+				}
 			}
-		}
 
-		if skipIndex >= 0 {
-			info.DailyStatistics = append(info.DailyStatistics[:skipIndex], info.DailyStatistics[skipIndex+1:]...)
-		}
+			if skipIndex >= 0 {
+				info.DailyStatistics = append(info.DailyStatistics[:skipIndex], info.DailyStatistics[skipIndex+1:]...)
+			}
 		*/
 
 		// Sort the array
@@ -382,4 +382,70 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
+}
+
+func HandleAppendStatistics(resp http.ResponseWriter, request *http.Request) {
+	// Send in a thing to increment
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in add stats: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to add stats: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body in add stats: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	inputData := AdditionalUseConfig{}
+	err = json.Unmarshal(body, &inputData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling inputdata for add stats: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed unpacking data"}`))
+		return
+	}
+
+	if len(inputData.Key) < 3 || len(inputData.Key) > 50 {
+		log.Printf("[WARNING] Invalid input data for add stats: %s", inputData.Key)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "'key' has to be a minimum of 3 characters and a maximum of 50"}`))
+		return
+	}
+
+	if inputData.Value <= 0 {
+		inputData.Value = 1
+	}
+
+	if inputData.Value > 100 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "'value' to increment can be a maximum of 100"}`))
+		return
+	}
+
+	if !strings.HasPrefix(inputData.Key, "custom_") {
+		inputData.Key = fmt.Sprintf("custom_%s", inputData.Key)
+	}
+
+	ctx := GetContext(request)
+	go IncrementCache(ctx, user.ActiveOrg.Id, inputData.Key, int(inputData.Value))
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Cache incremented by %d"}`, inputData.Value)))
 }

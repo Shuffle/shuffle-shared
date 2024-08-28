@@ -561,7 +561,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		return
 	}
 
-	//log.Printf("[DEBUG] Incrementing cache '%s' for org '%s'", dataType, orgId)
+	dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
 
 	incrementAmount := 1
 	if len(amount) > 0 {

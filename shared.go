@@ -28684,3 +28684,4 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write([]byte(`{"success": true}`))
 }
+

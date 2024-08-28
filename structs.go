@@ -4074,4 +4074,6 @@ type DetectionResponse struct {
 	DetectionInfo     []DetectionFileInfo `json:"detection_info"`
 	FolderDisabled    bool                `json:"folder_disabled"`
 	IsConnectorActive bool                `json:"is_connector_active"`
+
+	DownloadRepo string `json:"download_repo"`
 }

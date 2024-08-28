@@ -458,7 +458,7 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 		}
 	}
 
-	log.Printf("\n\n[DEBUG] Got %d file(s): %s\n\n", len(files), path)
+	//log.Printf("\n\n[DEBUG] Got %d file(s): %s\n\n", len(files), path)
 
 	if len(files) == 0 {
 		log.Printf("[ERROR] No files found in namespace '%s' on Github - Used for integration framework", path)
