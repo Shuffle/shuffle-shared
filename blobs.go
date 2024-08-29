@@ -3,6 +3,7 @@ package shuffle
 func GetPublicDetections() []DetectionResponse {
 	return []DetectionResponse{
 		DetectionResponse{
+			Title: "Sigma SIEM Detections",
 			DetectionName:     "Sigma",
 			Category:          "SIEM",
 			DetectionInfo:     []DetectionFileInfo{},
@@ -11,8 +12,9 @@ func GetPublicDetections() []DetectionResponse {
 			DownloadRepo: 	   "https://github.com/satti-hari-krishna-reddy/shuffle_sigma",
 		},
 		DetectionResponse{
+			Title: "Sublime Email Detection",
 			DetectionName:     "Sublime",
-			Category:          "COMMUNICATION",
+			Category:          "Email",
 			DetectionInfo:     []DetectionFileInfo{},
 			FolderDisabled:    false,
 			IsConnectorActive: false,

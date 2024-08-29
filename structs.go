@@ -4068,6 +4068,7 @@ type AppParser struct {
 }
 
 type DetectionResponse struct {
+	Title             string              `json:"title"`
 	DetectionName     string              `json:"detection_name"`
 	Category          string              `json:"category"`
 	OrgId             string              `json:"org_id"`

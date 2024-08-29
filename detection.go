@@ -222,6 +222,7 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+		response.Title = detection.Title
 		response.Category = detection.Category
 		response.DownloadRepo = detection.DownloadRepo
 		break
@@ -630,6 +631,7 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
+	log.Printf("[DEBUG] Validating if the user has an %d sandbox handling workflow/system", detectionType)
 	detectionType := strings.ToLower(location[4])
 	if detectionType == "siem" {
 		log.Printf("[AUDIT] User '%s' (%s) is trying to connect to SIEM", user.Username, user.Id)
@@ -656,9 +658,55 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+	} else if detectionType == "email" {
+
+		// FIXME: 
+		// 1. Can we track if it's active based on a workflow + validation?
+		// 2. The workflow should get email
+		// 3. It should track unread AND read emails separately
+		// 4. When a new email is received, we should automatically track the statistics for it
+
+		ctx := GetContext(request)
+		workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+		if err != nil && len(workflows) == 0 {
+			log.Printf("[ERROR] Failed to loading workflows to validate email: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to load workflows"}`))
+			return
+		}
+
+		foundWorkflow := false
+		workflowValid := false
+		for _, workflow := range workflows {
+			if workflow.WorkflowType != "EMAIL-DETECTION" {
+				continue
+			}
+
+			if workflow.Validation.Valid {
+				workflowValid = true
+			}
+
+			foundWorkflow = true
+			break
+		}
+
+		if foundWorkflow {
+			resp.WriteHeader(200)
+			resp.Write([]byte(fmt.Sprintf(`{"success": true, "valid": "%v", "reason": "Email workflow found"}`, workflowValid)))
+			return
+		} 
+
+		// FIXME: Create the workflow and start it
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "valid": "%v", "reason": "Email handling workflow not found. Creating."}`, workflowValid)))
+		return
+
+
+
 	} else {
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Detection Type '%s' not implemented"}`, detectionType)))
+		return
 	}
 
 	resp.WriteHeader(200)
