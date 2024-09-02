@@ -12773,7 +12773,7 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		//check if base url exist if exist then assign the base url. This is for local testing when request.Host is is not "shuffle-backend"
 		if project.Environment != "cloud" && len(os.Getenv("BASE_URL")) > 0 {
 			redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
-		} else {
+		} else if project.Environment != "cloud" {
 			//if base url not exist then assign hardcoded url for the onprem, user should not reach here but in case not set the base url hardcode it.
 			redirectUrl = url.QueryEscape(fmt.Sprintf("http://localhost:5001/api/v1/login_openid"))
 		}
