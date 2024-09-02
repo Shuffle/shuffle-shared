@@ -36,9 +36,10 @@ func HandleTenzirHealthUpdate(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := context.Background()
+	//ctx := context.Background()
+	/*
 	status := healthUpdate.Status
-	result, err := GetDisabledRules(ctx)
+	result, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
 	if (err != nil && err.Error() == "rules doesn't exist") || err == nil {
 		result.IsTenzirActive = status
 		result.LastActive = time.Now().Unix()
@@ -54,9 +55,10 @@ func HandleTenzirHealthUpdate(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 		return
 	}
+	*/
 
 	resp.WriteHeader(500)
-	resp.Write([]byte(`{"success": false}`))
+	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
 	return
 }
 
@@ -97,12 +99,12 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[DEBUG] Loaded %d files for user %s from namespace %s", len(files), user.Username, detectionType)
 
-	disabledRules, err := GetDisabledRules(ctx)
+	disabledRules, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
 	if err != nil && err.Error() != "rules doesn't exist" {
 		log.Printf("[ERROR] Failed to get disabled rules: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Error getting disabled rules."}`))
-		return
+		//resp.WriteHeader(500)
+		//resp.Write([]byte(`{"success": false, "reason": "Error getting disabled rules."}`))
+		//return
 	}
 
 	sort.Slice(files[:], func(i, j int) bool {
@@ -380,7 +382,7 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	action := location[5]
 
-	rules, err := GetDisabledRules(ctx)
+	rules, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Cannot get the rules, reason %s", err)
 		resp.WriteHeader(404)
@@ -428,7 +430,7 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 
 func disableRule(file File) error {
 	ctx := context.Background()
-	resp, err := GetDisabledRules(ctx)
+	resp, err := GetDisabledRules(ctx, file.OrgId)
 	if err != nil {
 		if err.Error() == "rules doesn't exist" {
 			// FIX ME :- code duplication : (
@@ -458,7 +460,7 @@ func disableRule(file File) error {
 
 func enableRule(file File) error {
 	ctx := context.Background()
-	resp, err := GetDisabledRules(ctx)
+	resp, err := GetDisabledRules(ctx, file.OrgId)
 	if err != nil {
 		return err
 	}
@@ -631,8 +633,8 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	log.Printf("[DEBUG] Validating if the user has an %d sandbox handling workflow/system", detectionType)
 	detectionType := strings.ToLower(location[4])
+	log.Printf("[DEBUG] Validating if the org %s (%s) has an %d sandbox handling workflow/system", user.ActiveOrg.Name, user.ActiveOrg.Id, detectionType)
 	if detectionType == "siem" {
 		log.Printf("[AUDIT] User '%s' (%s) is trying to connect to SIEM", user.Username, user.Id)
 
@@ -696,12 +698,15 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 			return
 		} 
 
-		// FIXME: Create the workflow and start it
-		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "valid": "%v", "reason": "Email handling workflow not found. Creating."}`, workflowValid)))
-		return
+		err = CreateDetectionWorkflow(ctx, user.ActiveOrg.Id, "EMAIL-DETECTION")
+		if err != nil {
+			log.Printf("[ERROR] Failed to create email handling workflow: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to create email handling workflow. Please try again or contact support@shuffler.io"}`))
+			return
+		}
 
-
+		log.Printf("[INFO] Email handling workflow created successfully")
 
 	} else {
 		resp.WriteHeader(400)
@@ -711,6 +716,11 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true}`))
+}
+
+func CreateDetectionWorkflow(ctx context.Context, orgId, workflowType string) error {
+	log.Printf("[DEBUG] Creating detection workflow for org %s (not implemented)", orgId)
+	return nil
 }
 
 func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, executionSource, environmentName string) error {

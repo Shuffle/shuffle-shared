@@ -9195,38 +9195,38 @@ func StoreDisabledRules(ctx context.Context, file DisabledRules) error {
 	return nil
 }
 
-func GetDisabledRules(ctx context.Context) (*DisabledRules, error) {
+func GetDisabledRules(ctx context.Context, orgId string) (*DisabledRules, error) {
 	nameKey := "disabled_rules"
 	disabledRules := &DisabledRules{}
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), "0")
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
-			return &DisabledRules{}, err
+			return disabledRules, nil
 		}
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return &DisabledRules{}, errors.New("rules doesn't exist")
+			return disabledRules, nil
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			return &DisabledRules{}, err
+			return disabledRules, err
 		}
 
 		wrapped := DisabledHookWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
-			return &DisabledRules{}, err
+			return disabledRules, err
 		}
 
 		disabledRules = &wrapped.Source
 	} else {
-		key := datastore.NameKey(nameKey, "0", nil)
+		key := datastore.NameKey(nameKey, orgId, nil)
 		if err := project.Dbclient.Get(ctx, key, disabledRules); err != nil {
-			log.Printf("[WARNING] Error getting disabled rules: %s", err)
-			//return &DisabledRules{}, err
+			log.Printf("[WARNING] Error getting disabled for org %s: %s", orgId, err)
+			return disabledRules, err
 		}
 	}
 
