@@ -1496,6 +1496,7 @@ type TypeValidation struct {
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 	NodeId      string `json:"node_id" datastore:"node_id"`
 
+	TotalProblems int `json:"total_problems" datastore:"total_problems"`
 	Problems    []ValidationProblem `json:"errors" datastore:"errors"`
 	SubflowApps []ValidationProblem `json:"subflow_apps" datastore:"subflow_apps"`
 }

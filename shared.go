@@ -28304,7 +28304,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 						ActionId: foundAction.ID,
 						AppId:    foundAction.AppID,
 						AppName:  foundAction.AppName,
-						Error:    "Action failed: " + unmarshalledHttp.Reason,
+						Error:    fmt.Sprintf("Action '%s' failed: '%s'", strings.ReplaceAll(foundAction.Label, "_", " "), unmarshalledHttp.Reason),
 						Type:     "configuration",
 					}
 
@@ -28402,11 +28402,13 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		}
 
 		// Replace with the apps of the subflow?
-		log.Printf("\n\n\nSUBFLOW: %#v\n\n\n", trigger.ID)
+		//log.Printf("\n\n\nSUBFLOW: %#v\n\n\n", trigger.ID)
 
 		foundWorkflow := ""
 		startNode := ""
+		_ = startNode
 		waitForResults := false
+		_ = waitForResults
 		for _, param := range trigger.Parameters {
 			if param.Name == "workflow" {
 				foundWorkflow = param.Value
@@ -28421,145 +28423,97 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			}
 		}
 
+
 		if foundWorkflow == "" {
 			continue
 		}
 
 		// Doing explicit execution IF it exists
-		// FIXME: Handle loops as well
-		if waitForResults == true { 
-			foundExecutionIds := []string{}
+		foundExecutionIds := []string{}
+		for _, res := range exec.Results {
+			if res.Action.ID != trigger.ID {
+				continue
+			}
 
-			for _, res := range exec.Results {
-				if res.Action.ID != trigger.ID {
-					continue
-				}
-
+			marshalledListData := []SubflowData{} 
+			err := json.Unmarshal([]byte(res.Result), &marshalledListData)
+			if err != nil {
+				log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
 				marshalledData := SubflowData{} 
 				err := json.Unmarshal([]byte(res.Result), &marshalledData)
 				if err != nil {
 					log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
-					continue
+					//continue
+				} else {
+					marshalledListData = append(marshalledListData, marshalledData)
 				}
+			}
 
+			for _, marshalledData := range marshalledListData {
 				if marshalledData.Success == false {
-					log.Printf("[DEBUG] Subflow %s failed to start", marshalledData.ExecutionId)
+					//log.Printf("[DEBUG] Subflow %s failed to start", marshalledData.ExecutionId)
 					continue
 				}
 
 				foundExecutionIds = append(foundExecutionIds, marshalledData.ExecutionId)
-				break
 			}
+			break
+		}
 
-			log.Printf("[DEBUG] Waiting for results. Execution IDs: %#v", foundExecutionIds)
-			appendedActionIds := []string{}
-			for _, execId := range foundExecutionIds {
-				subExec, err := GetWorkflowExecution(ctx, execId)
-				if err != nil {
-					log.Printf("[ERROR] Failed getting subflow execution %s for workflow %s: %s", execId, workflow.ID, err)
-					continue
-				}
-
-				if subExec.Status == "EXECUTING" {
-					// FIXME: Check based on the workflow itself instead
-					log.Printf("[DEBUG] Subflow %s is still executing. Validation: %s", execId, subExec.Workflow.Validation.Valid)
-				} else {
-					// Check validations
-					log.Printf("[DEBUG] Subflow %s is finished. Validation: %#v. Validation Problems: %d", execId, subExec.Workflow.Validation.Valid, len(subExec.Workflow.Validation.Problems))
-					if subExec.Workflow.Validation.Valid {
-						continue
-					}
-
-					for _, subProblem := range subExec.Workflow.Validation.Problems {
-						// We keep appending for each level
-						if ArrayContains(appendedActionIds, subProblem.ActionId) {
-							continue
-						}
-
-						appendedActionIds = append(appendedActionIds, subProblem.ActionId)
-						authenticationProblems = append(authenticationProblems, subProblem)
-
-					}
-				}
-			}
-
-		} else if !waitForResults { 
-			log.Printf("[DEBUG] Getting workflow %s for subflow check", foundWorkflow)
-			subflow, err := GetWorkflow(ctx, foundWorkflow)
+		//log.Printf("\n\n[DEBUG] Waiting for results. Execution IDs: %#v\n\n", foundExecutionIds)
+		appendedActionIds := []string{}
+		for _, execId := range foundExecutionIds {
+			subExec, err := GetWorkflowExecution(ctx, execId)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting subflow %s for workflow %s: %s", foundWorkflow, workflow.ID, err)
+				log.Printf("[ERROR] Failed getting subflow execution %s for workflow %s: %s", execId, workflow.ID, err)
 				continue
 			}
 
-			if startNode == "" {
-				startNode = workflow.Start
+			if subExec.Status == "EXECUTING" {
+				// FIXME: Check based on the workflow itself instead
+				//log.Printf("[DEBUG] Subflow %s is still executing. Validation: %s", execId, subExec.Workflow.Validation.Valid)
+
+				// Loading the Workflows own validation in this case 
+				oldWf, err := GetWorkflow(ctx, subExec.Workflow.ID)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting subflow %s for workflow %s: %s", subExec.Workflow.ID, workflow.ID, err)
+				} else {
+					subExec.Workflow = *oldWf
+				}
+			} 
+
+			// Check validations
+			//log.Printf("[DEBUG] Subflow %s is finished. Validation: %#v. Validation Problems: %d", execId, subExec.Workflow.Validation.Valid, len(subExec.Workflow.Validation.Problems))
+			if subExec.Workflow.Validation.Valid {
+				continue
 			}
 
-			// FIXME: Look for subvalues of this one again in this ones' subflow
+			for _, subProblem := range subExec.Workflow.Validation.Problems {
+				// We keep appending for each level
+				if ArrayContains(appendedActionIds, subProblem.ActionId) {
+					continue
+				}
 
-			// Check for actions in the subflow
-			subChildNodes := FindChildNodes(*subflow, startNode, []string{}, []string{})
-			log.Printf("[DEBUG] Found %d child nodes for subflow %s", len(subChildNodes), subflow.ID)
+				appendedActionIds = append(appendedActionIds, subProblem.ActionId)
 
-			// FIXME: May be a problem here with sub-sub workflows etc.
-			// Something about always being one workflow behind
-			if len(subflow.Validation.SubflowApps) > 0 {
-				for _, subProblem := range subflow.Validation.SubflowApps {
+				subProblem.Error = fmt.Sprintf("[SUBFLOW] %s", subProblem.Error)
+				subProblem.Type = "subflow_app"
+
+				workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, subProblem)
+			}
+
+			if len(subExec.Workflow.Validation.SubflowApps) > 0 {
+				for _, subProblem := range subExec.Workflow.Validation.SubflowApps {
 					// We keep appending for each level
-					// This is a shitty solution, but is parsable :))
-					if strings.HasSuffix(subProblem.Type, "subflow_app") {
-						subProblem.Type = fmt.Sprintf("subflow_%s", subProblem.Type)
+					if ArrayContains(appendedActionIds, subProblem.ActionId) {
+						continue
 					}
 
-					subProblem.Order = strings.Count(subProblem.Type, "subflow_")
-					subProblem.WorkflowId = subflow.ID // Override due to frontend utilization
+					appendedActionIds = append(appendedActionIds, subProblem.ActionId)
+
+					subProblem.Type = fmt.Sprintf("sub_%s", subProblem.Type)
 					workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, subProblem)
 				}
-			}
-
-			for _, subAction := range subflow.Actions {
-				found := false
-				for _, childNode := range subChildNodes {
-					if childNode == subAction.ID {
-						found = true
-						break
-					}
-				}
-
-				if subAction.ID == startNode {
-					found = true
-				}
-
-				if !found {
-					continue
-				}
-
-				if subAction.AppName == "Shuffle Workflow" || subAction.AppName == "Shuffle Tools" || strings.ToLower(subAction.AppName) == "http" {
-					continue
-				}
-
-				// FIXME: Use generic icon here?
-				if subAction.AppName == "Integration Framework" {
-					for _, param := range subAction.Parameters {
-						if param.Name == "app_name" {
-							subAction.AppName = param.Value
-							break
-						}
-					}
-				}
-
-				validationProblem := ValidationProblem{
-					ActionId: subAction.ID,
-					AppId:    subAction.AppID,
-					AppName:  subAction.AppName,
-					Error:    trigger.ID,
-					Type:     "subflow_app",
-
-					WorkflowId: subflow.ID,
-					Waiting:    waitForResults,
-				}
-
-				workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, validationProblem)
 			}
 		}
 	}
@@ -28597,6 +28551,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		workflow.Validation.LastValid = timenow
 		workflow.Validation.ExecutionId = exec.ExecutionId
 	}
+
+	workflow.Validation.TotalProblems = len(workflow.Validation.Problems) + len(workflow.Validation.SubflowApps)
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true
