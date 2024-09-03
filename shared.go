@@ -14019,13 +14019,43 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			sendRequest = true
 		} else {
 			// In here maning no-loop?
+			/*
 			actionValue := SubflowData{
 				Success:       true,
 				ExecutionId:   executionParent,
 				Authorization: parentAuth,
 				Result:        returnValue,
 			}
+			*/
 
+			actionValue := SubflowData{
+				Success:       true,
+				ExecutionId:   "",
+				Authorization: "",
+				Result:        returnValue,
+			}
+
+			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", executionParent, parentNode)
+			cacheData, err := GetCache(ctx, newCacheKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting cache for subflow action result %s (4): %s", subflowExecutionId, err)
+			} else {
+
+				mappedData, ok := cacheData.([]byte)
+				if ok { 
+					// Unmarshal it into actionValue
+					err = json.Unmarshal(mappedData, &actionValue)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling cache for subflow action result %s (4): %s", subflowExecutionId, err)
+					}
+				} else {
+					log.Printf("[ERROR] Failed type assertion for subflow action result %s (4): %s", subflowExecutionId, err)
+				}
+			}
+
+			// Keep the original info
+			// Where is it kept? :thinking:
+			actionValue.Result = returnValue
 			parsedActionValue, err := json.Marshal(actionValue)
 			if err != nil {
 				log.Printf("[ERROR] Failed updating resultData (1): %s", err)
@@ -15449,6 +15479,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			log.Printf("[WARNING][%s] Sinkholing request of %s IF the subflow-result DOESNT have result.", workflowExecution.ExecutionId, actionResult.Action.Label)
+
+			// Just set the sinkholed data for some time in cache in case
+			// it will be necessary to use later. E.g. for wait for results
+			// + subflow data
+			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+			go SetCache(ctx, newCacheKey, []byte(actionResult.Result), 35)
+
+
 
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
