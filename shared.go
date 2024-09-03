@@ -13799,7 +13799,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		for _, param := range trigger.Parameters {
 			if param.Name == "argument" && isLoop(param.Value) {
 				// Check if the .# exists, without .#0 or .#1 for digits
-				log.Printf("\n\n[DEBUG] IN LOOP CHECK RESULT\n\n")
 				//re := regexp.MustCompile(`\.\#(\d+)`)
 				//if re.MatchString(param.Value) {
 				//	log.Printf("\n\n\n[DEBUG][%s] Found a loop in the subflow. Not mapping subflow result back to parent workflow. Trigger: %#v\n\n\n", subflowExecutionId, selectedTrigger.ID)
@@ -13836,7 +13835,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			foundResult.Action = action
 
 			for _, param := range action.Parameters {
-				if param.Name == "argument" && strings.Contains(param.Value, "$") && strings.Contains(param.Value, ".#") {
+				if param.Name == "argument" && isLoop(param.Value) {
 					isLooping = true
 				}
 
