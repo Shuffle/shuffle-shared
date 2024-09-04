@@ -18911,7 +18911,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(backendUrl) > 0 {
-		redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
+		//we don't need to add /workflow path in backend url as backend url is SSO_REDIRECT_URL and it is already pointing to /workflow by default.
+		redirectUrl = backendUrl
 	}
 
 	if project.Environment == "cloud" {
