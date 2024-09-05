@@ -12898,7 +12898,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[AUDIT] Handling login of username %s", data.Username)
 	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
-	err = checkUsername(data.Username)
+	err = CheckUsername(data.Username)
 	if err != nil {
 		log.Printf("[INFO] Username is too short or bad for %s: %s", data.Username, err)
 		resp.WriteHeader(401)
@@ -13521,7 +13521,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[AUDIT] Handling login of %s", data.Username)
 
 	data.Username = strings.ToLower(strings.TrimSpace(data.Username))
-	err = checkUsername(data.Username)
+	err = CheckUsername(data.Username)
 	if err != nil {
 		log.Printf("[INFO] Username is too short or bad for %s: %s", data.Username, err)
 		resp.WriteHeader(401)
@@ -13668,7 +13668,7 @@ func ParseLoginParameters(resp http.ResponseWriter, request *http.Request) (logi
 	return t, nil
 }
 
-func checkUsername(Username string) error {
+func CheckUsername(Username string) error {
 	// Stupid first check of email loool
 	//if !strings.Contains(Username, "@") || !strings.Contains(Username, ".") {
 	//	return errors.New("Invalid Username")
@@ -14019,13 +14019,43 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			sendRequest = true
 		} else {
 			// In here maning no-loop?
+			/*
 			actionValue := SubflowData{
 				Success:       true,
 				ExecutionId:   executionParent,
 				Authorization: parentAuth,
 				Result:        returnValue,
 			}
+			*/
 
+			actionValue := SubflowData{
+				Success:       true,
+				ExecutionId:   "",
+				Authorization: "",
+				Result:        returnValue,
+			}
+
+			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", executionParent, parentNode)
+			cacheData, err := GetCache(ctx, newCacheKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting cache for subflow action result %s (4): %s", subflowExecutionId, err)
+			} else {
+
+				mappedData, ok := cacheData.([]byte)
+				if ok { 
+					// Unmarshal it into actionValue
+					err = json.Unmarshal(mappedData, &actionValue)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling cache for subflow action result %s (4): %s", subflowExecutionId, err)
+					}
+				} else {
+					log.Printf("[ERROR] Failed type assertion for subflow action result %s (4): %s", subflowExecutionId, err)
+				}
+			}
+
+			// Keep the original info
+			// Where is it kept? :thinking:
+			actionValue.Result = returnValue
 			parsedActionValue, err := json.Marshal(actionValue)
 			if err != nil {
 				log.Printf("[ERROR] Failed updating resultData (1): %s", err)
@@ -15449,6 +15479,14 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			log.Printf("[WARNING][%s] Sinkholing request of %s IF the subflow-result DOESNT have result.", workflowExecution.ExecutionId, actionResult.Action.Label)
+
+			// Just set the sinkholed data for some time in cache in case
+			// it will be necessary to use later. E.g. for wait for results
+			// + subflow data
+			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", workflowExecution.ExecutionId, actionResult.Action.ID)
+			go SetCache(ctx, newCacheKey, []byte(actionResult.Result), 35)
+
+
 
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
@@ -28217,118 +28255,132 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			continue
 		}
 
-		/*
-			if (foundAction.AppName == "Shuffle Tools" || strings.ToLower(foundAction.AppName) == "http") {
-				continue
-			}
-		*/
-
-		unmarshalledHttp := HTTPOutput{}
-		err := json.Unmarshal([]byte(result.Result), &unmarshalledHttp)
-		if err != nil {
-			//log.Printf("[WARNING] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
-			//continue
-		}
-
-		isValid := false
-		if unmarshalledHttp.Success == true {
-			if unmarshalledHttp.Status >= 200 && unmarshalledHttp.Status < 300 {
-				isValid = true
-			} else if unmarshalledHttp.Status != 0 {
-				validationProblem := ValidationProblem{
-					ActionId: foundAction.ID,
-					AppId:    foundAction.AppID,
-					AppName:  foundAction.AppName,
-					Error:    fmt.Sprintf("Status %d for action %s. Are the fields correct?", unmarshalledHttp.Status, foundAction.Label),
-
-					Type: "configuration",
-				}
-
-				if unmarshalledHttp.Status == 401 {
-					validationProblem.Type = "authentication"
-				}
-
-				if unmarshalledHttp.Status == 403 {
-					validationProblem.Type = "authorization"
-				}
-
-				authenticationProblems = append(authenticationProblems, validationProblem)
-			}
-
+		// FIXME: try to make it a list of items first
+		listUnmarshalled := []HTTPOutput{}
+		err := json.Unmarshal([]byte(result.Result), &listUnmarshalled)
+		if len(listUnmarshalled) > 0 {
+			//log.Printf("[DEBUG] Unmarshal list success")
 		} else {
-			if len(unmarshalledHttp.Reason) > 0 {
-				validationProblem := ValidationProblem{
-					ActionId: foundAction.ID,
-					AppId:    foundAction.AppID,
-					AppName:  foundAction.AppName,
-					Error:    "Action failed: " + unmarshalledHttp.Reason,
-					Type:     "configuration",
-				}
-
-				authenticationProblems = append(authenticationProblems, validationProblem)
+			singleHttpItem := HTTPOutput{}
+			err := json.Unmarshal([]byte(result.Result), &singleHttpItem)
+			if err != nil {
+				log.Printf("[WARNING] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
+				//continue
 			} else {
-				validationProblem := ValidationProblem{
-					ActionId: foundAction.ID,
-					AppId:    foundAction.AppID,
-					AppName:  foundAction.AppName,
-					Error:    "Success is false: Check node for more failure details",
-					Type:     "configuration",
-				}
-
-				authenticationProblems = append(authenticationProblems, validationProblem)
+				listUnmarshalled = []HTTPOutput{singleHttpItem}
 			}
-
-			// FIXME: What do we do here if there is no reason?
 		}
 
-		//log.Printf("[DEBUG][%s] Checking result for %s", exec.ExecutionId, result.Action.Label)
-		handledAuth = append(handledAuth, foundAction.AuthenticationId)
+		for _, unmarshalledHttp := range listUnmarshalled {
+			isValid := false
 
-		for _, auth := range allAuth {
-			if auth.Id != foundAction.AuthenticationId {
-				continue
-			}
+			if unmarshalledHttp.Success == true {
+				if unmarshalledHttp.Status >= 200 && unmarshalledHttp.Status < 300 {
+					isValid = true
+				} else if unmarshalledHttp.Status != 0 {
+					validationProblem := ValidationProblem{
+						ActionId: foundAction.ID,
+						AppId:    foundAction.AppID,
+						AppName:  foundAction.AppName,
+						Error:    fmt.Sprintf("Status %d for action '%s'. Are the fields correct?", unmarshalledHttp.Status, strings.ReplaceAll(foundAction.Label, "_", " ")),
 
-			authUpdated := false
-			// Check if the auth is still valid
-			if !isValid {
-				// Check if existing is valid or not
-				// if auth.Validation.V == false {
-				// 	//log.Printf("[DEBUG] Auth %s is already invalid", auth.Id)
-				if auth.Validation.Valid {
-					auth.Validation.Valid = false
+						Type: "configuration",
+					}
 
-					authUpdated = true
+					if unmarshalledHttp.Status == 401 {
+						validationProblem.Type = "authentication"
+					}
+
+					if unmarshalledHttp.Status == 403 {
+						validationProblem.Type = "authorization"
+					}
+
+					authenticationProblems = append(authenticationProblems, validationProblem)
+					break
 				}
 
-				// Making sure it's set once, with tests
-				if auth.Validation.ChangedAt == 0 {
-					authUpdated = true
-				}
 			} else {
-				// New is valid if here. If already valid, do nothing
-				if !auth.Validation.Valid {
-					auth.Validation.Valid = true
-					authUpdated = true
+				if len(unmarshalledHttp.Reason) > 0 {
+					validationProblem := ValidationProblem{
+						ActionId: foundAction.ID,
+						AppId:    foundAction.AppID,
+						AppName:  foundAction.AppName,
+						Error:    fmt.Sprintf("Action '%s' failed: '%s'", strings.ReplaceAll(foundAction.Label, "_", " "), unmarshalledHttp.Reason),
+						Type:     "configuration",
+					}
+
+					authenticationProblems = append(authenticationProblems, validationProblem)
+					break
+				} else {
+					// Remove spaces and newlines, then check if it actually contains "success":false or not
+					formattedResult := strings.Replace(strings.Replace(strings.Replace(result.Result, " ", "", -1), "\n", "", -1), "\t", "", -1)
+					if !strings.Contains(formattedResult, `"success":false`) {
+						continue
+					}
+
+					validationProblem := ValidationProblem{
+						ActionId: foundAction.ID,
+						AppId:    foundAction.AppID,
+						AppName:  foundAction.AppName,
+						Error:    "Success is false: Check node for more failure details",
+						Type:     "configuration",
+					}
+
+					authenticationProblems = append(authenticationProblems, validationProblem)
+					break
 				}
+
+				// FIXME: What do we do here if there is no reason?
 			}
 
-			if authUpdated {
-
-				auth.Validation.ChangedAt = timenow
-				if auth.Validation.Valid {
-					auth.Validation.LastValid = timenow
+			//log.Printf("[DEBUG][%s] Checking result for %s", exec.ExecutionId, result.Action.Label)
+			handledAuth = append(handledAuth, foundAction.AuthenticationId)
+			for _, auth := range allAuth {
+				if auth.Id != foundAction.AuthenticationId {
+					continue
 				}
 
-				auth.Validation.WorkflowId = workflow.ID
-				auth.Validation.ExecutionId = exec.ExecutionId
-				auth.Validation.NodeId = result.Action.ID
+				authUpdated := false
+				// Check if the auth is still valid
+				if !isValid {
+					// Check if existing is valid or not
+					// if auth.Validation.V == false {
+					// 	//log.Printf("[DEBUG] Auth %s is already invalid", auth.Id)
+					if auth.Validation.Valid {
+						auth.Validation.Valid = false
 
-				err = SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
-				if err != nil {
-					log.Printf("[ERROR] Failed updating auth at end of workflow run %s: %s", auth.Id, err)
+						authUpdated = true
+					}
+
+					// Making sure it's set once, with tests
+					if auth.Validation.ChangedAt == 0 {
+						authUpdated = true
+					}
 				} else {
-					log.Printf("[DEBUG] Updated auth %s for workflow %s", auth.Id, workflow.ID)
+					// New is valid if here. If already valid, do nothing
+					if !auth.Validation.Valid {
+						auth.Validation.Valid = true
+						authUpdated = true
+					}
+				}
+
+				if authUpdated {
+
+					auth.Validation.ChangedAt = timenow
+					if auth.Validation.Valid {
+						auth.Validation.LastValid = timenow
+					}
+
+					auth.Validation.WorkflowId = workflow.ID
+					auth.Validation.ExecutionId = exec.ExecutionId
+					auth.Validation.NodeId = result.Action.ID
+
+					err = SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
+					if err != nil {
+						log.Printf("[ERROR] Failed updating auth at end of workflow run %s: %s", auth.Id, err)
+					} else {
+						log.Printf("[DEBUG] Updated auth %s for workflow %s", auth.Id, workflow.ID)
+					}
 				}
 			}
 		}
@@ -28351,11 +28403,13 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		}
 
 		// Replace with the apps of the subflow?
-		log.Printf("SUBFLOW: %#v", trigger.ID)
+		//log.Printf("\n\n\nSUBFLOW: %#v\n\n\n", trigger.ID)
 
 		foundWorkflow := ""
 		startNode := ""
+		_ = startNode
 		waitForResults := false
+		_ = waitForResults
 		for _, param := range trigger.Parameters {
 			if param.Name == "workflow" {
 				foundWorkflow = param.Value
@@ -28370,86 +28424,98 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			}
 		}
 
+
 		if foundWorkflow == "" {
 			continue
 		}
 
-		log.Printf("[DEBUG] Getting workflow %s for subflow check", foundWorkflow)
-		subflow, err := GetWorkflow(ctx, foundWorkflow)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting subflow %s for workflow %s: %s", foundWorkflow, workflow.ID, err)
-			continue
-		}
+		// Doing explicit execution IF it exists
+		foundExecutionIds := []string{}
+		for _, res := range exec.Results {
+			if res.Action.ID != trigger.ID {
+				continue
+			}
 
-		if startNode == "" {
-			startNode = workflow.Start
-		}
+			marshalledListData := []SubflowData{} 
+			err := json.Unmarshal([]byte(res.Result), &marshalledListData)
+			if err != nil {
+				log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
+				marshalledData := SubflowData{} 
+				err := json.Unmarshal([]byte(res.Result), &marshalledData)
+				if err != nil {
+					log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
+					//continue
+				} else {
+					marshalledListData = append(marshalledListData, marshalledData)
+				}
+			}
 
-		// FIXME: Look for subvalues of this one again in this ones' subflow
-
-		// Check for actions in the subflow
-		subChildNodes := FindChildNodes(*subflow, startNode, []string{}, []string{})
-		log.Printf("[DEBUG] Found %d child nodes for subflow %s", len(subChildNodes), subflow.ID)
-
-		// FIXME: May be a problem here with sub-sub workflows etc.
-		// Something about always being one workflow behind
-		if len(subflow.Validation.SubflowApps) > 0 {
-			for _, subProblem := range subflow.Validation.SubflowApps {
-				// We keep appending for each level
-				// This is a shitty solution, but is parsable :))
-				if strings.HasSuffix(subProblem.Type, "subflow_app") {
-					subProblem.Type = fmt.Sprintf("subflow_%s", subProblem.Type)
+			for _, marshalledData := range marshalledListData {
+				if marshalledData.Success == false {
+					//log.Printf("[DEBUG] Subflow %s failed to start", marshalledData.ExecutionId)
+					continue
 				}
 
-				subProblem.Order = strings.Count(subProblem.Type, "subflow_")
-				subProblem.WorkflowId = subflow.ID // Override due to frontend utilization
+				foundExecutionIds = append(foundExecutionIds, marshalledData.ExecutionId)
+			}
+			break
+		}
+
+		//log.Printf("\n\n[DEBUG] Waiting for results. Execution IDs: %#v\n\n", foundExecutionIds)
+		appendedActionIds := []string{}
+		for _, execId := range foundExecutionIds {
+			subExec, err := GetWorkflowExecution(ctx, execId)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting subflow execution %s for workflow %s: %s", execId, workflow.ID, err)
+				continue
+			}
+
+			if subExec.Status == "EXECUTING" {
+				// FIXME: Check based on the workflow itself instead
+				//log.Printf("[DEBUG] Subflow %s is still executing. Validation: %s", execId, subExec.Workflow.Validation.Valid)
+
+				// Loading the Workflows own validation in this case 
+				oldWf, err := GetWorkflow(ctx, subExec.Workflow.ID)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting subflow %s for workflow %s: %s", subExec.Workflow.ID, workflow.ID, err)
+				} else {
+					subExec.Workflow = *oldWf
+				}
+			} 
+
+			// Check validations
+			//log.Printf("[DEBUG] Subflow %s is finished. Validation: %#v. Validation Problems: %d", execId, subExec.Workflow.Validation.Valid, len(subExec.Workflow.Validation.Problems))
+			if subExec.Workflow.Validation.Valid {
+				continue
+			}
+
+			for _, subProblem := range subExec.Workflow.Validation.Problems {
+				// We keep appending for each level
+				if ArrayContains(appendedActionIds, subProblem.ActionId) {
+					continue
+				}
+
+				appendedActionIds = append(appendedActionIds, subProblem.ActionId)
+
+				subProblem.Error = fmt.Sprintf("[SUBFLOW] %s", subProblem.Error)
+				subProblem.Type = "subflow_app"
+
 				workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, subProblem)
 			}
-		}
 
-		for _, subAction := range subflow.Actions {
-			found := false
-			for _, childNode := range subChildNodes {
-				if childNode == subAction.ID {
-					found = true
-					break
-				}
-			}
-
-			if subAction.ID == startNode {
-				found = true
-			}
-
-			if !found {
-				continue
-			}
-
-			if subAction.AppName == "Shuffle Workflow" || subAction.AppName == "Shuffle Tools" || strings.ToLower(subAction.AppName) == "http" {
-				continue
-			}
-
-			// FIXME: Use generic icon here?
-			if subAction.AppName == "Integration Framework" {
-				for _, param := range subAction.Parameters {
-					if param.Name == "app_name" {
-						subAction.AppName = param.Value
-						break
+			if len(subExec.Workflow.Validation.SubflowApps) > 0 {
+				for _, subProblem := range subExec.Workflow.Validation.SubflowApps {
+					// We keep appending for each level
+					if ArrayContains(appendedActionIds, subProblem.ActionId) {
+						continue
 					}
+
+					appendedActionIds = append(appendedActionIds, subProblem.ActionId)
+
+					subProblem.Type = fmt.Sprintf("sub_%s", subProblem.Type)
+					workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, subProblem)
 				}
 			}
-
-			validationProblem := ValidationProblem{
-				ActionId: subAction.ID,
-				AppId:    subAction.AppID,
-				AppName:  subAction.AppName,
-				Error:    trigger.ID,
-				Type:     "subflow_app",
-
-				WorkflowId: subflow.ID,
-				Waiting:    waitForResults,
-			}
-
-			workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, validationProblem)
 		}
 	}
 
@@ -28486,6 +28552,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		workflow.Validation.LastValid = timenow
 		workflow.Validation.ExecutionId = exec.ExecutionId
 	}
+
+	workflow.Validation.TotalProblems = len(workflow.Validation.Problems) + len(workflow.Validation.SubflowApps)
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true
