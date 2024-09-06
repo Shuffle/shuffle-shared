@@ -11811,7 +11811,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 }
 
-func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) error {
+func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, BccAddresses []string) error {
 	log.Printf("[DEBUG] In mail sending with subject %s and body length %s. TO: %s", subject, body, toEmail)
 	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
 	srequest.Method = "POST"
@@ -11827,6 +11827,7 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 
 	type SendgridPersonalization struct {
 		To      []SendgridEmail `json:"to"`
+		Bcc     []SendgridEmail `json:"bcc"`
 		Subject string          `json:"subject"`
 	}
 
@@ -11840,7 +11841,7 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 
 	newBody := sendgridMailBody{
 		Personalizations: []SendgridPersonalization{
-			SendgridPersonalization{
+			{
 				To:      []SendgridEmail{},
 				Subject: subject,
 			},
@@ -11849,7 +11850,7 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 			Email: "Shuffle Support <shuffle-support@shuffler.io>",
 		},
 		Content: []SendgridContent{
-			SendgridContent{
+			{
 				Type:  "text/html",
 				Value: body,
 			},
@@ -11866,6 +11867,17 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 				Email: strings.TrimSpace(email),
 			})
 	}
+
+	// Conditionally add BCC addresses if they exist
+	if len(BccAddresses) > 0 {
+		for _, bccEmail := range BccAddresses {
+			newBody.Personalizations[0].Bcc = append(newBody.Personalizations[0].Bcc,
+				SendgridEmail{
+					Email: strings.TrimSpace(bccEmail),
+				})
+		}
+	}
+
 
 	parsedBody, err := json.Marshal(newBody)
 	if err != nil {
@@ -28727,7 +28739,7 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 	Subject := "Thank you for your private training request"
 	Message := fmt.Sprintf("Hi there, Thank you for submitting request for shuffle private training. This is confirmation that we have received your private training request. You have requested a private training for %v members. We will get back to you shortly. <br> <br> Best Regards <br>Shuffle Team", tmpData.Training)
 
-	err = sendMailSendgrid(email, Subject, Message, false)
+	err = sendMailSendgrid(email, Subject, Message, false, []string{})
 	if err != nil {
 		log.Printf("[ERROR] Failed sending mail: %s", err)
 		resp.WriteHeader(http.StatusBadRequest)
@@ -28740,7 +28752,7 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 	Subject = fmt.Sprintf("Private training request")
 	Message = fmt.Sprintf("Private training request : <br>Org id: %v <br> Org Name: %v  <br>Username: %v <br> Training Members: %v <br>Customer: %v <br> Message: %v", org.Id, org.Name, User.Username, tmpData.Training, org.LeadInfo.Customer, tmpData.Message)
 
-	err = sendMailSendgrid(email, Subject, Message, false)
+	err = sendMailSendgrid(email, Subject, Message, false, []string{})
 	if err != nil {
 		log.Printf("[ERROR] Failed sending mail: %s", err)
 		resp.WriteHeader(http.StatusBadRequest)
