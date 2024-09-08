@@ -304,7 +304,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				for _, user := range org.Users {
 					if user.Role == "admin" {
 						var BccAddress []string
-						if int64(AlertThreshold.Count) >= 10 || int64(AlertThreshold.Count) >= 15 && AlertThreshold.Email_send == false {
+						if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
 							BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
 						}
 
