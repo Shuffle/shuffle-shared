@@ -1245,12 +1245,11 @@ type InputQuestion struct {
 }
 
 type Workflow struct {
-	Actions        []Action   `json:"actions" datastore:"actions,noindex"`
-	Branches       []Branch   `json:"branches" datastore:"branches,noindex"`
-	VisualBranches []Branch   `json:"visual_branches" datastore:"visual_branches,noindex"`
-	Triggers       []Trigger  `json:"triggers" datastore:"triggers,noindex"`
-	Schedules      []Schedule `json:"schedules" datastore:"schedules,noindex"`
-	Comments       []Comment  `json:"comments" datastore:"comments,noindex"`
+	Actions        []Action  `json:"actions" datastore:"actions,noindex"`
+	Branches       []Branch  `json:"branches" datastore:"branches,noindex"`
+	VisualBranches []Branch  `json:"visual_branches" datastore:"visual_branches,noindex"`
+	Triggers       []Trigger `json:"triggers" datastore:"triggers,noindex"`
+	Comments       []Comment `json:"comments" datastore:"comments,noindex"`
 	Configuration  struct {
 		ExitOnError       bool `json:"exit_on_error" datastore:"exit_on_error"`
 		StartFromTop      bool `json:"start_from_top" datastore:"start_from_top"`
@@ -1440,10 +1439,10 @@ type File struct {
 }
 
 type DisabledRules struct {
-	Files          []File `json:"files"        datastore:"files"`
-	DisabledFolder bool   `json:"disabled_folder" datastore:"disabled_folder"`
-	IsTenzirActive string `json:"tenzir_active"  datastore:"tenzir_active"`
-	LastActive     int64  `json:"last_active" datastore:"last_active"`
+	Files           []File `json:"files"        datastore:"files"`
+	DisabledFolder  bool   `json:"disabled_folder" datastore:"disabled_folder"`
+	DetectionActive string `json:"detection_active"  datastore:"detection_active"`
+	LastActive      int64  `json:"last_active" datastore:"last_active"`
 }
 
 type SelectedDetectionRules struct {
@@ -1487,18 +1486,19 @@ type ValidationProblem struct {
 }
 
 type TypeValidation struct {
-	Valid     bool  `json:"valid" datastore:"valid"`
-	ChangedAt int64 `json:"changed_at" datastore:"changed_at"`
-	LastValid int64 `json:"last_valid" datastore:"last_valid"`
+	Valid         bool  `json:"valid" datastore:"valid"`
+	ChangedAt     int64 `json:"changed_at" datastore:"changed_at"`
+	LastValid     int64 `json:"last_valid" datastore:"last_valid"`
+	ValidationRan bool  `json:"validation_ran" datastore:"validation_ran"`
 
 	// For the last update, which did it
 	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
 	ExecutionId string `json:"execution_id" datastore:"execution_id"`
 	NodeId      string `json:"node_id" datastore:"node_id"`
 
-	TotalProblems int `json:"total_problems" datastore:"total_problems"`
-	Problems    []ValidationProblem `json:"errors" datastore:"errors"`
-	SubflowApps []ValidationProblem `json:"subflow_apps" datastore:"subflow_apps"`
+	TotalProblems int                 `json:"total_problems" datastore:"total_problems"`
+	Errors        []ValidationProblem `json:"errors" datastore:"errors"`
+	SubflowApps   []ValidationProblem `json:"subflow_apps" datastore:"subflow_apps"`
 }
 
 type AppAuthenticationStorage struct {
@@ -3742,11 +3742,12 @@ type AppCategory struct {
 }
 
 type SingleResult struct {
-	Success       bool     `json:"success"`
-	Id            string   `json:"id"`
-	Authorization string   `json:"authorization"`
-	Result        string   `json:"result"`
-	Errors        []string `json:"errors"`
+	Success       bool           `json:"success"`
+	Id            string         `json:"id"`
+	Authorization string         `json:"authorization"`
+	Result        string         `json:"result"`
+	Errors        []string       `json:"errors"`
+	Validation    TypeValidation `json:"validation"`
 }
 
 type DockerRequestCheck struct {

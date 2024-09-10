@@ -162,17 +162,17 @@ func randStr(strSize int, randType string) string {
 }
 
 func isLoop(arg string) bool {
-    if strings.Contains(arg, "$") && (strings.HasSuffix(arg, ".#") || strings.Contains(arg, ".#.")){
-        return true
-    }
+	if strings.Contains(arg, "$") && (strings.HasSuffix(arg, ".#") || strings.Contains(arg, ".#.")) {
+		return true
+	}
 
-    if strings.Contains(arg,"$") && strings.Contains(arg, ".#") {
-        pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
-        re := regexp.MustCompile(pattern)
-        return strings.Contains(arg, "$") && re.MatchString(arg)
-    }
+	if strings.Contains(arg, "$") && strings.Contains(arg, ".#") {
+		pattern := `(^|\.)(#(\d+-\d+)?($|\.))`
+		re := regexp.MustCompile(pattern)
+		return strings.Contains(arg, "$") && re.MatchString(arg)
+	}
 
-    return false
+	return false
 }
 
 func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
@@ -2038,6 +2038,9 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 	if len(appAuth.App.LargeImage) == 0 && len(app.LargeImage) > 0 {
 		appAuth.App.LargeImage = app.LargeImage
 	}
+
+	// If editing, reset verification?
+	appAuth.Validation = TypeValidation{}
 
 	appAuth.OrgId = user.ActiveOrg.Id
 	appAuth.Defined = true
@@ -4190,7 +4193,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	for index, execution := range workflowExecutions {
 		if project.Environment != "cloud" && execution.Status != "FINISHED" && execution.Status != "ABORTED" {
-			execution, _ = Fixexecution(ctx, execution) 
+			execution, _ = Fixexecution(ctx, execution)
 		}
 
 		newResults := []ActionResult{}
@@ -4241,7 +4244,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		workflowExecutions[index].Workflow.Image = ""
 		workflowExecutions[index].Workflow.Triggers = newTriggers
 
-		if workflowExecutions[index].Status != "EXECUTION" && workflowExecutions[index].Workflow.Validation.Valid == false && len(workflowExecutions[index].Workflow.Validation.Problems) == 0 && len(workflowExecutions[index].Workflow.Validation.SubflowApps) == 0 {
+		if workflowExecutions[index].Status != "EXECUTION" && workflowExecutions[index].Workflow.Validation.Valid == false && len(workflowExecutions[index].Workflow.Validation.Errors) == 0 && len(workflowExecutions[index].Workflow.Validation.SubflowApps) == 0 {
 			validation, err := GetExecutionValidation(ctx, workflowExecutions[index].ExecutionId)
 			if err == nil {
 				workflowExecutions[index].Workflow.Validation = validation
@@ -5675,16 +5678,18 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 		newTriggers = append(newTriggers, item)
 	}
 
-	newSchedules := []Schedule{}
-	for _, item := range workflow.Schedules {
-		item.Id = uuid.NewV4().String()
-		newSchedules = append(newSchedules, item)
-	}
+	/*
+		newSchedules := []Schedule{}
+		for _, item := range workflow.Schedules {
+			item.Id = uuid.NewV4().String()
+			newSchedules = append(newSchedules, item)
+		}
+	*/
 
 	timeNow := int64(time.Now().Unix())
 	workflow.Actions = newActions
 	workflow.Triggers = newTriggers
-	workflow.Schedules = newSchedules
+	//workflow.Schedules = newSchedules
 	workflow.IsValid = true
 	workflow.Configuration.ExitOnError = false
 	workflow.Created = timeNow
@@ -10824,7 +10829,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//if org.SSOConfig.SSORequired == true && !ArrayContains(user.ValidatedSessionOrgs, tmpData.OrgId) && user.SupportAccess == false {
-	if org.SSOConfig.SSORequired == true && !ArrayContains(user.ValidatedSessionOrgs, tmpData.OrgId) {
+	if org.SSOConfig.SSORequired == true && !ArrayContains(user.ValidatedSessionOrgs, tmpData.OrgId) && user.SupportAccess == false {
 
 		baseSSOUrl := org.SSOConfig.SSOEntrypoint
 		redirectKey := "SSO_REDIRECT"
@@ -11579,7 +11584,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.LeadInfo = newLeadinfo
 		//if org.LeadInfo != newLeadinfo {
 		log.Printf("[DEBUG] Lead info updated for %s (%s) from %#v to %#v", org.Id, org.Name, org.LeadInfo, newLeadinfo)
-
 
 		// Check for ORG_CHANGE_WEBHOOK
 		orgWebhook := os.Getenv("ORG_CHANGE_WEBHOOK")
@@ -14020,12 +14024,12 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		} else {
 			// In here maning no-loop?
 			/*
-			actionValue := SubflowData{
-				Success:       true,
-				ExecutionId:   executionParent,
-				Authorization: parentAuth,
-				Result:        returnValue,
-			}
+				actionValue := SubflowData{
+					Success:       true,
+					ExecutionId:   executionParent,
+					Authorization: parentAuth,
+					Result:        returnValue,
+				}
 			*/
 
 			actionValue := SubflowData{
@@ -14042,7 +14046,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			} else {
 
 				mappedData, ok := cacheData.([]byte)
-				if ok { 
+				if ok {
 					// Unmarshal it into actionValue
 					err = json.Unmarshal(mappedData, &actionValue)
 					if err != nil {
@@ -15486,8 +15490,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", workflowExecution.ExecutionId, actionResult.Action.ID)
 			go SetCache(ctx, newCacheKey, []byte(actionResult.Result), 35)
 
-
-
 			if jsonerr == nil && len(subflowData.Result) == 0 && !strings.Contains(actionResult.Result, "\"result\"") {
 				log.Printf("[INFO][%s] NO RESULT FOR SUBFLOW RESULT - SETTING TO EXECUTING. Results: %d. Trying to find subexec in cache onprem", workflowExecution.ExecutionId, len(workflowExecution.Results))
 
@@ -16883,7 +16885,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	cacheKey, err = url.QueryUnescape(strings.Trim(cacheKey, " "))
 	if err != nil {
-		log.Printf("[WARNING] Failed to unescape cache key %s: %s", cacheKey,err)
+		log.Printf("[WARNING] Failed to unescape cache key %s: %s", cacheKey, err)
 		cacheKey = strings.Trim(cacheKey, " ")
 	}
 
@@ -17624,7 +17626,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte, runValidationAction bool) (WorkflowExecution, error) {
 	workflowExecution := WorkflowExecution{}
 
 	var action Action
@@ -17663,6 +17665,21 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		if !found {
 			return workflowExecution, errors.New("You must authenticate the app first")
 		}
+	}
+
+	if runValidationAction {
+		log.Printf("[INFO] Running validation action for %s for org %s (%s)", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		// Find the action tagged to be used for validation:
+		// 1. Find the action in the app
+		// 2. Find a GET request that is labeled without required parameters
+		// 3. Run the default request that is sent in IF possible
+
+		// Validation of the workflow will say whether it was successful or not
+
+		//for _, appAction := range app.Actions {
+
+		//}
 	}
 
 	newParams := []WorkflowAppActionParameter{}
@@ -17758,7 +17775,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	*/
 
 	// Make a fake request object as it's not necessary
-	badRequest := &http.Request{}
 
 	if user.ActiveOrg.Id != "" {
 		workflow.Owner = user.Id
@@ -17769,6 +17785,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	}
 
 	// Add fake queries to it
+	badRequest := &http.Request{}
 	badRequest.URL, _ = url.Parse(fmt.Sprintf("http://localhost:3000/api/v1/workflows/%s/execute", workflow.ID))
 	badRequest.URL.RawQuery = fmt.Sprintf("")
 	badRequest.Method = "GET"
@@ -17802,6 +17819,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		Authorization: workflowExecution.Authorization,
 		Result:        "",
 		Errors:        []string{},
+		Validation:    workflowExecution.Workflow.Validation,
 	}
 
 	// VERY short sleeptime here on purpose
@@ -17820,9 +17838,11 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 			break
 		}
 
+		returnBody.Validation = newExecution.Workflow.Validation
+
 		//log.Printf("[INFO] Checking single execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
 
-		if len(newExecution.Results) > resultAmount-1 {
+		if len(newExecution.Results) > resultAmount-1  {
 			relevantIndex := len(newExecution.Results) - 1
 
 			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
@@ -17838,7 +17858,11 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 						returnBody.Errors = append(returnBody.Errors, param.Value)
 					}
 				}
-				break
+
+				// Wait for validation to have ran
+				if newExecution.Workflow.Validation.ValidationRan {
+					break
+				}
 			}
 		}
 
@@ -19928,7 +19952,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					if err != nil {
 						log.Printf("[ERROR][%s] Failed marshalling userinput result: %s", oldExecution.ExecutionId, err)
-					} else { 
+					} else {
 						actionCacheId := fmt.Sprintf("%s_%s_result", result.ExecutionId, result.Action.ID)
 						err = SetCache(ctx, actionCacheId, fullMarshal, 35)
 						if err != nil {
@@ -20007,7 +20031,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								backendUrl = fmt.Sprintf("http://localhost:%d", port)
 							}
 
-	
 							if project.Environment == "cloud" && len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 								backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 							}
@@ -23715,7 +23738,6 @@ func GetExternalClient(baseUrl string) *http.Client {
 			transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
 		}
 	}
-
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
@@ -28195,12 +28217,21 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	}
 
 	originalActions := workflow.Actions
-	workflow.Actions = newActions
+
+	if len(newActions) > 0 {
+		workflow.Actions = newActions
+	}
+
+	if len(workflow.Actions) == 0 {
+		workflow.Actions = exec.Workflow.Actions
+	}
 
 	authenticationProblems := []ValidationProblem{}
 
 	handledAuth := []string{}
 	timenow := time.Now().Unix() * 1000
+
+	//log.Printf("\n\n[DEBUG][%s] STARTING VALIDATION WITH %d results and %d actions\n\n", exec.ExecutionId, len(exec.Results), len(workflow.Actions))
 	for _, result := range exec.Results {
 		// FIXME: Skipping anything that outright fails right now
 		if result.Status != "SUCCESS" {
@@ -28213,6 +28244,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			if action.ID != result.Action.ID {
 				continue
 			}
+
+			found = true
 
 			authRequired := false
 			for _, param := range action.Parameters {
@@ -28241,7 +28274,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 				break
 			}
 
-			found = true
 			foundAction = action
 			break
 		}
@@ -28332,7 +28364,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 				// FIXME: What do we do here if there is no reason?
 			}
 
-			//log.Printf("[DEBUG][%s] Checking result for %s", exec.ExecutionId, result.Action.Label)
+			//log.Printf("\n\n\n[DEBUG][%s] Checking result for %s\n\n\n", exec.ExecutionId, result.Action.Label)
 			handledAuth = append(handledAuth, foundAction.AuthenticationId)
 			for _, auth := range allAuth {
 				if auth.Id != foundAction.AuthenticationId {
@@ -28373,6 +28405,12 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 					auth.Validation.WorkflowId = workflow.ID
 					auth.Validation.ExecutionId = exec.ExecutionId
 					auth.Validation.NodeId = result.Action.ID
+
+					auth.Validation.ValidationRan = true
+
+					if len(auth.App.LargeImage) == 0 {
+						auth.App.LargeImage = result.Action.LargeImage
+					}
 
 					err = SetWorkflowAppAuthDatastore(ctx, auth, auth.Id)
 					if err != nil {
@@ -28423,7 +28461,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			}
 		}
 
-
 		if foundWorkflow == "" {
 			continue
 		}
@@ -28435,11 +28472,11 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 				continue
 			}
 
-			marshalledListData := []SubflowData{} 
+			marshalledListData := []SubflowData{}
 			err := json.Unmarshal([]byte(res.Result), &marshalledListData)
 			if err != nil {
 				log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
-				marshalledData := SubflowData{} 
+				marshalledData := SubflowData{}
 				err := json.Unmarshal([]byte(res.Result), &marshalledData)
 				if err != nil {
 					log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
@@ -28473,22 +28510,22 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 				// FIXME: Check based on the workflow itself instead
 				//log.Printf("[DEBUG] Subflow %s is still executing. Validation: %s", execId, subExec.Workflow.Validation.Valid)
 
-				// Loading the Workflows own validation in this case 
+				// Loading the Workflows own validation in this case
 				oldWf, err := GetWorkflow(ctx, subExec.Workflow.ID)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting subflow %s for workflow %s: %s", subExec.Workflow.ID, workflow.ID, err)
 				} else {
 					subExec.Workflow = *oldWf
 				}
-			} 
+			}
 
 			// Check validations
-			//log.Printf("[DEBUG] Subflow %s is finished. Validation: %#v. Validation Problems: %d", execId, subExec.Workflow.Validation.Valid, len(subExec.Workflow.Validation.Problems))
+			//log.Printf("[DEBUG] Subflow %s is finished. Validation: %#v. Validation.Errors: %d", execId, subExec.Workflow.Validation.Valid, len(subExec.Workflow.Validation.Errors))
 			if subExec.Workflow.Validation.Valid {
 				continue
 			}
 
-			for _, subProblem := range subExec.Workflow.Validation.Problems {
+			for _, subProblem := range subExec.Workflow.Validation.Errors {
 				// We keep appending for each level
 				if ArrayContains(appendedActionIds, subProblem.ActionId) {
 					continue
@@ -28538,8 +28575,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	workflow.Validation.SubflowApps = newApps
 
 	workflowChanged := false
-	workflow.Validation.Problems = authenticationProblems
-	if len(workflow.Validation.Problems) > 0 {
+	workflow.Validation.Errors = authenticationProblems
+	if len(workflow.Validation.Errors) > 0 {
 		workflow.Validation.Valid = false
 	} else {
 		workflow.Validation.Valid = true
@@ -28552,10 +28589,11 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		workflow.Validation.ExecutionId = exec.ExecutionId
 	}
 
-	workflow.Validation.TotalProblems = len(workflow.Validation.Problems) + len(workflow.Validation.SubflowApps)
+	workflow.Validation.TotalProblems = len(workflow.Validation.Errors) + len(workflow.Validation.SubflowApps)
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true
+	workflow.Validation.ValidationRan = true
 	workflow.Validation.ExecutionId = exec.ExecutionId
 	if workflowChanged {
 		workflow.Actions = originalActions
@@ -28574,12 +28612,12 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	// Force them to work without parent context management
 	backgroundContext := context.Background()
-	go SetCache(backgroundContext, fmt.Sprintf("validation_workflow_%s", workflow.ID), marshalledValidation, 1440)
-	go SetCache(backgroundContext, cacheKey, marshalledValidation, 120)
+	SetCache(backgroundContext, fmt.Sprintf("validation_workflow_%s", workflow.ID), marshalledValidation, 1440)
+	SetCache(backgroundContext, cacheKey, marshalledValidation, 120)
 
 	// ALWAYS have correct exec id for current execution, but not always in workflow
 
-	//log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to '%s'\n\n", exec.ExecutionId, len(workflow.Validation.Problems), marshalledValidation)
+	//log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to '%s'\n\n", exec.ExecutionId, len(workflow.Validation.Errors), marshalledValidation)
 
 	return exec
 }
@@ -28751,4 +28789,3 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write([]byte(`{"success": true}`))
 }
-
