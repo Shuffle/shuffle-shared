@@ -202,7 +202,7 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		rule.FileId = file.Id
-		rule.FileName = file.Filename
+		rule.FileName = strings.Trim(file.Filename, ".yml")
 		sigmaFileInfo = append(sigmaFileInfo, rule)
 	}
 

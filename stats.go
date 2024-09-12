@@ -279,6 +279,54 @@ func HandleNewWidget(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	var orgId string
+	var statsKey string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		statsKey = location[4]
+		if len(location) > 6 {
+			orgId = location[4]
+			statsKey = location[6]
+		}
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get stats: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	orgId = user.ActiveOrg.Id
+	ctx := GetContext(request)
+	info, err := GetOrgStatistics(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting stats in specific stats for org %s: %s", orgId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting stats for your org. Maybe not initialized yet?"}`))
+		return
+	}
+
+	log.Printf("RESP: %#v", info)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "key": "%s", "value": 2}`, statsKey)))
+}
+
 func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -286,6 +334,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	var orgId string
+	var statsKey string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
@@ -296,6 +345,10 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		orgId = location[4]
+
+		if len(location) > 6 {
+			statsKey = location[6]
+		}
 	}
 
 	user, err := HandleApiAuthentication(resp, request)
@@ -344,23 +397,11 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(statsKey) > 0  {
+		log.Printf("[INFO] Should get stats for key %s", statsKey)
+	}
+
 	if len(info.DailyStatistics) > 0 {
-		/*
-			   // Should remove the FIRST day as it's very skewed
-			// Do this based on the Timestamp (date)
-			skipIndex := 0
-			lowestTimestamp := info.DailyStatistics[0].Date
-			   for _, timestamp := range info.DailyStatistics {
-				if timestamp.Date.Before(lowestTimestamp) {
-					lowestTimestamp = timestamp.Date
-				}
-			}
-
-			if skipIndex >= 0 {
-				info.DailyStatistics = append(info.DailyStatistics[:skipIndex], info.DailyStatistics[skipIndex+1:]...)
-			}
-		*/
-
 		// Sort the array
 		sort.Slice(info.DailyStatistics, func(i, j int) bool {
 			return info.DailyStatistics[i].Date.Before(info.DailyStatistics[j].Date)

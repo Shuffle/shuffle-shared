@@ -3713,7 +3713,18 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	oauthUrl := ""
 	refreshUrl := ""
 	refreshToken := ""
+	
 	for _, field := range appAuth.Fields {
+		// Try decryption here as well just in case
+		// In some cases, it's already decrypted at this point, but it doesn't matter much to re-do it in case, as this function is used multiple places
+		decryptionKey := fmt.Sprintf("%s_%d_%s_%s", appAuth.OrgId, appAuth.Created, appAuth.Label, field.Key)
+		newValue, err := HandleKeyDecryption([]byte(field.Value), decryptionKey)
+		if err == nil {
+			field.Value = string(newValue)
+		} else {
+			//log.Printf("[DEBUG] Failed decrypting field %s: %s", field.Key, err)
+		}
+
 		if field.Key == "authentication_url" {
 			url = field.Value
 		} else if field.Key == "code" {
