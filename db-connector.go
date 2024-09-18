@@ -4265,6 +4265,10 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
 	}
 
+	if len(data.Users) == 0 {
+		return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
+	}
+
 	if id != data.Id && len(data.Id) > 0 {
 		log.Printf("[ERROR] Org ID mismatch: %s != %s. Resetting ID", id, data.Id)
 		id = data.Id

@@ -11582,27 +11582,28 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		org.LeadInfo = newLeadinfo
-		//if org.LeadInfo != newLeadinfo {
-		log.Printf("[DEBUG] Lead info updated for %s (%s) from %#v to %#v", org.Id, org.Name, org.LeadInfo, newLeadinfo)
 
 		// Check for ORG_CHANGE_WEBHOOK
 		orgWebhook := os.Getenv("ORG_CHANGE_WEBHOOK")
 		if orgWebhook != "" && strings.HasPrefix(orgWebhook, "http") {
-			org.Users = []User{}
-			org.Subscriptions = []PaymentSubscription{}
-			org.Image = ""
-			org.ActiveApps = []string{}
-			org.SyncUsage = SyncUsage{}
-			org.SSOConfig = SSOConfig{}
-			org.SecurityFramework = Categories{}
+			// Make a copy of org to be modified without modifying the original
+			tmpOrg := *org
 
-			org.Priorities = []Priority{}
-			org.Interests = []Priority{}
+			tmpOrg.Users = []User{}
+			tmpOrg.Subscriptions = []PaymentSubscription{}
+			tmpOrg.Image = ""
+			tmpOrg.ActiveApps = []string{}
+			tmpOrg.SyncUsage = SyncUsage{}
+			tmpOrg.SSOConfig = SSOConfig{}
+			tmpOrg.SecurityFramework = Categories{}
 
-			org.OrgAuth = OrgAuth{}
-			org.Billing = Billing{}
+			tmpOrg.Priorities = []Priority{}
+			tmpOrg.Interests = []Priority{}
 
-			mappedData, err := json.Marshal(org)
+			tmpOrg.OrgAuth = OrgAuth{}
+			tmpOrg.Billing = Billing{}
+
+			mappedData, err := json.Marshal(tmpOrg)
 			if err != nil {
 				log.Printf("[WARNING] Marshal error for org sending: %s", err)
 			} else {
@@ -11627,7 +11628,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				defer res.Body.Close()
 			}
 		}
-
 	}
 
 	if len(tmpData.CreatorConfig) > 0 {
@@ -11750,10 +11750,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	//	SSOUrl = org.SSOConfig.SSOEntrypoint
 	//}
 
-	//log.Printf("Org: %s", org)
+
+	log.Printf("[DEBUG] Updating org %s (%s) with %d users", org.Name, org.Id, len(org.Users))
 	err = SetOrg(ctx, *org, org.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed to edit org %s: %s", org.Id, err)
+		log.Printf("[ERROR] Failed to edit org %s: %s", org.Id, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
