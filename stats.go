@@ -303,6 +303,13 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if len(statsKey) <= 1 {
+		log.Printf("[WARNING] Invalid stats key: %s", statsKey)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid stats key"}`))
+		return
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in get stats: %s", err)
@@ -321,10 +328,36 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("RESP: %#v", info)
+	totalEntires := 0
+	totalValue := 0 
+	statEntries := []AdditionalUseConfig{}
+
+	info.DailyStatistics = append(info.DailyStatistics, DailyStatistics{
+		Additions: info.Additions,
+	})
+
+	for _, daily := range info.DailyStatistics {
+		for _, addition := range daily.Additions {
+			if addition.Key == statsKey {
+				totalEntires++
+				totalValue += int(addition.Value)
+				statEntries = append(statEntries, addition)
+
+				break
+			}
+		}
+	}
+
+	marshalledEntries, err := json.Marshal(statEntries)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data for org stats"}`)))
+		return
+	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "key": "%s", "value": 2}`, statsKey)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "key": "%s", "total": %d, "entries": %s}`, statsKey, totalValue, string(marshalledEntries))))
 }
 
 func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
