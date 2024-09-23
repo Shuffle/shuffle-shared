@@ -12270,7 +12270,6 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Required fields id and name can't be empty"}`))
 		return
-
 	}
 
 	validTypes := []string{
@@ -12290,6 +12289,35 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	originalWorkflow, err := GetWorkflow(ctx, requestdata.Workflow)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow %s: %s", requestdata.Workflow, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow doesn't exist"}`))
+		return
+	}
+
+	originalHook, err := GetHook(ctx, newId)
+	if err == nil {
+		log.Printf("[WARNING] Hook with ID %s doesn't exist", newId)
+	}
+
+	if originalWorkflow.OrgId != user.ActiveOrg.Id {
+		log.Printf("[WARNING] User %s doesn't have access to workflow %s", user.Username, requestdata.Workflow)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if (user.Id != originalHook.Owner || len(user.Id) == 0) && originalHook.Id != "" {
+		if originalHook.OrgId != user.ActiveOrg.Id && originalHook.OrgId != "" {
+			log.Printf("[WARNING] User %s doesn't have access to hook %s", user.Username, newId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
 
 	// Let remote endpoint handle access checks (shuffler.io)
@@ -12368,6 +12396,33 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 	err = SetHook(ctx, hook)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting hook: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// set the same for the workflow
+	workflow, err := GetWorkflow(ctx, requestdata.Workflow)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow %s: %s", requestdata.Workflow, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	// get the webhook trigger with the same id
+	for triggerIndex, trigger := range workflow.Triggers {
+		if trigger.ID == newId {
+			workflow.Triggers[triggerIndex].Status = "running"
+			log.Printf("[INFO] Changed status of trigger %s to running", newId)
+			break
+		}
+	}
+
+	// update the workflow
+	err = SetWorkflow(ctx, *workflow, workflow.ID)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting workflow %s: %s", workflow.ID, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -12464,6 +12519,24 @@ func HandleDeleteHook(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	// find workflow and set status to stopped
+	workflow, err := GetWorkflow(ctx, hook.Workflows[0])
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflow %s: %s", hook.Workflows[0], err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(workflow.Triggers) > 0 {
+		for triggerIndex, trigger := range workflow.Triggers {
+			if trigger.ID == fileId {
+				workflow.Triggers[triggerIndex].Status = "stopped"
+				break
+			}
+		}
 	}
 
 	if hook.Environment == "cloud" && project.Environment != "cloud" {
