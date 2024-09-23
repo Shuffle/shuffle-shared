@@ -449,6 +449,7 @@ type AdditionalUseConfig struct {
 	Value int64  `json:"value" datastore:"value"`
 
 	DailyValue int64 `json:"daily_value,omitempty" datastore:"daily_value"`
+	Date time.Time `json:"date,omitempty" datastore:"date"`
 }
 
 type ParsedOpenApi struct {
@@ -3711,6 +3712,8 @@ type CategoryAction struct {
 	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
 	Environment           string `json:"environment"`             // The environment to use for the action (Orborus)
+	App string `jjson:"app"` // The app to use for the action (Orborus)
+	Action string `json:"action"` // The action to use for the action (Orborus)
 }
 
 type LabelStruct struct {
@@ -3984,23 +3987,24 @@ type WorkflowSearchResult struct {
 
 // Used for the integrations API to work with AI well
 type StructuredCategoryAction struct {
-	Success     bool          `json:"success"`
-	Reason      string        `json:"reason"`
-	WorkflowId  string        `json:"workflow_id"`
-	ExecutionId string        `json:"execution_id"`
-	Action      string        `json:"action"`
+	WorkflowId  string        `json:"workflow_id,omitempty"`
+	ExecutionId string        `json:"execution_id,omitempty"`
 	Label       string        `json:"label"`
 	Category    string        `json:"category"`
-	Apps        []WorkflowApp `json:"apps"`
+	Apps        []WorkflowApp `json:"apps,omitempty"`
 
-	Result string `json:"result"`
+	Result string `json:"result,omitempty"`
 
 	AvailableLabels []string `json:"available_labels"`
-	ThreadId        string   `json:"thread_id"`
-	RunId           string   `json:"run_id"`
-	MissingFields   []string `json:"missing_fields"`
+	ThreadId        string   `json:"thread_id,omitempty"`
+	RunId           string   `json:"run_id,omitempty"`
+	MissingFields   []string `json:"missing_fields,omitempty"`
 
-	Translated bool `json:"translated"`
+	Translated bool `json:"translated,omitempty"`
+
+	Success     bool          `json:"success"`
+	Action      string        `json:"action"`
+	Reason      string        `json:"reason"`
 }
 
 type ModelLabelParameter struct {

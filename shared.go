@@ -24105,6 +24105,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(value.AppName) == 0 && len(value.App) > 0 {
+		value.AppName = value.App
+	}
+
+	if len(value.Label) == 0 && len(value.Action) > 0 {
+		value.Label = value.Action
+	}
+
 	log.Printf("[INFO] Running category-action '%s' in category '%s' with app %s for org %s (%s)", value.Label, value.Category, value.AppName, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 	if len(value.Query) > 0 {
@@ -24270,6 +24278,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
 
+	//RunAiQuery(systemMessage, userMessage) 
+
 	availableLabels := []string{}
 	for _, app := range newapps {
 		if app.Name == "" || len(app.Categories) == 0 {
@@ -24324,15 +24334,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			// If we DONT have a category app already
 			if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
-				log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(selectedApp, value.Label, true)
+				//log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
 
 				break
+
 			} else if selectedApp.ID == "" && len(value.AppName) > 0 && (strings.Contains(strings.ToLower(app.Name), strings.ToLower(value.AppName)) || strings.Contains(strings.ToLower(value.AppName), strings.ToLower(app.Name))) {
 				selectedApp = app
 
 				log.Printf("[WARNING] Set selected app to partial match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(selectedApp, value.Label, true)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
 			}
 		}
 	}
@@ -24345,15 +24356,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			if err != nil {
 				log.Printf("[ERROR] Failed getting app with ID or name '%s' in category action: %s", value.AppName, err)
 			} else if err == nil && len(foundApp.ObjectID) > 0 {
-				log.Printf("\n\n[INFO] Found app %s (%s) for name %s in Algolia\n\n", foundApp.Name, foundApp.ObjectID, value.AppName)
+				log.Printf("[INFO] Found app %s (%s) for name %s in Algolia", foundApp.Name, foundApp.ObjectID, value.AppName)
 
 				tmpApp, err := GetApp(ctx, foundApp.ObjectID, user, false)
 				if err == nil {
 					selectedApp = *tmpApp
 					failed = false
 
-					log.Printf("[DEBUG] Got app %s with %d actions", selectedApp.Name, len(selectedApp.Actions))
-					selectedAction, selectedCategory, availableLabels = GetActionFromLabel(selectedApp, value.Label, true)
+					//log.Printf("[DEBUG] Got app %s with %d actions", selectedApp.Name, len(selectedApp.Actions))
+					selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
 				}
 			} else {
 				log.Printf("[DEBUG] Found app with ID or name '%s' in Algolia: %#v", value.AppName, foundApp)
@@ -24367,6 +24378,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Section for mapping fields to automatic translation from previous runs
 	fieldHash := ""
 	fieldFileFound := false
 	fieldFileContentMap := map[string]interface{}{}
@@ -24426,11 +24438,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(selectedAction.Name) == 0 && value.Label != "discover_app" {
-		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'. If authentication/discover_app, ignore this.", value.Label, selectedApp.Name)
+		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'.", value.Label, selectedApp.Name)
 
 		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "discover_app" {
 			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding action '%s' labeled in app '%s'. If this is wrong, please contact support@shuffler.io"}`, value.Label, strings.ReplaceAll(selectedApp.Name, "_", " "))))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "app_id": "%s", "reason": "Failed finding action '%s' labeled in app '%s'. If this is wrong, please suggest a label by finding the app in Shuffle, OR contact support@shuffler.io and we can help with labeling."}`, selectedApp.ID, value.Label, strings.ReplaceAll(selectedApp.Name, "_", " "))))
 			return
 		} else {
 			//log.Printf("[DEBUG] NOT sending back due to label %s", value.Label)
@@ -24679,6 +24691,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Action:   "app_authentication",
 			Category: discoveredCategory,
 			Reason:   fmt.Sprintf("Authenticate %s first.", selectedApp.Name),
+			Label:	value.Label,
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -24686,13 +24699,33 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			AvailableLabels: availableLabels,
 		}
 
-		jsonFormatted, err := json.Marshal(structuredFeedback)
+		// Check for user agent including shufflepy 
+		useragent := request.Header.Get("User-Agent")
+		if strings.Contains(strings.ToLower(useragent), "shufflepy") {
+			structuredFeedback.Apps = []WorkflowApp{}
+
+			// Find current domain from the url
+			currentUrl := fmt.Sprintf("%s://%s", request.URL.Scheme, request.URL.Host)
+			if project.Environment == "cloud" {
+				currentUrl = "https://shuffler.io"
+			} 
+
+			// FIXME: Implement this. Uses org's auth 
+			orgAuth := org.OrgAuth.Token
+
+			structuredFeedback.Reason = fmt.Sprintf("Authenticate here: %s/appauth?app_id=%s&auth=%s", currentUrl, selectedApp.ID, orgAuth)
+		}
+
+		jsonFormatted, err := json.MarshalIndent(structuredFeedback, "", "    ")
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling structured feedback: %s", err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "Failed formatting your data"}`))
 			return
 		}
+
+		// Replace \u0026 with &
+		jsonFormatted = bytes.Replace(jsonFormatted, []byte("\\u0026"), []byte("&"), -1)
 
 		resp.WriteHeader(400)
 		resp.Write(jsonFormatted)
@@ -25904,24 +25937,40 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(jsonParsed)
 }
 
-func GetActionFromLabel(app WorkflowApp, label string, fixLabels bool) (WorkflowAppAction, AppCategory, []string) {
-
+func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixLabels bool) (WorkflowAppAction, AppCategory, []string) {
 	availableLabels := []string{}
 	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
 
 	if len(app.ID) == 0 || len(app.Actions) == 0 {
+		log.Printf("[WARNING] No actions in app %s (%s) for label '%s'", app.Name, app.ID, label)
 		return selectedAction, selectedCategory, availableLabels
+	}
+
+	// Reload the app to be the proper one with updated actions instead 
+	// of random cache issues
+	newApp, err := GetApp(ctx, app.ID, User{}, false)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting app in category action: %s", err)
+	} else {
+		app = *newApp
 	}
 
 	categories := GetAllAppCategories()
 	lowercaseLabel := strings.ReplaceAll(strings.ToLower(label), " ", "_")
 	for _, action := range app.Actions {
 		if len(action.CategoryLabel) == 0 {
+			//log.Printf("%s: %#v\n", action.Name, action.CategoryLabel)
 			continue
 		}
 
+		//log.Printf("FOUND LABELS: %s -> %#v\n", action.Name, action.CategoryLabel)
+
 		for labelIndex, _ := range action.CategoryLabel {
+			if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[labelIndex]), " ", "_") == "no_label" {
+				continue
+			}
+
 			availableLabels = append(availableLabels, action.CategoryLabel[labelIndex])
 			actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[labelIndex]), " ", "_")
 
@@ -25938,16 +25987,16 @@ func GetActionFromLabel(app WorkflowApp, label string, fixLabels bool) (Workflow
 		}
 	}
 
+	//log.Printf("\n\n[DEBUG] SELECTED: %#v\n\n", selectedAction)
+
 	// FIXME: If selectedAction isn't chosen, then we need to try to discover it in the app
 	if len(selectedAction.ID) == 0 {
 		if fixLabels == true {
 			//log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Autodiscovering and updating the app!!!\n\n", app.Name, app.ID, label)
 
 			// Make it FORCE look for a specific label if it exists, otherwise
-			// try any
 			newApp := AutofixAppLabels(app, label)
-
-			return GetActionFromLabel(newApp, label, false)
+			return GetActionFromLabel(ctx, newApp, label, false)
 		}
 	}
 
@@ -27699,7 +27748,7 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request) er
 		return errors.New("Too many requests")
 	}
 
-	log.Printf("[DEBUG] Adding request to list")
+	//log.Printf("[DEBUG] Adding request to list")
 	newList = append(newList, userRequest)
 	b, err := json.Marshal(newList)
 	if err != nil {
