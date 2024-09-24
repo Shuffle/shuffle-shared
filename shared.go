@@ -12311,11 +12311,11 @@ func HandleNewHook(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if (user.Id != originalHook.Owner || len(user.Id) == 0) && originalHook.Id != "" {
+	if (!(user.SupportAccess || user.Id == originalHook.Owner) || len(user.Id) == 0) && originalHook.Id != "" {
 		if originalHook.OrgId != user.ActiveOrg.Id && originalHook.OrgId != "" {
-			log.Printf("[WARNING] User %s doesn't have access to hook %s", user.Username, newId)
+			log.Printf("[WARNING] User %s (from org %s) doesn't have access to hook %s (org %s)", user.Username, user.ActiveOrg.Id, originalHook.Id, originalHook.OrgId)
 			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to hook"}`))
 			return
 		}
 	}
