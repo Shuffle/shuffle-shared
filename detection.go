@@ -10,22 +10,25 @@ import (
 	"net/http"
 	"os"
 
+	"errors"
 	"sort"
 	"strings"
 	"time"
-	"errors"
 
 	uuid "github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
 )
 
-func HandleTenzirHealthUpdate(resp http.ResponseWriter, request *http.Request) {
+func HandleDetectionHealthUpdate(resp http.ResponseWriter, request *http.Request) {
 	if request.Method != "POST" {
 		request.Method = "POST"
 	}
 
 	type HealthUpdate struct {
-		Status string `json:"status"`
+		OrgId         string `json:"org_id"`
+		Status        string `json:"status"`
+		Environment   string `json:"environment"`
+		Authorization string `json:"authorization"`
 	}
 
 	var healthUpdate HealthUpdate
@@ -36,25 +39,27 @@ func HandleTenzirHealthUpdate(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("[DEBUG] Tenzir health update: %#v", healthUpdate)
+
 	//ctx := context.Background()
 	/*
-	status := healthUpdate.Status
-	result, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
-	if (err != nil && err.Error() == "rules doesn't exist") || err == nil {
-		result.IsTenzirActive = status
-		result.LastActive = time.Now().Unix()
+		status := healthUpdate.Status
+		result, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
+		if (err != nil && err.Error() == "rules doesn't exist") || err == nil {
+			result.IsTenzirActive = status
+			result.LastActive = time.Now().Unix()
 
-		err = StoreDisabledRules(ctx, *result)
-		if err != nil {
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
+			err = StoreDisabledRules(ctx, *result)
+			if err != nil {
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			resp.WriteHeader(200)
+			resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
 			return
 		}
-
-		resp.WriteHeader(200)
-		resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
-		return
-	}
 	*/
 
 	resp.WriteHeader(500)
@@ -197,7 +202,7 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		rule.FileId = file.Id
-		rule.FileName = file.Filename
+		rule.FileName = strings.Trim(file.Filename, ".yml")
 		sigmaFileInfo = append(sigmaFileInfo, rule)
 	}
 
@@ -634,7 +639,9 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 	}
 
 	detectionType := strings.ToLower(location[4])
-	log.Printf("[DEBUG] Validating if the org %s (%s) has an %d sandbox handling workflow/system", user.ActiveOrg.Name, user.ActiveOrg.Id, detectionType)
+	log.Printf("[DEBUG] Validating if the org %s (%s) has a %s sandbox handling workflow/system", user.ActiveOrg.Name, user.ActiveOrg.Id, detectionType)
+
+	workflow := Workflow{}
 	if detectionType == "siem" {
 		log.Printf("[AUDIT] User '%s' (%s) is trying to connect to SIEM", user.Username, user.Id)
 
@@ -642,15 +649,14 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		execType := "START_TENZIR"
 		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, "", "SIGMA", "SHUFFLE_DISCOVER")
 		if err != nil {
-			if strings.Contains(strings.ToLower(err.Error()), "must be started") { 
+			if strings.Contains(strings.ToLower(err.Error()), "must be started") {
 				resp.WriteHeader(200)
 				resp.Write([]byte(`{"success": true, "reason": "Please start the environment by running the relevant command.", "action": "environment_start"}`))
 				return
 			}
 
-
 			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
-			if strings.Contains(strings.ToLower(err.Error()), "no valid environments") { 
+			if strings.Contains(strings.ToLower(err.Error()), "no valid environments") {
 				resp.WriteHeader(400)
 				resp.Write([]byte(`{"success": false, "reason": "No valid environments found. Go to /admin?tab=environments to create one.", "action": "environment_create"}`))
 				return
@@ -662,51 +668,20 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		}
 	} else if detectionType == "email" {
 
-		// FIXME: 
+		// FIXME:
 		// 1. Can we track if it's active based on a workflow + validation?
 		// 2. The workflow should get email
 		// 3. It should track unread AND read emails separately
 		// 4. When a new email is received, we should automatically track the statistics for it
 
 		ctx := GetContext(request)
-		workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
-		if err != nil && len(workflows) == 0 {
-			log.Printf("[ERROR] Failed to loading workflows to validate email: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to load workflows"}`))
-			return
-		}
-
-		foundWorkflow := false
-		workflowValid := false
-		for _, workflow := range workflows {
-			if workflow.WorkflowType != "EMAIL-DETECTION" {
-				continue
-			}
-
-			if workflow.Validation.Valid {
-				workflowValid = true
-			}
-
-			foundWorkflow = true
-			break
-		}
-
-		if foundWorkflow {
-			resp.WriteHeader(200)
-			resp.Write([]byte(fmt.Sprintf(`{"success": true, "valid": "%v", "reason": "Email workflow found"}`, workflowValid)))
-			return
-		} 
-
-		err = CreateDetectionWorkflow(ctx, user.ActiveOrg.Id, "EMAIL-DETECTION")
+		workflow, err = ConfigureDetectionWorkflow(ctx, user.ActiveOrg.Id, "EMAIL-DETECTION")
 		if err != nil {
-			log.Printf("[ERROR] Failed to create email handling workflow: %s", err)
+			log.Printf("\n\n\n[ERROR] Failed to create email handling workflow: %s\n\n\n", err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "Failed to create email handling workflow. Please try again or contact support@shuffler.io"}`))
 			return
 		}
-
-		log.Printf("[INFO] Email handling workflow created successfully")
 
 	} else {
 		resp.WriteHeader(400)
@@ -714,13 +689,15 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		return
 	}
 
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
-}
+	success := true
+	if len(workflow.ID) == 0 {
+		success = false
+	}
 
-func CreateDetectionWorkflow(ctx context.Context, orgId, workflowType string) error {
-	log.Printf("[DEBUG] Creating detection workflow for org %s (not implemented)", orgId)
-	return nil
+	log.Printf("[INFO] '%s' detection workflow in org '%s' ID: %s", detectionType, workflow.OrgId, workflow.ID)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "workflow_id": "%s", "workflow_valid": %v}`, success, workflow.ID, workflow.Validation.Valid)))
 }
 
 func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, executionSource, environmentName string) error {
@@ -754,10 +731,10 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 	log.Printf("[DEBUG] Found %d potentially valid environment(s)", len(selectedEnvironments))
 
 	/*
-	if len(selectedEnvironments) == 0 || environmentName == "SHUFFLE_DISCOVER" {
-		// FIXME: Get based on the Organisation. This is only tested onprem so far, so there's a lot to do to make this stable ROFL 
-		log.Printf("[DEBUG] Automatically discovering the right environment from '%s'", environmentName)
-	} 
+		if len(selectedEnvironments) == 0 || environmentName == "SHUFFLE_DISCOVER" {
+			// FIXME: Get based on the Organisation. This is only tested onprem so far, so there's a lot to do to make this stable ROFL
+			log.Printf("[DEBUG] Automatically discovering the right environment from '%s'", environmentName)
+		}
 	*/
 
 	if len(selectedEnvironments) == 0 {
@@ -807,16 +784,16 @@ func HandleListDetectionCategories(resp http.ResponseWriter, request *http.Reque
 	}
 
 	/*
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get detection rules: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
+		user, err := HandleApiAuthentication(resp, request)
+		if err != nil {
+			log.Printf("[WARNING] Api authentication failed in get detection rules: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	*/
 
-	publicDetections := GetPublicDetections() 
+	publicDetections := GetPublicDetections()
 	data, err := json.Marshal(publicDetections)
 	if err != nil {
 		resp.WriteHeader(500)
@@ -826,4 +803,197 @@ func HandleListDetectionCategories(resp http.ResponseWriter, request *http.Reque
 
 	resp.WriteHeader(200)
 	resp.Write(data)
+}
+
+func ConfigureDetectionWorkflow(ctx context.Context, orgId, workflowType string) (Workflow, error) {
+	log.Printf("\n\n[DEBUG] Creating detection workflow for org %s (not implemented)\n\n", orgId)
+	/*
+		// FIXME: Use Org to find the correct tools according to the Usecase
+		// SHOULD map usecase from workflowType -> actual Usecase in blobs
+		foundOrg, err := GetOrg(ctx, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get org '%s' during detection workflow creation: %s", err)
+			return err
+		}
+	*/
+
+	user := User{
+		Role: "admin",
+		ActiveOrg: OrgMini{
+			Id: orgId,
+		},
+	}
+
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+	if err != nil && len(workflows) == 0 {
+		log.Printf("[ERROR] Failed to loading workflows to validate email: %s", err)
+		return Workflow{}, err
+	}
+
+	workflow := Workflow{}
+	workflowValid := false
+	for _, foundworkflow := range workflows {
+		if foundworkflow.WorkflowType != workflowType {
+			continue
+		}
+
+		if foundworkflow.Validation.Valid {
+			workflowValid = true
+		}
+
+		workflow = foundworkflow
+		break
+	}
+
+	_ = workflowValid
+	if len(workflow.ID) > 0 {
+		return workflow, nil
+	}
+
+	workflow = Workflow{
+		WorkflowType: workflowType,
+		Actions:      []Action{},
+		Triggers:     []Trigger{},
+	}
+
+	// Do this based on public workflows
+	cloudWorkflowId := ""
+	usecaseNames := []string{}
+	if workflowType == "TENZIR-SIGMA" {
+	} else if workflowType == "EMAIL-DETECTION" {
+		// How do we check what email tool they use?
+		//log.Printf("[INFO] Creating email handling workflow for org %s", orgId)
+
+		cloudWorkflowId = "31d1a492-9fe0-4c4a-807d-b44d9cb81fc0"
+		usecaseNames = []string{"Search emails (Sublime)"}
+	}
+
+	if len(cloudWorkflowId) == 0 {
+		return workflow, errors.New("No valid workflow found")
+	}
+
+	// Load it in from cloud with a normal GET request
+	url := fmt.Sprintf("https://shuffler.io/api/v1/workflows/%s", cloudWorkflowId)
+	client := GetExternalClient(url)
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request for workflow: %s", err)
+		return workflow, err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get workflow from cloud: %s", err)
+		return workflow, err
+	}
+
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to get workflow from cloud: %s", resp.Status)
+		return workflow, errors.New("Failed to get workflow from cloud")
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read response body: %s", err)
+		return workflow, err
+	}
+
+	err = json.Unmarshal(body, &workflow)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal response body: %s", err)
+		return workflow, err
+	}
+
+	// Clear out and reset IDs
+	workflow.Created = time.Now().Unix()
+	workflow.ID = uuid.NewV4().String()
+	workflow.OrgId = orgId
+	workflow.Org = []OrgMini{
+		OrgMini{
+			Id: orgId,
+		},
+	}
+	workflow.ExecutingOrg = OrgMini{
+		Id: orgId,
+	}
+	workflow.Public = false
+	workflow.WorkflowType = workflowType
+	workflow.Validation = TypeValidation{}
+
+	for _, usecaseName := range usecaseNames {
+		workflow.UsecaseIds = append(workflow.UsecaseIds, usecaseName)
+	}
+
+	workflow.ParentWorkflowId = ""
+	for actionIndex, _ := range workflow.Actions {
+		newId := uuid.NewV4().String()
+
+		if workflow.Start == workflow.Actions[actionIndex].ID {
+			workflow.Start = newId
+		}
+
+		for branchIndex, _ := range workflow.Branches {
+			if workflow.Actions[actionIndex].ID == workflow.Branches[branchIndex].SourceID {
+				workflow.Branches[branchIndex].SourceID = newId
+			}
+
+			if workflow.Actions[actionIndex].ID == workflow.Branches[branchIndex].DestinationID {
+				workflow.Branches[branchIndex].DestinationID = newId
+			}
+		}
+
+		workflow.Actions[actionIndex].ID = newId
+	}
+
+	for triggerIndex, _ := range workflow.Triggers {
+		newId := uuid.NewV4().String()
+
+		for branchIndex, _ := range workflow.Branches {
+			if workflow.Triggers[triggerIndex].ID == workflow.Branches[branchIndex].SourceID {
+				workflow.Branches[branchIndex].SourceID = newId
+			}
+
+			if workflow.Triggers[triggerIndex].ID == workflow.Branches[branchIndex].DestinationID {
+				workflow.Branches[branchIndex].DestinationID = newId
+			}
+		}
+
+		workflow.Triggers[triggerIndex].ID = newId
+
+		// FIXME: Check if it's a schedule, then set the interval + start it
+		if workflow.Triggers[triggerIndex].TriggerType == "schedule" {
+			//workflow.Triggers[triggerIndex].Interval = 60
+			for paramIndex, param := range workflow.Triggers[triggerIndex].Parameters {
+				if param.Name == "interval" {
+					if project.Environment == "cloud" {
+						param.Value = "*/5 * * * *"
+					} else {
+						param.Value = "300"
+					}
+				}
+
+				workflow.Triggers[triggerIndex].Parameters[paramIndex] = param
+			}
+
+			// FIXME: Start the schedule automatically
+		}
+	}
+
+	/*
+		for branchIndex, _ := range workflow.Branches {
+			workflow.Branches[branchIndex].ID = uuid.NewV4().String()
+		}
+	*/
+
+	// FIXME: Add a changeout for ANY schemaless node to use the correct
+	// action in it
+	log.Printf("[DEBUG] Saving workflow for org %s", orgId)
+	err = SetWorkflow(ctx, workflow, workflow.ID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to set workflow during detection save: %s", err)
+		return Workflow{}, err
+	}
+
+	return workflow, nil
 }

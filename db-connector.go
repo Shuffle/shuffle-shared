@@ -3065,7 +3065,6 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
-
 	if project.CacheDb && workflow.ID != "" {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
@@ -4269,6 +4268,10 @@ func propagateUser(user User, delete bool) error {
 func SetOrg(ctx context.Context, data Org, id string) error {
 	if len(id) == 0 {
 		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
+	}
+
+	if len(data.Users) == 0 {
+		return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
 	}
 
 	if id != data.Id && len(data.Id) > 0 {
@@ -7909,7 +7912,14 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 	}
 
 	// Fix branches & triggers
+	scheduleNotStarted := "" 
 	for index, trigger := range workflow.Triggers {
+		if trigger.TriggerType == "SCHEDULE" {
+			if trigger.Status != "RUNNING" {
+				scheduleNotStarted = trigger.ID
+			}
+		}
+
 		if trigger.ID == "" {
 			workflow.Triggers[index].ID = uuid.NewV4().String()
 		}
@@ -7919,6 +7929,35 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 		if branch.ID == "" {
 			workflow.Branches[index].ID = uuid.NewV4().String()
 		}
+	}
+
+	// Check validation if Schedule is started (?)
+	if len(scheduleNotStarted) > 0  {
+		// Add validation problem
+		found := false
+		for _, problem := range workflow.Validation.Errors {
+			if problem.Type == "SCHEDULE" {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			workflow.Validation.Errors = append(workflow.Validation.Errors, ValidationProblem{
+				Order: -1,
+				Type:  "SCHEDULE",
+				ActionId: scheduleNotStarted,
+				Error: "Schedule not started",
+			})
+		}
+	}
+
+	if len(workflow.Validation.Errors) == 0 {
+		workflow.Validation.Errors = []ValidationProblem{}
+	}
+
+	if len(workflow.Validation.SubflowApps) == 0 {
+		workflow.Validation.SubflowApps = []ValidationProblem{}
 	}
 
 	return workflow

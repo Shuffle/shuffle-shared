@@ -3,21 +3,31 @@ package shuffle
 func GetPublicDetections() []DetectionResponse {
 	return []DetectionResponse{
 		DetectionResponse{
-			Title: "Sigma SIEM Detections",
+			Title:             "Sigma SIEM Detections",
 			DetectionName:     "Sigma",
 			Category:          "SIEM",
 			DetectionInfo:     []DetectionFileInfo{},
 			FolderDisabled:    false,
 			IsConnectorActive: false,
-			DownloadRepo: 	   "https://github.com/satti-hari-krishna-reddy/shuffle_sigma",
+			DownloadRepo:      "https://github.com/shuffle/security-rules",
 		},
 		DetectionResponse{
-			Title: "Sublime Email Detection",
+			Title:             "Sublime Email Detection",
 			DetectionName:     "Sublime",
 			Category:          "Email",
 			DetectionInfo:     []DetectionFileInfo{},
 			FolderDisabled:    false,
 			IsConnectorActive: false,
+			DownloadRepo:      "https://github.com/shuffle/security-rules",
+		},
+		DetectionResponse{
+			Title:             "File Detection",
+			DetectionName:     "Yara",
+			Category:          "Files",
+			DetectionInfo:     []DetectionFileInfo{},
+			FolderDisabled:    false,
+			IsConnectorActive: false,
+			DownloadRepo:      "https://github.com/shuffle/security-rules",
 		},
 	}
 }
@@ -312,14 +322,14 @@ func GetUsecaseData() string {
             },
             {
                 "name": "ChatOps",
-				"priority": 70,
+				"priority": 60,
 				"type": "communication",
 				"last": "cases",
                 "items": {}
             },
             {
                 "name": "Threat Intel received",
-				"priority": 50,
+				"priority": 20,
 				"type": "intel",
 				"last": "cases",
                 "items": {}
