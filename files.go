@@ -48,7 +48,7 @@ func fileAuthentication(request *http.Request) (string, error) {
 		ctx := GetContext(request)
 		workflowExecution, err := GetWorkflowExecution(ctx, executionId[0])
 		if err != nil {
-			log.Printf("[ERROR] Couldn't find execution ID %s", executionId[0])
+			log.Printf("[ERROR] Couldn't find execution ID from '%s'", executionId)
 			return "", err
 		}
 

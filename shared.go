@@ -6692,7 +6692,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		if err != nil {
 			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
 		} else {
-			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
+			log.Printf("\n\n[INFO] Updated child workflow '%s' based on parent %s\n\n", childWorkflow.ID, oldWorkflow.ID)
 
 			SetWorkflowRevision(ctx, childWorkflow)
 			passedOrg := Org{
@@ -6806,7 +6806,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
-	log.Printf("[DEBUG] Making ALL input questions required for %s", workflow.ID)
+	if len(workflow.InputQuestions) > 0 {
+		log.Printf("[DEBUG] Making ALL '%d' input questions required for %s", len(workflow.InputQuestions), workflow.ID)
+	}
 	for qIndex, _ := range workflow.InputQuestions {
 		workflow.InputQuestions[qIndex].Required = true
 	}
@@ -17246,6 +17248,20 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 			return
+		}
+
+		user, err := HandleApiAuthentication(resp, request)
+		if err == nil {
+			user.ActiveOrg.Id = fileId
+			skipExecutionAuth = true
+
+			if user.ActiveOrg.Id != fileId {
+				log.Printf("[INFO] OrgId %s and %s don't match in get cache key list. Checking cache auth", user.ActiveOrg.Id, fileId)
+
+				requireCacheAuth = true
+				skipExecutionAuth = false
+				user.ActiveOrg.Id = fileId
+			}
 		}
 	} else {
 		if len(location) <= 6 {
@@ -28210,6 +28226,10 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	}
 }
 
+
+// FIXME: Always fails:
+
+
 func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -28251,9 +28271,54 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
 		return
+	}
+
+	// FIXME: Check if this workflow has a parent workflow
+	//log.Printf("[DEBUG] Parent workflow: %#v", workflow.ParentWorkflowId)
+	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != fileId {
+		workflow, err = GetWorkflow(ctx, workflow.ParentWorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Parent workflow %s doesn't exist.", workflow.ParentWorkflowId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Failed finding parent workflow"}`))
+			return
+		}
+
+		// Updating role
+		orgUserFound := false
+		for _, orgId := range user.Orgs {
+			if orgId != workflow.OrgId {
+				continue
+			}
+
+			org, err := GetOrg(ctx, orgId) 
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org during parent org loading %s: %s", org.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			for _, orgUser := range org.Users {
+				if user.Id == orgUser.Id {
+					user.Role = orgUser.Role
+					user.ActiveOrg.Id = org.Id
+					orgUserFound = true 
+				}
+			}
+
+			break
+		}
+
+		if !orgUserFound {
+			log.Printf("[WARNING] User %s not found in parent org %s", user.Username, workflow.OrgId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "User not found in parent org"}`))
+			return
+		}
 	}
 
 	// Check workflow.Sharing == private / public / org  too
@@ -28274,6 +28339,8 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
+
 
 	// Access is granted -> get revisions
 	childWorkflows, err := ListChildWorkflows(ctx, workflow.ID)

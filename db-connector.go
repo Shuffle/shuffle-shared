@@ -3726,7 +3726,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
 			log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 			//log.Printf("Users: %s", curOrg.Users)
-			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
+			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) && !strings.Contains(err.Error(), `users_last_session`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
 				log.Printf("[INFO] Error in org loading (3). Migrating org to new org and user handler (2): %s", err)
 				err = nil
@@ -7999,6 +7999,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	// Handles parent/child workflow relationships
 	if len(workflow.ParentWorkflowId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
+	} 
+
+	if len(workflow.ChildWorkflowIds) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
 	}
 
