@@ -312,29 +312,8 @@ func GetUsecaseData() string {
 				"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
 				"reference_image": "/images/detectionframework.png",
                 "items": {}
-            },
-            {
-				"type": "cases",
-				"last": "cases",
-                "name": "2-way Ticket synchronization",
-				"priority": 20,
-                "items": {}
-            },
-            {
-                "name": "ChatOps",
-				"priority": 60,
-				"type": "communication",
-				"last": "cases",
-                "items": {}
-            },
-            {
-                "name": "Threat Intel received",
-				"priority": 20,
-				"type": "intel",
-				"last": "cases",
-                "items": {}
-            }
-        ]
+            }        
+		]
     },
     {
         "name": "2. Enrich",
@@ -451,78 +430,30 @@ func GetUsecaseData() string {
         "color": "#4885ed",
         "list": [
             {
-                "name": "Eradicate malware",
-				"priority": 90,
-				"type": "intel",
-				"last": "edr",
-                "items": {}
-            },
-            {
-                "name": "Quarantine host(s)",
-				"priority": 90,
+                "name": "Isolate Host",
+				"old_name": "Quarantine host(s)",
+				"priority": 80,
 				"type": "edr",
                 "items": {}
             },
             {
-                "name": "Update Outdated Software",
-				"priority": 70,
-				"type": "assets",
-                "items": {}
-            },
-            {
-                "name": "Block IPs, URLs, Domains and Hashes",
-				"priority": 90,
+                "name": "Block an IP",
+				"old_name": "Block IPs, URLs, Domains and Hashes",
+				"priority": 75,
 				"type": "network",
                 "items": {}
             },
             {
-                "name": "Trigger scans",
+                "name": "Kill a process",
 				"priority": 50,
-				"type": "assets",
+				"type": "edr",
                 "items": {}
             },
             {
-                "name": "Update indicators (FW, EDR, SIEM...)",
-				"priority": 50,
-				"type": "intel",
-				"last": "siem",
-                "items": {}
-            },
-            {
-                "name": "Autoblock activity when threat intel is received",
-				"priority": 50,
-				"type": "intel",
-				"last": "iam",
-                "items": {}
-            },
-            {
-                "name": "Lock/Delete/Reset account",
-				"priority": 50,
+                "name": "Lock account",
+				"old_name": "Lock/Delete/Reset account",
+				"priority": 70,
 				"type": "iam",
-                "items": {}
-            },
-            {
-                "name": "Lock vault",
-				"priority": 50,
-				"type": "iam",
-                "items": {}
-            },
-            {
-                "name": "Increase authentication",
-				"priority": 50,
-				"type": "iam",
-                "items": {}
-            },
-            {
-                "name": "Get policies from assets",
-				"priority": 50,
-				"type": "assets",
-                "items": {}
-            },
-            {
-                "name": "Run ansible scripts",
-				"type": "assets",
-				"priority": 50,
                 "items": {}
             }
         ]

@@ -3289,11 +3289,14 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	// Here as well as in db-connector due to cache handling
 	timenow := time.Now().Unix()
 	for envIndex, env := range newEnvironments {
-		if newEnvironments[envIndex].Type == "onprem" {
-			if env.Checkin > 0 && timenow-env.Checkin > 90 {
-				newEnvironments[envIndex].RunningIp = ""
-				newEnvironments[envIndex].Licensed = false
-			}
+		if newEnvironments[envIndex].Type != "onprem" {
+			continue
+		}
+
+		if env.Checkin > 0 && timenow-env.Checkin > 90 && len(newEnvironments[envIndex].RunningIp) > 0 {
+			log.Printf("[DEBUG] Resetting environment %s (%s) due to inactivity", env.Name, env.Id)
+			newEnvironments[envIndex].RunningIp = ""
+			newEnvironments[envIndex].Licensed = false
 		}
 	}
 
@@ -12886,6 +12889,7 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 }
 
 func GetRequestIp(r *http.Request) string {
+	// Check the actual IP that is inbound
 	forwardedFor := r.Header.Get("X-Forwarded-For")
 	if forwardedFor != "" {
 		// The X-Forwarded-For header can contain a comma-separated list of IP addresses.
@@ -12934,9 +12938,13 @@ func GetRequestIp(r *http.Request) string {
 		}
 	}
 
+	// IPv6 / localhostm apping. Just returning raw.
+	if strings.Contains(r.RemoteAddr, "::") || strings.Contains(r.RemoteAddr, "127.0.0.1") || strings.Contains(r.RemoteAddr, "localhost") {
+		return r.RemoteAddr
+	}
+
 	// If neither header is present, fall back to using the RemoteAddr field.
 	// Check for IPv6 and split accordingly.
-
 	re := regexp.MustCompile(`\[[^\]]+\]`)
 	remoteAddr := re.ReplaceAllString(r.RemoteAddr, "")
 	if remoteAddr != "" {
@@ -27839,7 +27847,7 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 		request := ExecutionRequest{
 			Type:              "DOCKER_IMAGE_DOWNLOAD",
 			ExecutionId:       uuid.NewV4().String(),
-			ExecutionArgument: strings.Join(appnames, ","),
+			ExecutionArgument: fmt.Sprintf("%s,%s", strings.ToLower(strings.Join(appnames, ",")), strings.Join(appnames, ",")),
 			Priority:          11,
 		}
 

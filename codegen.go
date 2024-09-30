@@ -3790,7 +3790,9 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	baseUrl := os.Getenv("BASE_URL")
 	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist. All images: %#v", imageName, baseUrl, downloadedImages)
 
-	downloadedImages = append(downloadedImages, imageName)
+	if !ArrayContains(downloadedImages, imageName) {
+		downloadedImages = append(downloadedImages, imageName)
+	}
 
 	data := fmt.Sprintf(`{"name": "%s"}`, imageName)
 	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl)
@@ -3876,6 +3878,13 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		return errors.New(string(body))
 	}
 
+	os.Remove(newFileName)
+
+	if strings.Contains(strings.ToLower(string(body)), "error") {
+		log.Printf("[ERROR] Error loading image %s: %s", imageName, string(body))
+		return errors.New(string(body))
+	}
+
 	baseTag := strings.Split(imageName, ":")
 	if len(baseTag) > 1 {
 		tag := baseTag[1]
@@ -3890,8 +3899,6 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
 
 	}
-
-	os.Remove(newFileName)
 
 	log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
 	return nil
