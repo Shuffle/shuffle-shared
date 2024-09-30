@@ -3724,7 +3724,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-			log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 			//log.Printf("Users: %s", curOrg.Users)
 			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) && !strings.Contains(err.Error(), `users_last_session`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
@@ -3756,9 +3755,10 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					setOrg = true
 				}
 			} else if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
+				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
+				log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 				return &Org{}, err
 			}
 		}

@@ -6692,7 +6692,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		if err != nil {
 			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
 		} else {
-			log.Printf("\n\n[INFO] Updated child workflow '%s' based on parent %s\n\n", childWorkflow.ID, oldWorkflow.ID)
+			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
 
 			SetWorkflowRevision(ctx, childWorkflow)
 			passedOrg := Org{
@@ -7566,7 +7566,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			if added {
 				orgUpdated = true
-				log.Printf("[DEBUG] Org updated with new apps: %s", org.ActiveApps)
+				//log.Printf("[DEBUG] Org updated with new apps: %s", org.ActiveApps)
 
 				//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
@@ -15137,7 +15137,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("\n\n[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
+			// FIXME: Debug logs necessary to understand how workflows finish?
+			log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -20885,16 +20886,16 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				setAuth := false
 				executionAuthKey := fmt.Sprintf("oauth2_%s", curAuth.Id)
 
-				log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
+				//log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
 				execAuthData, err := GetCache(ctx, executionAuthKey)
 				if err == nil {
-					log.Printf("[DEBUG] Successfully retrieved auth wrapper from cache for %s", executionAuthKey)
+					//log.Printf("[DEBUG] Successfully retrieved auth wrapper from cache for %s", executionAuthKey)
 					cacheData := []byte(execAuthData.([]uint8))
 
 					appAuthWrapper := AppAuthenticationStorage{}
 					err = json.Unmarshal(cacheData, &appAuthWrapper)
 					if err == nil {
-						log.Printf("[DEBUG] Successfully unmarshalled auth wrapper from cache for %s", executionAuthKey)
+						//log.Printf("[DEBUG] Successfully unmarshalled auth wrapper from cache for %s", executionAuthKey)
 
 						newParams = action.Parameters
 						for _, param := range appAuthWrapper.Fields {
