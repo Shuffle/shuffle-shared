@@ -1449,6 +1449,9 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	DeleteCache(ctx, fmt.Sprintf("session_%s", userInfo.Session))
 	DeleteCache(ctx, userInfo.Session)
 
+	//store user's last session so we can force sso when user's session change.
+	userInfo.UsersLastSession = userInfo.Session
+
 	userInfo.Session = ""
 	userInfo.ValidatedSessionOrgs = []string{}
 	err = SetUser(ctx, &userInfo, false)
@@ -5114,6 +5117,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			if userInfo.ActiveOrg.Id == foundUser.ActiveOrg.Id {
 				foundUser.Role = t.Role
 				foundUser.Roles = []string{t.Role}
+				foundUser.ActiveOrg.Role = t.Role
 			}
 
 			// Getting the specific org and just updating the user in that one
@@ -5126,6 +5130,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 					if user.Id == foundUser.Id {
 						user.Role = t.Role
 						user.Roles = []string{t.Role}
+						user.ActiveOrg.Role = t.Role
 					}
 
 					users = append(users, user)
@@ -6687,7 +6692,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		if err != nil {
 			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
 		} else {
-			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
+			log.Printf("\n\n[INFO] Updated child workflow '%s' based on parent %s\n\n", childWorkflow.ID, oldWorkflow.ID)
 
 			SetWorkflowRevision(ctx, childWorkflow)
 			passedOrg := Org{
@@ -6801,7 +6806,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
-	log.Printf("[DEBUG] Making ALL input questions required for %s", workflow.ID)
+	if len(workflow.InputQuestions) > 0 {
+		log.Printf("[DEBUG] Making ALL '%d' input questions required for %s", len(workflow.InputQuestions), workflow.ID)
+	}
 	for qIndex, _ := range workflow.InputQuestions {
 		workflow.InputQuestions[qIndex].Required = true
 	}
@@ -10767,6 +10774,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	type ReturnData struct {
 		OrgId     string `json:"org_id" datastore:"org_id"`
 		RegionUrl string `json:"region_url" datastore:"region_url"`
+		SSOTest   bool   `json:"sso_test"`
 	}
 
 	var tmpData ReturnData
@@ -10799,7 +10807,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if user.ActiveOrg.Id == fileId {
+	if user.ActiveOrg.Id == fileId && tmpData.SSOTest == false {
 		log.Printf("[WARNING] User swap to the org \"%s\" - already in the org", tmpData.OrgId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "You are already in that organisation"}`))
@@ -10829,8 +10837,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//if org.SSOConfig.SSORequired == true && !ArrayContains(user.ValidatedSessionOrgs, tmpData.OrgId) && user.SupportAccess == false {
-	if org.SSOConfig.SSORequired == true && !ArrayContains(user.ValidatedSessionOrgs, tmpData.OrgId) && user.SupportAccess == false {
+	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSOTest {
 
 		baseSSOUrl := org.SSOConfig.SSOEntrypoint
 		redirectKey := "SSO_REDIRECT"
@@ -17242,6 +17249,20 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Organization ID's don't match"}`))
 			return
 		}
+
+		user, err := HandleApiAuthentication(resp, request)
+		if err == nil {
+			user.ActiveOrg.Id = fileId
+			skipExecutionAuth = true
+
+			if user.ActiveOrg.Id != fileId {
+				log.Printf("[INFO] OrgId %s and %s don't match in get cache key list. Checking cache auth", user.ActiveOrg.Id, fileId)
+
+				requireCacheAuth = true
+				skipExecutionAuth = false
+				user.ActiveOrg.Id = fileId
+			}
+		}
 	} else {
 		if len(location) <= 6 {
 			log.Printf("[ERROR] Cache Path too short: %d", len(location))
@@ -18814,41 +18835,46 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
-				//if len(user.Session) == 0 {
-				log.Printf("[INFO] User does NOT have session - creating")
-				sessionToken := uuid.NewV4().String()
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating")
+					sessionToken := uuid.NewV4().String()
 
-				newCookie := http.Cookie{
-					Name:    "session_token",
-					Value:   sessionToken,
-					Expires: expiration,
-					Path:    "/",
+					newCookie := http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, &newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, &newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
+					user.Session = sessionToken
 				}
-
-				if project.Environment == "cloud" {
-					newCookie.Domain = ".shuffler.io"
-					newCookie.Secure = true
-					newCookie.HttpOnly = true
-				}
-
-				http.SetCookie(resp, &newCookie)
-
-				newCookie.Name = "__session"
-				http.SetCookie(resp, &newCookie)
-
-				err = SetSession(ctx, user, sessionToken)
-				if err != nil {
-					log.Printf("[WARNING] Error creating session for user: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-					return
-				}
-
-				user.Session = sessionToken
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
 					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
 				})
+
+				//Store users last session as new session so user don't have to go through sso again while changing org.
+				user.UsersLastSession = user.Session
+
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -18879,40 +18905,45 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
-				//if len(user.Session) == 0 {
-				log.Printf("[INFO] User does NOT have session - creating")
-				sessionToken := uuid.NewV4().String()
-				newCookie := &http.Cookie{
-					Name:    "session_token",
-					Value:   sessionToken,
-					Expires: expiration,
-					Path:    "/",
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating")
+					sessionToken := uuid.NewV4().String()
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
+					user.Session = sessionToken
 				}
-
-				if project.Environment == "cloud" {
-					newCookie.Domain = ".shuffler.io"
-					newCookie.Secure = true
-					newCookie.HttpOnly = true
-				}
-
-				http.SetCookie(resp, newCookie)
-
-				newCookie.Name = "__session"
-				http.SetCookie(resp, newCookie)
-
-				err = SetSession(ctx, user, sessionToken)
-				if err != nil {
-					log.Printf("[WARNING] Error creating session for user: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-					return
-				}
-
-				user.Session = sessionToken
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
 					IP:        GetRequestIp(request),
 					Timestamp: time.Now().Unix(),
 				})
+
+				//Store users last session as new session so user don't have to go through sso again while changing org.
+				user.UsersLastSession = user.Session
+
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -19009,6 +19040,10 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newUser.Session = sessionToken
+
+	//Store users last session as new session so user don't have to go through sso again while changing org.
+	newUser.UsersLastSession = sessionToken
+
 	err = SetUser(ctx, newUser, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting new user in DB: %s", err)
@@ -19047,7 +19082,8 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(backendUrl) > 0 {
-		redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
+		// redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
+		redirectUrl = backendUrl
 	}
 
 	if project.Environment == "cloud" {
@@ -19253,46 +19289,51 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				//log.Printf("SESSION: %s", user.Session)
 
 				expiration := time.Now().Add(3600 * time.Second)
-				// if len(user.Session) == 0 {
-				log.Printf("[INFO] User does NOT have session - creating")
-				sessionToken := uuid.NewV4().String()
-				newCookie := &http.Cookie{
-					Name:    "session_token",
-					Value:   sessionToken,
-					Expires: expiration,
-					Path:    "/",
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating")
+					sessionToken := uuid.NewV4().String()
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
+					user.LoginInfo = append(user.LoginInfo, LoginInfo{
+						IP:        GetRequestIp(request),
+						Timestamp: time.Now().Unix(),
+					})
+
+					user.Session = sessionToken
 				}
-
-				if project.Environment == "cloud" {
-					newCookie.Domain = ".shuffler.io"
-					newCookie.Secure = true
-					newCookie.HttpOnly = true
-				}
-
-				http.SetCookie(resp, newCookie)
-
-				newCookie.Name = "__session"
-				http.SetCookie(resp, newCookie)
-
-				err = SetSession(ctx, user, sessionToken)
-				if err != nil {
-					log.Printf("[WARNING] Error creating session for user: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-					return
-				}
-
-				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        GetRequestIp(request),
-					Timestamp: time.Now().Unix(),
-				})
-
-				user.Session = sessionToken
 				// user.LoginInfo = append(user.LoginInfo, LoginInfo{
 				// 	IP:        GetRequestIp(request),
 				// 	Timestamp: time.Now().Unix(),
 				// })
 				// }
+
+				//store user's last session so don't have to go through sso again while changing org.
+				user.UsersLastSession = user.Session
+
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -19327,41 +19368,43 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
-				// if len(user.Session) == 0 {
-				log.Printf("[INFO] User does NOT have session - creating")
-				sessionToken := uuid.NewV4().String()
-				newCookie := &http.Cookie{
-					Name:    "session_token",
-					Value:   sessionToken,
-					Expires: expiration,
-					Path:    "/",
+				if len(user.Session) == 0 {
+					log.Printf("[INFO] User does NOT have session - creating")
+					sessionToken := uuid.NewV4().String()
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
+					user.Session = sessionToken
+					user.LoginInfo = append(user.LoginInfo, LoginInfo{
+						IP:        GetRequestIp(request),
+						Timestamp: time.Now().Unix(),
+					})
 				}
-
-				if project.Environment == "cloud" {
-					newCookie.Domain = ".shuffler.io"
-					newCookie.Secure = true
-					newCookie.HttpOnly = true
-				}
-
-				http.SetCookie(resp, newCookie)
-
-				newCookie.Name = "__session"
-				http.SetCookie(resp, newCookie)
-
-				err = SetSession(ctx, user, sessionToken)
-				if err != nil {
-					log.Printf("[WARNING] Error creating session for user: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-					return
-				}
-
-				user.Session = sessionToken
-				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        GetRequestIp(request),
-					Timestamp: time.Now().Unix(),
-				})
-				// }
+				//Store user's last session so don't have to go through sso again while changing org.
+				user.UsersLastSession = user.Session
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -19465,6 +19508,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		IP:        GetRequestIp(request),
 		Timestamp: time.Now().Unix(),
 	})
+
+	//Store user's last session so don't have to go through sso again while changing org.
+	newUser.UsersLastSession = sessionToken
 
 	err = SetUser(ctx, newUser, true)
 	if err != nil {
@@ -28180,6 +28226,10 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	}
 }
 
+
+// FIXME: Always fails:
+
+
 func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -28221,9 +28271,54 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
 		return
+	}
+
+	// FIXME: Check if this workflow has a parent workflow
+	//log.Printf("[DEBUG] Parent workflow: %#v", workflow.ParentWorkflowId)
+	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != fileId {
+		workflow, err = GetWorkflow(ctx, workflow.ParentWorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Parent workflow %s doesn't exist.", workflow.ParentWorkflowId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Failed finding parent workflow"}`))
+			return
+		}
+
+		// Updating role
+		orgUserFound := false
+		for _, orgId := range user.Orgs {
+			if orgId != workflow.OrgId {
+				continue
+			}
+
+			org, err := GetOrg(ctx, orgId) 
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org during parent org loading %s: %s", org.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			for _, orgUser := range org.Users {
+				if user.Id == orgUser.Id {
+					user.Role = orgUser.Role
+					user.ActiveOrg.Id = org.Id
+					orgUserFound = true 
+				}
+			}
+
+			break
+		}
+
+		if !orgUserFound {
+			log.Printf("[WARNING] User %s not found in parent org %s", user.Username, workflow.OrgId)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "User not found in parent org"}`))
+			return
+		}
 	}
 
 	// Check workflow.Sharing == private / public / org  too
@@ -28244,6 +28339,8 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
+
 
 	// Access is granted -> get revisions
 	childWorkflows, err := ListChildWorkflows(ctx, workflow.ID)

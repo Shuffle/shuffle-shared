@@ -591,6 +591,7 @@ type User struct {
 	GeneratedUsername    string        `datastore:"generated_username" json:"generated_username"`
 	SessionLogin         bool          `datastore:"session_login" json:"session_login"`                   // Whether it's a login with session or API (used to verify access)
 	ValidatedSessionOrgs []string      `datastore:"validated_session_orgs" json:"validated_session_orgs"` // Orgs that have been used in the current session for the user
+	UsersLastSession     string        `datastore:"users_last_session" json:"users_last_session"`
 
 	// Starting web3 integration
 	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
