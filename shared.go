@@ -12854,13 +12854,23 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("https://shuffler.io/api/v1/login_openid"))
 	}
 
+	//Redirect url for onprem
 	if project.Environment != "cloud" && strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
+	} else {
+		//check if base url exist if exist then assign the base url. This is for local testing when request.Host is is not "shuffle-backend"
+		if project.Environment != "cloud" && len(os.Getenv("BASE_URL")) > 0 {
+			redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
+		} else if project.Environment != "cloud" {
+			//if base url not exist then assign hardcoded url for the onprem, user should not reach here but in case not set the base url hardcode it.
+			redirectUrl = url.QueryEscape(fmt.Sprintf("http://localhost:5001/api/v1/login_openid"))
+		}
 	}
 
-	if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
-		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
-	}
+	//In any case redirect url should not be the SSO_REDIRECT_URL as it is the frontend url where user will be redirected after login.
+	// if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+	// 	redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
+	// }
 
 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 
@@ -19091,7 +19101,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(backendUrl) > 0 {
-		// redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
+		//we don't need to add /workflow path in backend url as backend url is SSO_REDIRECT_URL and it is already pointing to /workflow by default.
 		redirectUrl = backendUrl
 	}
 
