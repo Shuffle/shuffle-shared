@@ -3919,7 +3919,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if strings.Contains(string(respBody), "error") {
-		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v", string(respBody), v.Encode())
+		//log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v\n", string(respBody), v.Encode())
+		log.Printf("\n\n[ERROR] Oauth2 RESPONSE from %s: %s", url, string(respBody))
 	}
 
 	// Check if we have an authentication token and pre-set it

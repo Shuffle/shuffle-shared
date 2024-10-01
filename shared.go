@@ -23843,12 +23843,12 @@ func GetExternalClient(baseUrl string) *http.Client {
 		}
 
 		certDir := "/certs/"
-
 		if os.Getenv("SHUFFLE_CERT_DIR") != "" {
 			certDir = os.Getenv("SHUFFLE_CERT_DIR")
+
+			log.Printf("[INFO] Reading self signed certificates from custom dir '%s'", certDir)
 		}
 
-		log.Printf("[INFO] Reading self signed certificates from %s dir", certDir)
 
 		files, err := os.ReadDir(certDir)
 		if err == nil && os.Getenv("SHUFFLE_CERT_DIR") != "" {
@@ -23865,6 +23865,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 					}
 				}
 			}
+
 			transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
 		}
 	}
