@@ -6828,7 +6828,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			// Just making sure
 			if project.Environment == "cloud" {
 				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
-				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, tmpworkflow.ID)
+
+				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
 				if err != nil {
 					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
 					log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s. Username: %s. ACL controlled with GITHUB_USER_ALLOWLIST environment variable. Allowed users: %#v", user.Id, tmpworkflow.ID, err, user.PublicProfile.GithubUsername, allowList)
@@ -11759,7 +11760,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	//	//log.Printf("[INFO] Should set SSO entrypoint to %s", org.SSOConfig.SSOEntrypoint)
 	//	SSOUrl = org.SSOConfig.SSOEntrypoint
 	//}
-
 
 	log.Printf("[DEBUG] Updating org %s (%s) with %d users", org.Name, org.Id, len(org.Users))
 	err = SetOrg(ctx, *org, org.Id)
@@ -17956,7 +17956,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		//log.Printf("[INFO] Checking single execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
 
-		if len(newExecution.Results) > resultAmount-1  {
+		if len(newExecution.Results) > resultAmount-1 {
 			relevantIndex := len(newExecution.Results) - 1
 
 			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
@@ -24344,7 +24344,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
 
-	//RunAiQuery(systemMessage, userMessage) 
+	//RunAiQuery(systemMessage, userMessage)
 
 	availableLabels := []string{}
 	for _, app := range newapps {
@@ -24757,7 +24757,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Action:   "app_authentication",
 			Category: discoveredCategory,
 			Reason:   fmt.Sprintf("Authenticate %s first.", selectedApp.Name),
-			Label:	value.Label,
+			Label:    value.Label,
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -24765,7 +24765,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			AvailableLabels: availableLabels,
 		}
 
-		// Check for user agent including shufflepy 
+		// Check for user agent including shufflepy
 		useragent := request.Header.Get("User-Agent")
 		if strings.Contains(strings.ToLower(useragent), "shufflepy") {
 			structuredFeedback.Apps = []WorkflowApp{}
@@ -24774,9 +24774,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			currentUrl := fmt.Sprintf("%s://%s", request.URL.Scheme, request.URL.Host)
 			if project.Environment == "cloud" {
 				currentUrl = "https://shuffler.io"
-			} 
+			}
 
-			// FIXME: Implement this. Uses org's auth 
+			// FIXME: Implement this. Uses org's auth
 			orgAuth := org.OrgAuth.Token
 
 			structuredFeedback.Reason = fmt.Sprintf("Authenticate here: %s/appauth?app_id=%s&auth=%s", currentUrl, selectedApp.ID, orgAuth)
@@ -26013,7 +26013,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 		return selectedAction, selectedCategory, availableLabels
 	}
 
-	// Reload the app to be the proper one with updated actions instead 
+	// Reload the app to be the proper one with updated actions instead
 	// of random cache issues
 	newApp, err := GetApp(ctx, app.ID, User{}, false)
 	if err != nil {
