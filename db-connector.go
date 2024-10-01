@@ -303,12 +303,17 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
 				for _, user := range org.Users {
 					if user.Role == "admin" {
+						var BccAddress []string
+						if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
+							BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
+						}
+
 						mailbody := Mailcheck{
 							Targets: []string{user.Username},
 							Subject: "You have reached the threshold limit of app executions",
 							Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
 						}
-						err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false)
+						err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
 						if err != nil {
 							log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
 						} else {

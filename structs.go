@@ -3645,6 +3645,7 @@ type Mailcheck struct {
 	Authorization      string   `json:"authorization"`
 	ExecutionType      string   `json:"execution_type"`
 	Start              string   `json:"start"`
+	Bcc                []string `json:"bcc"`
 }
 
 type SmsBody struct {
