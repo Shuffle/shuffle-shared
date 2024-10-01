@@ -3060,7 +3060,6 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
-
 	if project.CacheDb && workflow.ID != "" {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
@@ -3725,9 +3724,8 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-			log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 			//log.Printf("Users: %s", curOrg.Users)
-			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) {
+			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) && !strings.Contains(err.Error(), `users_last_session`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
 				log.Printf("[INFO] Error in org loading (3). Migrating org to new org and user handler (2): %s", err)
 				err = nil
@@ -3757,9 +3755,10 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					setOrg = true
 				}
 			} else if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
+				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
+				log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 				return &Org{}, err
 			}
 		}
@@ -4264,6 +4263,10 @@ func propagateUser(user User, delete bool) error {
 func SetOrg(ctx context.Context, data Org, id string) error {
 	if len(id) == 0 {
 		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
+	}
+
+	if len(data.Users) == 0 {
+		return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
 	}
 
 	if id != data.Id && len(data.Id) > 0 {
@@ -7904,7 +7907,14 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 	}
 
 	// Fix branches & triggers
+	scheduleNotStarted := "" 
 	for index, trigger := range workflow.Triggers {
+		if trigger.TriggerType == "SCHEDULE" {
+			if trigger.Status != "RUNNING" {
+				scheduleNotStarted = trigger.ID
+			}
+		}
+
 		if trigger.ID == "" {
 			workflow.Triggers[index].ID = uuid.NewV4().String()
 		}
@@ -7914,6 +7924,35 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 		if branch.ID == "" {
 			workflow.Branches[index].ID = uuid.NewV4().String()
 		}
+	}
+
+	// Check validation if Schedule is started (?)
+	if len(scheduleNotStarted) > 0  {
+		// Add validation problem
+		found := false
+		for _, problem := range workflow.Validation.Errors {
+			if problem.Type == "SCHEDULE" {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			workflow.Validation.Errors = append(workflow.Validation.Errors, ValidationProblem{
+				Order: -1,
+				Type:  "SCHEDULE",
+				ActionId: scheduleNotStarted,
+				Error: "Schedule not started",
+			})
+		}
+	}
+
+	if len(workflow.Validation.Errors) == 0 {
+		workflow.Validation.Errors = []ValidationProblem{}
+	}
+
+	if len(workflow.Validation.SubflowApps) == 0 {
+		workflow.Validation.SubflowApps = []ValidationProblem{}
 	}
 
 	return workflow
@@ -7960,6 +7999,11 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	// Handles parent/child workflow relationships
 	if len(workflow.ParentWorkflowId) > 0 {
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
+	} 
+
+	if len(workflow.ChildWorkflowIds) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
 	}
 
@@ -9195,38 +9239,38 @@ func StoreDisabledRules(ctx context.Context, file DisabledRules) error {
 	return nil
 }
 
-func GetDisabledRules(ctx context.Context) (*DisabledRules, error) {
+func GetDisabledRules(ctx context.Context, orgId string) (*DisabledRules, error) {
 	nameKey := "disabled_rules"
 	disabledRules := &DisabledRules{}
 	if project.DbType == "opensearch" {
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), "0")
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), orgId)
 		if err != nil {
 			log.Printf("[WARNING] Error for %s: %s", nameKey, err)
-			return &DisabledRules{}, err
+			return disabledRules, nil
 		}
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
-			return &DisabledRules{}, errors.New("rules doesn't exist")
+			return disabledRules, nil
 		}
 
 		respBody, err := ioutil.ReadAll(res.Body)
 		if err != nil {
-			return &DisabledRules{}, err
+			return disabledRules, err
 		}
 
 		wrapped := DisabledHookWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
 		if err != nil {
-			return &DisabledRules{}, err
+			return disabledRules, err
 		}
 
 		disabledRules = &wrapped.Source
 	} else {
-		key := datastore.NameKey(nameKey, "0", nil)
+		key := datastore.NameKey(nameKey, orgId, nil)
 		if err := project.Dbclient.Get(ctx, key, disabledRules); err != nil {
-			log.Printf("[WARNING] Error getting disabled rules: %s", err)
-			//return &DisabledRules{}, err
+			log.Printf("[WARNING] Error getting disabled for org %s: %s", orgId, err)
+			return disabledRules, err
 		}
 	}
 

@@ -3534,7 +3534,7 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 	username := ""
 	password := ""
 
-	log.Printf("[DEBUG] Got %d auth fields (%s)", len(appAuth.Fields), appAuth.Id)
+	//log.Printf("[DEBUG] Got %d auth fields (%s)", len(appAuth.Fields), appAuth.Id)
 	for _, field := range appAuth.Fields {
 		if field.Key == "client_secret" {
 			clientSecret = field.Value
@@ -3580,22 +3580,15 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		refreshData += fmt.Sprintf("&scope=%s", strings.Replace(scope, ",", " ", -1))
 	}
 
-
 	if strings.Contains(refreshData, "user_impersonation") && strings.Contains (refreshData, "azure") && !strings.Contains(refreshData, "resource="){
 		// Add "resource" for microsoft hings
 		refreshData += "&resource=https://management.azure.com"
 	}
 
-	/*
-	if strings.Contains(refreshData, "client_credentials") && strings.Contains (refreshData, "azure") && !strings.Contains(refreshData, "resource="){
-		refreshData += "&resource=https://management.azure.com"
-	}
-	*/
-
+	// Not necessary for refresh
 	log.Printf("[DEBUG] Oauth2 REFRESH DATA: %#v. URL: %#v", refreshData, tokenUrl)
 
 	client := GetExternalClient(tokenUrl)
-
 	req, err := http.NewRequest(
 		"POST",
 		tokenUrl,
@@ -3619,13 +3612,14 @@ func GetOauth2ApplicationPermissionToken(ctx context.Context, user User, appAuth
 		return appAuth, err
 	}
 
-	log.Printf("[DEBUG] Oauth2 application auth Response for %s: %d", tokenUrl, newresp.StatusCode)
-
 	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
+		log.Printf("[ERROR] Oauth2 application auth: Failed to read response body: %s", err)
 		return appAuth, err
 	}
+
+	log.Printf("[DEBUG] Oauth2 application auth Response for %s: %d", tokenUrl, newresp.StatusCode)
 
 	if newresp.StatusCode >= 300 {
 		// Printing on error to handle in future instances
@@ -3713,7 +3707,18 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	oauthUrl := ""
 	refreshUrl := ""
 	refreshToken := ""
+	
 	for _, field := range appAuth.Fields {
+		// Try decryption here as well just in case
+		// In some cases, it's already decrypted at this point, but it doesn't matter much to re-do it in case, as this function is used multiple places
+		decryptionKey := fmt.Sprintf("%s_%d_%s_%s", appAuth.OrgId, appAuth.Created, appAuth.Label, field.Key)
+		newValue, err := HandleKeyDecryption([]byte(field.Value), decryptionKey)
+		if err == nil {
+			field.Value = string(newValue)
+		} else {
+			//log.Printf("[DEBUG] Failed decrypting field %s: %s", field.Key, err)
+		}
+
 		if field.Key == "authentication_url" {
 			url = field.Value
 		} else if field.Key == "code" {
@@ -3914,7 +3919,8 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 	}
 
 	if strings.Contains(string(respBody), "error") {
-		log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v", string(respBody), v.Encode())
+		//log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v\n", string(respBody), v.Encode())
+		log.Printf("\n\n[ERROR] Oauth2 RESPONSE from %s: %s", url, string(respBody))
 	}
 
 	// Check if we have an authentication token and pre-set it

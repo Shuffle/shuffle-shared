@@ -3,8 +3,10 @@ package shuffle
 import (
 	"fmt"
 	"log"
+	"time"
 	"sort"
 	"strings"
+	"strconv"
 
 	"encoding/json"
 	"io/ioutil"
@@ -43,7 +45,7 @@ func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
 		widget = location[6]
 	}
 
-	log.Printf("Should get widget %s in dashboard %s", widget, dashboard)
+	//log.Printf("Should get widget %s in dashboard %s", widget, dashboard)
 	id := uuid.NewV4().String()
 
 	// Returning some static info for now
@@ -279,13 +281,14 @@ func HandleNewWidget(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
-func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
+func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
 	}
 
 	var orgId string
+	var statsKey string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
@@ -295,7 +298,191 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		orgId = location[4]
+		statsKey = location[4]
+		if len(location) > 6 {
+			orgId = location[4]
+			statsKey = location[6]
+		}
+	}
+
+	// Remove ? from orgId or statsKey
+	orgId = strings.Split(orgId, "?")[0]
+	statsKey = strings.Split(statsKey, "?")[0]
+
+	if len(statsKey) <= 1 {
+		log.Printf("[WARNING] Invalid stats key: %s", statsKey)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid stats key"}`))
+		return
+	}
+
+	statsKey = strings.ToLower(strings.ReplaceAll(statsKey, " ", "_"))
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get stats: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	orgId = user.ActiveOrg.Id
+	ctx := GetContext(request)
+	info, err := GetOrgStatistics(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting stats in specific stats for org %s: %s", orgId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting stats for your org. Maybe not initialized yet?"}`))
+		return
+	}
+
+	// Default
+	statDays := 30
+	// Check for if the query parameter exists
+	if len(request.URL.Query().Get("days")) > 0 {
+		amountQuery := request.URL.Query().Get("days")
+		statDays, err = strconv.Atoi(amountQuery)
+		if err != nil {
+			log.Printf("[WARNING] Failed parsing days query parameter: %s", err)
+		} else {
+			if statDays > 365 {
+				statDays = 365
+			}
+		}
+	}
+
+	log.Printf("[INFO] Should get stats for key %s for the last %d days", statsKey, statDays)
+
+	totalEntires := 0
+	totalValue := 0 
+	statEntries := []AdditionalUseConfig{}
+	info.DailyStatistics = append(info.DailyStatistics, DailyStatistics{
+		Date: time.Now(),
+		Additions: info.Additions,
+	})
+
+	allStats := []string{}
+	for _, daily := range info.DailyStatistics {
+		// Check if the date is more than statDays ago
+		shouldAppend := true
+		if daily.Date.Before(time.Now().AddDate(0, 0, -statDays)) {
+			shouldAppend = false 
+		}
+
+		for _, addition := range daily.Additions {
+			newKey := strings.ToLower(strings.ReplaceAll(addition.Key, " ", "_"))
+			if shouldAppend && newKey == statsKey {
+				totalEntires++
+				totalValue += int(addition.Value)
+
+				addition.Key = statsKey
+				addition.Date = daily.Date
+				statEntries = append(statEntries, addition)
+			}
+
+			if !ArrayContains(allStats, newKey) {
+				allStats = append(allStats, newKey)
+			}
+		}
+	}
+
+	// Deduplicate and merge same days
+	mergedEntries := []AdditionalUseConfig{}
+	for _, entry := range statEntries {
+		found := false
+		for mergedEntryIndex, mergedEntry := range mergedEntries {
+			if mergedEntry.Date.Day() == entry.Date.Day() && mergedEntry.Date.Month() == entry.Date.Month() && mergedEntry.Date.Year() == entry.Date.Year() {
+				mergedEntries[mergedEntryIndex].Value += entry.Value
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			mergedEntries = append(mergedEntries, entry)
+		}
+	}
+
+	statEntries = mergedEntries
+
+	// Check if entries exist for the last X statDays
+	// Backfill any missing ones
+	if len(statEntries) < statDays {
+		// Find the missing days
+		missingDays := []time.Time{}
+		for i := 0; i < statDays; i++ {
+			missingDays = append(missingDays, time.Now().AddDate(0, 0, -i))
+		}
+
+		// Find the missing entries
+		appended := 0
+		foundAmount := 0
+		toAppend := []AdditionalUseConfig{}
+		for _, missingDay := range missingDays {
+			found := false
+			for _, entry := range statEntries {
+				if entry.Date.Day() == missingDay.Day() && entry.Date.Month() == missingDay.Month() && entry.Date.Year() == missingDay.Year() {
+					foundAmount += 1
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				appended += 1
+				toAppend = append(toAppend, AdditionalUseConfig{
+					Key:   statsKey,
+					Value: 0,
+					Date:  missingDay,
+				})
+			}
+		}
+
+		statEntries = append(statEntries, toAppend...)
+	}
+
+	// Sort statentries by date
+	sort.Slice(statEntries, func(i, j int) bool {
+		return statEntries[i].Date.Before(statEntries[j].Date)
+	})
+
+	marshalledEntries, err := json.Marshal(statEntries)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data for org stats"}`)))
+		return
+	}
+
+	availableStats, err := json.Marshal(allStats)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data for org stats"}`)))
+		return
+	}
+
+	successful := totalValue != 0
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "key": "%s", "total": %d, "available_keys": %s, "entries": %s}`, successful, statsKey, totalValue, string(availableStats), string(marshalledEntries))))
+}
+
+func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	var orgId string
+	var statsKey string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		// Just falling back 
+		if len(location) <= 4 {
+		} else {
+			orgId = location[4]
+		}
 	}
 
 	user, err := HandleApiAuthentication(resp, request)
@@ -304,6 +491,10 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	if len(orgId) == 0 {
+		orgId = user.ActiveOrg.Id
 	}
 
 	ctx := GetContext(request)
@@ -344,23 +535,11 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(statsKey) > 0  {
+		log.Printf("[INFO] Should get stats for key %s", statsKey)
+	}
+
 	if len(info.DailyStatistics) > 0 {
-		/*
-			   // Should remove the FIRST day as it's very skewed
-			// Do this based on the Timestamp (date)
-			skipIndex := 0
-			lowestTimestamp := info.DailyStatistics[0].Date
-			   for _, timestamp := range info.DailyStatistics {
-				if timestamp.Date.Before(lowestTimestamp) {
-					lowestTimestamp = timestamp.Date
-				}
-			}
-
-			if skipIndex >= 0 {
-				info.DailyStatistics = append(info.DailyStatistics[:skipIndex], info.DailyStatistics[skipIndex+1:]...)
-			}
-		*/
-
 		// Sort the array
 		sort.Slice(info.DailyStatistics, func(i, j int) bool {
 			return info.DailyStatistics[i].Date.Before(info.DailyStatistics[j].Date)

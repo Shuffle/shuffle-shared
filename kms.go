@@ -24,7 +24,8 @@ import (
 )
 
 //var model = "gpt-4-turbo-preview"
-var model = "gpt-4o"
+//var model = "gpt-4o"
+var model = "gpt-4o-mini"
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
 	//log.Printf("\n\n[DEBUG] Getting KMS cache for key %s\n\n", key)
@@ -533,7 +534,7 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 		}
 	}
 
-	log.Printf("[DEBUG] Status: %d, ok: %t", status, bodyOk)
+	log.Printf("[DEBUG] Previous Status: %d, ok: %t", status, bodyOk)
 
 	if bodyOk {
 		if val, ok := body1.(map[string]interface{}); ok {
@@ -611,7 +612,8 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	// Add all fields with value from here
 	inputBody := "{\n"
 	for _, param := range action.Parameters {
-		if param.Name == "headers" || param.Name == "ssl_verify" || param.Name == "to_file" || param.Name == "url" || strings.Contains(param.Name, "username_") || strings.Contains(param.Name, "password_") {
+		//if param.Name == "headers" || param.Name == "ssl_verify" || param.Name == "to_file" || param.Name == "url" || strings.Contains(param.Name, "username_") || strings.Contains(param.Name, "password_") {
+		if param.Name == "ssl_verify" || param.Name == "to_file" || param.Name == "url" || strings.Contains(param.Name, "username_") || strings.Contains(param.Name, "password_") {
 			continue
 		}
 
@@ -755,7 +757,6 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 				// Make map from val and marshal to byte
 
 				stringType := reflect.TypeOf(val).String()
-				log.Printf("STRINGTYPE: %#v", stringType)
 				if stringType == "map[string]interface {}" {
 					valByte, err := json.Marshal(val)
 					if err != nil {
@@ -835,26 +836,36 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 
 	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
 
-	log.Printf("[DEBUG] Skipping output formatting")
+	log.Printf("[DEBUG] Skipping output formatting (bad output string)")
 	//errorString := handleOutputFormatting(string(outputData), inputdata, appname)
 
 	return outputData 
 }
 
 func RunAiQuery(systemMessage, userMessage string) (string, error) {
-	if len(systemMessage) > 10000 || len(userMessage) > 10000 {
-		return "", errors.New("Message too long for general usage. Max 10000 characters for system & user message")
+	maxTokens := 5000
+	maxCharacters := 100000
+	//if len(systemMessage) > maxTokens || len(userMessage) > maxTokens {
+		// FIXME: Error or just cut it off?
+		//return "", errors.New("Message too long for general usage. Max 10000 characters for system & user message")
+
+	if len(systemMessage) > maxCharacters {
+		systemMessage = systemMessage[:maxCharacters]
 	}
 
-	//log.Printf("[INFO] System message (find API documentation): %s", systemMessage)
+	if len(userMessage) > maxCharacters {
+		log.Printf("[WARNING] User message too long. Cutting off from %d to %d characters", len(userMessage), maxCharacters)
+		userMessage = userMessage[:maxCharacters]
+	}
+	//}
+
 	cnt := 0
 	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-
 	chatCompletion := openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{},
 		Temperature: 0.8, // A tiny bit of creativity 
-		MaxTokens:   500,
+		MaxTokens:   maxTokens,
 	}
 
 	if len(systemMessage) > 0 {
@@ -1215,16 +1226,41 @@ func uploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 }
 
 func FixContentOutput(contentOutput string) string {
-	if strings.Contains(contentOutput, "```") {
+	if strings.Contains(contentOutput, "```json") {
 		// Handle ```json
 		start := strings.Index(contentOutput, "```json")
 		end := strings.Index(contentOutput, "```")
 		if start != -1 {
 			end = strings.Index(contentOutput[start+7:], "```")
+
+			// Shift it so the index is at the correct place
+			end = end + start+7
 		}
 
+
 		if start != -1 && end != -1 {
-			contentOutput = contentOutput[start+7 : end+7]
+			newend := end+7	
+			newstart := start+7
+
+			log.Printf("[INFO] Found ``` in content. Start: %d, end: %d", start, end)
+
+			if newend > len(contentOutput) {
+				newend = end
+			}
+
+			if newend > len(contentOutput) {
+				newend = len(contentOutput)
+			}
+
+			if newstart > len(contentOutput) {
+				newstart = start
+			}
+
+			if newstart > len(contentOutput) {
+				newstart = len(contentOutput)
+			}
+
+			contentOutput = contentOutput[start+7 : newend]
 		}
 	}
 
@@ -1233,6 +1269,7 @@ func FixContentOutput(contentOutput string) string {
 		end := strings.Index(contentOutput[start+3:], "```")
 		if start != -1 {
 			end = strings.Index(contentOutput[start+3:], "```")
+			end = end + start+3
 		}
 			
 		if start != -1 && end != -1 {
@@ -1266,7 +1303,16 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 		return app
 	}
 
-	log.Printf("[DEBUG] Running app fix with ONLY one label for app %s (%s) with %d actions: %s", app.Name, app.ID, len(app.Actions), label)
+	// Fix the label to be as it is in category (uppercase + spaces)
+	// fml, there is no consistency to casing + underscores, so we keep the new
+	//label = strings.ReplaceAll(strings.Title(strings.ToLower(label)), "_", " ")
+
+	log.Printf("[INFO] Running app fix for label '%s' for app %s (%s) with %d actions", label, app.Name, app.ID, len(app.Actions))
+
+	// Just a reset, as Other doesn't really achieve anything directly
+	if len(app.Categories) > 0 && app.Categories[0] == "Other" {
+		app.Categories = []string{}
+	}
 
 	// Check if the app has any actions
 	foundCategory := AppCategory{}
@@ -1291,9 +1337,8 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 		}
 	}
 
+	updatedIndex := -1
 	if len(foundCategory.ActionLabels) == 0 {
-		log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label, then using that category in app setup", app.Name, app.ID)
-
 		for _, category := range availableCategories {
 			for _, actionLabel := range category.ActionLabels {
 				if strings.ToLower(actionLabel) != strings.ToLower(label) {
@@ -1305,20 +1350,82 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 				break
 			}
 		}
+
+		if len(foundCategory.Name) == 0 {
+			log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label, then using that category in app setup", app.Name, app.ID)
+			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. Output as only JSON."`
+
+			categories := ""
+			for _, category := range availableCategories {
+				categories += fmt.Sprintf("%s,", category.Name)	
+			}
+
+			userMessage := fmt.Sprintf("The app name is '%s'. Available categories are: %s. Here are SOME actions it can do:\n", app.Name, strings.Trim(categories, ","))
+			for cnt, action := range app.Actions {
+				userMessage += fmt.Sprintf("%s\n", action.Name)
+				if cnt > 25 {
+					break
+				}
+			}
+
+			output, err := RunAiQuery(systemMessage, userMessage) 
+			log.Printf("[DEBUG] Autocomplete output for category '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
+			if err != nil {
+				log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for category with app %s (%s): %s", app.Name, app.ID, err)
+				return app
+			} 
+
+			type ActionStruct struct {
+				Category string `json:"category"`
+			}
+
+			output = FixContentOutput(output) 
+			actionStruct := ActionStruct{}
+			err = json.Unmarshal([]byte(output), &actionStruct)
+			if err != nil {
+				log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
+			}
+
+			if len(actionStruct.Category) == 0 {
+				log.Printf("[ERROR] No category found for app %s (%s) based on label %s (1)", app.Name, app.ID, label)
+				return app
+			}
+
+			app.Categories = append(app.Categories, actionStruct.Category)
+
+			// Forces app to update
+			if len(app.Actions) > 0 { 
+				updatedIndex = 0
+			}
+
+			for _, category := range availableCategories {
+				if category.Name != actionStruct.Category {
+					continue
+				}
+
+				foundCategory = category
+				break
+			}
+		}
 	}
 
 	if len(foundCategory.ActionLabels) == 0 { 
+
 		log.Printf("[ERROR] No category found for app %s (%s) based on label %s", app.Name, app.ID, label)
 		return app
 	}
 
 	// FIXME: Run AI here to check based on the label which action may be matching
-	//log.Printf("[DEBUG] Found category %s for app %s (%s) based on app categories", foundCategory.Name, app.Name, app.ID)
-	systemMessage := fmt.Sprintf(`Find which action is most likely to be used based on the label '%s'. If any match, return their exact name and if none match, write "none" as the name. Return in the JSON format {"action": "action name"}`, label)
-	userMessage := "The available actions are as follows:\n"
+	
+	// Old attempts 
+	//systemMessage := fmt.Sprintf(`Find which action is most likely to be used based on the label '%s'. If any match, return their exact name and if none match, write "none" as the name. Return in the JSON format {"action": "action name"}`, label)
+	//userMessage := "The available actions are as follows:\n"
+
+	systemMessage := `Your goal is to find the correct action for a specific label if it exists. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, return {"success": false, "action": ""}. Output as only JSON."`
+	userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 	for _, action := range app.Actions {
-		userMessage += fmt.Sprintf("Action: %s\n", action.Name)	
+		userMessage += fmt.Sprintf("%s\n", action.Name)	
 	}
 
 	output, err := RunAiQuery(systemMessage, userMessage) 
@@ -1333,6 +1440,8 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 
 	output = FixContentOutput(output) 
 
+	log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
+
 	actionStruct := ActionStruct{}
 	err = json.Unmarshal([]byte(output), &actionStruct)
 	if err != nil {
@@ -1341,43 +1450,133 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 
 	if len(actionStruct.Action) == 0 {
 		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (1)", app.Name, app.ID, label)
-		return app
-	}
+		//return app
+	} else {
+		newname := strings.Trim(strings.ToLower(strings.Replace(GetCorrectActionName(actionStruct.Action), " ", "_", -1)), " ")
 
-	//log.Printf("[DEBUG] Found action %s for app %s (%s) based on label %s", actionStruct.Action, app.Name, app.ID, label)
+		//log.Printf("[DEBUG] Looking for action: %s\n\n\n\n", newname)
 
-	updatedIndex := -1
-	newname := strings.Trim(strings.ToLower(strings.Replace(actionStruct.Action, " ", "_", -1)), " ")
-	for actionIndex, action := range app.Actions {
-		if strings.Trim(strings.ToLower(strings.Replace(action.Name, " ", "_", -1)), " ") != newname {
-			continue
-		}
+		for actionIndex, action := range app.Actions {
+			searchName := strings.Trim(strings.ToLower(strings.Replace(GetCorrectActionName(action.Name), " ", "_", -1)), " ")
 
-		// Avoid duplicates in case validation system fails
-		foundLabel := false
-		for _, categoryLabel := range action.CategoryLabel {
-			if strings.ToLower(categoryLabel) != strings.ToLower(label) {
-				foundLabel = true
+			// For some reason this doesn't find it properly
+			if searchName != newname {
+				continue
+			}
+
+			log.Printf("[INFO] Found action %s in app %s based on label %s", action.Name, app.Name, label)
+
+			// Avoid duplicates in case validation system fails
+			foundLabel := false
+			newLabels := []string{}
+			for _, categoryLabel := range action.CategoryLabel {
+				if strings.ToLower(categoryLabel) == "no label" {
+					continue
+				}
+
+				newLabels = append(newLabels, categoryLabel)
+				if strings.ToLower(categoryLabel) == strings.ToLower(label) {
+					foundLabel = true
+				}
+			}
+
+			app.Actions[actionIndex].CategoryLabel = newLabels
+			if foundLabel {
+				log.Printf("[INFO] %s already has label '%s' in app %s (%s)", action.Name, label, app.Name, app.ID)
 				break
 			}
-		}
 
-		if foundLabel {
+			updatedIndex = actionIndex
+			app.Actions[actionIndex].CategoryLabel = append(app.Actions[actionIndex].CategoryLabel, label)
+
+			log.Printf("[DEBUG] Adding label %s to action %s in app %s (%s). New labels: %#v", label, action.Name, app.Name, app.ID, app.Actions[actionIndex].CategoryLabel)
 			break
 		}
-
-		updatedIndex = actionIndex
-		app.Actions[actionIndex].CategoryLabel = append(app.Actions[actionIndex].CategoryLabel, label)
-
-		log.Printf("[DEBUG] Adding label %s to action %s in app %s (%s). New labels: %#v", label, action.Name, app.Name, app.ID, app.Actions[actionIndex].CategoryLabel)
-		break
 	}
 
 	// FIXME: Add the label to the OpenAPI action as well?
 	if updatedIndex >= 0 {
-		go SetWorkflowAppDatastore(context.Background(), app, app.ID)
+		err = SetWorkflowAppDatastore(context.Background(), app, app.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed to set app datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+		}
 
-		log.Printf("\n\n\n[WARNING] Updated app %s (%s) with label %s. SHOULD update OpenAPI action as well\n\n\n", app.Name, app.ID, label)
+		//log.Printf("\n\n\n[WARNING] Updated app %s (%s) with label %s. SHOULD update OpenAPI action as well\n\n\n", app.Name, app.ID, label)
+
+		// Find the OpenAPI version and update it too
+		openapiApp, err := GetOpenApiDatastore(context.Background(), app.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get openapi datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+			return app 
+		} 
+
+		swaggerLoader := openapi3.NewSwaggerLoader()
+		swaggerLoader.IsExternalRefsAllowed = true
+		openapi, err := swaggerLoader.LoadSwaggerFromData([]byte(openapiApp.Body))
+		if err != nil {
+			log.Printf("[ERROR] Failed to unmarshal openapi in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+			return app
+		}
+
+
+		// Overwrite categories no matter what?
+		openapi.Info.Extensions["x-categories"] = app.Categories
+
+		// Find the path
+		actionName := GetCorrectActionName(app.Actions[updatedIndex].Name)
+		changed := false
+		_ = openapi
+		log.Printf("OPENAPI, ACTIONNAME: %s", actionName)
+		for pathIndex, path := range openapi.Paths {
+			_ = pathIndex
+
+			for method, operation := range path.Operations() {
+				if operation == nil {
+					continue
+				}
+
+				correctName := strings.Replace(strings.ToLower(GetCorrectActionName(operation.Summary)), " ", "_", -1)
+				if correctName != actionName {
+					//log.Printf("[INFO] Skipping method %s with summary '%s' as it doesn't match action '%s'", method, correctName, actionName)
+					continue
+				}
+
+				log.Printf("[INFO] Found method %s for action %s (OPENAPI) during label mapping for '%s' in app '%s'", method, app.Actions[updatedIndex].Name, label, app.Name)
+				if len(operation.Extensions) == 0 {
+					operation.Extensions["x-label"] = label
+				} else {
+					if _, found := operation.Extensions["x-label"]; !found {
+						operation.Extensions["x-label"] = label
+					} else {
+						// add to it with comma?
+						operation.Extensions["x-label"] = fmt.Sprintf("%s,%s", operation.Extensions["x-label"], label)
+					}
+				}
+
+				changed = true 
+				openapi.Paths[pathIndex].SetOperation(method, operation)
+			}
+
+			if changed {
+				break
+			}
+		}
+
+		if changed {
+			parsedOpenapi, err := openapi.MarshalJSON()
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal openapi in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+			} else {
+				openapiApp.Body = string(parsedOpenapi)
+
+				log.Printf("[INFO] Updated openapi with new label for action %s in app %s", app.Actions[updatedIndex].Name, app.Name)
+				err = SetOpenApiDatastore(context.Background(), openapiApp.ID, openapiApp)
+				if err != nil {
+					log.Printf("[ERROR] Failed to set openapi datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+				}
+			}
+		}
+
 	} else {
 		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (2). GPT error most likely. Output: %s", app.Name, app.ID, label, output)
 	}
