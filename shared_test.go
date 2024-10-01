@@ -2,6 +2,7 @@ package shuffle
 
 import (
     "testing"
+    "net/http"
 )
 
 func TestIsLoop(t *testing.T) {
@@ -25,4 +26,18 @@ func TestIsLoop(t *testing.T) {
             t.Errorf("isLoop(%s) = %v; expected %v", tt.arg, result, tt.expected)
         }
     }
+}
+
+// Simple Test for HandleInternalProxy(client)
+// set env SHUFFLE_INTERNAL_HTTP_PROXY to test the function.
+func TestHandleInternalProxy(t *testing.T) {
+	client := &http.Client{}
+	result := HandleInternalProxy(client)
+
+	if result.Transport.(*http.Transport).Proxy != nil {
+		proxyURL, _ := result.Transport.(*http.Transport).Proxy(nil)
+		t.Logf("Proxy URL set: %v", proxyURL)
+	} else {
+		t.Log("No proxy set")
+	}
 }
