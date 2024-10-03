@@ -6810,8 +6810,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	*/
 
 	if len(workflow.InputQuestions) > 0 {
-		log.Printf("[DEBUG] Making ALL '%d' input questions required for %s", len(workflow.InputQuestions), workflow.ID)
+		log.Printf("[DEBUG] Making ALL '%d' input questions required for workflow %s", len(workflow.InputQuestions), workflow.ID)
 	}
+
 	for qIndex, _ := range workflow.InputQuestions {
 		workflow.InputQuestions[qIndex].Required = true
 	}
@@ -7053,7 +7054,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	} else {
-		log.Printf("[AUDIT] User %s is creating or modifying workflow with ID %s as they are the owner / it's public", user.Username, workflow.ID)
+		log.Printf("[AUDIT] User %s is creating or modifying workflow with ID %s as they are the owner OR it's public", user.Username, workflow.ID)
 
 		if workflow.Public {
 			log.Printf("[WARNING] Rolling back public as the user set it to true themselves")
@@ -7809,6 +7810,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	// Nodechecks
 	foundNodes := []string{}
+
+	log.Printf("[DEBUG] all nodes: %d", len(allNodes))
 	for _, node := range allNodes {
 		for _, branch := range workflow.Branches {
 			if node == branch.DestinationID || node == branch.SourceID {
@@ -13878,7 +13881,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		log.Printf("[ERROR] Failed reading parent body: %s", err)
 		return err
 	}
-	//log.Printf("\n\nBODY FROM STREAM OF PARENT FROM %s (%d): %s", resultUrl, newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
 		log.Printf("[ERROR] Bad statuscode setting subresult (1) with URL %s: %d, %s. Input data: %s", resultUrl, newresp.StatusCode, string(body), string(data))
@@ -20294,6 +20296,79 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Don't override workflow defaults
 	}
 
+	log.Printf("[DEBUG][%s] STARTING IF/ELSE NODE REMAPPING", workflowExecution.ExecutionId)
+	for branchIndex, branch := range workflowExecution.Workflow.Branches {
+		if len(branch.SourceParent) == 0 {
+			continue
+		}
+
+		elseCondition := false
+		if strings.HasSuffix(branch.SourceParent, "-else") {
+			branch.SourceParent = strings.TrimSuffix(branch.SourceParent, "-else")
+			elseCondition = true
+		}
+
+		parentAction := Action{}
+		for _, workflowAction := range workflowExecution.Workflow.Actions {
+			if workflowAction.ID == branch.SourceParent {
+				parentAction = workflowAction
+				break
+			}
+		}
+
+		if parentAction.ID == "" {
+			continue
+		}
+
+		actionLabelParsed := fmt.Sprintf("$%s.%s.valid", strings.ToLower(strings.ReplaceAll(parentAction.Label, " ", "_")), branch.SourceID)
+
+		// FIXME: Add condition to them:
+		// This is going to check the result for:
+		// $parentname.${branch.SourceID}.valid == True
+		// For the else, add one for ALL others:
+		// $parentname.${branch.SourceID}.valid == False & $parentname.${branch.SourceID2}.valid == False && $parentname.${branch.SourceID3}.valid == False
+		//log.Printf("[DEBUG] Branch REMAP: %s -> %s: %#v", branch.SourceID, branch.DestinationID, branch)
+
+		workflowExecution.Workflow.Branches[branchIndex].SourceID = branch.SourceParent
+		newCondition := Condition{
+			Source: WorkflowAppActionParameter{
+				Value: actionLabelParsed,
+
+				ActionField: "",
+				ID: uuid.NewV4().String(),
+				Name: "source",
+				Variant: "STATIC_VALUE",
+			},
+			Condition: WorkflowAppActionParameter{
+				Value: "equals",
+
+				ID: uuid.NewV4().String(),
+				Name: "condition",
+				Variant: "STATIC_VALUE",
+			},
+			Destination: WorkflowAppActionParameter{
+				Value: "true",
+
+				ActionField: "",
+				ID: uuid.NewV4().String(),
+				Name: "destination",
+				Variant: "STATIC_VALUE",
+			},
+		}
+
+		if elseCondition {
+			newCondition.Source.Value = fmt.Sprintf("$%s.run_else", strings.ToLower(strings.ReplaceAll(parentAction.Label, " ", "_")))
+		}
+
+		workflowExecution.Workflow.Branches[branchIndex].Conditions = append(workflowExecution.Workflow.Branches[branchIndex].Conditions, newCondition)
+
+		// Changed to use success: false -> else
+		//newCondition.Destination.Value = "false"
+		//elseCondition = append(elseCondition, newCondition)
+	}
+
+	log.Printf("[DEBUG][%s] ENDING IF/ELSE NODE REMAPPING", workflowExecution.ExecutionId)
+
 	if workflowExecution.SubExecutionCount == 0 {
 		workflowExecution.SubExecutionCount = 1
 	}
@@ -21212,7 +21287,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					continue
 				}
 
-				//log.Printf("[WARNING] Set %s to SKIPPED as it's NOT a childnode of the startnode.", action.ID)
 				curaction := Action{
 					AppName:    action.AppName,
 					AppVersion: action.AppVersion,
@@ -21220,8 +21294,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					Name:       action.Name,
 					ID:         action.ID,
 				}
-				//action
-				//curaction.Parameters = []
+
 				defaultResults = append(defaultResults, ActionResult{
 					Action:        curaction,
 					ExecutionId:   workflowExecution.ExecutionId,
@@ -21276,8 +21349,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if !found {
-				//log.Printf("SHOULD SET TRIGGER %s TO BE SKIPPED", trigger.ID)
-
 				curaction := Action{
 					AppName:    "shuffle-subflow",
 					AppVersion: trigger.AppVersion,
@@ -21426,14 +21497,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	workflowExecution.Workflow.OrgId = workflowExecution.Workflow.ExecutingOrg.Id
 
-	/*
-		workflowExecution.Workflow.ExecutingOrg = OrgMini{
-			Id: workflowExecution.Workflow.ExecutingOrg.Id,
-		}
-		workflowExecution.Workflow.Org = []OrgMini{
-			workflowExecution.Workflow.ExecutingOrg,
-		}
-	*/
+	//childNodes := FindChildNodes(workflowExecution.Workflow, nextAction, []string{}, []string{})
 
 	// Means executing a subflow is happening
 	if len(workflowExecution.ExecutionParent) > 0 {
@@ -21736,6 +21800,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	if len(workflowExecution.Workflow.ID) > 0 {
+		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	}
+
 	finished := ValidateFinished(ctx, extra, workflowExecution)
 	if finished {
 		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
@@ -21745,8 +21813,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_100", workflowExecution.WorkflowId))
 
-	workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	//for _, branch := range workflowExecution.Workflow.Branches {
+	//	log.Printf("\n\n[INFO] Branch (%d condition(s)): %s -> %s\n\n", len(branch.Conditions), branch.SourceID, branch.DestinationID)
+	//}
 
+	// Force it into the database
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
 }
 
