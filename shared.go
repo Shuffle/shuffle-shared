@@ -15896,8 +15896,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	return workflowExecution, dbSave
 }
 
-// Finds the child nodes of a node in execution and returns them
+// Recursively finds the child nodes of a node in execution and returns their ID. 
 // Used if e.g. a node in a branch is exited, and all children have to be stopped
+// Also used during startup of a workflow to set all nodes to be SKIPPED that aren't in immediate use
 func FindChildNodes(workflow Workflow, nodeId string, parents, handledBranches []string) []string {
 	allChildren := []string{nodeId}
 
@@ -21394,7 +21395,42 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-	//log.Printf("EXECUTION START: %s", workflowExecution.Start)
+	// Validation of SKIPPED nodes
+	if len(workflowExecution.Workflow.Start) > 0 {
+		childNodes := FindChildNodes(workflowExecution.Workflow, workflow.Start, []string{}, []string{})
+
+		//log.Printf("\n\n\n[DEBUG][%s] STARTUP NODES (%d): %#v. Total actions: %#v\n\n\n", workflowExecution.ExecutionId, len(childNodes), childNodes, len(workflowExecution.Workflow.Actions))
+
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.ID == workflowExecution.Start { 
+				continue
+			}
+
+			if ArrayContains(childNodes, action.ID) {
+				continue
+			}
+
+			foundResult := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.ID == action.ID {
+					foundResult = true
+					break
+				}
+			}
+
+			if !foundResult { 
+				defaultResults = append(defaultResults, ActionResult{
+					Action:        action,
+					ExecutionId:   workflowExecution.ExecutionId,
+					Authorization: workflowExecution.Authorization,
+					Result:        `{"success": false, "reason": "Skipped because it's not under the startnode (3)"}`,
+					StartedAt:     0,
+					CompletedAt:   0,
+					Status:        "SKIPPED",
+				})
+			}
+		}
+	}
 
 	// Verification for execution environments
 	workflowExecution.Results = defaultResults
@@ -21496,8 +21532,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	workflowExecution.Workflow.OrgId = workflowExecution.Workflow.ExecutingOrg.Id
-
-	//childNodes := FindChildNodes(workflowExecution.Workflow, nextAction, []string{}, []string{})
 
 	// Means executing a subflow is happening
 	if len(workflowExecution.ExecutionParent) > 0 {
@@ -21652,6 +21686,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 	}
+
 
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
