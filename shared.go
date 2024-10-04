@@ -14066,27 +14066,20 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			log.Printf("[INFO][%s] TOTAL FINISHED SUBFLOWS: %d/%d", subflowExecutionId, len(parentSubflowResult), len(newResults))
 
 			// Can it be if this and also status = "WAITING"?
-			if len(parentSubflowResult) == finishedSubflows {
+			if len(parentSubflowResult) == finishedSubflows && foundResult.Status != "SUCCESS" && foundResult.Status != "FAILURE" {
 				log.Printf("[INFO][%s] ALL THE SUBFLOW GOT THE RESULT BACK SO UPATING THE STATUS TO SUCCESS")
 				foundResult.Status = "SUCCESS"
-			}
+				if foundResult.CompletedAt == 0 {
+					foundResult.CompletedAt = time.Now().Unix() * 1000
+				}
+				ranUpdate = true
 
-			if finishedSubflows == len(newResults) {
-				log.Printf("[DEBUG][%s] Finished workflow because status of all should be set to finished now", subflowExecutionId)
-
-				// Status is used to determine if the current subflow is finished
-
-				/*
-					foundResult.Status = "SUCCESS"
-
-					if result.CompletedAt == 0 {
-						result.CompletedAt = time.Now().Unix()*1000
-					}
-				*/
+				sendRequest = true
 			}
 
 			if ranUpdate {
 
+				// FIXME: Look into whether this sendRequest can be removed if we want reduce the amount of request
 				sendRequest = true
 				baseResultData, err := json.Marshal(newResults)
 				if err != nil {
@@ -20341,24 +20334,24 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				Value: actionLabelParsed,
 
 				ActionField: "",
-				ID: uuid.NewV4().String(),
-				Name: "source",
-				Variant: "STATIC_VALUE",
+				ID:          uuid.NewV4().String(),
+				Name:        "source",
+				Variant:     "STATIC_VALUE",
 			},
 			Condition: WorkflowAppActionParameter{
 				Value: "equals",
 
-				ID: uuid.NewV4().String(),
-				Name: "condition",
+				ID:      uuid.NewV4().String(),
+				Name:    "condition",
 				Variant: "STATIC_VALUE",
 			},
 			Destination: WorkflowAppActionParameter{
 				Value: "true",
 
 				ActionField: "",
-				ID: uuid.NewV4().String(),
-				Name: "destination",
-				Variant: "STATIC_VALUE",
+				ID:          uuid.NewV4().String(),
+				Name:        "destination",
+				Variant:     "STATIC_VALUE",
 			},
 		}
 
