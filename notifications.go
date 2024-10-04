@@ -781,7 +781,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		} else {
 			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
 			if err != nil {
-				if !strings.Contains(err.Error(), "cache stored") {
+				if !strings.Contains(err.Error(), "cache stored") && !strings.Contains(err.Error(), "Same workflow") {
 					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
 				}
 			}
@@ -906,6 +906,8 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	//log.Printf("[DEBUG] Creating notification based on: %s", string(body))
 
 	notification := Notification{}
 	err = json.Unmarshal(body, &notification)

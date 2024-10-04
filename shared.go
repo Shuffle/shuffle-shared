@@ -3289,11 +3289,14 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	// Here as well as in db-connector due to cache handling
 	timenow := time.Now().Unix()
 	for envIndex, env := range newEnvironments {
-		if newEnvironments[envIndex].Type == "onprem" {
-			if env.Checkin > 0 && timenow-env.Checkin > 90 {
-				newEnvironments[envIndex].RunningIp = ""
-				newEnvironments[envIndex].Licensed = false
-			}
+		if newEnvironments[envIndex].Type != "onprem" {
+			continue
+		}
+
+		if env.Checkin > 0 && timenow-env.Checkin > 90 && len(newEnvironments[envIndex].RunningIp) > 0 {
+			log.Printf("[DEBUG] Resetting environment %s (%s) due to inactivity", env.Name, env.Id)
+			newEnvironments[envIndex].RunningIp = ""
+			newEnvironments[envIndex].Licensed = false
 		}
 	}
 
@@ -6692,7 +6695,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 		if err != nil {
 			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
 		} else {
-			log.Printf("\n\n[INFO] Updated child workflow '%s' based on parent %s\n\n", childWorkflow.ID, oldWorkflow.ID)
+			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
 
 			SetWorkflowRevision(ctx, childWorkflow)
 			passedOrg := Org{
@@ -6807,8 +6810,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	*/
 
 	if len(workflow.InputQuestions) > 0 {
-		log.Printf("[DEBUG] Making ALL '%d' input questions required for %s", len(workflow.InputQuestions), workflow.ID)
+		log.Printf("[DEBUG] Making ALL '%d' input questions required for workflow %s", len(workflow.InputQuestions), workflow.ID)
 	}
+
 	for qIndex, _ := range workflow.InputQuestions {
 		workflow.InputQuestions[qIndex].Required = true
 	}
@@ -6825,7 +6829,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			// Just making sure
 			if project.Environment == "cloud" {
 				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
-				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, tmpworkflow.ID)
+
+				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
 				if err != nil {
 					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
 					log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s. Username: %s. ACL controlled with GITHUB_USER_ALLOWLIST environment variable. Allowed users: %#v", user.Id, tmpworkflow.ID, err, user.PublicProfile.GithubUsername, allowList)
@@ -7049,7 +7054,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	} else {
-		log.Printf("[AUDIT] User %s is creating or modifying workflow with ID %s as they are the owner / it's public", user.Username, workflow.ID)
+		log.Printf("[AUDIT] User %s is creating or modifying workflow with ID %s as they are the owner OR it's public", user.Username, workflow.ID)
 
 		if workflow.Public {
 			log.Printf("[WARNING] Rolling back public as the user set it to true themselves")
@@ -7566,7 +7571,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			if added {
 				orgUpdated = true
-				log.Printf("[DEBUG] Org updated with new apps: %s", org.ActiveApps)
+				//log.Printf("[DEBUG] Org updated with new apps: %s", org.ActiveApps)
 
 				//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
 				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
@@ -7805,6 +7810,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	// Nodechecks
 	foundNodes := []string{}
+
+	log.Printf("[DEBUG] all nodes: %d", len(allNodes))
 	for _, node := range allNodes {
 		for _, branch := range workflow.Branches {
 			if node == branch.DestinationID || node == branch.SourceID {
@@ -11757,7 +11764,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	//	SSOUrl = org.SSOConfig.SSOEntrypoint
 	//}
 
-
 	log.Printf("[DEBUG] Updating org %s (%s) with %d users", org.Name, org.Id, len(org.Users))
 	err = SetOrg(ctx, *org, org.Id)
 	if err != nil {
@@ -11823,7 +11829,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 }
 
-func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) error {
+func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, BccAddresses []string) error {
 	log.Printf("[DEBUG] In mail sending with subject %s and body length %s. TO: %s", subject, body, toEmail)
 	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
 	srequest.Method = "POST"
@@ -11839,6 +11845,7 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 
 	type SendgridPersonalization struct {
 		To      []SendgridEmail `json:"to"`
+		Bcc     []SendgridEmail `json:"bcc"`
 		Subject string          `json:"subject"`
 	}
 
@@ -11852,7 +11859,7 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 
 	newBody := sendgridMailBody{
 		Personalizations: []SendgridPersonalization{
-			SendgridPersonalization{
+			{
 				To:      []SendgridEmail{},
 				Subject: subject,
 			},
@@ -11861,7 +11868,7 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 			Email: "Shuffle Support <shuffle-support@shuffler.io>",
 		},
 		Content: []SendgridContent{
-			SendgridContent{
+			{
 				Type:  "text/html",
 				Value: body,
 			},
@@ -11878,6 +11885,17 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool) err
 				Email: strings.TrimSpace(email),
 			})
 	}
+
+	// Conditionally add BCC addresses if they exist
+	if len(BccAddresses) > 0 {
+		for _, bccEmail := range BccAddresses {
+			newBody.Personalizations[0].Bcc = append(newBody.Personalizations[0].Bcc,
+				SendgridEmail{
+					Email: strings.TrimSpace(bccEmail),
+				})
+		}
+	}
+
 
 	parsedBody, err := json.Marshal(newBody)
 	if err != nil {
@@ -12851,13 +12869,23 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("https://shuffler.io/api/v1/login_openid"))
 	}
 
+	//Redirect url for onprem
 	if project.Environment != "cloud" && strings.Contains(request.Host, "shuffle-backend") && !strings.Contains(os.Getenv("BASE_URL"), "shuffle-backend") {
 		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
+	} else {
+		//check if base url exist if exist then assign the base url. This is for local testing when request.Host is is not "shuffle-backend"
+		if project.Environment != "cloud" && len(os.Getenv("BASE_URL")) > 0 {
+			redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("BASE_URL")))
+		} else if project.Environment != "cloud" {
+			//if base url not exist then assign hardcoded url for the onprem, user should not reach here but in case not set the base url hardcode it.
+			redirectUrl = url.QueryEscape(fmt.Sprintf("http://localhost:5001/api/v1/login_openid"))
+		}
 	}
 
-	if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
-		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
-	}
+	//In any case redirect url should not be the SSO_REDIRECT_URL as it is the frontend url where user will be redirected after login.
+	// if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+	// 	redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
+	// }
 
 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 
@@ -12886,6 +12914,7 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 }
 
 func GetRequestIp(r *http.Request) string {
+	// Check the actual IP that is inbound
 	forwardedFor := r.Header.Get("X-Forwarded-For")
 	if forwardedFor != "" {
 		// The X-Forwarded-For header can contain a comma-separated list of IP addresses.
@@ -12934,9 +12963,13 @@ func GetRequestIp(r *http.Request) string {
 		}
 	}
 
+	// IPv6 / localhostm apping. Just returning raw.
+	if strings.Contains(r.RemoteAddr, "::") || strings.Contains(r.RemoteAddr, "127.0.0.1") || strings.Contains(r.RemoteAddr, "localhost") {
+		return r.RemoteAddr
+	}
+
 	// If neither header is present, fall back to using the RemoteAddr field.
 	// Check for IPv6 and split accordingly.
-
 	re := regexp.MustCompile(`\[[^\]]+\]`)
 	remoteAddr := re.ReplaceAllString(r.RemoteAddr, "")
 	if remoteAddr != "" {
@@ -13848,7 +13881,6 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 		log.Printf("[ERROR] Failed reading parent body: %s", err)
 		return err
 	}
-	//log.Printf("\n\nBODY FROM STREAM OF PARENT FROM %s (%d): %s", resultUrl, newresp.StatusCode, string(body))
 
 	if newresp.StatusCode != 200 {
 		log.Printf("[ERROR] Bad statuscode setting subresult (1) with URL %s: %d, %s. Input data: %s", resultUrl, newresp.StatusCode, string(body), string(data))
@@ -15137,7 +15169,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				}
 			}
 
-			log.Printf("\n\n[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip\n\n", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
+			// FIXME: Debug logs necessary to understand how workflows finish?
+			log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -15863,8 +15896,9 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	return workflowExecution, dbSave
 }
 
-// Finds the child nodes of a node in execution and returns them
+// Recursively finds the child nodes of a node in execution and returns their ID. 
 // Used if e.g. a node in a branch is exited, and all children have to be stopped
+// Also used during startup of a workflow to set all nodes to be SKIPPED that aren't in immediate use
 func FindChildNodes(workflow Workflow, nodeId string, parents, handledBranches []string) []string {
 	allChildren := []string{nodeId}
 
@@ -17937,7 +17971,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		//log.Printf("[INFO] Checking single execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
 
-		if len(newExecution.Results) > resultAmount-1  {
+		if len(newExecution.Results) > resultAmount-1 {
 			relevantIndex := len(newExecution.Results) - 1
 
 			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
@@ -19082,7 +19116,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(backendUrl) > 0 {
-		// redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
+		//we don't need to add /workflow path in backend url as backend url is SSO_REDIRECT_URL and it is already pointing to /workflow by default.
 		redirectUrl = backendUrl
 	}
 
@@ -20263,6 +20297,79 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Don't override workflow defaults
 	}
 
+	log.Printf("[DEBUG][%s] STARTING IF/ELSE NODE REMAPPING", workflowExecution.ExecutionId)
+	for branchIndex, branch := range workflowExecution.Workflow.Branches {
+		if len(branch.SourceParent) == 0 {
+			continue
+		}
+
+		elseCondition := false
+		if strings.HasSuffix(branch.SourceParent, "-else") {
+			branch.SourceParent = strings.TrimSuffix(branch.SourceParent, "-else")
+			elseCondition = true
+		}
+
+		parentAction := Action{}
+		for _, workflowAction := range workflowExecution.Workflow.Actions {
+			if workflowAction.ID == branch.SourceParent {
+				parentAction = workflowAction
+				break
+			}
+		}
+
+		if parentAction.ID == "" {
+			continue
+		}
+
+		actionLabelParsed := fmt.Sprintf("$%s.%s.valid", strings.ToLower(strings.ReplaceAll(parentAction.Label, " ", "_")), branch.SourceID)
+
+		// FIXME: Add condition to them:
+		// This is going to check the result for:
+		// $parentname.${branch.SourceID}.valid == True
+		// For the else, add one for ALL others:
+		// $parentname.${branch.SourceID}.valid == False & $parentname.${branch.SourceID2}.valid == False && $parentname.${branch.SourceID3}.valid == False
+		//log.Printf("[DEBUG] Branch REMAP: %s -> %s: %#v", branch.SourceID, branch.DestinationID, branch)
+
+		workflowExecution.Workflow.Branches[branchIndex].SourceID = branch.SourceParent
+		newCondition := Condition{
+			Source: WorkflowAppActionParameter{
+				Value: actionLabelParsed,
+
+				ActionField: "",
+				ID: uuid.NewV4().String(),
+				Name: "source",
+				Variant: "STATIC_VALUE",
+			},
+			Condition: WorkflowAppActionParameter{
+				Value: "equals",
+
+				ID: uuid.NewV4().String(),
+				Name: "condition",
+				Variant: "STATIC_VALUE",
+			},
+			Destination: WorkflowAppActionParameter{
+				Value: "true",
+
+				ActionField: "",
+				ID: uuid.NewV4().String(),
+				Name: "destination",
+				Variant: "STATIC_VALUE",
+			},
+		}
+
+		if elseCondition {
+			newCondition.Source.Value = fmt.Sprintf("$%s.run_else", strings.ToLower(strings.ReplaceAll(parentAction.Label, " ", "_")))
+		}
+
+		workflowExecution.Workflow.Branches[branchIndex].Conditions = append(workflowExecution.Workflow.Branches[branchIndex].Conditions, newCondition)
+
+		// Changed to use success: false -> else
+		//newCondition.Destination.Value = "false"
+		//elseCondition = append(elseCondition, newCondition)
+	}
+
+	log.Printf("[DEBUG][%s] ENDING IF/ELSE NODE REMAPPING", workflowExecution.ExecutionId)
+
 	if workflowExecution.SubExecutionCount == 0 {
 		workflowExecution.SubExecutionCount = 1
 	}
@@ -20885,16 +20992,16 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				setAuth := false
 				executionAuthKey := fmt.Sprintf("oauth2_%s", curAuth.Id)
 
-				log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
+				//log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
 				execAuthData, err := GetCache(ctx, executionAuthKey)
 				if err == nil {
-					log.Printf("[DEBUG] Successfully retrieved auth wrapper from cache for %s", executionAuthKey)
+					//log.Printf("[DEBUG] Successfully retrieved auth wrapper from cache for %s", executionAuthKey)
 					cacheData := []byte(execAuthData.([]uint8))
 
 					appAuthWrapper := AppAuthenticationStorage{}
 					err = json.Unmarshal(cacheData, &appAuthWrapper)
 					if err == nil {
-						log.Printf("[DEBUG] Successfully unmarshalled auth wrapper from cache for %s", executionAuthKey)
+						//log.Printf("[DEBUG] Successfully unmarshalled auth wrapper from cache for %s", executionAuthKey)
 
 						newParams = action.Parameters
 						for _, param := range appAuthWrapper.Fields {
@@ -21181,7 +21288,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					continue
 				}
 
-				//log.Printf("[WARNING] Set %s to SKIPPED as it's NOT a childnode of the startnode.", action.ID)
 				curaction := Action{
 					AppName:    action.AppName,
 					AppVersion: action.AppVersion,
@@ -21189,8 +21295,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					Name:       action.Name,
 					ID:         action.ID,
 				}
-				//action
-				//curaction.Parameters = []
+
 				defaultResults = append(defaultResults, ActionResult{
 					Action:        curaction,
 					ExecutionId:   workflowExecution.ExecutionId,
@@ -21245,8 +21350,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if !found {
-				//log.Printf("SHOULD SET TRIGGER %s TO BE SKIPPED", trigger.ID)
-
 				curaction := Action{
 					AppName:    "shuffle-subflow",
 					AppVersion: trigger.AppVersion,
@@ -21292,7 +21395,42 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-	//log.Printf("EXECUTION START: %s", workflowExecution.Start)
+	// Validation of SKIPPED nodes
+	if len(workflowExecution.Workflow.Start) > 0 {
+		childNodes := FindChildNodes(workflowExecution.Workflow, workflow.Start, []string{}, []string{})
+
+		//log.Printf("\n\n\n[DEBUG][%s] STARTUP NODES (%d): %#v. Total actions: %#v\n\n\n", workflowExecution.ExecutionId, len(childNodes), childNodes, len(workflowExecution.Workflow.Actions))
+
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.ID == workflowExecution.Start { 
+				continue
+			}
+
+			if ArrayContains(childNodes, action.ID) {
+				continue
+			}
+
+			foundResult := false
+			for _, result := range workflowExecution.Results {
+				if result.Action.ID == action.ID {
+					foundResult = true
+					break
+				}
+			}
+
+			if !foundResult { 
+				defaultResults = append(defaultResults, ActionResult{
+					Action:        action,
+					ExecutionId:   workflowExecution.ExecutionId,
+					Authorization: workflowExecution.Authorization,
+					Result:        `{"success": false, "reason": "Skipped because it's not under the startnode (3)"}`,
+					StartedAt:     0,
+					CompletedAt:   0,
+					Status:        "SKIPPED",
+				})
+			}
+		}
+	}
 
 	// Verification for execution environments
 	workflowExecution.Results = defaultResults
@@ -21394,15 +21532,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	workflowExecution.Workflow.OrgId = workflowExecution.Workflow.ExecutingOrg.Id
-
-	/*
-		workflowExecution.Workflow.ExecutingOrg = OrgMini{
-			Id: workflowExecution.Workflow.ExecutingOrg.Id,
-		}
-		workflowExecution.Workflow.Org = []OrgMini{
-			workflowExecution.Workflow.ExecutingOrg,
-		}
-	*/
 
 	// Means executing a subflow is happening
 	if len(workflowExecution.ExecutionParent) > 0 {
@@ -21558,6 +21687,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
 			allAuths, err = GetAllWorkflowAppAuth(ctx, workflow.ExecutingOrg.Id)
@@ -21705,6 +21835,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+	if len(workflowExecution.Workflow.ID) > 0 {
+		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	}
+
 	finished := ValidateFinished(ctx, extra, workflowExecution)
 	if finished {
 		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
@@ -21714,8 +21848,11 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
 	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_100", workflowExecution.WorkflowId))
 
-	workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	//for _, branch := range workflowExecution.Workflow.Branches {
+	//	log.Printf("\n\n[INFO] Branch (%d condition(s)): %s -> %s\n\n", len(branch.Conditions), branch.SourceID, branch.DestinationID)
+	//}
 
+	// Force it into the database
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
 }
 
@@ -23790,22 +23927,45 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	return workflowExecution, relevantActions
 }
 
-func GetExternalClient(baseUrl string) *http.Client {
-	httpProxy := os.Getenv("HTTP_PROXY")
-	httpsProxy := os.Getenv("HTTPS_PROXY")
+func HandleInternalProxy(handler *http.Client) *http.Client {
+	httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
+	httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
 
+	transport := &http.Transport{}
+
+	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && (strings.ToLower(httpProxy) != "noproxy" || strings.ToLower(httpsProxy) != "noproxy") {
+		if len(httpProxy) > 0 && strings.ToLower(httpProxy) != "noproxy" {
+			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+
+		if len(httpsProxy) > 0 && strings.ToLower(httpsProxy) != "noproxy" {
+			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpsProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+	}
+
+	handler.Transport = transport
+
+	return handler
+}
+
+func GetExternalClient(baseUrl string) *http.Client {
 	// Look for internal proxy instead
 	// in case apps need a different one: https://jamboard.google.com/d/1KNr4JJXmTcH44r5j_5goQYinIe52lWzW-12Ii_joi-w/viewer?mtt=9r8nrqpnbz6z&f=0
+	httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
+	httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
 
-	overrideHttpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
-	overrideHttpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
-	if len(overrideHttpProxy) > 0 && strings.ToLower(overrideHttpProxy) != "noproxy" {
-		httpProxy = overrideHttpProxy
-	}
-
-	if len(overrideHttpsProxy) > 0 && strings.ToLower(overrideHttpsProxy) != "noproxy" {
-		httpsProxy = overrideHttpsProxy
-	}
 
 	transport := http.DefaultTransport.(*http.Transport)
 	transport.MaxIdleConnsPerHost = 100
@@ -23834,12 +23994,12 @@ func GetExternalClient(baseUrl string) *http.Client {
 		}
 
 		certDir := "/certs/"
-
 		if os.Getenv("SHUFFLE_CERT_DIR") != "" {
 			certDir = os.Getenv("SHUFFLE_CERT_DIR")
+
+			log.Printf("[INFO] Reading self signed certificates from custom dir '%s'", certDir)
 		}
 
-		log.Printf("[INFO] Reading self signed certificates from %s dir", certDir)
 
 		files, err := os.ReadDir(certDir)
 		if err == nil && os.Getenv("SHUFFLE_CERT_DIR") != "" {
@@ -23856,14 +24016,14 @@ func GetExternalClient(baseUrl string) *http.Client {
 					}
 				}
 			}
+
 			transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
 		}
 	}
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
-	} else {
-		if len(httpProxy) > 0 {
+        if len(httpProxy) > 0 && httpProxy != "noproxy"{
 			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 
 			url_i := url.URL{}
@@ -23872,7 +24032,27 @@ func GetExternalClient(baseUrl string) *http.Client {
 				transport.Proxy = http.ProxyURL(url_proxy)
 			}
 		}
-		if len(httpsProxy) > 0 {
+		if len(httpsProxy) > 0 && httpsProxy != "noproxy"{
+			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpsProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+	} else {
+        // keeping this here for now
+		if len(httpProxy) > 0 && httpProxy != "noproxy" {
+			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+
+			url_i := url.URL{}
+			url_proxy, err := url_i.Parse(httpProxy)
+			if err == nil {
+				transport.Proxy = http.ProxyURL(url_proxy)
+			}
+		}
+		if len(httpsProxy) > 0 && httpsProxy != "noproxy" {
 			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
 
 			url_i := url.URL{}
@@ -24324,7 +24504,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
 
-	//RunAiQuery(systemMessage, userMessage) 
+	//RunAiQuery(systemMessage, userMessage)
 
 	availableLabels := []string{}
 	for _, app := range newapps {
@@ -24737,7 +24917,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Action:   "app_authentication",
 			Category: discoveredCategory,
 			Reason:   fmt.Sprintf("Authenticate %s first.", selectedApp.Name),
-			Label:	value.Label,
+			Label:    value.Label,
 			Apps: []WorkflowApp{
 				selectedApp,
 			},
@@ -24745,7 +24925,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			AvailableLabels: availableLabels,
 		}
 
-		// Check for user agent including shufflepy 
+		// Check for user agent including shufflepy
 		useragent := request.Header.Get("User-Agent")
 		if strings.Contains(strings.ToLower(useragent), "shufflepy") {
 			structuredFeedback.Apps = []WorkflowApp{}
@@ -24754,9 +24934,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			currentUrl := fmt.Sprintf("%s://%s", request.URL.Scheme, request.URL.Host)
 			if project.Environment == "cloud" {
 				currentUrl = "https://shuffler.io"
-			} 
+			}
 
-			// FIXME: Implement this. Uses org's auth 
+			// FIXME: Implement this. Uses org's auth
 			orgAuth := org.OrgAuth.Token
 
 			structuredFeedback.Reason = fmt.Sprintf("Authenticate here: %s/appauth?app_id=%s&auth=%s", currentUrl, selectedApp.ID, orgAuth)
@@ -25993,7 +26173,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 		return selectedAction, selectedCategory, availableLabels
 	}
 
-	// Reload the app to be the proper one with updated actions instead 
+	// Reload the app to be the proper one with updated actions instead
 	// of random cache issues
 	newApp, err := GetApp(ctx, app.ID, User{}, false)
 	if err != nil {
@@ -27838,7 +28018,7 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 		request := ExecutionRequest{
 			Type:              "DOCKER_IMAGE_DOWNLOAD",
 			ExecutionId:       uuid.NewV4().String(),
-			ExecutionArgument: strings.Join(appnames, ","),
+			ExecutionArgument: fmt.Sprintf("%s,%s", strings.ToLower(strings.Join(appnames, ",")), strings.Join(appnames, ",")),
 			Priority:          11,
 		}
 
@@ -28985,7 +29165,7 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 	Subject := "Thank you for your private training request"
 	Message := fmt.Sprintf("Hi there, Thank you for submitting request for shuffle private training. This is confirmation that we have received your private training request. You have requested a private training for %v members. We will get back to you shortly. <br> <br> Best Regards <br>Shuffle Team", tmpData.Training)
 
-	err = sendMailSendgrid(email, Subject, Message, false)
+	err = sendMailSendgrid(email, Subject, Message, false, []string{})
 	if err != nil {
 		log.Printf("[ERROR] Failed sending mail: %s", err)
 		resp.WriteHeader(http.StatusBadRequest)
@@ -28998,7 +29178,7 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 	Subject = fmt.Sprintf("Private training request")
 	Message = fmt.Sprintf("Private training request : <br>Org id: %v <br> Org Name: %v  <br>Username: %v <br> Training Members: %v <br>Customer: %v <br> Message: %v", org.Id, org.Name, User.Username, tmpData.Training, org.LeadInfo.Customer, tmpData.Message)
 
-	err = sendMailSendgrid(email, Subject, Message, false)
+	err = sendMailSendgrid(email, Subject, Message, false, []string{})
 	if err != nil {
 		log.Printf("[ERROR] Failed sending mail: %s", err)
 		resp.WriteHeader(http.StatusBadRequest)

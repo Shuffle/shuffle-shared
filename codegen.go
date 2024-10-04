@@ -16,14 +16,17 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"net/http"
 
 	"cloud.google.com/go/storage"
 	"github.com/frikky/kin-openapi/openapi3"
+	docker "github.com/docker/docker/client"
 
 	//"github.com/satori/go.uuid"
 	"gopkg.in/yaml.v2"
 )
 
+var downloadedImages = []string{}
 var pythonAllowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_"
 var pythonReplacements = map[string]string{
 	"[": "",
@@ -3640,7 +3643,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.7.6\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\n"
+	return "requests==2.25.1\nurllib3==1.25.9\nliquidpy==0.8.2\nMarkupSafe==2.0.1\nflask[async]==2.0.2\npython-dateutil==2.8.1\nPyJWT==2.9.0\n"
 }
 
 // Removes JSON values from the input
@@ -3770,4 +3773,133 @@ func RemoveJsonValues(input []byte, depth int64) ([]byte, string, error) {
 	}
 
 	return input, keyToken, nil
+}
+
+func DownloadDockerImageBackend(topClient *http.Client, imageName string) error {
+	// Check environment SHUFFLE_AUTO_IMAGE_DOWNLOAD
+	if os.Getenv("SHUFFLE_AUTO_IMAGE_DOWNLOAD") == "false" {
+		log.Printf("[DEBUG] SHUFFLE_AUTO_IMAGE_DOWNLOAD is false. Not downloading image %s", imageName)
+		return nil
+	}
+
+	if ArrayContains(downloadedImages, imageName) && project.Environment == "worker" {
+		log.Printf("[DEBUG] Image %s already downloaded - not re-downloading. This only applies to workers.", imageName)
+		return nil
+	}
+
+	baseUrl := os.Getenv("BASE_URL")
+	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist. All images: %#v", imageName, baseUrl, downloadedImages)
+
+	if !ArrayContains(downloadedImages, imageName) {
+		downloadedImages = append(downloadedImages, imageName)
+	}
+
+	data := fmt.Sprintf(`{"name": "%s"}`, imageName)
+	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl)
+
+	req, err := http.NewRequest(
+		"POST",
+		dockerImgUrl,
+		bytes.NewBuffer([]byte(data)),
+	)
+
+	// Specific to the worker
+	authorization := os.Getenv("AUTHORIZATION")
+	if len(authorization) > 0 {
+		req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", authorization))
+	} else {
+		// Specific to Orborus auth (org + auth) -> environment auth
+		authorization = os.Getenv("AUTH")
+		if len(authorization) > 0 {
+			log.Printf("[DEBUG] Found Orborus environment auth - adding to header.")
+			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", authorization))
+
+			org := os.Getenv("ORG")
+			if len(org) > 0 {
+				req.Header.Add("Org-Id", org)
+			}
+
+		} else {
+			log.Printf("[WARNING] No auth found - running backend download without it.")
+		}
+	}
+
+	newresp, err := topClient.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed download request for %s: %s", imageName, err)
+		return err
+	}
+
+	defer newresp.Body.Close()
+	if newresp.StatusCode != 200 {
+		log.Printf("[ERROR] Docker download for image %s (backend) StatusCode (1): %d", imageName, newresp.StatusCode)
+		return errors.New(fmt.Sprintf("Failed to get image - status code %d", newresp.StatusCode))
+	}
+
+	newImageName := strings.Replace(imageName, "/", "_", -1)
+	newFileName := newImageName + ".tar"
+
+	tar, err := os.Create(newFileName)
+	if err != nil {
+		log.Printf("[WARNING] Failed creating file: %s", err)
+		return err
+	}
+
+	defer tar.Close()
+	_, err = io.Copy(tar, newresp.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed response body copying: %s", err)
+		return err
+	}
+	tar.Seek(0, 0)
+
+	dockercli, err := docker.NewEnvClient()
+	if err != nil {
+		log.Printf("[ERROR] Unable to create docker client (3): %s", err)
+		return err
+	}
+
+	defer dockercli.Close()
+
+	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
+	if err != nil {
+		log.Printf("[ERROR] Error loading images: %s", err)
+		return err
+	}
+
+	defer imageLoadResponse.Body.Close()
+	body, err := ioutil.ReadAll(imageLoadResponse.Body)
+	if err != nil {
+		log.Printf("[ERROR] Error reading: %s", err)
+		return err
+	}
+
+	if strings.Contains(string(body), "no such file") {
+		return errors.New(string(body))
+	}
+
+	os.Remove(newFileName)
+
+	if strings.Contains(strings.ToLower(string(body)), "error") {
+		log.Printf("[ERROR] Error loading image %s: %s", imageName, string(body))
+		return errors.New(string(body))
+	}
+
+	baseTag := strings.Split(imageName, ":")
+	if len(baseTag) > 1 {
+		tag := baseTag[1]
+		log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
+
+		// Remapping
+		ctx := context.Background()
+		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("frikky/shuffle:%s", tag))
+		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+
+		downloadedImages = append(downloadedImages, fmt.Sprintf("frikky/shuffle:%s", tag))
+		downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+
+	}
+
+	log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
+	return nil
 }

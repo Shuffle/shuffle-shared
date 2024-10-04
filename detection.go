@@ -39,7 +39,7 @@ func HandleDetectionHealthUpdate(resp http.ResponseWriter, request *http.Request
 		return
 	}
 
-	log.Printf("[DEBUG] Tenzir health update: %#v", healthUpdate)
+	//log.Printf("[DEBUG] Tenzir health update: %#v", healthUpdate)
 
 	//ctx := context.Background()
 	/*

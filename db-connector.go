@@ -303,12 +303,17 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 			if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
 				for _, user := range org.Users {
 					if user.Role == "admin" {
+						var BccAddress []string
+						if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
+							BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
+						}
+
 						mailbody := Mailcheck{
 							Targets: []string{user.Username},
 							Subject: "You have reached the threshold limit of app executions",
 							Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
 						}
-						err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false)
+						err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
 						if err != nil {
 							log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
 						} else {
@@ -1037,12 +1042,12 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	}
 
 	if len(workflowExecution.WorkflowId) == 0 {
-		log.Printf("[WARNING][%s] Workflowexecution workflowId can't be empty.", workflowExecution.ExecutionId)
+		log.Printf("[ERROR][%s] Workflowexecution workflowId can't be empty.", workflowExecution.ExecutionId)
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 	}
 
 	if len(workflowExecution.Authorization) == 0 {
-		log.Printf("[WARNING][%s] Workflowexecution authorization can't be empty.", workflowExecution.ExecutionId)
+		log.Printf("[ERROR][%s] Workflowexecution authorization can't be empty.", workflowExecution.ExecutionId)
 		//workflowExecution.Authorization = uuid.NewV4().String()
 		return errors.New("Authorization can't be empty.")
 	}
@@ -3724,7 +3729,6 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-			log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 			//log.Printf("Users: %s", curOrg.Users)
 			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) && !strings.Contains(err.Error(), `users_last_session`) {
 				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
@@ -3756,9 +3760,10 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					setOrg = true
 				}
 			} else if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
+				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
+				log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
 				return &Org{}, err
 			}
 		}

@@ -1204,6 +1204,7 @@ type Branch struct {
 	Decorator     bool        `json:"decorator" datastore:"decorator"`
 
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+	SourceParent string `json:"source_parent" datastore:"source_parent"` // Parent node of the actual source we use. Mainly added for handling else/if-s in branches. Automatically happens during workflow saves (frontend for now)
 }
 
 // Same format for a lot of stuff
@@ -3645,6 +3646,7 @@ type Mailcheck struct {
 	Authorization      string   `json:"authorization"`
 	ExecutionType      string   `json:"execution_type"`
 	Start              string   `json:"start"`
+	Bcc                []string `json:"bcc"`
 }
 
 type SmsBody struct {
