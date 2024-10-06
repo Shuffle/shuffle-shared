@@ -11896,7 +11896,6 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, Bcc
 		}
 	}
 
-
 	parsedBody, err := json.Marshal(newBody)
 	if err != nil {
 		log.Printf("[ERROR] Failed to parse JSON in sendmail: %s", err)
@@ -15896,7 +15895,7 @@ func compressExecution(ctx context.Context, workflowExecution WorkflowExecution,
 	return workflowExecution, dbSave
 }
 
-// Recursively finds the child nodes of a node in execution and returns their ID. 
+// Recursively finds the child nodes of a node in execution and returns their ID.
 // Used if e.g. a node in a branch is exited, and all children have to be stopped
 // Also used during startup of a workflow to set all nodes to be SKIPPED that aren't in immediate use
 func FindChildNodes(workflow Workflow, nodeId string, parents, handledBranches []string) []string {
@@ -20336,24 +20335,24 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				Value: actionLabelParsed,
 
 				ActionField: "",
-				ID: uuid.NewV4().String(),
-				Name: "source",
-				Variant: "STATIC_VALUE",
+				ID:          uuid.NewV4().String(),
+				Name:        "source",
+				Variant:     "STATIC_VALUE",
 			},
 			Condition: WorkflowAppActionParameter{
 				Value: "equals",
 
-				ID: uuid.NewV4().String(),
-				Name: "condition",
+				ID:      uuid.NewV4().String(),
+				Name:    "condition",
 				Variant: "STATIC_VALUE",
 			},
 			Destination: WorkflowAppActionParameter{
 				Value: "true",
 
 				ActionField: "",
-				ID: uuid.NewV4().String(),
-				Name: "destination",
-				Variant: "STATIC_VALUE",
+				ID:          uuid.NewV4().String(),
+				Name:        "destination",
+				Variant:     "STATIC_VALUE",
 			},
 		}
 
@@ -21402,7 +21401,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		//log.Printf("\n\n\n[DEBUG][%s] STARTUP NODES (%d): %#v. Total actions: %#v\n\n\n", workflowExecution.ExecutionId, len(childNodes), childNodes, len(workflowExecution.Workflow.Actions))
 
 		for _, action := range workflowExecution.Workflow.Actions {
-			if action.ID == workflowExecution.Start { 
+			if action.ID == workflowExecution.Start {
 				continue
 			}
 
@@ -21418,7 +21417,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
-			if !foundResult { 
+			if !foundResult {
 				defaultResults = append(defaultResults, ActionResult{
 					Action:        action,
 					ExecutionId:   workflowExecution.ExecutionId,
@@ -21686,7 +21685,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 	}
-
 
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
@@ -23966,7 +23964,6 @@ func GetExternalClient(baseUrl string) *http.Client {
 	httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
 	httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
 
-
 	transport := http.DefaultTransport.(*http.Transport)
 	transport.MaxIdleConnsPerHost = 100
 	transport.ResponseHeaderTimeout = time.Second * 60
@@ -24000,7 +23997,6 @@ func GetExternalClient(baseUrl string) *http.Client {
 			log.Printf("[INFO] Reading self signed certificates from custom dir '%s'", certDir)
 		}
 
-
 		files, err := os.ReadDir(certDir)
 		if err == nil && os.Getenv("SHUFFLE_CERT_DIR") != "" {
 			for _, file := range files {
@@ -24023,7 +24019,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
-        if len(httpProxy) > 0 && httpProxy != "noproxy"{
+		if len(httpProxy) > 0 && httpProxy != "noproxy" {
 			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 
 			url_i := url.URL{}
@@ -24032,7 +24028,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 				transport.Proxy = http.ProxyURL(url_proxy)
 			}
 		}
-		if len(httpsProxy) > 0 && httpsProxy != "noproxy"{
+		if len(httpsProxy) > 0 && httpsProxy != "noproxy" {
 			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
 
 			url_i := url.URL{}
@@ -24042,7 +24038,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 			}
 		}
 	} else {
-        // keeping this here for now
+		// keeping this here for now
 		if len(httpProxy) > 0 && httpProxy != "noproxy" {
 			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 
@@ -28406,9 +28402,7 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	}
 }
 
-
 // FIXME: Always fails:
-
 
 func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
@@ -28474,7 +28468,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 
-			org, err := GetOrg(ctx, orgId) 
+			org, err := GetOrg(ctx, orgId)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting org during parent org loading %s: %s", org.Id, err)
 				resp.WriteHeader(500)
@@ -28486,7 +28480,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 				if user.Id == orgUser.Id {
 					user.Role = orgUser.Role
 					user.ActiveOrg.Id = org.Id
-					orgUserFound = true 
+					orgUserFound = true
 				}
 			}
 
@@ -28520,8 +28514,6 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
-
 	// Access is granted -> get revisions
 	childWorkflows, err := ListChildWorkflows(ctx, workflow.ID)
 	if err != nil {
@@ -28550,6 +28542,139 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(body)
+}
+
+func ExecuteEnrichment(ctx context.Context, iocs []string, exec WorkflowExecution) error {
+	if exec.WorkflowId == exec.OrgId {
+		return nil
+	}
+
+	enrichWorkflow := exec.OrgId
+	url := "https://frankfurt.shuffler.io/api/v1/workflows/fc314a42-41dd-469c-ac8d-f9d80fe98722"
+	workflow, err := GetWorkflow(ctx, enrichWorkflow)
+	currentOrg, err := GetOrg(ctx, exec.OrgId)
+
+	if err != nil || workflow.ID == "" {
+		log.Printf("[INFO] Enrichment Workflow does not exists creating a new one for org: %s", exec.OrgId)
+		currentWorkflow, err := GetWorkflow(ctx, exec.WorkflowId)
+
+		client := http.Client{}
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Printf("[Error] Error creating a http request: %s", err)
+			return errors.New("Error creating a http request")
+		}
+
+		log.Printf("[DEBUG] Fetching enrichment public workflow")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed to sending a fetch request: %s", err)
+			return errors.New("Failed sending to a request")
+		}
+
+		defer resp.Body.Close()
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("[ERROR] reading HTTP response body:", err)
+			return errors.New("Error reading HTTP App response response body: " + err.Error())
+		}
+
+		log.Printf("[DEBUG] Successfully fetched workflow! Now creating a copy workflow for current org(%s)", exec.OrgId)
+
+		err = json.Unmarshal(body, workflow)
+		if err != nil {
+			log.Println("[ERROR] unmarshalling Enrichment workflowData JSON data:", err)
+			return errors.New("Error unmarshalling JSON data: " + err.Error())
+		}
+
+		workflow.ID = currentOrg.Id
+		workflow.OrgId = exec.OrgId
+		workflow.Sharing = "private"
+		workflow.Public = false
+		workflow.Status = ""
+		// FIXME: Better name
+		workflow.Name = "IOCS Runner"
+		workflow.Org = currentWorkflow.Org
+		workflow.OrgId = currentWorkflow.OrgId
+
+		if err != nil {
+			log.Printf("[WARNING] Failed getting current org with org id: %s", exec.OrgId)
+			return errors.New("Failed to get current org: " + err.Error())
+		}
+
+		var actions []Action
+
+		for actionIndex, _ := range workflow.Actions {
+			action := workflow.Actions[actionIndex]
+
+			if project.Environment == "onprem" {
+				if action.Environment != "Shuffle" {
+					action.Environment = "Shuffle"
+				}
+			} else {
+				if action.Environment != "Cloud" {
+					action.Environment = "Cloud"
+				}
+			}
+
+			workflow.Actions[actionIndex] = action
+
+			actions = append(actions, action)
+		}
+
+		workflow.Actions = actions
+
+		err = SetWorkflow(ctx, *workflow, workflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed to create a workflow(%s) for enrichment in org(%s): %s", workflow.ID, workflow.OrgId, err)
+			return err
+		}
+
+		log.Printf("[INFO] Created a new workflow(%s) for enrichment in current org(%s)", workflow.ID, workflow.OrgId)
+	}
+
+	var user User
+
+	for i, u := range currentOrg.Users {
+		if u.Username == workflow.UpdatedBy {
+			user = currentOrg.Users[i]
+		}
+	}
+
+	id := workflow.ID
+	reqUrl := "https://frankfurt.shuffler.io" + "/api/v1/workflows/" + id + "/execute"
+
+	IPs := struct {
+		IP string `json:"IP"`
+	}{
+		IP: iocs[0],
+	}
+
+	out, err := json.Marshal(IPs)
+
+	req, err := http.NewRequest("POST", reqUrl, bytes.NewBuffer(out))
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+user.ApiKey)
+	req.Header.Set("Org-Id", workflow.OrgId)
+
+	// send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending health check HTTP request: %s", err)
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	return nil
 }
 
 // Updates statuses in relevant areas according to what happened in the workflow run

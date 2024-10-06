@@ -266,5 +266,10 @@ func RunIOCFinder(ctx context.Context, workflowExecution WorkflowExecution) {
 	foundMd5s = runDedup(foundMd5s)
 	foundSha256s = runDedup(foundSha256s)
 
-	//fmt.Printf("[DEBUG][%s] IPS: %#v, Domains: %#v, Md5s: %#v, Sha256s: %#v", workflowExecution.ExecutionId, foundIps, foundDomains, foundMd5s, foundSha256s)
+	log.Printf("[DEBUG][%s] IPS: %#v, Domains: %#v, Md5s: %#v, Sha256s: %#v\n", workflowExecution.ExecutionId, foundIps, foundDomains, foundMd5s, foundSha256s)
+
+	err := ExecuteEnrichment(ctx, foundIps, workflowExecution)
+	if err != nil {
+		log.Printf("%s", err)
+	}
 }
