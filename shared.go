@@ -41,6 +41,7 @@ import (
 	"crypto/sha1"
 	mathrand "math/rand"
 
+	"github.com/Shuffle/indicator-parser/go/ioc"
 	"github.com/bradfitz/slice"
 	uuid "github.com/satori/go.uuid"
 	"github.com/sendgrid/sendgrid-go"
@@ -28564,7 +28565,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(body)
 }
 
-func ExecuteEnrichment(ctx context.Context, iocs []string, exec WorkflowExecution) error {
+func ExecuteEnrichment(ctx context.Context, iocs []ioc.Indicator[string], exec WorkflowExecution) error {
 	if exec.WorkflowId == exec.OrgId {
 		return nil
 	}
@@ -28664,15 +28665,22 @@ func ExecuteEnrichment(ctx context.Context, iocs []string, exec WorkflowExecutio
 	}
 
 	id := workflow.ID
-	reqUrl := "https://frankfurt.shuffler.io" + "/api/v1/workflows/" + id + "/execute"
-
-	IPs := struct {
-		IP string `json:"IP"`
-	}{
-		IP: iocs[0],
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 	}
 
-	out, err := json.Marshal(IPs)
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if project.Environment != "cloud" {
+		baseUrl = "http://localhost:3001"
+	}
+
+	reqUrl := baseUrl + "/api/v1/workflows/" + id + "/execute"
+
+	out, err := json.Marshal(iocs)
 
 	req, err := http.NewRequest("POST", reqUrl, bytes.NewBuffer(out))
 	if err != nil {
@@ -28730,6 +28738,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	go RunCacheCleanup(ctx, *exec)
 	go RunIOCFinder(ctx, *exec)
+	go RunIOCFinderV2(ctx, *exec)
 
 	log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
 	orgId := exec.ExecutionOrg
