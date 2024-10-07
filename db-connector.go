@@ -21,7 +21,7 @@ import (
 	//"strconv"
 	//"encoding/binary"
 	"math"
-	mathrand "math/rand"
+	mathrand "math/rand"c
 	"sort"
 	"strings"
 	"time"
@@ -642,7 +642,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					err = IncrementCacheDump(ctx, orgId, dataType, int(oldNum))
 					// if err contains "Failed committing stats" 
 					if err != nil {
-						if strings.Contains(fmt.Sprintf("%s", err), "Failed committing stats") {
+						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
 							log.Printf("[ERROR] Failed committing stats for %s: %s. Going to increment cache instead: %s - %d", orgId, err, key, oldNum)
 							// just increment the cache
 							item := &gomemcache.Item{
