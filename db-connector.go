@@ -16,12 +16,10 @@ import (
 	"os"
 	"strconv"
 
-	"math/rand"
-
 	//"strconv"
 	//"encoding/binary"
 	"math"
-	mathrand "math/rand"c
+	"math/rand"
 	"sort"
 	"strings"
 	"time"
@@ -53,9 +51,9 @@ var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
-var dbInterval = 0x19
+// var dbInterval = 0x19
 // var dbInterval = 0x1
-// var dbInterval = 0xA
+var dbInterval = 0xA
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
 
@@ -163,7 +161,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	return executionInfo
 }
 
-func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint64) *ExecutionInfo {
+func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint8) *ExecutionInfo {
 
 	appendCustom := false
 	if dataType == "app_executions" || strings.HasPrefix(dataType, "app_executions") {
@@ -397,15 +395,15 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	return nil
 }
 
-func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
+func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) {
 
 	nameKey := "org_statistics"
 	orgStatistics := &ExecutionInfo{}
 
-	dbDumpInterval := uint64(dbInterval)
+	dbDumpInterval := uint8(dbInterval)
 	if len(amount) > 0 {
 		if amount[0] > 0 {
-			dbDumpInterval = uint64(amount[0])
+			dbDumpInterval = uint8(amount[0])
 		}
 	}
 
@@ -413,7 +411,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	tmpOrgDetail, err := GetOrg(ctx, orgId)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting org in increment: %s", err)
-		return err
+		return
 	}
 
 	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
@@ -422,16 +420,13 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(tmpOrgDetail)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err
+			return
 		}
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
 		}
 	}
-
-	commitErr := false
-	txnErrMsg := ""
 
 	if project.DbType == "opensearch" {
 		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
@@ -440,7 +435,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error in org STATS get: %s", err)
-			return err
+			return
 		}
 
 		defer res.Body.Close()
@@ -451,7 +446,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			// Init the org stats if it doesn't exist
 			if res.StatusCode == 404 {
 				orgStatistics.OrgId = orgId
-				orgStatistics = HandleIncrement(dataType, orgStatistics, uint64(dbDumpInterval))
+				orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
 				orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
 				marshalledData, err := json.Marshal(orgStatistics)
@@ -467,14 +462,14 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 				}
 			}
 
-			return err
+			return
 		}
 
 		orgStatsWrapper := &ExecutionInfoWrapper{}
 		err = json.Unmarshal(respBody, &orgStatsWrapper)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", err)
-			return err
+			return
 		}
 
 		orgStatistics = &orgStatsWrapper.Source
@@ -487,14 +482,14 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			orgStatistics.OrgId = orgId
 		}
 
-		orgStatistics = HandleIncrement(dataType, orgStatistics, uint64(dbDumpInterval))
+		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
 		orgStatistics = handleDailyCacheUpdate(orgStatistics)
 
 		// Set the data back in the database
 		marshalledData, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[ERROR] Failed marshalling org STATS body (2): %s", err)
-			return err
+			return
 		}
 
 		err = indexEs(ctx, nameKey, id, marshalledData)
@@ -507,7 +502,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		tx, err := project.Dbclient.NewTransaction(ctx)
 		if err != nil {
 			log.Printf("[WARNING] Error in cache dump: %s", err)
-			return err
+			return
 		}
 
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
@@ -518,7 +513,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			} else {
 				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
 				tx.Rollback()
-				return err 
+				return
 			}
 		}
 
@@ -537,14 +532,11 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		if _, err := tx.Put(key, orgStatistics); err != nil {
 			log.Printf("[WARNING] Failed setting stats: %s", err)
 			tx.Rollback()
-			return err 
+			return
 		}
 
-		commitErr = true
-
 		if _, err = tx.Commit(); err != nil {
-			txnErrMsg = fmt.Sprintf("Failed committing stats: %s", err)
-			log.Printf(txnErrMsg)
+			log.Printf("[ERROR] Failed commiting stats: %s", err)
 		}
 	}
 
@@ -554,7 +546,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err
+			return
 		}
 
 		err = SetCache(ctx, cacheKey, data, 30)
@@ -562,12 +554,6 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
 		}
 	}
-
-	if commitErr {
-		return errors.New(txnErrMsg)
-	}
-
-	return nil
 }
 
 // Rudementary caching system. WILL go wrong at times without sharding.
@@ -631,44 +617,18 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 				if num >= dbDumpInterval {
 					// Memcache dump first to keep the counter going for other executions
-					oldNum := num
 					num = 0
 
-					// add a fake delay of a few random miliseconds
-					mathrand.Seed(time.Now().UnixNano())
-					randInt := mathrand.Intn(150)
-					time.Sleep(time.Duration(randInt+50) * time.Millisecond)
-
-					err = IncrementCacheDump(ctx, orgId, dataType, int(oldNum))
-					// if err contains "Failed committing stats" 
-					if err != nil {
-						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
-							log.Printf("[ERROR] Failed committing stats for %s: %s. Going to increment cache instead: %s - %d", orgId, err, key, oldNum)
-							// just increment the cache
-							item := &gomemcache.Item{
-								Key:        key,
-								Value:      []byte(string(oldNum)),
-								Expiration: 86400,
-							}
-							
-							if err := mc.Set(item); err != nil {
-								log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
-							}
-						}
-					} else {
-						log.Printf("[DEBUG] Setting cache for %s with amount %d", key, num)
-
-						item := &gomemcache.Item{
-							Key:        key,
-							Value:      []byte(string(num)),
-							Expiration: 86400,
-						}
-
-						if err := mc.Set(item); err != nil {
-							log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
-						}
+					item := &gomemcache.Item{
+						Key:        key,
+						Value:      []byte(string(num)),
+						Expiration: 86400,
+					}
+					if err := mc.Set(item); err != nil {
+						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
 					}
 
+					IncrementCacheDump(ctx, orgId, dataType, int(num))
 				} else {
 					//log.Printf("NOT Dumping!")
 
