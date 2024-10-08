@@ -1270,7 +1270,7 @@ type Workflow struct {
 	Description          string     `json:"description" datastore:"description,noindex"`
 	Start                string     `json:"start" datastore:"start"`
 	Owner                string     `json:"owner" datastore:"owner"`
-	Sharing              string     `json:"sharing" datastore:"sharing"` // Not really used outside of Forms.
+	Sharing              string     `json:"sharing" datastore:"sharing"`
 	Image                string     `json:"image,omitempty" datastore:"image,noindex"`
 	Org                  []OrgMini  `json:"org,omitempty" datastore:"org"`
 	ExecutingOrg         OrgMini    `json:"execution_org,omitempty" datastore:"execution_org"`
