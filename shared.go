@@ -14072,23 +14072,22 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 				newResults = append(newResults, res)
 			}
 
-			log.Printf("[INFO][%s] TOTAL FINISHED SUBFLOWS: %d/%d", subflowExecutionId, len(parentSubflowResult), len(newResults))
+			if finishedSubflows == len(newResults) {
+				log.Printf("[DEBUG][%s] Finished workflow because status of all should be set to finished now", subflowExecutionId)
 
-			// Can it be if this and also status = "WAITING"?
-			if len(parentSubflowResult) == finishedSubflows && foundResult.Status != "SUCCESS" && foundResult.Status != "FAILURE" {
-				log.Printf("[INFO][%s] ALL THE SUBFLOW GOT THE RESULT BACK SO UPATING THE STATUS TO SUCCESS")
-				foundResult.Status = "SUCCESS"
-				if foundResult.CompletedAt == 0 {
-					foundResult.CompletedAt = time.Now().Unix() * 1000
-				}
-				ranUpdate = true
+				// Status is used to determine if the current subflow is finished
 
-				sendRequest = true
+				/*
+					foundResult.Status = "SUCCESS"
+
+					if result.CompletedAt == 0 {
+						result.CompletedAt = time.Now().Unix()*1000
+					}
+				*/
 			}
 
 			if ranUpdate {
 
-				// FIXME: Look into whether this sendRequest can be removed if we want reduce the amount of request
 				sendRequest = true
 				baseResultData, err := json.Marshal(newResults)
 				if err != nil {
@@ -14592,7 +14591,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		// Verifying if the userinput should be sent properly or not
 		if actionResult.Action.Name == "run_userinput" && actionResult.Status != "SKIPPED" {
-			// log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
+			//log.Printf("\n\n[INFO] Inside userinput default return! Return data: %s", actionResult.Result)
 			actionResult.Status = "WAITING"
 			actionResult.CompletedAt = time.Now().Unix() * 1000
 
@@ -15426,7 +15425,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	updateParentRan := false
-
 	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
 		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
 		finished := true
@@ -15451,6 +15449,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				//log.Printf("[INFO][%s] Execution in workflow %s finished (not subflow).", workflowExecution.ExecutionId, workflowExecution.Workflow.ID)
 			} else {
 				log.Printf("[INFO][%s] SubExecution of parentExecution %s in workflow %s finished (subflow).", workflowExecution.ExecutionId, workflowExecution.ExecutionParent, workflowExecution.Workflow.ID)
+
 			}
 
 			for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -15655,6 +15654,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 					// Setting to waiting, as it should be updated by child executions' fill-ins from their result when they finish
 					workflowExecution.Status = "EXECUTING"
+
 					amountFinished := 0
 					for _, subflowData := range subflowDataList {
 						if subflowData.ResultSet || len(subflowData.Result) > 0 {
