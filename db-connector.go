@@ -699,8 +699,8 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				// make it a random number between
 				// (10-60 seconds)
 				randomSeconds := (rand.Intn(50) + 10)*5 // to make the number longer
-				
-				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > 0 {
+		
+				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > 25 {
 					// Memcache dump first to keep the counter going for other executions
 					oldNum := num
 					num = 0
@@ -755,15 +755,50 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 				} else {
 					//log.Printf("NOT Dumping!")
+					// this case got apparently overwritten unnecessarily 3 times out of 20.
+					// data gets more lost here due to cache overwrites.
 
-					log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount)
+					// add a random sleep of a few miliseconds here
+					randomSleep := rand.Intn(50) + 10
+					time.Sleep(time.Duration(randomSleep) * time.Millisecond)
+
+					// read again and check if it's already not dumped
+					item, err := mc.Get(key)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting cache item for key %s: %s", key, err)
+						return
+					}
+
+					incrementedItemInCache = IncrementInCache{}
+					err = json.Unmarshal(item.Value, &incrementedItemInCache)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
+						incrementedItemInCache.Amount = num
+						incrementedItemInCache.CreatedAt = time.Now().Unix()
+					}
+
+					// this means there will be an overwrite!
+					if incrementedItemInCache.Amount == num {
+						// better to update the cache again instead of losing the data
+						incrementedItemInCache.Amount += uint64(incrementAmount)
+					} else if num > incrementedItemInCache.Amount {
+						// we bow to the higher number we have
+						incrementedItemInCache.Amount = num
+					} else if incrementedItemInCache.Amount > num {
+						// this means, a bunch of stats were added in the meantime
+						// bow to the higher number and just increment again
+						incrementedItemInCache.Amount += uint64(incrementAmount)
+					}
+
+					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount)
+					log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d. While num we updated was %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount, num)
 
 					data, err := json.Marshal(incrementedItemInCache)
 					if err != nil {
 						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
 					}
 
-					item := &gomemcache.Item{
+					item = &gomemcache.Item{
 						Key:        key,
 						Value:      data,
 						Expiration: 86400*30,
