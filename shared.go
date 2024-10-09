@@ -9659,6 +9659,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				Owner:          workflow.Owner,
 				OrgId:          workflow.OrgId,
 
+				OutputYields:   workflow.OutputYields,
 				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
@@ -28647,7 +28648,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	//log.Printf("\n\n[DEBUG][%s] STARTING VALIDATION WITH %d results and %d actions\n\n", exec.ExecutionId, len(exec.Results), len(workflow.Actions))
 	for _, result := range exec.Results {
 		// FIXME: Skipping anything that outright fails right now
-		if result.Status != "SUCCESS" {
+		if result.Status == "SKIPPED" {
 			continue
 		}
 

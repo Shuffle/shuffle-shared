@@ -1294,7 +1294,7 @@ type Workflow struct {
 
 	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
 	InputMarkdown  string          `json:"input_markdown" datastore:"input_markdown,noindex"`
-	//OutputMarkdown string         `json:"output_markdown" datastore:"output_markdown,noindex"`
+	OutputYields []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
 
 	Blogpost     string `json:"blogpost" yaml:"blogpost"`
 	Video        string `json:"video" yaml:"video"`
