@@ -53,7 +53,8 @@ var maxCacheSize = 1020000
 
 // var dbInterval = 0x19
 // var dbInterval = 0x1
-var dbInterval = 0xA
+var dbInterval = 25
+// var dbInterval = 0xA
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
 
@@ -700,7 +701,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				// (10-60 seconds)
 				randomSeconds := (rand.Intn(50) + 10)*5 // to make the number longer
 		
-				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > 25 {
+				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > uint64(dbInterval) {
 					// Memcache dump first to keep the counter going for other executions
 					oldNum := num
 					num = 0
