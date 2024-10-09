@@ -348,6 +348,11 @@ type AppUsage struct {
 	Usage   int64  `json:"usage" datastore:"usage"`
 }
 
+type IncrementInCache struct {
+	Amount uint64 `json:"amount" datastore:"amount"`
+	CreatedAt int64 `json:"created_at" datastore:"created_at"`
+}
+
 // Should be for a particular day
 // Reset is handled during caching. If the date is not today, then the reset is handled
 type DailyStatistics struct {
