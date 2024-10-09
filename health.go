@@ -987,7 +987,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	}
 
 	updateOpsCache(workflowHealth)
-	timeout := time.After(5 * time.Minute)
+	timeout := time.After(6 * time.Minute)
 
 	if workflowHealth.Create == true {
 		log.Printf("[DEBUG] Deleting created ops workflow")
