@@ -535,7 +535,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	if len(memcached) > 0 {
 		keysInterface, err := GetCache(ctx, "stat_cache_keys_" + orgId)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting cache keys for org %s: %s", orgId, err)
+			// log.Printf("[WARNING] Failed getting cache keys for org %s: %s", orgId, err)
 		} else {
 			var keys []string
 
@@ -566,7 +566,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 
 					// Increment the value
 					if !(len(valueBytes) > 1) {
-						log.Printf("[WARNING] Invalid value for key %s: %s", key, value)
+						// log.Printf("[WARNING] Invalid value for key %s: %s", key, value)
 						continue
 					}
 
@@ -578,7 +578,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if incrementInCache.Amount == 0 {
-						log.Printf("[INFO] No need to dump cache value for key %s", key)
+						// log.Printf("[INFO] No need to dump cache value for key %s", key)
 						continue
 					}
 
@@ -594,7 +594,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 					if err != nil {
 						log.Printf("[WARNING] Failed dumping cache value for key %s: %s and datatype %s", key, err, dataType)
 					} else {
-						log.Printf("[INFO] Dumped cache value for key %s and datatype %s", key, dataType)
+						// log.Printf("[INFO] Dumped cache value for key %s and datatype %s", key, dataType)
 						// now, set it back to 0
 						incrementInCache.Amount = 0
 						incrementInCache.CreatedAt = time.Now().Unix()

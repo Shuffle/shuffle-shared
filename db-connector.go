@@ -613,7 +613,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				if err := mc.Set(item); err != nil {
 					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
 				} else {
-					log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
+					// log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
 				}
 			}
 		} else {
@@ -638,7 +638,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 						if err := mc.Set(item); err != nil {
 							log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
 						} else {
-							log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
+							// log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
 						}
 					}
 				}
@@ -689,7 +689,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					Expiration: 86400*30,
 				}
 
-				log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
+				// log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
 			}
 
 			if len(item.Value) == 1 {
@@ -742,7 +742,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 				incrementedItemInCache.Amount = num
 
-				log.Printf("[DEBUG] time.Now().Unix() (%d) - incrementedItemInCache.CreatedAt (%d) = %d", time.Now().Unix(), incrementedItemInCache.CreatedAt, time.Now().Unix()-incrementedItemInCache.CreatedAt)
+				// log.Printf("[DEBUG] time.Now().Unix() (%d) - incrementedItemInCache.CreatedAt (%d) = %d", time.Now().Unix(), incrementedItemInCache.CreatedAt, time.Now().Unix()-incrementedItemInCache.CreatedAt)
 
 				// if num >= dbDumpInterval {
 				// if the cache was created more than a day ago
@@ -759,7 +759,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					incrementedItemInCache.Amount = num
 					incrementedItemInCache.CreatedAt = time.Now().Unix()
 
-					log.Printf("[DEBUG] Dumping cache item with key %s which was created at %s is was %d", key, incrementedItemInCache.CreatedAt, oldNum)
+					// log.Printf("[DEBUG] Dumping cache item with key %s which was created at %s is was %d", key, incrementedItemInCache.CreatedAt, oldNum)
 
 					data, err := json.Marshal(incrementedItemInCache)
 					if err != nil {
@@ -772,7 +772,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					if err != nil {
 						log.Printf("[ERROR] Failed dumping cache for key (1) %s: %s", key, err)
 						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
-							log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
+							// log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
 							incrementedItemInCache.Amount = oldNum
 							
 							data, err := json.Marshal(incrementedItemInCache)
@@ -842,7 +842,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					}
 
 					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount)
-					log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d. While num we updated was %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount, num)
+					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d. While num we updated was %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount, num)
 
 					data, err := json.Marshal(incrementedItemInCache)
 					if err != nil {
