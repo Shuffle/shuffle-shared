@@ -8,6 +8,8 @@ import (
 	"strings"
 	"strconv"
 
+	"os"
+
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
@@ -525,6 +527,97 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "User doesn't have access to org"}`))
 		return
 
+	}
+
+	// before we get stats, force dump all increments to db
+	// this is just for memcached right now
+	memcached := os.Getenv("SHUFFLE_MEMCACHED")
+	if len(memcached) > 0 {
+		keysInterface, err := GetCache(ctx, "stat_cache_keys_" + orgId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting cache keys for org %s: %s", orgId, err)
+		} else {
+			var keys []string
+
+			keyBytes, ok := keysInterface.([]byte)
+			if !ok {
+				log.Printf("[WARNING] Failed converting keyInterface -> keyBytes cache keys for org %s", orgId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed converting keyInterface -> keyBytes cache keys for org %s"}`, orgId)))
+				return
+			}
+
+			err = json.Unmarshal(keyBytes, &keys)
+			if err != nil {
+				log.Printf("[WARNING] Failed unmarshaling cache keys for org %s: %s", orgId, err)
+				keys = []string{}
+			}
+
+			for _, key := range keys {
+				value, err := GetCache(ctx, key)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting cache value for key %s: %s", key, err)
+				} else {
+					valueBytes, ok := value.([]byte)
+					if !ok {
+						log.Printf("[WARNING] Failed converting value -> valueBytes cache value for key %s", key)
+						continue
+					}
+
+					// Increment the value
+					if !(len(valueBytes) > 1) {
+						log.Printf("[WARNING] Invalid value for key %s: %s", key, value)
+						continue
+					}
+
+					var incrementInCache IncrementInCache
+					err = json.Unmarshal(valueBytes, &incrementInCache)
+					if err != nil {
+						log.Printf("[WARNING] Failed unmarshaling increment in cache for key %s: %s", key, err)
+						continue
+					}
+
+					if incrementInCache.Amount == 0 {
+						log.Printf("[INFO] No need to dump cache value for key %s", key)
+						continue
+					}
+
+					// make the value "dataType" everything after the second _
+					if len(strings.Split(key, "_")) < 3 {
+						log.Printf("[WARNING] Invalid key for cache value: %s", key)
+						continue
+					}
+
+					dataType := strings.Split(key, "_")[2]
+
+					err = IncrementCacheDump(ctx, orgId, dataType, int(incrementInCache.Amount))
+					if err != nil {
+						log.Printf("[WARNING] Failed dumping cache value for key %s: %s", key, err)
+					} else {
+						log.Printf("[INFO] Dumped cache value for key %s", key)
+						// now, set it back to 0
+						incrementInCache.Amount = 0
+						incrementInCache.CreatedAt = time.Now().Unix()
+
+						newjson, err := json.Marshal(incrementInCache)
+						if err != nil {
+							log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
+							resp.WriteHeader(401)
+							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data for org stats"}`)))
+							return
+						}
+
+						err = SetCache(ctx, key, newjson, 86400*30)
+						if err != nil {
+							log.Printf("[WARNING] Failed setting cache value for key %s: %s", key, err)
+							resp.WriteHeader(401)
+							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting cache value for key %s"}`, key)))
+							return
+						}
+					}
+				}
+			}
+		}
 	}
 
 	info, err := GetOrgStatistics(ctx, orgId)

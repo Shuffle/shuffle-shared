@@ -53,7 +53,7 @@ var maxCacheSize = 1020000
 
 // var dbInterval = 0x19
 // var dbInterval = 0x1
-var dbInterval = 25
+var dbInterval = 500
 // var dbInterval = 0xA
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
@@ -595,6 +595,56 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 	dbDumpInterval := uint8(dbInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
 	if len(memcached) > 0 {
+		// check if the cache already key is indexed in memcache
+		keyItems, err := mc.Get("stat_cache_keys_" + orgId)
+		if err == gomemcache.ErrCacheMiss {
+			keyItem := []string{key}
+			data, err := json.Marshal(keyItem)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+			} else {
+				// dump it to memcache
+				item := &gomemcache.Item{
+					Key:        "stat_cache_keys_" + orgId,
+					Value:      data,
+					Expiration: 86400*30,
+				}
+
+				if err := mc.Set(item); err != nil {
+					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+				} else {
+					log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
+				}
+			}
+		} else {
+			dumpedItems := []string{}
+			err = json.Unmarshal(keyItems.Value, &dumpedItems)
+			if err != nil {
+				log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
+			} else {
+				if !ArrayContains(dumpedItems, key) {
+					dumpedItems = append(dumpedItems, key)
+					data, err := json.Marshal(dumpedItems)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+					} else {
+						// dump it to memcache
+						item := &gomemcache.Item{
+							Key:        "stat_cache_keys_" + orgId,
+							Value:      data,
+							Expiration: 86400*30,
+						}
+
+						if err := mc.Set(item); err != nil {
+							log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+						} else {
+							log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
+						}
+					}
+				}
+			}
+		}
+
 		item, err := mc.Get(key)
 		if err == gomemcache.ErrCacheMiss {
 			incrementItem := IncrementInCache{
