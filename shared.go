@@ -29237,6 +29237,18 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 		orgId = strings.Split(orgId, "?")[0]
 	}
 
+	validAuth := false
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting forms: %s. Allowing anyway", err)
+	} else {
+		if len(user.Id) > 0 && len(user.Username) > 0 {
+			if user.ActiveOrg.Id == orgId {
+				validAuth = true
+			}
+		}
+	}
+
 	if len(orgId) < 36 || len(orgId) > 36 {
 		log.Printf("[WARNING] Bad ID '%s' of length %d when getting forms is not valid", orgId, len(orgId))
 
@@ -29257,10 +29269,10 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] Getting forms for org %s (%s)", org.Name, org.Id)
 
-
 	// Prevent cache steals in any way
 	randomUserId := uuid.NewV4().String()
-	user := User{
+
+	randomUser := User{
 		Id: randomUserId,
 		ActiveOrg: OrgMini{
 			Id: orgId,
@@ -29268,16 +29280,20 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 		},
 	}
 
-	workflows, err := GetAllWorkflowsByQuery(ctx, user, 50, "")
+	if validAuth { 
+		randomUser = user
+	} 
+
+	workflows, err := GetAllWorkflowsByQuery(ctx, randomUser, 50, "")
 	if err != nil {
-		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", randomUser.Username, err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if len(workflows) == 0 {
-		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
 		return
@@ -29285,34 +29301,47 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 
 	relevantForms := []Workflow{}
 	for _, workflow := range workflows {
-		if workflow.Sharing != "form" {
-			continue
+		if validAuth { 
+			if len(workflow.InputQuestions) == 0 && len(workflow.InputMarkdown) == 0 {
+				continue
+			}
+
+			if workflow.Sharing == "form" {
+				relevantForms = append(relevantForms, workflow)
+				continue
+			}
+
+		} else {
+			if workflow.Sharing != "form" {
+				continue
+			}
+
+			// Overwrite to remove anything unecessary for most locations
+			workflow = Workflow{
+				Name:           workflow.Name,
+				ID:			 	workflow.ID,
+				Owner:          workflow.Owner,
+				OrgId:          workflow.OrgId,
+
+				OutputYields:   workflow.OutputYields,
+				Sharing: 		workflow.Sharing,
+				Description:    workflow.Description,
+				InputQuestions: workflow.InputQuestions,
+				InputMarkdown:  workflow.InputMarkdown,
+			}
 		}
 
-		// Overwrite to remove anything unecessary for most locations
-		workflow = Workflow{
-			Name:           workflow.Name,
-			ID:			 	workflow.ID,
-			Owner:          workflow.Owner,
-			OrgId:          workflow.OrgId,
-
-			OutputYields:   workflow.OutputYields,
-			Sharing: 		workflow.Sharing,
-			Description:    workflow.Description,
-			InputQuestions: workflow.InputQuestions,
-			InputMarkdown:  workflow.InputMarkdown,
-		}
 		relevantForms = append(relevantForms, workflow)
 	}
 
 	if len(relevantForms) == 0 {
-		log.Printf("[INFO] No forms found for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		log.Printf("[INFO] No forms found for user %s (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
 		return
 	}
 
-	log.Printf("[INFO] Found %d forms for org %s (%s)", len(relevantForms), user.ActiveOrg.Name, user.ActiveOrg.Id)
+	log.Printf("[INFO] Found %d forms for org %s (%s)", len(relevantForms), randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
 
 	body, err := json.Marshal(relevantForms)
 	if err != nil {
