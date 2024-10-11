@@ -29325,3 +29325,64 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 	resp.WriteHeader(200)
 	resp.Write(body)
 }
+
+func SendDeleteWorkflowRequest(childWorkflow Workflow, request *http.Request) error {
+	log.Printf("[INFO] Attempting to delete child workflow %s", childWorkflow.ID)
+
+	// Send a Delete request to the workflows 
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("BASE_URL")) > 0 {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s", baseUrl, childWorkflow.ID)
+	client := GetExternalClient(baseUrl)
+
+	req, err := http.NewRequest(
+		"DELETE",
+		fullUrl,
+		nil,
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, err)
+		return err
+	}
+
+
+	// Look for Authorization
+	for key, values := range request.Header {
+		if len(values) > 0 {
+			req.Header.Add(key, values[0])
+		}
+	}
+
+	// Cookies
+	for _, cookie := range request.Cookies() {
+		req.AddCookie(cookie)
+	}
+
+	// Ensure it points correctly, and that you can only delete the ones you have access to 
+	if len(childWorkflow.OrgId) > 0 {
+		req.Header.Add("Org-Id", childWorkflow.OrgId)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, err)
+		return err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, resp.Status)
+		return fmt.Errorf("Failed to delete child workflow %s: %s", childWorkflow.ID, resp.Status)
+	}
+
+	log.Printf("[INFO] Deleted child workflow %s. Resp: %s", childWorkflow.ID, string(resp.Status))
+
+	return nil
+}
