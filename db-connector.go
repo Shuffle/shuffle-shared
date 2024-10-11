@@ -162,7 +162,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	return executionInfo
 }
 
-func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint8) *ExecutionInfo {
+func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint) *ExecutionInfo {
 
 	appendCustom := false
 	if dataType == "app_executions" || strings.HasPrefix(dataType, "app_executions") {
@@ -401,10 +401,10 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	nameKey := "org_statistics"
 	orgStatistics := &ExecutionInfo{}
 
-	dbDumpInterval := uint8(dbInterval)
+	dbDumpInterval := uint(dbInterval)
 	if len(amount) > 0 {
 		if amount[0] > 0 {
-			dbDumpInterval = uint8(amount[0])
+			dbDumpInterval = uint(amount[0])
 		}
 	}
 

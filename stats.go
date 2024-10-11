@@ -588,13 +588,13 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					dataType := strings.Split(key, "_")[2]
+					dataType := strings.Join(strings.Split(key, "_")[2:], "_")
 
 					err = IncrementCacheDump(ctx, orgId, dataType, int(incrementInCache.Amount))
 					if err != nil {
-						log.Printf("[WARNING] Failed dumping cache value for key %s: %s", key, err)
+						log.Printf("[WARNING] Failed dumping cache value for key %s: %s and datatype %s", key, err, dataType)
 					} else {
-						log.Printf("[INFO] Dumped cache value for key %s", key)
+						log.Printf("[INFO] Dumped cache value for key %s and datatype %s", key, dataType)
 						// now, set it back to 0
 						incrementInCache.Amount = 0
 						incrementInCache.CreatedAt = time.Now().Unix()
