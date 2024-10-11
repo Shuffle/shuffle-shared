@@ -29203,3 +29203,125 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write([]byte(`{"success": true}`))
 }
+
+// An API to ONLY return PUBLIC forms for an org
+// A public form = Workflow with "sharing": "form" 
+func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s Get Org Forms", GetRequestIp(request))
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+	var orgId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		orgId = location[4]
+	}
+
+	if strings.Contains(orgId, "?") {
+		orgId = strings.Split(orgId, "?")[0]
+	}
+
+	if len(orgId) < 36 || len(orgId) > 36 {
+		log.Printf("[WARNING] Bad ID '%s' of length %d when getting forms is not valid", orgId, len(orgId))
+
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org ID when getting forms is not valid"}`))
+		return
+	}
+
+	// Load the org to see if it wants them public or not
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Org %s doesn't exist.", orgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding org"}`))
+		return
+	}
+
+	log.Printf("[INFO] Getting forms for org %s (%s)", org.Name, org.Id)
+
+
+	// Prevent cache steals in any way
+	randomUserId := uuid.NewV4().String()
+	user := User{
+		Id: randomUserId,
+		ActiveOrg: OrgMini{
+			Id: orgId,
+			Name: org.Name,
+		},
+	}
+
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 50, "")
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(workflows) == 0 {
+		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		resp.WriteHeader(200)
+		resp.Write([]byte("[]"))
+		return
+	}
+
+	relevantForms := []Workflow{}
+	for _, workflow := range workflows {
+		if workflow.Sharing != "form" {
+			continue
+		}
+
+		// Overwrite to remove anything unecessary for most locations
+		workflow = Workflow{
+			Name:           workflow.Name,
+			ID:			 	workflow.ID,
+			Owner:          workflow.Owner,
+			OrgId:          workflow.OrgId,
+
+			OutputYields:   workflow.OutputYields,
+			Sharing: 		workflow.Sharing,
+			Description:    workflow.Description,
+			InputQuestions: workflow.InputQuestions,
+			InputMarkdown:  workflow.InputMarkdown,
+		}
+		relevantForms = append(relevantForms, workflow)
+	}
+
+	if len(relevantForms) == 0 {
+		log.Printf("[INFO] No forms found for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		resp.WriteHeader(200)
+		resp.Write([]byte("[]"))
+		return
+	}
+
+	log.Printf("[INFO] Found %d forms for org %s (%s)", len(relevantForms), user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+	body, err := json.Marshal(relevantForms)
+	if err != nil {
+		log.Printf("[WARNING] Failed form GET marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(body)
+}
