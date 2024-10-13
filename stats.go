@@ -17,6 +17,21 @@ import (
 	"github.com/satori/go.uuid"
 )
 
+var PredictableDataTypes = []string{
+    "app_executions",
+    "workflow_executions",
+    "workflow_executions_finished",
+    "workflow_executions_failed",
+    "app_executions_failed",
+	"app_executions_cloud",
+    "subflow_executions",
+    "org_sync_actions",
+    "workflow_executions_cloud",
+    "workflow_executions_onprem",
+    "api_usage",
+    "ai_executions",
+}
+
 func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -533,12 +548,12 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	// this is just for memcached right now
 	memcached := os.Getenv("SHUFFLE_MEMCACHED")
 	if len(memcached) > 0 {
+		var keys []string
+
 		keysInterface, err := GetCache(ctx, "stat_cache_keys_" + orgId)
 		if err != nil {
-			// log.Printf("[WARNING] Failed getting cache keys for org %s: %s", orgId, err)
+			
 		} else {
-			var keys []string
-
 			keyBytes, ok := keysInterface.([]byte)
 			if !ok {
 				log.Printf("[WARNING] Failed converting keyInterface -> keyBytes cache keys for org %s", orgId)
@@ -552,68 +567,78 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[WARNING] Failed unmarshaling cache keys for org %s: %s", orgId, err)
 				keys = []string{}
 			}
+		}
 
-			for _, key := range keys {
-				value, err := GetCache(ctx, key)
+		for _, dataType := range PredictableDataTypes {
+			key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
+			if !ArrayContains(keys, key) {
+				log.Printf("[DEBUG] Adding %s to stats", key)
+				keys = append(keys, key)
+			} else {
+				log.Printf("[DEBUG] NOT Adding %s to stats because they are apparently in %+v", keys)	
+			}
+		}
+
+		for _, key := range keys {
+			value, err := GetCache(ctx, key)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting cache value for key %s: %s", key, err)
+			} else {
+				valueBytes, ok := value.([]byte)
+				if !ok {
+					log.Printf("[WARNING] Failed converting value -> valueBytes cache value for key %s", key)
+					continue
+				}
+
+				// Increment the value
+				if !(len(valueBytes) > 1) {
+					// log.Printf("[WARNING] Invalid value for key %s: %s", key, value)
+					continue
+				}
+
+				var incrementInCache IncrementInCache
+				err = json.Unmarshal(valueBytes, &incrementInCache)
 				if err != nil {
-					log.Printf("[WARNING] Failed getting cache value for key %s: %s", key, err)
+					log.Printf("[WARNING] Failed unmarshaling increment in cache for key %s: %s", key, err)
+					continue
+				}
+
+				if incrementInCache.Amount == 0 {
+					// log.Printf("[INFO] No need to dump cache value for key %s", key)
+					continue
+				}
+
+				// make the value "dataType" everything after the second _
+				if len(strings.Split(key, "_")) < 3 {
+					log.Printf("[WARNING] Invalid key for cache value: %s", key)
+					continue
+				}
+
+				dataType := strings.Join(strings.Split(key, "_")[2:], "_")
+
+				err = IncrementCacheDump(ctx, orgId, dataType, int(incrementInCache.Amount))
+				if err != nil {
+					log.Printf("[WARNING] Failed dumping cache value for key %s: %s and datatype %s", key, err, dataType)
 				} else {
-					valueBytes, ok := value.([]byte)
-					if !ok {
-						log.Printf("[WARNING] Failed converting value -> valueBytes cache value for key %s", key)
-						continue
-					}
+					log.Printf("[INFO] Dumped cache value for key %s and datatypes %s", key, dataType)
+					// now, set it back to 0
+					incrementInCache.Amount = 0
+					incrementInCache.CreatedAt = time.Now().Unix()
 
-					// Increment the value
-					if !(len(valueBytes) > 1) {
-						// log.Printf("[WARNING] Invalid value for key %s: %s", key, value)
-						continue
-					}
-
-					var incrementInCache IncrementInCache
-					err = json.Unmarshal(valueBytes, &incrementInCache)
+					newjson, err := json.Marshal(incrementInCache)
 					if err != nil {
-						log.Printf("[WARNING] Failed unmarshaling increment in cache for key %s: %s", key, err)
-						continue
+						log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data for org stats"}`)))
+						return
 					}
 
-					if incrementInCache.Amount == 0 {
-						// log.Printf("[INFO] No need to dump cache value for key %s", key)
-						continue
-					}
-
-					// make the value "dataType" everything after the second _
-					if len(strings.Split(key, "_")) < 3 {
-						log.Printf("[WARNING] Invalid key for cache value: %s", key)
-						continue
-					}
-
-					dataType := strings.Join(strings.Split(key, "_")[2:], "_")
-
-					err = IncrementCacheDump(ctx, orgId, dataType, int(incrementInCache.Amount))
+					err = SetCache(ctx, key, newjson, 86400*30)
 					if err != nil {
-						log.Printf("[WARNING] Failed dumping cache value for key %s: %s and datatype %s", key, err, dataType)
-					} else {
-						// log.Printf("[INFO] Dumped cache value for key %s and datatype %s", key, dataType)
-						// now, set it back to 0
-						incrementInCache.Amount = 0
-						incrementInCache.CreatedAt = time.Now().Unix()
-
-						newjson, err := json.Marshal(incrementInCache)
-						if err != nil {
-							log.Printf("[ERROR] Failed marshal in get org stats: %s", err)
-							resp.WriteHeader(401)
-							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking data for org stats"}`)))
-							return
-						}
-
-						err = SetCache(ctx, key, newjson, 86400*30)
-						if err != nil {
-							log.Printf("[WARNING] Failed setting cache value for key %s: %s", key, err)
-							resp.WriteHeader(401)
-							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting cache value for key %s"}`, key)))
-							return
-						}
+						log.Printf("[WARNING] Failed setting cache value for key %s: %s", key, err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting cache value for key %s"}`, key)))
+						return
 					}
 				}
 			}
