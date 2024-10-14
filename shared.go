@@ -3334,7 +3334,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		// Get the org
 		org, err = GetOrg(ctx, org_id)
 		if err != nil || org.Id != org_id {
-			return User{}, errors.New("Invalid org id specified")
+			//return User{}, errors.New("Invalid org id specified")
+			log.Printf("[ERROR] Invalid Org-Id specified: %s", org_id)
+			org_id = ""
 		}
 	}
 
@@ -3418,7 +3420,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return User{}, errors.New(fmt.Sprintf("(2) User doesn't have access to this org", org_id))
 			}
 
-			log.Printf("[AUDIT] Setting user %s (%s) org to %#v FROM %#v for one request", userdata.Username, userdata.Id, org_id, userdata.ActiveOrg.Id)
+			log.Printf("[AUDIT] Setting user %s (%s) org to %#v FROM %#v for %#v", userdata.Username, userdata.Id, org_id, userdata.ActiveOrg.Id, request.URL.String())
 			userdata.ActiveOrg.Id = org_id
 			userdata.ActiveOrg.Name = org.Name
 			userdata.ActiveOrg.Image = org.Image
@@ -3562,7 +3564,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return User{}, errors.New(fmt.Sprintf("(1) User doesn't have access to this org (%s)", org_id))
 			}
 
-			log.Printf("[AUDIT] Setting user %s (%s) org to %s for one request", user.Username, user.Id, org_id)
+			log.Printf("[AUDIT] Setting user %s (%s) org to %s for %#v", user.Username, user.Id, org_id, request.URL.String())
 			user.ActiveOrg.Id = org_id
 			user.ActiveOrg.Name = org.Name
 			user.ActiveOrg.Image = org.Image
