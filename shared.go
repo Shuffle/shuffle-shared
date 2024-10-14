@@ -9655,12 +9655,12 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//user.ActiveOrg.Id = workflow.OrgId
 
 			workflow = &Workflow{
-				Name:           workflow.Name,
-				ID:			 	workflow.ID,
-				Owner:          workflow.Owner,
-				OrgId:          workflow.OrgId,
+				Name:  workflow.Name,
+				ID:    workflow.ID,
+				Owner: workflow.Owner,
+				OrgId: workflow.OrgId,
 
-				Sharing: 		workflow.Sharing,
+				Sharing:        workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
 				InputMarkdown:  workflow.InputMarkdown,
@@ -28574,6 +28574,11 @@ func ExecuteEnrichment(ctx context.Context, iocs []ioc.Indicator[string], exec W
 	url := "https://frankfurt.shuffler.io/api/v1/workflows/fc314a42-41dd-469c-ac8d-f9d80fe98722"
 	workflow, err := GetWorkflow(ctx, enrichWorkflow)
 	currentOrg, err := GetOrg(ctx, exec.OrgId)
+
+	// If IOCEnrichment is disabled
+	if currentOrg.Defaults.IOCEnrichment == false {
+		return nil
+	}
 
 	if err != nil || workflow.ID == "" {
 		log.Printf("[INFO] Enrichment Workflow does not exists creating a new one for org: %s", exec.OrgId)
