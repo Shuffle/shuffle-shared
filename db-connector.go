@@ -1391,8 +1391,9 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 }
 
 func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
+	// New form REQUIRES sanitization no matter what
+	//if workflowExecution.Workflow.Sharing != "form" { 
 	sanitizeLiquid := os.Getenv("LIQUID_SANITIZE_INPUT")
-
 	if sanitizeLiquid == "" {
 		sanitizeLiquid = "true" // Set default value to "true" if not set
 	}
@@ -1401,10 +1402,9 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 		if sanitizeLiquid != "true" {
 			log.Printf("[WARNING] Liquid sanitization is disabled. Skipping sanitization.")
 		}
+
 		return workflowExecution
 	}
-
-	//log.Printf("[INFO] Sanitizing execution %s from liquid syntax", workflowExecution.ExecutionId)
 
 	workflowExecution.ExecutionArgument = sanitizeString(workflowExecution.ExecutionArgument)
 	for i := range workflowExecution.Results {
@@ -1420,7 +1420,6 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 }
 
 func sanitizeString(input string) string {
-
 	// Sanitize instances of {{...}}
 	for strings.Contains(input, "{{") && strings.Contains(input, "}}") {
 		startIndex := strings.Index(input, "{{")

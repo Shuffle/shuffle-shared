@@ -3420,7 +3420,10 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return User{}, errors.New(fmt.Sprintf("(2) User doesn't have access to this org", org_id))
 			}
 
-			log.Printf("[AUDIT] Setting user %s (%s) org to %#v FROM %#v for %#v", userdata.Username, userdata.Id, org_id, userdata.ActiveOrg.Id, request.URL.String())
+			if userdata.ActiveOrg.Id != org_id {
+				log.Printf("[AUDIT] Setting user %s (%s) org to %#v FROM %#v for %#v", userdata.Username, userdata.Id, org_id, userdata.ActiveOrg.Id, request.URL.String())
+			}
+
 			userdata.ActiveOrg.Id = org_id
 			userdata.ActiveOrg.Name = org.Name
 			userdata.ActiveOrg.Image = org.Image
@@ -3564,7 +3567,10 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				return User{}, errors.New(fmt.Sprintf("(1) User doesn't have access to this org (%s)", org_id))
 			}
 
-			log.Printf("[AUDIT] Setting user %s (%s) org to %s for %#v", user.Username, user.Id, org_id, request.URL.String())
+			if user.ActiveOrg.Id != org_id {
+				log.Printf("[AUDIT] Setting user %s (%s) org to %s for %#v", user.Username, user.Id, org_id, request.URL.String())
+			}
+
 			user.ActiveOrg.Id = org_id
 			user.ActiveOrg.Name = org.Name
 			user.ActiveOrg.Image = org.Image
@@ -12216,8 +12222,6 @@ func AbortExecution(resp http.ResponseWriter, request *http.Request) {
 }
 
 func SanitizeWorkflow(workflow Workflow) Workflow {
-	log.Printf("[INFO] Sanitizing workflow %s", workflow.ID)
-
 	for _, trigger := range workflow.Triggers {
 		_ = trigger
 	}
@@ -17843,15 +17847,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	}
 
 	newParams := []WorkflowAppActionParameter{}
-	/*
-		for _, param := range action.Parameters {
-			if param.Configuration && len(param.Value) == 0 {
-				continue
-			}
-
-			newParams = append(newParams, param)
-		}
-	*/
 
 	// Auth is handled in PrepareWorkflowExec, so this may not be needed
 	for _, param := range action.Parameters {
@@ -17859,27 +17854,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		if len(newName) > 0 {
 			param.Name = newName[0]
 		}
-
-		//if param.Configuration && len(param.Value) == 0 {
-		//	continue
-		//}
-
-		/*
-			if param.Required && len(param.Value) == 0 {
-				if param.Name == "username_basic" {
-					param.Name = "username"
-				} else if param.Name == "password_basic" {
-					param.Name = "password"
-				}
-
-				param.Name = strings.Replace(param.Name, "_", " ", -1)
-				param.Name = strings.Title(param.Name)
-
-				value := fmt.Sprintf("Param %s can't be empty. Please fill all required parameters (orange outline). If you don't know the value, input space in the field.", param.Name)
-				log.Printf("[WARNING] During single exec: %s", value)
-				//return workflowExecution, errors.New(value)
-			}
-		*/
 
 		newParams = append(newParams, param)
 	}
@@ -21867,6 +21841,31 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	if len(workflowExecution.Workflow.ID) > 0 {
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
+	}
+
+	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.InputMarkdown) > 0 {
+		log.Printf("\n\nFORM. Running Org injection AND liquid template removal\n\n")
+
+		// 1. Add Org-Id from the user to the existing workflowExecution.ExecutionArgument
+		validMap := map[string]interface{}{}
+		err := json.Unmarshal([]byte(workflowExecution.ExecutionArgument), &validMap)
+		if err != nil {
+			log.Printf("[ERROR] Failed to unmarshal execution argument: %s", err)
+		} 
+
+		// Overwriting it either way. Input NEEDS to be valid for map[string]interface{}{}
+		discoveredUser, err := HandleApiAuthentication(nil, request)
+		if err != nil {
+			log.Printf("[ERROR] Failed to find user during form execution: %s", err)
+		} else {
+			validMap["org_id"] = discoveredUser.ActiveOrg.Id
+			marshalMap, err := json.Marshal(validMap)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal execution argument: %s", err)
+			} else {
+				workflowExecution.ExecutionArgument = sanitizeString(string(marshalMap))
+			}
+		}
 	}
 
 	finished := ValidateFinished(ctx, extra, workflowExecution)
@@ -29227,7 +29226,7 @@ func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) 
 }
 
 // An API to ONLY return PUBLIC forms for an org
-// A public form = Workflow with "sharing": "form" 
+// A public form = Workflow with "sharing": form 
 func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
