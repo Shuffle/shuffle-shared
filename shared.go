@@ -13094,8 +13094,35 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	org, err := GetOrg(ctx, userdata.ActiveOrg.Id)
-	if err == nil {
+	org, orgerr := GetOrg(ctx, userdata.ActiveOrg.Id)
+	if orgerr != nil && (len(org.Id) == 0 || len(org.Name) == 0) {
+		log.Printf("[ERROR] Failed getting active org '%s' during login for %s (%s). Remapping to another suborg if possible: %s", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, orgerr)
+
+		for _, orgId := range userdata.Orgs {
+			innerorg, orgerr := GetOrg(ctx, orgId)
+			if orgerr != nil {
+				continue
+			}
+
+			if len(innerorg.Id) > 0 && len(innerorg.Name) > 0 {
+				userdata.ActiveOrg.Id = innerorg.Id
+				userdata.ActiveOrg.Name = innerorg.Name
+				org = innerorg
+	
+				updateUser = true
+				break
+			}
+		}
+
+		if len(org.Id) == 0 {
+			log.Printf("[ERROR] Failed getting active org '%s' during login for %s (%s). Remapping to another suborg failed: %s", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, orgerr)
+			resp.WriteHeader(403)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting org. If this persists, please contact support@shuffler.io"}`)))
+			return
+		}
+	}
+
+	if orgerr == nil {
 		//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
 		ssoRequired := org.SSOConfig.SSORequired
 		if ssoRequired {
@@ -13207,35 +13234,28 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		for _, orgID := range userdata.Orgs {
 			org, err := GetOrg(ctx, orgID)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting org %s during login: %s", orgID, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
-				return
+				log.Printf("[ERROR] Failed getting suborg %s during login: %s", orgID, err)
+				continue
 			}
+
 			if org.MFARequired {
 				if org.MFARequired && !userdata.MFA.Active {
 					log.Printf("MFA is required for org %s and user has not set up MFA.", orgID)
 
 					// Generate a unique code
 					MFACode := uuid.NewV4().String()
-
 					cacheKey := fmt.Sprintf("user_id_%s", MFACode)
-
 					err := SetCache(ctx, cacheKey, []byte(userdata.Id), 30)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting cache for user %s: %s", userdata.Username, err)
-						resp.WriteHeader(500)
-						resp.Write([]byte(`{"success": false, "reason": "Failed setting cache"}`))
-						return
+						continue
 					}
 
 					cacheKey = fmt.Sprintf("mfa_code_%s", MFACode)
 					err = SetCache(ctx, cacheKey, []byte(MFACode), 30)
 					if err != nil {
 						log.Printf("[ERROR] Failed setting cache for user %s: %s", userdata.Username, err)
-						resp.WriteHeader(500)
-						resp.Write([]byte(`{"success": false, "reason": "Failed setting cache"}`))
-						return
+						continue
 					}
 
 					response := fmt.Sprintf(`{"success": true, "reason": "MFA_SETUP", "url": "%s"}`, MFACode)

@@ -3129,7 +3129,7 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
 		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[INFO] Error in org loading (1). Migrating org to new org and user handler (3): %s", err)
+				log.Printf("[INFO] Error in org stats loading (1). Migrating org to new org and user handler (3): %s", err)
 				err = nil
 			} else {
 				return stats, err
