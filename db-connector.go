@@ -53,7 +53,8 @@ var maxCacheSize = 1020000
 
 // var dbInterval = 0x19
 // var dbInterval = 0x1
-var dbInterval = 0xA
+var dbInterval = 500
+// var dbInterval = 0xA
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
 
@@ -161,7 +162,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	return executionInfo
 }
 
-func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint8) *ExecutionInfo {
+func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint) *ExecutionInfo {
 
 	appendCustom := false
 	if dataType == "app_executions" || strings.HasPrefix(dataType, "app_executions") {
@@ -395,15 +396,15 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	return nil
 }
 
-func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) {
+func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
 
 	nameKey := "org_statistics"
 	orgStatistics := &ExecutionInfo{}
 
-	dbDumpInterval := uint8(dbInterval)
+	dbDumpInterval := uint(dbInterval)
 	if len(amount) > 0 {
 		if amount[0] > 0 {
-			dbDumpInterval = uint8(amount[0])
+			dbDumpInterval = uint(amount[0])
 		}
 	}
 
@@ -411,7 +412,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 	tmpOrgDetail, err := GetOrg(ctx, orgId)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting org in increment: %s", err)
-		return
+		return err
 	}
 
 	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
@@ -420,13 +421,16 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(tmpOrgDetail)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return
+			return err 
 		}
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
 		}
 	}
+
+	concurrentTxn := false
+	errMsg := ""
 
 	if project.DbType == "opensearch" {
 		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
@@ -435,7 +439,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error in org STATS get: %s", err)
-			return
+			return err 
 		}
 
 		defer res.Body.Close()
@@ -462,14 +466,14 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 				}
 			}
 
-			return
+			return err 
 		}
 
 		orgStatsWrapper := &ExecutionInfoWrapper{}
 		err = json.Unmarshal(respBody, &orgStatsWrapper)
 		if err != nil {
 			log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", err)
-			return
+			return err
 		}
 
 		orgStatistics = &orgStatsWrapper.Source
@@ -489,7 +493,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		marshalledData, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[ERROR] Failed marshalling org STATS body (2): %s", err)
-			return
+			return err 
 		}
 
 		err = indexEs(ctx, nameKey, id, marshalledData)
@@ -502,7 +506,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		tx, err := project.Dbclient.NewTransaction(ctx)
 		if err != nil {
 			log.Printf("[WARNING] Error in cache dump: %s", err)
-			return
+			return err 
 		}
 
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
@@ -513,7 +517,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			} else {
 				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
 				tx.Rollback()
-				return
+				return err 
 			}
 		}
 
@@ -532,11 +536,15 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		if _, err := tx.Put(key, orgStatistics); err != nil {
 			log.Printf("[WARNING] Failed setting stats: %s", err)
 			tx.Rollback()
-			return
+			return err
 		}
 
 		if _, err = tx.Commit(); err != nil {
 			log.Printf("[ERROR] Failed commiting stats: %s", err)
+			if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
+				concurrentTxn = true
+				errMsg = fmt.Sprintf("%s", err)
+			}
 		}
 	}
 
@@ -546,7 +554,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return
+			return err 
 		}
 
 		err = SetCache(ctx, cacheKey, data, 30)
@@ -554,6 +562,12 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
 		}
 	}
+
+	if concurrentTxn {
+		return errors.New(errMsg)
+	}
+
+	return nil
 }
 
 // Rudementary caching system. WILL go wrong at times without sharding.
@@ -581,14 +595,80 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 	dbDumpInterval := uint8(dbInterval)
 	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
 	if len(memcached) > 0 {
+		appendForQuickDump := false
+		if !ArrayContains(PredictableDataTypes, dataType) {
+			appendForQuickDump = true
+		}
+
+		if appendForQuickDump {
+		// check if the cache already key is indexed in memcache
+			keyItems, err := mc.Get("stat_cache_keys_" + orgId)
+			if err == gomemcache.ErrCacheMiss {
+				keyItem := []string{key}
+				data, err := json.Marshal(keyItem)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+				} else {
+					// dump it to memcache
+					item := &gomemcache.Item{
+						Key:        "stat_cache_keys_" + orgId,
+						Value:      data,
+						Expiration: 86400*30,
+					}
+
+					if err := mc.Set(item); err != nil {
+						log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+					} else {
+						// log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
+					}
+				}
+			} else {
+				dumpedItems := []string{}
+				err = json.Unmarshal(keyItems.Value, &dumpedItems)
+				if err != nil {
+					log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
+				} else {
+					if !ArrayContains(dumpedItems, key) {
+						dumpedItems = append(dumpedItems, key)
+						data, err := json.Marshal(dumpedItems)
+						if err != nil {
+							log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+						} else {
+							// dump it to memcache
+							item := &gomemcache.Item{
+								Key:        "stat_cache_keys_" + orgId,
+								Value:      data,
+								Expiration: 86400*30,
+							}
+
+							if err := mc.Set(item); err != nil {
+								log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+							} else {
+								// log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
+							}
+						}
+					}
+				}
+			}
+		}
+
 		item, err := mc.Get(key)
 		if err == gomemcache.ErrCacheMiss {
-			//log.Printf("[DEBUG] Increment memcache miss for %s: %s", key, err)
+			incrementItem := IncrementInCache{
+				Amount: uint64(incrementAmount),
+				CreatedAt: time.Now().Unix(),
+			}
+
+			data, err := json.Marshal(incrementItem)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+				return
+			}
 
 			item := &gomemcache.Item{
 				Key:        key,
-				Value:      []byte(fmt.Sprintf("%d", incrementAmount)),
-				Expiration: 86400,
+				Value:      data,
+				Expiration: 86400*30,
 			}
 
 			if err := mc.Set(item); err != nil {
@@ -598,44 +678,188 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		} else if err != nil {
 			log.Printf("[ERROR] Failed increment memcache err: %s", err)
 		} else {
-
 			if item == nil || item.Value == nil {
-				item = &gomemcache.Item{
-					Key:        key,
-					Value:      []byte(fmt.Sprintf("%d", incrementAmount)),
-					Expiration: 86400,
+				incrementItem := IncrementInCache{
+					Amount: uint64(incrementAmount),
+					CreatedAt: time.Now().Unix(),
 				}
 
-				log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
+				data, err := json.Marshal(incrementItem)
+				if err != nil {
+					log.Printf("[DEBUG] Failed marshalling increment item for cache: %s", err)
+					return
+				}
+
+				item = &gomemcache.Item{
+					Key:        key,
+					Value:      data,
+					Expiration: 86400*30,
+				}
+
+				// log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
 			}
 
-			// Just the byte length.
 			if len(item.Value) == 1 {
-				num := item.Value[0]
-				num += byte(incrementAmount)
+				// case to use if the cache that was present before
+				// the new changes that introduced the struct to the increment system.
+				// log.Printf("[DEBUG] This is from the older system. num: %+v", item.Value)
+
+				// num := uint64(item.Value[0])
+				// num += uint64(incrementAmount)
+
+				// log.Printf("[DEBUG] new num: %d", num)
+
+				// there is some bug here. i would much rather lose the data here. 
+				num := uint64(incrementAmount)
+
+				incrementItem := IncrementInCache{
+					Amount: num,
+					CreatedAt: time.Now().Unix(),
+				}
+
+				data, err := json.Marshal(incrementItem)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+					return
+				}
+
+				item := &gomemcache.Item{
+					Key:        key,
+					Value:      data,
+					Expiration: 86400*30,
+				}
+
+				if err := mc.Set(item); err != nil {
+					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
+					return
+				}
+			} else if len(item.Value) > 0 {
+				var incrementedItemInCache IncrementInCache
+
+				err := json.Unmarshal(item.Value, &incrementedItemInCache)
+				if err != nil {
+					log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
+					return
+				}
+
+				num := incrementedItemInCache.Amount
+				// num += byte(incrementAmount)
+				num += uint64(incrementAmount)
 				//num += []byte{2}
 
-				if num >= dbDumpInterval {
+				incrementedItemInCache.Amount = num
+
+				// log.Printf("[DEBUG] time.Now().Unix() (%d) - incrementedItemInCache.CreatedAt (%d) = %d", time.Now().Unix(), incrementedItemInCache.CreatedAt, time.Now().Unix()-incrementedItemInCache.CreatedAt)
+
+				// if num >= dbDumpInterval {
+				// if the cache was created more than a day ago
+
+				// make it a random number between
+				// (10-60 seconds)
+				randomSeconds := (rand.Intn(50) + 10)*5 // to make the number longer
+		
+				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > uint64(dbInterval) {
 					// Memcache dump first to keep the counter going for other executions
+					oldNum := num
 					num = 0
 
-					item := &gomemcache.Item{
-						Key:        key,
-						Value:      []byte(string(num)),
-						Expiration: 86400,
-					}
-					if err := mc.Set(item); err != nil {
-						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+					incrementedItemInCache.Amount = num
+					incrementedItemInCache.CreatedAt = time.Now().Unix()
+
+					// log.Printf("[DEBUG] Dumping cache item with key %s which was created at %s is was %d", key, incrementedItemInCache.CreatedAt, oldNum)
+
+					data, err := json.Marshal(incrementedItemInCache)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+						return
 					}
 
-					IncrementCacheDump(ctx, orgId, dataType, int(num))
+					// an issue here is that it isn't necessary that num is dbDumpInterval
+					err = IncrementCacheDump(ctx, orgId, dataType, int(oldNum))
+					if err != nil {
+						log.Printf("[ERROR] Failed dumping cache for key (1) %s: %s", key, err)
+						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
+							// log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
+							incrementedItemInCache.Amount = oldNum
+							
+							data, err := json.Marshal(incrementedItemInCache)
+							if err != nil {
+								log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+							}
+
+							item := &gomemcache.Item{
+								Key:        key,
+								Value:      data,
+								Expiration: 86400*30,
+							}
+
+							if err := mc.Set(item); err != nil {
+								log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+							}
+						} else {
+							log.Printf("[ERROR] Failed dumping cache for key %s: %s", key, err)
+						}
+					} else {
+						item := &gomemcache.Item{
+							Key:        key,
+							Value:      data,
+							Expiration: 86400*30,
+						}
+						if err := mc.Set(item); err != nil {
+							log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
+						}
+					}
+
+
 				} else {
 					//log.Printf("NOT Dumping!")
+					// this case got apparently overwritten unnecessarily 3 times out of 20.
+					// data gets more lost here due to cache overwrites.
 
-					item := &gomemcache.Item{
+					// add a random sleep of a few miliseconds here
+					randomSleep := rand.Intn(50) + 10
+					time.Sleep(time.Duration(randomSleep) * time.Millisecond)
+
+					// read again and check if it's already not dumped
+					item, err := mc.Get(key)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting cache item for key %s: %s", key, err)
+						return
+					}
+
+					incrementedItemInCache = IncrementInCache{}
+					err = json.Unmarshal(item.Value, &incrementedItemInCache)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
+						incrementedItemInCache.Amount = num
+						incrementedItemInCache.CreatedAt = time.Now().Unix()
+					}
+
+					// this means there will be an overwrite!
+					if incrementedItemInCache.Amount == num {
+						// better to update the cache again instead of losing the data
+						incrementedItemInCache.Amount += uint64(incrementAmount)
+					} else if num > incrementedItemInCache.Amount {
+						// we bow to the higher number we have
+						incrementedItemInCache.Amount = num
+					} else if incrementedItemInCache.Amount > num {
+						// this means, a bunch of stats were added in the meantime
+						// bow to the higher number and just increment again
+						incrementedItemInCache.Amount += uint64(incrementAmount)
+					}
+
+					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount)
+					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d. While num we updated was %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount, num)
+
+					data, err := json.Marshal(incrementedItemInCache)
+					if err != nil {
+						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
+					}
+
+					item = &gomemcache.Item{
 						Key:        key,
-						Value:      []byte(string(num)),
-						Expiration: 86400,
+						Value:      data,
+						Expiration: 86400*30,
 					}
 
 					if err := mc.Set(item); err != nil {
@@ -643,7 +867,8 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					}
 				}
 			} else {
-				log.Printf("[ERROR] Length of value in cache key %s is longer than 1: %d", key, len(item.Value))
+				// let's keep this here for now
+				// log.Printf("[ERROR] Length of value in cache key %s is less than 1: %d", key, len(item.Value))
 			}
 		}
 
