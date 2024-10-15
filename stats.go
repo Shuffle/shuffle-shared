@@ -572,10 +572,10 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 		for _, dataType := range PredictableDataTypes {
 			key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
 			if !ArrayContains(keys, key) {
-				log.Printf("[DEBUG] Adding %s to stats", key)
+				// log.Printf("[DEBUG] Adding %s to stats", key)
 				keys = append(keys, key)
 			} else {
-				log.Printf("[DEBUG] NOT Adding %s to stats because they are apparently in %+v", keys)	
+				// log.Printf("[DEBUG] NOT Adding %s to stats because they are apparently in %+v", keys)	
 			}
 		}
 
@@ -620,8 +620,10 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[WARNING] Failed dumping cache value for key %s: %s and datatype %s", key, err, dataType)
 				} else {
-					log.Printf("[INFO] Dumped cache value for key %s and datatypes %s", key, dataType)
+					// log.Printf("[INFO] Dumped cache value for key %s and datatypes %s", key, dataType)
 					// now, set it back to 0
+					// known bug: many times, the cache just deletes
+					// rather than becoming 0
 					incrementInCache.Amount = 0
 					incrementInCache.CreatedAt = time.Now().Unix()
 

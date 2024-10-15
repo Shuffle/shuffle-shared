@@ -868,7 +868,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				}
 			} else {
 				// let's keep this here for now
-				log.Printf("[ERROR] Length of value in cache key %s is longer than 1: %d", key, len(item.Value))
+				// log.Printf("[ERROR] Length of value in cache key %s is less than 1: %d", key, len(item.Value))
 			}
 		}
 
