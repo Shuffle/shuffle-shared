@@ -281,12 +281,14 @@ func GetUsecaseData() string {
     {
         "name": "1. Collect",
         "color": "#FB47A0",
+        "description": "Collection of data and incident handling tasks",
         "list": [
             {
                 "name": "Email management",
-				"priority": 100,
-				"type": "communication",
-				"last": "cases", 
+                "priority": 100,
+                "type": "communication",
+                "last": "cases",
+                "category": "Incident Response",
                 "items": {
                     "name": "Release a quarantined message",
                     "items": {}
@@ -294,9 +296,10 @@ func GetUsecaseData() string {
             },
             {
                 "name": "EDR to ticket",
-				"priority": 100,
-				"type": "edr",
-				"last": "cases",
+                "priority": 100,
+                "type": "edr",
+                "last": "cases",
+                "category": "Endpoint Detection and Response",
                 "items": {
                     "name": "Get host information",
                     "items": {}
@@ -304,25 +307,52 @@ func GetUsecaseData() string {
             },
             {
                 "name": "SIEM to ticket",
-				"priority": 100,
-				"type": "siem",
-				"last": "cases",
-				"description": "Ensure tickets are forwarded to the correct destination. Alternatively add enrichment on its way there.",
-				"video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
-				"blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
-				"reference_image": "/images/detectionframework.png",
+                "priority": 100,
+                "type": "siem",
+                "last": "cases",
+                "category": "Security Information and Event Management",
+                "description": "Ensure tickets are forwarded to the correct destination. Alternatively, add enrichment on its way there.",
+                "video": "https://www.youtube.com/watch?v=FBISHA7V15c&t=197s&ab_channel=OpenSecure",
+                "blogpost": "https://medium.com/shuffle-automation/introducing-shuffle-an-open-source-soar-platform-part-1-58a529de7d12",
+                "reference_image": "/images/detectionframework.png",
                 "items": {}
-            }        
-		]
+            },
+            {
+                "name": "2-way Ticket synchronization",
+                "priority": 20,
+                "type": "cases",
+                "last": "cases",
+                "category": "Case Management",
+                "items": {}
+            },
+            {
+                "name": "ChatOps",
+                "priority": 60,
+                "type": "communication",
+                "last": "cases",
+                "category": "Incident Response",
+                "items": {}
+            },
+            {
+                "name": "Threat Intel received",
+                "priority": 20,
+                "type": "intel",
+                "last": "cases",
+                "category": "Threat Intelligence",
+                "items": {}
+            }
+        ]
     },
     {
         "name": "2. Enrich",
         "color": "#f4c20d",
+        "description": "Adding additional context to alerts and incidents",
         "list": [
             {
                 "name": "Internal Enrichment",
-				"priority": 100,
-				"type": "intel",
+                "priority": 100,
+                "type": "intel",
+                "category": "Threat Intelligence",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -330,8 +360,9 @@ func GetUsecaseData() string {
             },
             {
                 "name": "External historical Enrichment",
-				"priority": 90,
-				"type": "intel",
+                "priority": 90,
+                "type": "intel",
+                "category": "Threat Intelligence",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -339,8 +370,9 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Sandbox",
-				"priority": 60,
-				"type": "intel",
+                "priority": 60,
+                "type": "intel",
+                "category": "Malware Analysis",
                 "items": {
                     "name": "Use a sandbox to analyze",
                     "items": {}
@@ -351,12 +383,14 @@ func GetUsecaseData() string {
     {
         "name": "3. Detect",
         "color": "#3cba54",
+        "description": "Detection of potential security incidents",
         "list": [
             {
                 "name": "Search SIEM (Sigma)",
-				"priority": 90,
-				"type": "siem",
-				"last": "cases",
+                "priority": 90,
+                "type": "siem",
+                "last": "cases",
+                "category": "SIEM",
                 "items": {
                     "name": "Endpoint",
                     "items": {}
@@ -364,16 +398,18 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Search EDR (OSQuery)",
-				"type": "edr",
-				"priority": 90,
-				"last": "cases",
+                "priority": 90,
+                "type": "edr",
+                "last": "cases",
+                "category": "Endpoint Detection",
                 "items": {}
             },
             {
                 "name": "Search emails (Sublime)",
-				"priority": 90,
-				"type": "communication",
-				"last": "cases",
+                "priority": 90,
+                "type": "communication",
+                "last": "cases",
+                "category": "Email Security",
                 "items": {
                     "name": "Check headers and IOCs",
                     "items": {}
@@ -381,43 +417,49 @@ func GetUsecaseData() string {
             },
             {
                 "name": "Automate Threathunt (Kestrel)",
-				"priority": 50,
-				"type": "edr",
-				"last": "cases",
+                "priority": 50,
+                "type": "edr",
+                "last": "cases",
+                "category": "Threat Hunting",
                 "items": {}
             },
             {
                 "name": "Search IOCs (ioc-finder)",
-				"priority": 50,
-				"type": "intel",
-				"last": "cases",
+                "priority": 50,
+                "type": "intel",
+                "last": "cases",
+                "category": "Threat Intelligence",
                 "items": {}
             },
             {
                 "name": "Search files (Yara)",
-				"priority": 50,
-				"type": "intel",
-				"last": "cases",
+                "priority": 50,
+                "type": "intel",
+                "last": "cases",
+                "category": "File Analysis",
                 "items": {}
             },
             {
                 "name": "Memory Analysis (Volatility)",
-				"priority": 50,
-				"type": "intel",
+                "priority": 50,
+                "type": "intel",
+                "category": "Memory Forensics",
                 "items": {}
             },
             {
                 "name": "IDS & IPS (Snort/Surricata)",
-				"priority": 50,
-				"type": "network",
-				"last": "cases",
+                "priority": 50,
+                "type": "network",
+                "last": "cases",
+                "category": "Intrusion Detection and Prevention",
                 "items": {}
             },
             {
                 "name": "Honeypot access",
-				"priority": 50,
-				"type": "network",
-				"last": "cases",
+                "priority": 50,
+                "type": "network",
+                "last": "cases",
+                "category": "Network Security",
                 "items": {
                     "name": "...",
                     "items": {}
@@ -428,32 +470,93 @@ func GetUsecaseData() string {
     {
         "name": "4. Respond",
         "color": "#4885ed",
+        "description": "Mitigating and responding to threats",
         "list": [
             {
-                "name": "Isolate Host",
-				"old_name": "Quarantine host(s)",
-				"priority": 80,
-				"type": "edr",
+                "name": "Eradicate malware",
+                "priority": 90,
+                "type": "intel",
+                "last": "edr",
+                "category": "Malware Response",
                 "items": {}
             },
             {
-                "name": "Block an IP",
-				"old_name": "Block IPs, URLs, Domains and Hashes",
-				"priority": 75,
-				"type": "network",
+                "name": "Quarantine host(s)",
+                "priority": 90,
+                "type": "edr",
+                "category": "Endpoint Response",
                 "items": {}
             },
             {
-                "name": "Kill a process",
-				"priority": 50,
-				"type": "edr",
+                "name": "Update Outdated Software",
+                "priority": 70,
+                "type": "assets",
+                "category": "Asset Management",
                 "items": {}
             },
             {
-                "name": "Lock account",
-				"old_name": "Lock/Delete/Reset account",
-				"priority": 70,
-				"type": "iam",
+                "name": "Block IPs, URLs, Domains and Hashes",
+                "priority": 90,
+                "type": "network",
+                "category": "Network Defense",
+                "items": {}
+            },
+            {
+                "name": "Trigger scans",
+                "priority": 50,
+                "type": "assets",
+                "category": "Vulnerability Scanning",
+                "items": {}
+            },
+            {
+                "name": "Update indicators (FW, EDR, SIEM...)",
+                "priority": 50,
+                "type": "intel",
+                "last": "siem",
+                "category": "Threat Intelligence",
+                "items": {}
+            },
+            {
+                "name": "Autoblock activity when threat intel is received",
+                "priority": 50,
+                "type": "intel",
+                "last": "iam",
+                "category": "Incident Response",
+                "items": {}
+            },
+            {
+                "name": "Lock/Delete/Reset account",
+                "priority": 50,
+                "type": "iam",
+                "category": "Identity Management",
+                "items": {}
+            },
+            {
+                "name": "Lock vault",
+                "priority": 50,
+                "type": "iam",
+                "category": "Access Control",
+                "items": {}
+            },
+            {
+                "name": "Increase authentication",
+                "priority": 50,
+                "type": "iam",
+                "category": "Authentication",
+                "items": {}
+            },
+            {
+                "name": "Get policies from assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "Policy Management",
+                "items": {}
+            },
+            {
+                "name": "Run ansible scripts",
+                "priority": 50,
+                "type": "assets",
+                "category": "Automation",
                 "items": {}
             }
         ]
@@ -461,103 +564,120 @@ func GetUsecaseData() string {
     {
         "name": "5. Verify",
         "color": "#7f00ff",
+        "description": "Ensuring system and control integrity",
         "list": [
             {
                 "name": "Discover vulnerabilities",
-								"priority": 80,
-								"type": "assets",
+                "priority": 80,
+                "type": "assets",
+                "category": "Vulnerability Management",
                 "items": {}
             },
             {
                 "name": "Discover assets",
-				"priority": 80,
-				"type": "assets",
+                "priority": 80,
+                "type": "assets",
+                "category": "Asset Management",
                 "items": {}
             },
             {
                 "name": "Ensure policies are followed",
-				"priority": 80,
-				"type": "assets",
+                "priority": 80,
+                "type": "assets",
+                "category": "Compliance",
                 "items": {}
             },
             {
                 "name": "Find Inactive users",
-				"priority": 50,
-				"type": "iam",
+                "priority": 50,
+                "type": "iam",
+                "category": "Identity Management",
                 "items": {}
             },
             {
                 "name": "Botnet tracker",
-				"priority": 50,
-				"type": "network",
+                "priority": 50,
+                "type": "network",
+                "category": "Threat Intelligence",
                 "items": {}
             },
             {
                 "name": "Ensure access rights match HR systems",
-				"priority": 50,
-				"type": "iam",
+                "priority": 50,
+                "type": "iam",
+                "category": "Access Control",
                 "items": {}
             },
             {
                 "name": "Ensure onboarding is followed",
-				"priority": 50,
-				"type": "iam",
+                "priority": 50,
+                "type": "iam",
+                "category": "Compliance",
                 "items": {}
             },
             {
                 "name": "Track third party SaaS apps",
-				"priority": 50,
-				"type": "iam",
+                "priority": 50,
+                "type": "iam",
+                "category": "Cloud Security",
                 "items": {}
             },
             {
                 "name": "Devices used for your cloud account",
-				"priority": 50,
-				"type": "assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "Asset Management",
                 "items": {}
             },
             {
                 "name": "Too much access in GCP/Azure/AWS other clouds",
-				"priority": 50,
-				"type": "assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "Cloud Security",
                 "items": {}
             },
             {
                 "name": "Certificate validation",
-				"priority": 50,
-				"type": "assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "Compliance",
                 "items": {}
             },
             {
                 "name": "Monitor domain creation and expiration",
-				"priority": 50,
-				"type": "assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "Domain Management",
                 "items": {}
             },
             {
                 "name": "Monitor new DNS entries for domain with passive DNS",
-				"priority": 50,
-				"type": "assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "DNS Security",
                 "items": {}
             },
             {
                 "name": "Monitor and track password dumps",
-				"priority": 50,
-				"type": "assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "Password Management",
                 "items": {}
             },
             {
                 "name": "Monitor for mentions of domain on darknet sites",
-				"priority": 50,
-				"type": "assets",
+                "priority": 50,
+                "type": "assets",
+                "category": "Darknet Monitoring",
                 "items": {}
             },
             {
                 "name": "Reporting",
-				"priority": 50,
-				"type": "assets",
-				"keywords": ["report", "reporting", "sheets", "excel"],
-				"keyword_matches": 1,
+                "priority": 50,
+                "type": "assets",
+                "keywords": ["report", "reporting", "sheets", "excel"],
+                "keyword_matches": 1,
+                "category": "Reporting",
                 "items": {
                     "name": "Monthly reports",
                     "items": {
