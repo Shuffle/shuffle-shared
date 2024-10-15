@@ -488,10 +488,10 @@ func GetUsecaseData() string {
                 "items": {}
             },
             {
-                "name": "Update Outdated Software",
-                "priority": 70,
-                "type": "assets",
-                "category": "Asset Management",
+                "name": "Block an IP",
+		"old_name": "Block IPs, URLs, Domains and Hashes",
+		"priority": 75,
+		"type": "network",
                 "items": {}
             },
             {
