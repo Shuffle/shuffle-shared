@@ -926,6 +926,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		// Update active org for user to this one?
 		// This makes it possible to walk around in the UI for the org
+
+		/*
 		if user.ActiveOrg.Id != org.Id {
 			log.Printf("[AUDIT] User %s (%s) is admin and has access to org %s. Updating active org to this one.", user.Username, user.Id, org.Id)
 			user.ActiveOrg.Id = org.Id
@@ -941,6 +943,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
 			DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
 		}
+		*/
 
 	} else {
 		userFound := false
@@ -6710,6 +6713,7 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 				Id:   childWorkflow.ExecutingOrg.Id,
 				Name: childWorkflow.ExecutingOrg.Name,
 			}
+
 			SetGitWorkflow(ctx, childWorkflow, &passedOrg)
 		}
 
@@ -8488,6 +8492,54 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.SuborgDistribution = []string{}
 	}
 
+	// Encrypt git backup info
+	if !workflow.BackupConfig.TokensEncrypted {
+		if len(workflow.BackupConfig.UploadRepo) > 0 {
+			parsedKey := fmt.Sprintf("%s_upload_repo", workflow.OrgId)
+			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadRepo), parsedKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
+			} else {
+				workflow.BackupConfig.UploadRepo = string(encryptedToken)
+				workflow.BackupConfig.TokensEncrypted = true
+			}
+		}
+
+		if len(workflow.BackupConfig.UploadBranch) > 0 {
+			parsedKey := fmt.Sprintf("%s_upload_branch", workflow.OrgId)
+			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadBranch), parsedKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
+			} else {
+				workflow.BackupConfig.UploadBranch = string(encryptedToken)
+				workflow.BackupConfig.TokensEncrypted = true
+			}
+		}
+
+		if len(workflow.BackupConfig.UploadUsername) > 0 {
+			parsedKey := fmt.Sprintf("%s_upload_username", workflow.OrgId)
+			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadUsername), parsedKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
+			} else {
+				workflow.BackupConfig.UploadUsername = string(encryptedToken)
+				workflow.BackupConfig.TokensEncrypted = true
+			}
+		}
+
+		if len(workflow.BackupConfig.UploadToken) > 0 {
+			parsedKey := fmt.Sprintf("%s_upload_token", workflow.OrgId)
+			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadToken), parsedKey)
+			if err != nil {
+				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
+			} else {
+				workflow.BackupConfig.UploadToken = string(encryptedToken)
+				workflow.BackupConfig.TokensEncrypted = true
+			}
+		}
+	}
+
+
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed saving workflow to database: %s", err)
@@ -8532,6 +8584,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Id:   user.ActiveOrg.Id,
 		Name: user.ActiveOrg.Name,
 	}
+
 
 	SetWorkflowRevision(ctx, workflow)
 	err = SetGitWorkflow(ctx, workflow, org)
@@ -9841,7 +9894,9 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+
 	if workflow.Public {
+		workflow.BackupConfig = BackupConfig{}
 		workflow.ExecutingOrg = OrgMini{}
 		workflow.Org = []OrgMini{}
 		workflow.OrgId = ""
@@ -9849,6 +9904,40 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		if !isOwner {
 			workflow.PreviouslySaved = false
 			workflow.ID = ""
+		}
+	}
+
+	if workflow.BackupConfig.TokensEncrypted { 
+		parsedKey := fmt.Sprintf("%s_upload_token", workflow.OrgId)
+		newValue, err := HandleKeyDecryption([]byte(workflow.BackupConfig.UploadToken), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting token for workflow %s (%s): %s", workflow.Name, workflow.ID, err)
+		} else {
+			workflow.BackupConfig.UploadToken = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_username", workflow.OrgId)
+		newValue, err = HandleKeyDecryption([]byte(workflow.BackupConfig.UploadUsername), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting username for workflow %s (%s): %s", workflow.Name, workflow.ID, err)
+		} else {
+			workflow.BackupConfig.UploadUsername = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_repo", workflow.OrgId)
+		newValue, err = HandleKeyDecryption([]byte(workflow.BackupConfig.UploadRepo), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting repo for workflow %s (%s): %s", workflow.Name, workflow.ID, err)
+		} else {
+			workflow.BackupConfig.UploadRepo = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_branch", workflow.OrgId)
+		newValue, err = HandleKeyDecryption([]byte(workflow.BackupConfig.UploadBranch), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting branch for org %s (%s): %s", workflow.Name, workflow.ID, err)
+		} else {
+			workflow.BackupConfig.UploadBranch = string(newValue)
 		}
 	}
 

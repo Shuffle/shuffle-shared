@@ -957,6 +957,8 @@ type Defaults struct {
 	WorkflowUploadUsername string `json:"workflow_upload_username" datastore:"workflow_upload_username"`
 	WorkflowUploadToken    string `json:"workflow_upload_token" datastore:"workflow_upload_token"`
 
+	TokensEncrypted 	   bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
+
 	NewsletterDisabled            bool `json:"newsletter" datastore:"newsletter_disabled"`
 	WeeklyRecommendationsDisabled bool `json:"weekly_recommendations" datastore:"weekly_recommendations_disabled"`
 
@@ -1329,6 +1331,8 @@ type BackupConfig struct {
 	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
 	UploadUsername string `json:"upload_username" datastore:"upload_username"`
 	UploadToken    string `json:"upload_token" datastore:"upload_token"`
+
+	TokensEncrypted bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
 }
 
 type Category struct {
