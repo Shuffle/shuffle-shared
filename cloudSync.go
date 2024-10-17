@@ -795,18 +795,69 @@ func CheckCreatorSelfPermission(ctx context.Context, requestUser, creatorUser Us
 
 // Uploads updates for a workflow to a specific file on git
 func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
-	if workflow.BackupConfig.UploadRepo != "" && workflow.BackupConfig.UploadBranch != "" && workflow.BackupConfig.UploadUsername != "" && workflow.BackupConfig.UploadToken != "" {
+	if workflow.BackupConfig.UploadRepo != "" || workflow.BackupConfig.UploadBranch != "" || workflow.BackupConfig.UploadUsername != "" || workflow.BackupConfig.UploadToken != "" {
 		//log.Printf("\n\n\n[DEBUG] Using workflow backup config for org %s (%s)\n\n\n", org.Name, org.Id)
 
 		org.Defaults.WorkflowUploadRepo = workflow.BackupConfig.UploadRepo
 		org.Defaults.WorkflowUploadBranch = workflow.BackupConfig.UploadBranch
 		org.Defaults.WorkflowUploadUsername = workflow.BackupConfig.UploadUsername
 		org.Defaults.WorkflowUploadToken = workflow.BackupConfig.UploadToken
+
+		// FIXME: Decrypt here 
+		if workflow.BackupConfig.TokensEncrypted {
+			log.Printf("\n\n[DEBUG] Should realtime decrypt token for org %s (%s)\n\n", org.Name, org.Id) 
+			org.Defaults.TokensEncrypted = true
+		} else {
+			org.Defaults.TokensEncrypted = false 
+		}
+	}
+
+	if org.Defaults.TokensEncrypted == true {
+		log.Printf("\n\n[DEBUG] Decrypting token for org %s (%s)\n\n", org.Name, org.Id)
+
+		parsedKey := fmt.Sprintf("%s_upload_token", org.Id)
+		newValue, err := HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadToken), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting token for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadToken = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_username", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadUsername), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting username for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadUsername = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_repo", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadRepo), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting repo for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadRepo = string(newValue)
+		}
+
+		parsedKey = fmt.Sprintf("%s_upload_branch", org.Id)
+		newValue, err = HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadBranch), parsedKey)
+		if err != nil {
+			log.Printf("[ERROR] Failed decrypting branch for org %s (%s): %s", org.Name, org.Id, err)
+		} else {
+			org.Defaults.WorkflowUploadBranch = string(newValue)
+		}
+
+		log.Printf("[DEBUG] Decrypted token for org %s (%s): %s", org.Name, org.Id, newValue)
+	}
+
+	if len(org.Defaults.WorkflowUploadBranch) == 0 {
+		org.Defaults.WorkflowUploadBranch = "master"
 	}
 
 
-	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadBranch == "" || org.Defaults.WorkflowUploadUsername == "" || org.Defaults.WorkflowUploadToken == "" {
-		//log.Printf("[DEBUG] No workflow upload repo for org %s (%s)", org.Name, org.Id)
+	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
+		log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
+		//return errors.New("Missing repo or token")
 		return nil
 	}
 
@@ -844,12 +895,13 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	commitMessage := fmt.Sprintf("User '%s' updated workflow '%s' with status '%s'", workflow.UpdatedBy, workflow.Name, workflow.Status)
 	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, org.Defaults.WorkflowUploadToken, org.Defaults.WorkflowUploadRepo)
 
-	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, strings.Replace(location, org.Defaults.WorkflowUploadToken, "SCRAMBLED", -1))
+	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, strings.Replace(location, org.Defaults.WorkflowUploadToken, "****", -1))
 
 	fs := memfs.New()
 	if len(workflow.Status) == 0 {
 		workflow.Status = "test"
 	}
+
 	//filePath := fmt.Sprintf("/%s/%s.json", workflow.Status, workflow.ID)
 	filePath := fmt.Sprintf("%s/%s/%s_%s.json", workflow.ExecutingOrg.Id, workflow.Status, strings.ReplaceAll(workflow.Name, " ", "-"), workflow.ID)
 
@@ -861,7 +913,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	// Initialize a new Git repository in memory
 	w := &git.Worktree{}
 	if err != nil {
-		log.Printf("[ERROR] Error cloning repo: %s", err)
+		log.Printf("[ERROR] Error cloning repo (workflow backup): %s", err)
 		return err
 	} 
 
@@ -895,7 +947,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	// Commit the changes
-	commit, err := w.Commit(commitMessage, &git.CommitOptions{
+	_, err = w.Commit(commitMessage, &git.CommitOptions{
 		Author: &object.Signature{
 			Name:  org.Defaults.WorkflowUploadUsername,
 			Email: "",
@@ -907,8 +959,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		return err
 	}
 
-		// Print the commit hash
-	log.Printf("[DEBUG] Commit Hash: %s", commit)
+	//log.Printf("[DEBUG] Commit Hash: %s", commit)
 
 	// Push the changes to a remote repository (replace URL with your repository URL)
 	// fmt.Sprintf("refs/heads/%s:refs/heads/%s", org.Defaults.WorkflowUploadBranch, org.Defaults.WorkflowUploadBranch)},
@@ -919,7 +970,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		RemoteURL:  location,
 	})
 	if err != nil {
-		log.Printf("[ERROR] Pushing changes: %v (2)", err)
+		log.Printf("[ERROR] Change Push issue: %v (2)", err)
 		return err
 	}
 
