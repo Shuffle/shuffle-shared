@@ -18948,6 +18948,13 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		redirectUrl = os.Getenv("SSO_REDIRECT_URL")
 	}
 
+	if len(userName) == 0 {
+		log.Printf("[ERROR] Username (%v) is empty in OpenID login for org: %v", userName, org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username is empty"}`))
+		return
+	}
+
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
@@ -18964,7 +18971,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				expiration := time.Now().Add(3600 * time.Second)
 				if len(user.Session) == 0 {
-					log.Printf("[INFO] User does NOT have session - creating")
+					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
 
 					newCookie := http.Cookie{
@@ -18994,6 +19001,35 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					user.Session = sessionToken
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
+					sessionToken := user.Session
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
 				}
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
 					IP:        GetRequestIp(request),
@@ -19034,7 +19070,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 				expiration := time.Now().Add(3600 * time.Second)
 				if len(user.Session) == 0 {
-					log.Printf("[INFO] User does NOT have session - creating")
+					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
 					newCookie := &http.Cookie{
 						Name:    "session_token",
@@ -19063,6 +19099,35 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					user.Session = sessionToken
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
+					sessionToken := user.Session
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
 				}
 				user.LoginInfo = append(user.LoginInfo, LoginInfo{
 					IP:        GetRequestIp(request),
@@ -19392,6 +19457,13 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		}
 	*/
 
+	if len(userName) == 0 {
+		log.Printf("[ERROR] Username (%v) is empty in SAML SSO login for org: %v", userName, matchingOrgs[0].Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Username is empty"}`))
+		return
+	}
+
 	users, err := FindGeneratedUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
@@ -19418,7 +19490,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 				expiration := time.Now().Add(3600 * time.Second)
 				if len(user.Session) == 0 {
-					log.Printf("[INFO] User does NOT have session - creating")
+					log.Printf("[INFO] User does NOT have session - creating (1)")
 					sessionToken := uuid.NewV4().String()
 					newCookie := &http.Cookie{
 						Name:    "session_token",
@@ -19452,12 +19524,40 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					})
 
 					user.Session = sessionToken
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
+					sessionToken := user.Session
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
+					user.LoginInfo = append(user.LoginInfo, LoginInfo{
+						IP:        GetRequestIp(request),
+						Timestamp: time.Now().Unix(),
+					})
 				}
-				// user.LoginInfo = append(user.LoginInfo, LoginInfo{
-				// 	IP:        GetRequestIp(request),
-				// 	Timestamp: time.Now().Unix(),
-				// })
-				// }
 
 				//store user's last session so don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
@@ -19497,7 +19597,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 				expiration := time.Now().Add(3600 * time.Second)
 				if len(user.Session) == 0 {
-					log.Printf("[INFO] User does NOT have session - creating")
+					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
 					newCookie := &http.Cookie{
 						Name:    "session_token",
@@ -19526,6 +19626,39 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					user.Session = sessionToken
+					user.LoginInfo = append(user.LoginInfo, LoginInfo{
+						IP:        GetRequestIp(request),
+						Timestamp: time.Now().Unix(),
+					})
+				} else {
+					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
+					sessionToken := user.Session
+					newCookie := &http.Cookie{
+						Name:    "session_token",
+						Value:   sessionToken,
+						Expires: expiration,
+						Path:    "/",
+					}
+
+					if project.Environment == "cloud" {
+						newCookie.Domain = ".shuffler.io"
+						newCookie.Secure = true
+						newCookie.HttpOnly = true
+					}
+
+					http.SetCookie(resp, newCookie)
+
+					newCookie.Name = "__session"
+					http.SetCookie(resp, newCookie)
+
+					err = SetSession(ctx, user, sessionToken)
+					if err != nil {
+						log.Printf("[WARNING] Error creating session for user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+						return
+					}
+
 					user.LoginInfo = append(user.LoginInfo, LoginInfo{
 						IP:        GetRequestIp(request),
 						Timestamp: time.Now().Unix(),
@@ -19601,44 +19734,81 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	newUser.VerificationToken = verifyToken.String()
 
 	expiration := time.Now().Add(3600 * time.Second)
-	//if len(user.Session) == 0 {
-	log.Printf("[INFO] User does NOT have session - creating")
-	sessionToken := uuid.NewV4().String()
-	newCookie := &http.Cookie{
-		Name:    "session_token",
-		Value:   sessionToken,
-		Expires: expiration,
-		Path:    "/",
+	if len(newUser.Session) == 0 {
+		log.Printf("[INFO] User does NOT have session - creating - (3)")
+		sessionToken := uuid.NewV4().String()
+		newCookie := &http.Cookie{
+			Name:    "session_token",
+			Value:   sessionToken,
+			Expires: expiration,
+			Path:    "/",
+		}
+
+		if project.Environment == "cloud" {
+			newCookie.Domain = ".shuffler.io"
+			newCookie.Secure = true
+			newCookie.HttpOnly = true
+		}
+
+		http.SetCookie(resp, newCookie)
+
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
+
+		err = SetSession(ctx, *newUser, sessionToken)
+		if err != nil {
+			log.Printf("[WARNING] Error creating session for user: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+			return
+		}
+
+		newUser.Session = sessionToken
+
+		newUser.LoginInfo = append(newUser.LoginInfo, LoginInfo{
+			IP:        GetRequestIp(request),
+			Timestamp: time.Now().Unix(),
+		})
+
+		//Store user's last session so don't have to go through sso again while changing org.
+		newUser.UsersLastSession = sessionToken
+	} else {
+		log.Printf("[INFO] user have session resetting session and cookies for user: %v - (3)", userName)
+		sessionToken := newUser.Session
+		newCookie := &http.Cookie{
+			Name:    "session_token",
+			Value:   sessionToken,
+			Expires: expiration,
+			Path:    "/",
+		}
+
+		if project.Environment == "cloud" {
+			newCookie.Domain = ".shuffler.io"
+			newCookie.Secure = true
+			newCookie.HttpOnly = true
+		}
+
+		http.SetCookie(resp, newCookie)
+
+		newCookie.Name = "__session"
+		http.SetCookie(resp, newCookie)
+
+		err = SetSession(ctx, *newUser, sessionToken)
+		if err != nil {
+			log.Printf("[WARNING] Error creating session for user: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
+			return
+		}
+
+		newUser.LoginInfo = append(newUser.LoginInfo, LoginInfo{
+			IP:        GetRequestIp(request),
+			Timestamp: time.Now().Unix(),
+		})
+
+		//Store user's last session so don't have to go through sso again while changing org.
+		newUser.UsersLastSession = sessionToken
 	}
-
-	if project.Environment == "cloud" {
-		newCookie.Domain = ".shuffler.io"
-		newCookie.Secure = true
-		newCookie.HttpOnly = true
-	}
-
-	http.SetCookie(resp, newCookie)
-
-	newCookie.Name = "__session"
-	http.SetCookie(resp, newCookie)
-
-	err = SetSession(ctx, *newUser, sessionToken)
-	if err != nil {
-		log.Printf("[WARNING] Error creating session for user: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-		return
-	}
-
-	newUser.Session = sessionToken
-
-	newUser.LoginInfo = append(newUser.LoginInfo, LoginInfo{
-		IP:        GetRequestIp(request),
-		Timestamp: time.Now().Unix(),
-	})
-
-	//Store user's last session so don't have to go through sso again while changing org.
-	newUser.UsersLastSession = sessionToken
 
 	err = SetUser(ctx, newUser, true)
 	if err != nil {
