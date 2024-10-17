@@ -18970,7 +18970,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
-				if len(user.Session) != 0 {
+				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
 
