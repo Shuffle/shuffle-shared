@@ -453,8 +453,8 @@ type AdditionalUseConfig struct {
 	Key   string `json:"key" datastore:"key"`
 	Value int64  `json:"value" datastore:"value"`
 
-	DailyValue int64 `json:"daily_value,omitempty" datastore:"daily_value"`
-	Date time.Time `json:"date,omitempty" datastore:"date"`
+	DailyValue int64     `json:"daily_value,omitempty" datastore:"daily_value"`
+	Date       time.Time `json:"date,omitempty" datastore:"date"`
 }
 
 type ParsedOpenApi struct {
@@ -963,6 +963,8 @@ type Defaults struct {
 	WeeklyRecommendationsDisabled bool `json:"weekly_recommendations" datastore:"weekly_recommendations_disabled"`
 
 	KmsId string `json:"kms_id" datastore:"kms_id"`
+
+	IOCEnrichment bool `json:"ioc_enrichment" datastore:"ioc_enrichment"`
 }
 
 type CacheKeyData struct {
@@ -1210,8 +1212,8 @@ type Branch struct {
 	Conditions    []Condition `json:"conditions" datastore: "conditions"`
 	Decorator     bool        `json:"decorator" datastore:"decorator"`
 
-	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
-	SourceParent string `json:"source_parent" datastore:"source_parent"` // Parent node of the actual source we use. Mainly added for handling else/if-s in branches. Automatically happens during workflow saves (frontend for now)
+	ParentControlled bool   `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+	SourceParent     string `json:"source_parent" datastore:"source_parent"`         // Parent node of the actual source we use. Mainly added for handling else/if-s in branches. Automatically happens during workflow saves (frontend for now)
 }
 
 // Same format for a lot of stuff
@@ -3724,8 +3726,8 @@ type CategoryAction struct {
 	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
 	Environment           string `json:"environment"`             // The environment to use for the action (Orborus)
-	App string `jjson:"app"` // The app to use for the action (Orborus)
-	Action string `json:"action"` // The action to use for the action (Orborus)
+	App                   string `jjson:"app"`                    // The app to use for the action (Orborus)
+	Action                string `json:"action"`                  // The action to use for the action (Orborus)
 }
 
 type LabelStruct struct {
@@ -4014,9 +4016,9 @@ type StructuredCategoryAction struct {
 
 	Translated bool `json:"translated,omitempty"`
 
-	Success     bool          `json:"success"`
-	Action      string        `json:"action"`
-	Reason      string        `json:"reason"`
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason"`
 }
 
 type ModelLabelParameter struct {

@@ -41,6 +41,7 @@ import (
 	"crypto/sha1"
 	mathrand "math/rand"
 
+	"github.com/Shuffle/indicator-parser/go/ioc"
 	"github.com/bradfitz/slice"
 	uuid "github.com/satori/go.uuid"
 	"github.com/sendgrid/sendgrid-go"
@@ -9715,11 +9716,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//user.ActiveOrg.Id = workflow.OrgId
 
 			workflow = &Workflow{
-				Name:           workflow.Name,
-				ID:			 	workflow.ID,
-				Owner:          workflow.Owner,
-				OrgId:          workflow.OrgId,
-
+				Name:  workflow.Name,
+				ID:    workflow.ID,
+				Owner: workflow.Owner,
+				OrgId: workflow.OrgId,
 				OutputYields:   workflow.OutputYields,
 				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
@@ -28675,6 +28675,151 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(body)
 }
 
+func ExecuteEnrichment(ctx context.Context, iocs []ioc.Indicator[string], exec WorkflowExecution) error {
+	if exec.WorkflowId == exec.OrgId {
+		return nil
+	}
+
+	enrichWorkflow := exec.OrgId
+	url := "https://frankfurt.shuffler.io/api/v1/workflows/fc314a42-41dd-469c-ac8d-f9d80fe98722"
+	workflow, err := GetWorkflow(ctx, enrichWorkflow)
+	currentOrg, err := GetOrg(ctx, exec.OrgId)
+
+	// If IOCEnrichment is disabled
+	if currentOrg.Defaults.IOCEnrichment == false {
+		return nil
+	}
+
+	if err != nil || workflow.ID == "" {
+		log.Printf("[INFO] Enrichment Workflow does not exists creating a new one for org: %s", exec.OrgId)
+		currentWorkflow, err := GetWorkflow(ctx, exec.WorkflowId)
+
+		client := http.Client{}
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			log.Printf("[Error] Error creating a http request: %s", err)
+			return errors.New("Error creating a http request")
+		}
+
+		log.Printf("[DEBUG] Fetching enrichment public workflow")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed to sending a fetch request: %s", err)
+			return errors.New("Failed sending to a request")
+		}
+
+		defer resp.Body.Close()
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Println("[ERROR] reading HTTP response body:", err)
+			return errors.New("Error reading HTTP App response response body: " + err.Error())
+		}
+
+		log.Printf("[DEBUG] Successfully fetched workflow! Now creating a copy workflow for current org(%s)", exec.OrgId)
+
+		err = json.Unmarshal(body, workflow)
+		if err != nil {
+			log.Println("[ERROR] unmarshalling Enrichment workflowData JSON data:", err)
+			return errors.New("Error unmarshalling JSON data: " + err.Error())
+		}
+
+		workflow.ID = currentOrg.Id
+		workflow.OrgId = exec.OrgId
+		workflow.Sharing = "private"
+		workflow.Public = false
+		workflow.Status = ""
+		// FIXME: Better name
+		workflow.Name = "IOCS Runner"
+		workflow.Org = currentWorkflow.Org
+		workflow.OrgId = currentWorkflow.OrgId
+
+		if err != nil {
+			log.Printf("[WARNING] Failed getting current org with org id: %s", exec.OrgId)
+			return errors.New("Failed to get current org: " + err.Error())
+		}
+
+		var actions []Action
+
+		for actionIndex, _ := range workflow.Actions {
+			action := workflow.Actions[actionIndex]
+
+			if project.Environment == "onprem" {
+				if action.Environment != "Shuffle" {
+					action.Environment = "Shuffle"
+				}
+			} else {
+				if action.Environment != "Cloud" {
+					action.Environment = "Cloud"
+				}
+			}
+
+			workflow.Actions[actionIndex] = action
+
+			actions = append(actions, action)
+		}
+
+		workflow.Actions = actions
+
+		err = SetWorkflow(ctx, *workflow, workflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed to create a workflow(%s) for enrichment in org(%s): %s", workflow.ID, workflow.OrgId, err)
+			return err
+		}
+
+		log.Printf("[INFO] Created a new workflow(%s) for enrichment in current org(%s)", workflow.ID, workflow.OrgId)
+	}
+
+	var user User
+
+	for i, u := range currentOrg.Users {
+		if u.Username == workflow.UpdatedBy {
+			user = currentOrg.Users[i]
+		}
+	}
+
+	id := workflow.ID
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if project.Environment != "cloud" {
+		baseUrl = "http://localhost:3001"
+	}
+
+	reqUrl := baseUrl + "/api/v1/workflows/" + id + "/execute"
+
+	out, err := json.Marshal(iocs)
+
+	req, err := http.NewRequest("POST", reqUrl, bytes.NewBuffer(out))
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+		return err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+user.ApiKey)
+	req.Header.Set("Org-Id", workflow.OrgId)
+
+	// send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending health check HTTP request: %s", err)
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	return nil
+}
+
 // Updates statuses in relevant areas according to what happened in the workflow run
 func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *WorkflowExecution {
 
@@ -28708,6 +28853,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	go RunCacheCleanup(ctx, *exec)
 	go RunIOCFinder(ctx, *exec)
+	go RunIOCFinderV2(ctx, *exec)
 
 	log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
 	orgId := exec.ExecutionOrg
