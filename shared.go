@@ -12987,9 +12987,9 @@ func GetOpenIdUrl(request *http.Request, org Org) string {
 	}
 
 	//In any case redirect url should not be the SSO_REDIRECT_URL as it is the frontend url where user will be redirected after login.
-	// if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
-	// 	redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
-	// }
+	if project.Environment != "cloud" && len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+		redirectUrl = url.QueryEscape(fmt.Sprintf("%s/api/v1/login_openid", os.Getenv("SSO_REDIRECT_URL")))
+	}
 
 	state := base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("org=%s&challenge=%s&redirect=%s", org.Id, codeChallenge, redirectUrl)))
 
