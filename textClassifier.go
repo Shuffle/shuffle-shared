@@ -13,8 +13,10 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/Shuffle/indicator-parser/go/ioc"
 	"github.com/adrg/strutil"
 	"github.com/adrg/strutil/metrics"
+
 	//"github.com/rcrowley/go-metrics"
 	"reflect"
 )
@@ -266,5 +268,22 @@ func RunIOCFinder(ctx context.Context, workflowExecution WorkflowExecution) {
 	foundMd5s = runDedup(foundMd5s)
 	foundSha256s = runDedup(foundSha256s)
 
-	//fmt.Printf("[DEBUG][%s] IPS: %#v, Domains: %#v, Md5s: %#v, Sha256s: %#v", workflowExecution.ExecutionId, foundIps, foundDomains, foundMd5s, foundSha256s)
+	log.Printf("[DEBUG][%s] IPS: %#v, Domains: %#v, Md5s: %#v, Sha256s: %#v\n", workflowExecution.ExecutionId, foundIps, foundDomains, foundMd5s, foundSha256s)
+
+}
+
+func RunIOCFinderV2(ctx context.Context, workflowExecution WorkflowExecution) {
+
+	finalResults := ""
+	for _, result := range workflowExecution.Results {
+		finalResults = finalResults + result.Result
+	}
+
+	IOCs := ioc.Parse[string](finalResults, []ioc.IndicatorType{})
+
+	err := ExecuteEnrichment(ctx, IOCs, workflowExecution)
+	if err != nil {
+		log.Printf("%s", err)
+	}
+
 }
