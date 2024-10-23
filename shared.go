@@ -29289,6 +29289,14 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	workflowChanged = true
 	workflow.Validation.ValidationRan = true
 	workflow.Validation.ExecutionId = exec.ExecutionId
+
+	// Check if the workflow exist or not before saving (fix after 22/10/24 outage)
+        _, err = GetWorkflow(ctx, workflow.ID)
+        if err != nil {
+                workflowChanged = false
+                log.Printf("[WARNING] Failed to get the workflow %s under execution %s", workflow.ID, exec.ExecutionId)
+        }
+
 	if workflowChanged {
 		workflow.Actions = originalActions
 
