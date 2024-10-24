@@ -11259,6 +11259,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+
+
 	// Update all admins to have access to this suborg
 	for _, loopUser := range parentOrg.Users {
 		if loopUser.Role != "admin" {
@@ -11309,6 +11311,42 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	// 1. Get environments for parent
+	// 2. Create an environment for the child with the same name
+	if project.Environment != "cloud" {
+		environments, err := GetEnvironments(ctx, parentOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting environments for parent org: %s", err)
+		} else {
+			defaultFoundEnv := Environment{}
+			for _, parentEnv := range environments {
+				if parentEnv.Default {
+					defaultFoundEnv = parentEnv
+					break
+				}
+			}
+
+			if len(defaultFoundEnv.Name) > 0 && defaultFoundEnv.Type != "cloud" {
+				item := Environment{
+					Name:    defaultFoundEnv.Name,
+					Type:    defaultFoundEnv.Type,
+					OrgId:   newOrg.Id,
+					Default: true,
+					Id:      uuid.NewV4().String(),
+
+					Auth: defaultFoundEnv.Auth,
+				}
+
+				err := SetEnvironment(ctx, &item)
+				if err != nil {
+					log.Printf("[ERROR] Failed setting up new environment for new org: %s", err)
+				} else {
+					log.Printf("[INFO] Successfully created new parent-duplicated environment for new suborg %s", newOrg.Id)
+				}
+			}
+		}
 	}
 
 	log.Printf("[INFO] User %s SUCCESSFULLY ADDED child org %s (%s) for parent %s (%s)", user.Username, newOrg.Name, newOrg.Id, parentOrg.Name, parentOrg.Id)
