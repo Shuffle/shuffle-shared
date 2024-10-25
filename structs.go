@@ -348,6 +348,11 @@ type AppUsage struct {
 	Usage   int64  `json:"usage" datastore:"usage"`
 }
 
+type IncrementInCache struct {
+	Amount uint64 `json:"amount" datastore:"amount"`
+	CreatedAt int64 `json:"created_at" datastore:"created_at"`
+}
+
 // Should be for a particular day
 // Reset is handled during caching. If the date is not today, then the reset is handled
 type DailyStatistics struct {
@@ -952,6 +957,8 @@ type Defaults struct {
 	WorkflowUploadUsername string `json:"workflow_upload_username" datastore:"workflow_upload_username"`
 	WorkflowUploadToken    string `json:"workflow_upload_token" datastore:"workflow_upload_token"`
 
+	TokensEncrypted 	   bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
+
 	NewsletterDisabled            bool `json:"newsletter" datastore:"newsletter_disabled"`
 	WeeklyRecommendationsDisabled bool `json:"weekly_recommendations" datastore:"weekly_recommendations_disabled"`
 
@@ -1294,7 +1301,7 @@ type Workflow struct {
 
 	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
 	InputMarkdown  string          `json:"input_markdown" datastore:"input_markdown,noindex"`
-	//OutputMarkdown string         `json:"output_markdown" datastore:"output_markdown,noindex"`
+	OutputYields []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
 
 	Blogpost     string `json:"blogpost" yaml:"blogpost"`
 	Video        string `json:"video" yaml:"video"`
@@ -1324,6 +1331,8 @@ type BackupConfig struct {
 	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
 	UploadUsername string `json:"upload_username" datastore:"upload_username"`
 	UploadToken    string `json:"upload_token" datastore:"upload_token"`
+
+	TokensEncrypted bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
 }
 
 type Category struct {
