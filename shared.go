@@ -23555,7 +23555,24 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 
 	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode, []string{})
 
-	//log.Printf("[DEBUG][%s] Checking what are next actions in workflow %s. Results: %d/%d. NextActions: %s", workflowExecution.ExecutionId, workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, nextActions)
+	// SHOULD WE: Write code here which returns IF an action should be SKIPPED. If ALL parents are SKIPPED/FAILED, return something like []string{id:SKIPPED} -> parent function that calls this should make it SKIPPED
+	// Question: Should we just run SKIPPED requests directly from here, then NOT return the ID?
+
+	// Skipped request info:
+	// Look into sendSelfRequest AND areas where we send requests for ActionResult to self:
+	/*
+		ActionResult{
+			Action:        curaction,
+			ExecutionId:   workflowExecution.ExecutionId,
+			Authorization: workflowExecution.Authorization,
+			Result:        `{"success": false, "reason": "Skipped because it's not under the startnode (1)"}`,
+			StartedAt:     0,
+			CompletedAt:   0,
+			Status:        "SKIPPED",
+		}
+	*/
+
+
 
 	return nextActions
 }
@@ -23578,6 +23595,10 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			log.Printf("[WARNING] Didn't find execution start action. Setting it to workflow start action.")
 			startAction = workflowExecution.Workflow.Start
 		}
+	}
+
+	if len(nextActions) == 0 { 
+		nextActions = CheckNextActions(ctx, &workflowExecution)
 	}
 
 	// Dedup results just in case
