@@ -1170,6 +1170,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
 		user.ActiveOrg.Id = orgId
 		user.Username = "Execution File API"
 	}
@@ -1228,7 +1229,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" && len(body) > maxFileSize {
 		log.Printf("[ERROR] Max filesize is 10MB in cloud environment")
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb"}`))
+		resp.Write([]byte(`{"success": false, "reason": "File too large. Max is 10mb per file."}`))
 		return
 	}
 
@@ -1247,6 +1248,19 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
 	if len(file.ReferenceFileId) > 0 {
 		parsedKey = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
+	}
+
+	if strings.HasPrefix(string(body), "--") && strings.Contains(string(body), "Content-Disposition") {
+		body = []byte(strings.TrimSpace(string(body)))
+		bodysplit := strings.Split(string(body), "\n")
+		if len(bodysplit) > 3 {
+			// Remove line 1, 2 and last
+			body = []byte(strings.Join(bodysplit[2:len(bodysplit)-1], "\n"))
+		}
+
+		// Trim newlines
+		body = []byte(strings.TrimSpace(string(body)))
+		log.Printf("[DEBUG] Found multipart form data in the body itself - autocleanup ran.")
 	}
 
 	fileId, err = uploadFile(ctx, file, parsedKey, body)
