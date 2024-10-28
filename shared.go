@@ -18982,8 +18982,11 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	redirectUrl := "https://shuffler.io/workflows"
 
-	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
-		redirectUrl = os.Getenv("SSO_REDIRECT_URL")
+	if project.Environment != "cloud" {
+		redirectUrl = "http://localhost:3001/workflows"
+		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+			redirectUrl = fmt.Sprintf("%s/workflows", os.Getenv("SSO_REDIRECT_URL"))
+		}
 	}
 
 	if len(userName) == 0 {
@@ -19305,7 +19308,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	backendUrl := os.Getenv("SSO_REDIRECT_URL")
 
 	if len(backendUrl) == 0 && project.Environment == "onprem" {
-		backendUrl = "http://localhost:3000"
+		backendUrl = "http://localhost:3001"
 	}
 
 	if len(backendUrl) == 0 && len(os.Getenv("BASE_URL")) > 0 {
