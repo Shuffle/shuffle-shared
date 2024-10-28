@@ -19308,7 +19308,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	backendUrl := os.Getenv("SSO_REDIRECT_URL")
 
 	if len(backendUrl) == 0 && project.Environment == "onprem" {
-		backendUrl = "http://localhost:3001"
+		backendUrl = "http://localhost:3000"
 	}
 
 	if len(backendUrl) == 0 && len(os.Getenv("BASE_URL")) > 0 {
