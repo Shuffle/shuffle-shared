@@ -641,9 +641,10 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 	detectionType := strings.ToLower(location[4])
 	log.Printf("[DEBUG] Validating if the org %s (%s) has a %s sandbox handling workflow/system", user.ActiveOrg.Name, user.ActiveOrg.Id, detectionType)
 
+	log.Printf("[AUDIT] User '%s' (%s) is trying to detection-connect to %s", user.Username, user.Id, strings.ToUpper(detectionType))
+
 	workflow := Workflow{}
 	if detectionType == "siem" {
-		log.Printf("[AUDIT] User '%s' (%s) is trying to connect to SIEM", user.Username, user.Id)
 
 		ctx := GetContext(request)
 		execType := "START_TENZIR"

@@ -857,7 +857,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 
 	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
-		log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
+		//log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
 		//return errors.New("Missing repo or token")
 		return nil
 	}

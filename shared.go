@@ -5942,6 +5942,7 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	return "", false
 }
 
+// Diffs workflows with Child workflows and updates them
 func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	// Actually load the child workflows directly from DB
 	ctx := context.Background()
@@ -5949,8 +5950,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	if err != nil {
 		return newWorkflow
 	}
-
-	//log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
 
 	// Taking care of dedup in case there is a reduction in orgs
 	newChildWorkflows := []Workflow{}
@@ -5963,8 +5962,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	}
 
 	childWorkflows = newChildWorkflows
-	//log.Printf("\n\n\nCHILD WORKFLOWS (2): %d\n\n\n", len(childWorkflows))
-
 	if len(childWorkflows) < len(newWorkflow.SuborgDistribution) {
 		for _, suborgId := range newWorkflow.SuborgDistribution {
 			found := false
@@ -6012,7 +6009,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 			continue
 		}
 
-		//diffWorkflows(childWorkflow, newWorkflow, true)
 		waitgroup.Add(1)
 		go func(childWorkflow Workflow, newWorkflow Workflow, update bool) {
 			diffWorkflows(childWorkflow, newWorkflow, update)
@@ -6072,6 +6068,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	// Child workflow env & auth id mapping
 	newWorkflowEnvironment := "cloud"
+	if project.Environment != "cloud" {
+		newWorkflowEnvironment = "Shuffle"
+	}
+
 	for actionIndex, action := range newWorkflow.Actions {
 		if len(action.Environment) > 0 {
 			discoveredEnvironment = action.Environment
