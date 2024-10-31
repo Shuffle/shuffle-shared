@@ -24,6 +24,7 @@ type LogRequest struct {
 }
 
 type PipelineRequest struct {
+	ID string `json:"id"`
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Command     string `json:"command"`
@@ -38,6 +39,7 @@ type PipelineRequest struct {
 
 type Pipeline struct {
 	Name        string   `json:"name" datastore:"name"`
+	ID		  	string   `json:"id" datastore:"id"`
 	Type        string   `json:"type" datastore:"type"`
 	Command     string   `json:"command" datastore:"command"`
 	Environment string   `json:"environment" datastore:"environment"`
@@ -349,8 +351,8 @@ type AppUsage struct {
 }
 
 type IncrementInCache struct {
-	Amount uint64 `json:"amount" datastore:"amount"`
-	CreatedAt int64 `json:"created_at" datastore:"created_at"`
+	Amount    uint64 `json:"amount" datastore:"amount"`
+	CreatedAt int64  `json:"created_at" datastore:"created_at"`
 }
 
 // Should be for a particular day
@@ -453,8 +455,8 @@ type AdditionalUseConfig struct {
 	Key   string `json:"key" datastore:"key"`
 	Value int64  `json:"value" datastore:"value"`
 
-	DailyValue int64 `json:"daily_value,omitempty" datastore:"daily_value"`
-	Date time.Time `json:"date,omitempty" datastore:"date"`
+	DailyValue int64     `json:"daily_value,omitempty" datastore:"daily_value"`
+	Date       time.Time `json:"date,omitempty" datastore:"date"`
 }
 
 type ParsedOpenApi struct {
@@ -490,8 +492,14 @@ type Environment struct {
 	Auth       string `json:"auth" datastore:"auth"`
 	Queue      int    `json:"queue" datastore:"queue"`
 
-	Licensed bool   `json:"licensed" datastore:"licensed"`
-	RunType  string `json:"run_type" datastore:"run_type"`
+	Licensed bool       `json:"licensed" datastore:"licensed"`
+	RunType  string     `json:"run_type" datastore:"run_type"`
+	DataLake LakeConfig `json:"data_lake" datastore:"data_lake"`
+}
+
+type LakeConfig struct {
+	Enabled   bool               `json:"enabled" datastore:"enabled"`
+	Pipelines []PipelineInfoMini `json:"pipelines" datastore:"pipelines"`
 }
 
 // Saves some data, not sure what to have here lol
@@ -957,7 +965,7 @@ type Defaults struct {
 	WorkflowUploadUsername string `json:"workflow_upload_username" datastore:"workflow_upload_username"`
 	WorkflowUploadToken    string `json:"workflow_upload_token" datastore:"workflow_upload_token"`
 
-	TokensEncrypted 	   bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
+	TokensEncrypted bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
 
 	NewsletterDisabled            bool `json:"newsletter" datastore:"newsletter_disabled"`
 	WeeklyRecommendationsDisabled bool `json:"weekly_recommendations" datastore:"weekly_recommendations_disabled"`
@@ -1210,8 +1218,8 @@ type Branch struct {
 	Conditions    []Condition `json:"conditions" datastore: "conditions"`
 	Decorator     bool        `json:"decorator" datastore:"decorator"`
 
-	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
-	SourceParent string `json:"source_parent" datastore:"source_parent"` // Parent node of the actual source we use. Mainly added for handling else/if-s in branches. Automatically happens during workflow saves (frontend for now)
+	ParentControlled bool   `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+	SourceParent     string `json:"source_parent" datastore:"source_parent"`         // Parent node of the actual source we use. Mainly added for handling else/if-s in branches. Automatically happens during workflow saves (frontend for now)
 }
 
 // Same format for a lot of stuff
@@ -1301,7 +1309,7 @@ type Workflow struct {
 
 	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
 	InputMarkdown  string          `json:"input_markdown" datastore:"input_markdown,noindex"`
-	OutputYields []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+	OutputYields   []string        `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
 
 	Blogpost     string `json:"blogpost" yaml:"blogpost"`
 	Video        string `json:"video" yaml:"video"`
@@ -2318,9 +2326,9 @@ type SubResponse struct {
 }
 
 type AllTriggersWrapper struct {
-	Pipelines []Pipeline    `json:"pipelines"`
-	WebHooks  []Hook        `json:"webhooks"`
-	Schedules []ScheduleOld `json:"schedules"`
+	Pipelines []PipelineInfoMini `json:"pipelines"`
+	WebHooks  []Hook             `json:"webhooks"`
+	Schedules []ScheduleOld      `json:"schedules"`
 }
 
 type SubWrapper struct {
@@ -3724,8 +3732,8 @@ type CategoryAction struct {
 	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
 	Environment           string `json:"environment"`             // The environment to use for the action (Orborus)
-	App string `jjson:"app"` // The app to use for the action (Orborus)
-	Action string `json:"action"` // The action to use for the action (Orborus)
+	App                   string `jjson:"app"`                    // The app to use for the action (Orborus)
+	Action                string `json:"action"`                  // The action to use for the action (Orborus)
 }
 
 type LabelStruct struct {
@@ -3853,6 +3861,11 @@ type OrborusStats struct {
 	WorkerContainers  int `json:"worker_containers"`
 	StoppedContainers int `json:"stopped_containers"`
 	TotalContainers   int `json:"total_containers"`
+
+	// New cache mechanics to keep better track of running/not running
+	RunningIp string     `json:"running_ip"`
+	Licensed  bool       `json:"licensed"`
+	DataLake  LakeConfig `json:"data_lake" datastore:"data_lake"`
 }
 
 // Create struct
@@ -4014,9 +4027,9 @@ type StructuredCategoryAction struct {
 
 	Translated bool `json:"translated,omitempty"`
 
-	Success     bool          `json:"success"`
-	Action      string        `json:"action"`
-	Reason      string        `json:"reason"`
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason"`
 }
 
 type ModelLabelParameter struct {
@@ -4095,4 +4108,50 @@ type DetectionResponse struct {
 	IsConnectorActive bool                `json:"is_connector_active"`
 
 	DownloadRepo string `json:"download_repo"`
+}
+
+type PipelineInfoMini struct {
+	Name       string `json:"name"`
+	ID         string `json:"id"`
+	Definition string `json:"definition"`
+	TotalRuns  int    `json:"total_runs"`
+	CreatedAt  int64  `json:"created_at"`
+
+	Environment string `json:"environment"`
+}
+
+// The raw output from pipelines in Tenzir
+type PipelineInfo struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Hidden       bool   `json:"hidden"`
+	Definition   string `json:"definition"`
+	Configured   bool   `json:"configured"`
+	Package      any    `json:"package"`
+	Unstoppable  bool   `json:"unstoppable"`
+	CreatedAt    int64  `json:"created_at"`
+	LastModified int64  `json:"last_modified"`
+	StartTime    string `json:"start_time"`
+	TotalRuns    int    `json:"total_runs"`
+	State        string `json:"state"`
+	Error        string `json:"error"`
+	Diagnostics  []any  `json:"diagnostics"`
+	Labels       []any  `json:"labels"`
+	RetryDelay   string `json:"retry_delay"`
+	Autostart    struct {
+		Created   bool `json:"created"`
+		Completed bool `json:"completed"`
+		Failed    bool `json:"failed"`
+	} `json:"autostart"`
+	Autodelete struct {
+		Completed bool `json:"completed"`
+		Failed    bool `json:"failed"`
+		Stopped   bool `json:"stopped"`
+	} `json:"autodelete"`
+	TTL          any `json:"ttl"`
+	RemainingTTL any `json:"remaining_ttl"`
+}
+
+type PipelineInfoWrapper struct {
+	Pipelines []PipelineInfo `json:"pipelines"`
 }
