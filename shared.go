@@ -3288,7 +3288,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Resets ips and such within 90 seconds
+	// Resets ips and such very quickly using cache
 	// Here as well as in db-connector due to cache handling
 	timenow := time.Now().Unix()
 	for envIndex, env := range newEnvironments {
@@ -3296,10 +3296,33 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		if env.Checkin > 0 && timenow-env.Checkin > 90 && len(newEnvironments[envIndex].RunningIp) > 0 {
-			log.Printf("[DEBUG] Resetting environment %s (%s) due to inactivity", env.Name, env.Id)
+		if newEnvironments[envIndex].Archived {
+			continue
+		}
+
+		// Check for env updates from cache just in case to keep things up to date
+		// The timeout for this key is 2 minutes, meaning we very quickly get the right answer/timeouts
+		cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			newEnv := OrborusStats{}
+			err = json.Unmarshal(cache.([]uint8), &newEnv)
+			if err == nil {
+				// Check if timestamp is within the last 60 seconds. If it is, overwrite newEnvironments
+				if newEnv.Timestamp > 0 && timenow-newEnv.Timestamp > 60 {
+					newEnvironments[envIndex].RunningIp = ""
+					newEnvironments[envIndex].Licensed = false
+					newEnvironments[envIndex].DataLake.Enabled = false 
+				} else {
+					newEnvironments[envIndex].DataLake = newEnv.DataLake
+					newEnvironments[envIndex].RunningIp = newEnv.RunningIp
+					newEnvironments[envIndex].Licensed = newEnv.Licensed
+				}
+			}
+		} else {
 			newEnvironments[envIndex].RunningIp = ""
 			newEnvironments[envIndex].Licensed = false
+			newEnvironments[envIndex].DataLake.Enabled = false 
 		}
 	}
 
@@ -4655,7 +4678,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	workflowsChan := make(chan []Workflow)
 	schedulesChan := make(chan []ScheduleOld)
 	hooksChan := make(chan []Hook)
-	pipelinesChan := make(chan []Pipeline)
+	pipelinesChan := make(chan []PipelineInfoMini)
 
 	errChan := make(chan error)
 
@@ -4698,12 +4721,44 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	}()
 
 	go func() {
+		// List it out from Environments and track them from each node directly as this is the most up to date config
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			wg.Done()
+			errChan <- err
+			return
+		}
+
+		pipelines := []PipelineInfoMini{}
+		for _, env  := range environments {
+			if env.Archived {
+				continue
+			}
+
+			cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+			cache, err := GetCache(ctx, cacheKey)
+			if err == nil {
+				newEnv := OrborusStats{}
+				err = json.Unmarshal(cache.([]uint8), &newEnv)
+				if err == nil {
+					for _, pipeline := range newEnv.DataLake.Pipelines {
+						pipeline.Environment = env.Name
+						pipelines = append(pipelines, pipeline)
+					}
+				}
+			}
+		}
+
+		//log.Printf("[DEBUG] Found %d pipelines in %d environments in org %s (%s)", len(pipelines), len(environments), user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		/*
 		pipelines, err := GetPipelines(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			wg.Done()
 			errChan <- err
 			return
 		}
+		*/
 		wg.Done()
 		pipelinesChan <- pipelines
 	}()
@@ -4730,7 +4785,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	hookMap := map[string]Hook{}
 	scheduleMap := map[string]ScheduleOld{}
-	pipelineMap := map[string]Pipeline{}
+	pipelineMap := map[string]PipelineInfoMini{}
 
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
@@ -4738,13 +4793,13 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, schedule := range schedules {
 		scheduleMap[schedule.Id] = schedule
 	}
+
 	for _, pipeline := range pipelines {
-		pipelineMap[pipeline.TriggerId] = pipeline
+		pipelineMap[pipeline.ID] = pipeline
 	}
 
 	allHooks := []Hook{}
 	allSchedules := []ScheduleOld{}
-	allPipelines := []Pipeline{}
 	// Now loop through the workflow triggers to see if anything is not in sync
 	for _, workflow := range workflows {
 		for _, trigger := range workflow.Triggers {
@@ -4865,7 +4920,8 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 				}
 			case "PIPELINE":
 				{
-
+					// Handled otherwise.
+					/*
 					storedPipeline, exist := pipelineMap[trigger.ID]
 					if exist && storedPipeline.Status != "uninitialized" {
 						startNode := ""
@@ -4886,6 +4942,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						allPipelines = append(allPipelines, storedPipeline)
 
 					}
+					*/
 				}
 			}
 		}
@@ -4905,7 +4962,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	allTriggersWrapper.WebHooks = allHooks
 	allTriggersWrapper.Schedules = allSchedules
-	allTriggersWrapper.Pipelines = allPipelines
+	allTriggersWrapper.Pipelines = pipelines
 
 	newjson, err := json.Marshal(allTriggersWrapper)
 	if err != nil {
@@ -5942,6 +5999,7 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	return "", false
 }
 
+// Diffs workflows with Child workflows and updates them
 func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	// Actually load the child workflows directly from DB
 	ctx := context.Background()
@@ -5949,8 +6007,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	if err != nil {
 		return newWorkflow
 	}
-
-	//log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
 
 	// Taking care of dedup in case there is a reduction in orgs
 	newChildWorkflows := []Workflow{}
@@ -5963,8 +6019,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	}
 
 	childWorkflows = newChildWorkflows
-	//log.Printf("\n\n\nCHILD WORKFLOWS (2): %d\n\n\n", len(childWorkflows))
-
 	if len(childWorkflows) < len(newWorkflow.SuborgDistribution) {
 		for _, suborgId := range newWorkflow.SuborgDistribution {
 			found := false
@@ -6012,7 +6066,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 			continue
 		}
 
-		//diffWorkflows(childWorkflow, newWorkflow, true)
 		waitgroup.Add(1)
 		go func(childWorkflow Workflow, newWorkflow Workflow, update bool) {
 			diffWorkflows(childWorkflow, newWorkflow, update)
@@ -6072,6 +6125,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	// Child workflow env & auth id mapping
 	newWorkflowEnvironment := "cloud"
+	if project.Environment != "cloud" {
+		newWorkflowEnvironment = "Shuffle"
+	}
+
 	for actionIndex, action := range newWorkflow.Actions {
 		if len(action.Environment) > 0 {
 			discoveredEnvironment = action.Environment
@@ -28034,60 +28091,6 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 
 	resp.Write(respBody)
 }
-
-// func HandleSavePipelineInfo(resp http.ResponseWriter, request *http.Request) {
-//     cors := HandleCors(resp, request)
-//     if cors {
-//         return
-//     }
-
-//     // How do I make sure that Orborus is the one that made this request?
-
-//     var requestBody Pipeline
-//     err := json.NewDecoder(request.Body).Decode(&requestBody)
-// 	if err != nil {
-//         log.Printf("[WARNING] Failed to decode request body: %s", err)
-//         resp.WriteHeader(401)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-//     }
-// 	if len(requestBody.TriggerId) == 0 || len(requestBody.PipelineId) == 0 || len(requestBody.Status) == 0 {
-// 		log.Printf("[WARNING] Missing fields in the request body")
-//         resp.WriteHeader(400)
-//         resp.Write([]byte(`{"success": false, "reason": "Missing fields in the request body"}`))
-//         return
-// 	}
-
-//     ctx := GetContext(request)
-//     pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
-//     if err != nil {
-// 		if strings.Contains(fmt.Sprintf("%s", err),"pipeline doesn't exist"){
-// 			log.Printf("[DEBUG] no matching document found for Pipeline: %s", requestBody.PipelineId)
-// 			resp.WriteHeader(404)
-// 			resp.Write([]byte(`{"success": false, "reason": "pipeline not found"}`))
-// 			return
-// 		} else {
-//         log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
-//         resp.WriteHeader(500)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-// 		}
-//     }
-
-//     pipeline.PipelineId = requestBody.PipelineId
-//     pipeline.Status = requestBody.Status
-
-//     err = savePipelineData(ctx, *pipeline)
-//     if err != nil {
-//         log.Printf("[WARNING] Failed updating pipeline with ID: %s due to %s", pipeline.PipelineId, err)
-//         resp.WriteHeader(500)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-//     }
-// 	log.Printf("[INFO] Sucessfully saved pipeline: %s", pipeline.PipelineId)
-//     resp.WriteHeader(200)
-//     resp.Write([]byte(`{"success": true}`))
-// }
 
 func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
