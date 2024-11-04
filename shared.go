@@ -21755,10 +21755,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	// Validation of SKIPPED nodes
-	if len(workflowExecution.Workflow.Start) > 0 {
-		childNodes := FindChildNodes(workflowExecution.Workflow, workflow.Start, []string{}, []string{})
+	if len(workflowExecution.Start) > 0 {
+		childNodes := FindChildNodes(workflowExecution.Workflow, workflowExecution.Start, []string{}, []string{})
 
-		//log.Printf("\n\n\n[DEBUG][%s] STARTUP NODES (%d): %#v. Total actions: %#v\n\n\n", workflowExecution.ExecutionId, len(childNodes), childNodes, len(workflowExecution.Workflow.Actions))
+		//log.Printf("\n\n\n[DEBUG][%s] STARTUP NODES UNDER '%s' (%d): %#v. Total actions: %#v\n\n\n", workflowExecution.ExecutionId, workflowExecution.Start, len(childNodes), childNodes, len(workflowExecution.Workflow.Actions))
 
 		for _, action := range workflowExecution.Workflow.Actions {
 			if action.ID == workflowExecution.Start {
