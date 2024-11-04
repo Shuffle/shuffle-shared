@@ -54,6 +54,7 @@ var maxCacheSize = 1020000
 // var dbInterval = 0x19
 // var dbInterval = 0x1
 var dbInterval = 500
+
 // var dbInterval = 0xA
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
@@ -421,7 +422,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(tmpOrgDetail)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err 
+			return err
 		}
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
@@ -439,7 +440,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error in org STATS get: %s", err)
-			return err 
+			return err
 		}
 
 		defer res.Body.Close()
@@ -466,7 +467,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 				}
 			}
 
-			return err 
+			return err
 		}
 
 		orgStatsWrapper := &ExecutionInfoWrapper{}
@@ -493,7 +494,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		marshalledData, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[ERROR] Failed marshalling org STATS body (2): %s", err)
-			return err 
+			return err
 		}
 
 		err = indexEs(ctx, nameKey, id, marshalledData)
@@ -506,7 +507,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		tx, err := project.Dbclient.NewTransaction(ctx)
 		if err != nil {
 			log.Printf("[WARNING] Error in cache dump: %s", err)
-			return err 
+			return err
 		}
 
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
@@ -517,7 +518,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			} else {
 				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
 				tx.Rollback()
-				return err 
+				return err
 			}
 		}
 
@@ -554,7 +555,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err 
+			return err
 		}
 
 		err = SetCache(ctx, cacheKey, data, 30)
@@ -601,7 +602,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		}
 
 		if appendForQuickDump {
-		// check if the cache already key is indexed in memcache
+			// check if the cache already key is indexed in memcache
 			keyItems, err := mc.Get("stat_cache_keys_" + orgId)
 			if err == gomemcache.ErrCacheMiss {
 				keyItem := []string{key}
@@ -613,7 +614,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					item := &gomemcache.Item{
 						Key:        "stat_cache_keys_" + orgId,
 						Value:      data,
-						Expiration: 86400*30,
+						Expiration: 86400 * 30,
 					}
 
 					if err := mc.Set(item); err != nil {
@@ -638,7 +639,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 							item := &gomemcache.Item{
 								Key:        "stat_cache_keys_" + orgId,
 								Value:      data,
-								Expiration: 86400*30,
+								Expiration: 86400 * 30,
 							}
 
 							if err := mc.Set(item); err != nil {
@@ -655,7 +656,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		item, err := mc.Get(key)
 		if err == gomemcache.ErrCacheMiss {
 			incrementItem := IncrementInCache{
-				Amount: uint64(incrementAmount),
+				Amount:    uint64(incrementAmount),
 				CreatedAt: time.Now().Unix(),
 			}
 
@@ -668,7 +669,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 			item := &gomemcache.Item{
 				Key:        key,
 				Value:      data,
-				Expiration: 86400*30,
+				Expiration: 86400 * 30,
 			}
 
 			if err := mc.Set(item); err != nil {
@@ -680,7 +681,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		} else {
 			if item == nil || item.Value == nil {
 				incrementItem := IncrementInCache{
-					Amount: uint64(incrementAmount),
+					Amount:    uint64(incrementAmount),
 					CreatedAt: time.Now().Unix(),
 				}
 
@@ -693,7 +694,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				item = &gomemcache.Item{
 					Key:        key,
 					Value:      data,
-					Expiration: 86400*30,
+					Expiration: 86400 * 30,
 				}
 
 				// log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
@@ -709,11 +710,11 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 				// log.Printf("[DEBUG] new num: %d", num)
 
-				// there is some bug here. i would much rather lose the data here. 
+				// there is some bug here. i would much rather lose the data here.
 				num := uint64(incrementAmount)
 
 				incrementItem := IncrementInCache{
-					Amount: num,
+					Amount:    num,
 					CreatedAt: time.Now().Unix(),
 				}
 
@@ -726,7 +727,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				item := &gomemcache.Item{
 					Key:        key,
 					Value:      data,
-					Expiration: 86400*30,
+					Expiration: 86400 * 30,
 				}
 
 				if err := mc.Set(item); err != nil {
@@ -756,8 +757,8 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 				// make it a random number between
 				// (10-60 seconds)
-				randomSeconds := (rand.Intn(50) + 10)*5 // to make the number longer
-		
+				randomSeconds := (rand.Intn(50) + 10) * 5 // to make the number longer
+
 				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > uint64(dbInterval) {
 					// Memcache dump first to keep the counter going for other executions
 					oldNum := num
@@ -781,7 +782,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
 							// log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
 							incrementedItemInCache.Amount = oldNum
-							
+
 							data, err := json.Marshal(incrementedItemInCache)
 							if err != nil {
 								log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
@@ -790,7 +791,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 							item := &gomemcache.Item{
 								Key:        key,
 								Value:      data,
-								Expiration: 86400*30,
+								Expiration: 86400 * 30,
 							}
 
 							if err := mc.Set(item); err != nil {
@@ -803,13 +804,12 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 						item := &gomemcache.Item{
 							Key:        key,
 							Value:      data,
-							Expiration: 86400*30,
+							Expiration: 86400 * 30,
 						}
 						if err := mc.Set(item); err != nil {
 							log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
 						}
 					}
-
 
 				} else {
 					//log.Printf("NOT Dumping!")
@@ -859,7 +859,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					item = &gomemcache.Item{
 						Key:        key,
 						Value:      data,
-						Expiration: 86400*30,
+						Expiration: 86400 * 30,
 					}
 
 					if err := mc.Set(item); err != nil {
@@ -1304,11 +1304,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		hostname = "shuffle-backend"
 	}
 
-	// FIXME: This right here has caused more problems during dev than anything
-	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
-		//log.Printf("[INFO] Not saving execution to DB (just cache), since we are running in swarm mode.")
-		return nil
-	}
+	//	// FIXME: This right here has caused more problems during dev than anything
+	//	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
+	//		//log.Printf("[INFO] Not saving execution to DB (just cache), since we are running in swarm mode.")
+	//		return nil
+	//	}
 
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
@@ -1617,7 +1617,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 
 func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 	// New form REQUIRES sanitization no matter what
-	//if workflowExecution.Workflow.Sharing != "form" { 
+	//if workflowExecution.Workflow.Sharing != "form" {
 	sanitizeLiquid := os.Getenv("LIQUID_SANITIZE_INPUT")
 	if sanitizeLiquid == "" {
 		sanitizeLiquid = "true" // Set default value to "true" if not set
@@ -7066,7 +7066,6 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 		//log.Printf("[DEBUG] Adding execution to queue: %s", nameKey)
 	}
 
-
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(executionRequest)
@@ -8136,7 +8135,7 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 	}
 
 	// Fix branches & triggers
-	scheduleNotStarted := "" 
+	scheduleNotStarted := ""
 	for index, trigger := range workflow.Triggers {
 		if trigger.TriggerType == "SCHEDULE" {
 			if trigger.Status != "RUNNING" {
@@ -8156,7 +8155,7 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 	}
 
 	// Check validation if Schedule is started (?)
-	if len(scheduleNotStarted) > 0  {
+	if len(scheduleNotStarted) > 0 {
 		// Add validation problem
 		found := false
 		for _, problem := range workflow.Validation.Errors {
@@ -8168,10 +8167,10 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 
 		if !found {
 			workflow.Validation.Errors = append(workflow.Validation.Errors, ValidationProblem{
-				Order: -1,
-				Type:  "SCHEDULE",
+				Order:    -1,
+				Type:     "SCHEDULE",
 				ActionId: scheduleNotStarted,
-				Error: "Schedule not started",
+				Error:    "Schedule not started",
 			})
 		}
 	}
@@ -8230,7 +8229,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if len(workflow.ParentWorkflowId) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
-	} 
+	}
 
 	if len(workflow.ChildWorkflowIds) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
