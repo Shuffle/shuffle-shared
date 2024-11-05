@@ -4804,9 +4804,11 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, workflow := range workflows {
 		for _, trigger := range workflow.Triggers {
 
+			/*
 			if trigger.Status == "uninitialized" {
 				continue
 			}
+			*/
 
 			switch trigger.TriggerType {
 			case "WEBHOOK":
@@ -4862,7 +4864,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						allHooks = append(allHooks, hook)
 					} else {
 						hookValue := storedHook
-						hookValue.Status = "running"
+						//hookValue.Status = "running"
 						for _, param := range trigger.Parameters {
 							if param.Name == "url" {
 								hookValue.Info.Url = param.Value
@@ -4913,7 +4915,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 					} else {
 						scheduleValue := storedschedule
 						scheduleValue.Name = trigger.Label
-						scheduleValue.Status = "running"
+						//scheduleValue.Status = "running"
 
 						allSchedules = append(allSchedules, scheduleValue)
 					}

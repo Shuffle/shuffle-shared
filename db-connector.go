@@ -3271,7 +3271,11 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 					workflow = &workflows[0]
 				}
 			} else if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
+				// Due to form migration
+				if !strings.Contains(err.Error(), `input_markdown`) {
+					log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
+				}
+
 				err = nil
 			} else {
 				return &Workflow{}, err
