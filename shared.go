@@ -16651,7 +16651,6 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	}
 
 	childNodes := FindChildNodes(workflowExecution.Workflow, workflowAction, []string{}, []string{})
-	//log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
 	newActions := []Action{}
 	branches := []Branch{}
 
@@ -29142,9 +29141,16 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	if workflowChanged {
 		workflow.Actions = originalActions
 
-		err = SetWorkflow(ctx, *workflow, workflow.ID)
+		// This causes too many writes and can't be handled at scale. Removing for now. Only setting cache.
+		cacheKey := fmt.Sprintf("workflow_%s", workflow.ID)
+		data, err := json.Marshal(workflow)
 		if err != nil {
-			log.Printf("[ERROR] Failed updating workflow from execution validator. This is NOT critical as we keep cache %s: %s", workflow.ID, err)
+			log.Printf("[ERROR] Failed marshalling validation of %s: %s", workflow.ID, err)
+		} else {
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting cache for workflow '%s': %s", cacheKey, err)
+			}
 		}
 	}
 

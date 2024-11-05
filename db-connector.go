@@ -8193,6 +8193,31 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 }
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
+	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
+	// Due to caching, this is kind of fine.
+	foundWorkflow, err := GetWorkflow(ctx, id)
+	if err != nil || foundWorkflow.ID == "" {
+		log.Printf("[INFO] Workflow %s doesn't exist, randomizing IDs for Triggers", id)
+
+		// Old ID + Org ID as seed -> generate new uuid
+		for triggerIndex, trigger := range workflow.Triggers {
+			uuidSeed := fmt.Sprintf("%s_%s", trigger.ID, workflow.OrgId)
+			newTriggerId := uuid.NewV5(uuid.NamespaceOID, uuidSeed).String()
+			for branchIndex, branch := range workflow.Branches {
+				if branch.SourceID == trigger.ID {
+					workflow.Branches[branchIndex].SourceID = newTriggerId
+				}
+
+				if branch.DestinationID == trigger.ID {
+					workflow.Branches[branchIndex].DestinationID = newTriggerId
+				}
+			}
+
+			workflow.Triggers[triggerIndex].ID = newTriggerId
+			workflow.Triggers[triggerIndex].Status = "stopped"
+		}
+	}
+
 	// Overwriting to be sure these are matching
 	// No real point in having id + workflow.ID anymore
 	id = workflow.ID
