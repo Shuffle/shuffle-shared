@@ -1572,6 +1572,7 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 		cacheData := []byte(cache.([]uint8))
 		err = json.Unmarshal(cacheData, &wrapper)
 		if err == nil {
+
 			return wrapper.StartNode, wrapper.Extra, wrapper.Children, wrapper.Parents, wrapper.Visited, wrapper.Executed, wrapper.NextActions, wrapper.Environments
 		}
 	} else {

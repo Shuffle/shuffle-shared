@@ -3288,7 +3288,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Resets ips and such within 90 seconds
+	// Resets ips and such very quickly using cache
 	// Here as well as in db-connector due to cache handling
 	timenow := time.Now().Unix()
 	for envIndex, env := range newEnvironments {
@@ -3296,10 +3296,33 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		if env.Checkin > 0 && timenow-env.Checkin > 90 && len(newEnvironments[envIndex].RunningIp) > 0 {
-			log.Printf("[DEBUG] Resetting environment %s (%s) due to inactivity", env.Name, env.Id)
+		if newEnvironments[envIndex].Archived {
+			continue
+		}
+
+		// Check for env updates from cache just in case to keep things up to date
+		// The timeout for this key is 2 minutes, meaning we very quickly get the right answer/timeouts
+		cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			newEnv := OrborusStats{}
+			err = json.Unmarshal(cache.([]uint8), &newEnv)
+			if err == nil {
+				// Check if timestamp is within the last 60 seconds. If it is, overwrite newEnvironments
+				if newEnv.Timestamp > 0 && timenow-newEnv.Timestamp > 60 {
+					newEnvironments[envIndex].RunningIp = ""
+					newEnvironments[envIndex].Licensed = false
+					newEnvironments[envIndex].DataLake.Enabled = false 
+				} else {
+					newEnvironments[envIndex].DataLake = newEnv.DataLake
+					newEnvironments[envIndex].RunningIp = newEnv.RunningIp
+					newEnvironments[envIndex].Licensed = newEnv.Licensed
+				}
+			}
+		} else {
 			newEnvironments[envIndex].RunningIp = ""
 			newEnvironments[envIndex].Licensed = false
+			newEnvironments[envIndex].DataLake.Enabled = false 
 		}
 	}
 
@@ -4655,7 +4678,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	workflowsChan := make(chan []Workflow)
 	schedulesChan := make(chan []ScheduleOld)
 	hooksChan := make(chan []Hook)
-	pipelinesChan := make(chan []Pipeline)
+	pipelinesChan := make(chan []PipelineInfoMini)
 
 	errChan := make(chan error)
 
@@ -4698,12 +4721,44 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	}()
 
 	go func() {
+		// List it out from Environments and track them from each node directly as this is the most up to date config
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			wg.Done()
+			errChan <- err
+			return
+		}
+
+		pipelines := []PipelineInfoMini{}
+		for _, env  := range environments {
+			if env.Archived {
+				continue
+			}
+
+			cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+			cache, err := GetCache(ctx, cacheKey)
+			if err == nil {
+				newEnv := OrborusStats{}
+				err = json.Unmarshal(cache.([]uint8), &newEnv)
+				if err == nil {
+					for _, pipeline := range newEnv.DataLake.Pipelines {
+						pipeline.Environment = env.Name
+						pipelines = append(pipelines, pipeline)
+					}
+				}
+			}
+		}
+
+		//log.Printf("[DEBUG] Found %d pipelines in %d environments in org %s (%s)", len(pipelines), len(environments), user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		/*
 		pipelines, err := GetPipelines(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			wg.Done()
 			errChan <- err
 			return
 		}
+		*/
 		wg.Done()
 		pipelinesChan <- pipelines
 	}()
@@ -4730,7 +4785,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	hookMap := map[string]Hook{}
 	scheduleMap := map[string]ScheduleOld{}
-	pipelineMap := map[string]Pipeline{}
+	pipelineMap := map[string]PipelineInfoMini{}
 
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
@@ -4738,13 +4793,13 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, schedule := range schedules {
 		scheduleMap[schedule.Id] = schedule
 	}
+
 	for _, pipeline := range pipelines {
-		pipelineMap[pipeline.TriggerId] = pipeline
+		pipelineMap[pipeline.ID] = pipeline
 	}
 
 	allHooks := []Hook{}
 	allSchedules := []ScheduleOld{}
-	allPipelines := []Pipeline{}
 	// Now loop through the workflow triggers to see if anything is not in sync
 	for _, workflow := range workflows {
 		for _, trigger := range workflow.Triggers {
@@ -4865,7 +4920,8 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 				}
 			case "PIPELINE":
 				{
-
+					// Handled otherwise.
+					/*
 					storedPipeline, exist := pipelineMap[trigger.ID]
 					if exist && storedPipeline.Status != "uninitialized" {
 						startNode := ""
@@ -4886,6 +4942,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						allPipelines = append(allPipelines, storedPipeline)
 
 					}
+					*/
 				}
 			}
 		}
@@ -4905,7 +4962,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	allTriggersWrapper.WebHooks = allHooks
 	allTriggersWrapper.Schedules = allSchedules
-	allTriggersWrapper.Pipelines = allPipelines
+	allTriggersWrapper.Pipelines = pipelines
 
 	newjson, err := json.Marshal(allTriggersWrapper)
 	if err != nil {
@@ -5942,6 +5999,7 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	return "", false
 }
 
+// Diffs workflows with Child workflows and updates them
 func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	// Actually load the child workflows directly from DB
 	ctx := context.Background()
@@ -5949,8 +6007,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	if err != nil {
 		return newWorkflow
 	}
-
-	//log.Printf("\n\n\nCHILD WORKFLOWS (1): %d\n\n\n", len(childWorkflows))
 
 	// Taking care of dedup in case there is a reduction in orgs
 	newChildWorkflows := []Workflow{}
@@ -5963,8 +6019,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 	}
 
 	childWorkflows = newChildWorkflows
-	//log.Printf("\n\n\nCHILD WORKFLOWS (2): %d\n\n\n", len(childWorkflows))
-
 	if len(childWorkflows) < len(newWorkflow.SuborgDistribution) {
 		for _, suborgId := range newWorkflow.SuborgDistribution {
 			found := false
@@ -6012,7 +6066,6 @@ func diffWorkflowWrapper(newWorkflow Workflow) Workflow {
 			continue
 		}
 
-		//diffWorkflows(childWorkflow, newWorkflow, true)
 		waitgroup.Add(1)
 		go func(childWorkflow Workflow, newWorkflow Workflow, update bool) {
 			diffWorkflows(childWorkflow, newWorkflow, update)
@@ -6072,6 +6125,10 @@ func diffWorkflows(oldWorkflow Workflow, newWorkflow Workflow, update bool) {
 
 	// Child workflow env & auth id mapping
 	newWorkflowEnvironment := "cloud"
+	if project.Environment != "cloud" {
+		newWorkflowEnvironment = "Shuffle"
+	}
+
 	for actionIndex, action := range newWorkflow.Actions {
 		if len(action.Environment) > 0 {
 			discoveredEnvironment = action.Environment
@@ -9718,11 +9775,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				Owner: workflow.Owner,
 				OrgId: workflow.OrgId,
 
-				OutputYields:   workflow.OutputYields,
-				Sharing:        workflow.Sharing,
+				FormControl: 	workflow.FormControl,
+				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
-				InputMarkdown:  workflow.InputMarkdown,
 			}
 		} else {
 			log.Printf("[AUDIT] Wrong user %s (%s) for workflow '%s' (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, user.Id, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
@@ -11256,6 +11312,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+
+
 	// Update all admins to have access to this suborg
 	for _, loopUser := range parentOrg.Users {
 		if loopUser.Role != "admin" {
@@ -11306,6 +11364,42 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	// 1. Get environments for parent
+	// 2. Create an environment for the child with the same name
+	if project.Environment != "cloud" {
+		environments, err := GetEnvironments(ctx, parentOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting environments for parent org: %s", err)
+		} else {
+			defaultFoundEnv := Environment{}
+			for _, parentEnv := range environments {
+				if parentEnv.Default {
+					defaultFoundEnv = parentEnv
+					break
+				}
+			}
+
+			if len(defaultFoundEnv.Name) > 0 && defaultFoundEnv.Type != "cloud" {
+				item := Environment{
+					Name:    defaultFoundEnv.Name,
+					Type:    defaultFoundEnv.Type,
+					OrgId:   newOrg.Id,
+					Default: true,
+					Id:      uuid.NewV4().String(),
+
+					Auth: defaultFoundEnv.Auth,
+				}
+
+				err := SetEnvironment(ctx, &item)
+				if err != nil {
+					log.Printf("[ERROR] Failed setting up new environment for new org: %s", err)
+				} else {
+					log.Printf("[INFO] Successfully created new parent-duplicated environment for new suborg %s", newOrg.Id)
+				}
+			}
+		}
 	}
 
 	log.Printf("[INFO] User %s SUCCESSFULLY ADDED child org %s (%s) for parent %s (%s)", user.Username, newOrg.Name, newOrg.Id, parentOrg.Name, parentOrg.Id)
@@ -21665,10 +21759,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	// Validation of SKIPPED nodes
-	if len(workflowExecution.Workflow.Start) > 0 {
-		childNodes := FindChildNodes(workflowExecution.Workflow, workflow.Start, []string{}, []string{})
+	if len(workflowExecution.Start) > 0 {
+		childNodes := FindChildNodes(workflowExecution.Workflow, workflowExecution.Start, []string{}, []string{})
 
-		//log.Printf("\n\n\n[DEBUG][%s] STARTUP NODES (%d): %#v. Total actions: %#v\n\n\n", workflowExecution.ExecutionId, len(childNodes), childNodes, len(workflowExecution.Workflow.Actions))
+		//log.Printf("\n\n\n[DEBUG][%s] STARTUP NODES UNDER '%s' (%d): %#v. Total actions: %#v\n\n\n", workflowExecution.ExecutionId, workflowExecution.Start, len(childNodes), childNodes, len(workflowExecution.Workflow.Actions))
 
 		for _, action := range workflowExecution.Workflow.Actions {
 			if action.ID == workflowExecution.Start {
@@ -22107,7 +22201,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 	}
 
-	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.InputMarkdown) > 0 {
+	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.FormControl.InputMarkdown) > 0 {
 		log.Printf("\n\nFORM. Running Org injection AND liquid template removal\n\n")
 
 		// 1. Add Org-Id from the user to the existing workflowExecution.ExecutionArgument
@@ -23523,33 +23617,23 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 
 	nextActions = findMissingChildren(ctx, workflowExecution, children, inputNode, []string{})
 
-	for index, actionId := range nextActions {
-		skippedParents := 0
-		for _, parent := range parents[actionId] {
-			_, result := GetActionResult(ctx, *workflowExecution, parent)
-			if result.Status == "SKIPPED" {
-				skippedParents += 1
-			}
-		}
+	// SHOULD WE: Write code here which returns IF an action should be SKIPPED. If ALL parents are SKIPPED/FAILED, return something like []string{id:SKIPPED} -> parent function that calls this should make it SKIPPED
+	// Question: Should we just run SKIPPED requests directly from here, then NOT return the ID?
 
-		if skippedParents >= len(parents[actionId]) {
-			if actionId != workflowExecution.Workflow.Start {
-				for _, action := range workflowExecution.Workflow.Actions {
-					if actionId != action.ID {
-						continue
-					}
-					foundAction := GetAction(*workflowExecution, actionId, action.Environment)
-					err := ActionSkip(foundAction, *workflowExecution)
-					if err != nil {
-						log.Printf("ERROR %s", err)
-					}
-					copy(nextActions[index:], nextActions[index+1:])
-					nextActions[len(nextActions)-1] = ""
-					nextActions = nextActions[:len(nextActions)-1]
-				}
-			}
+	// Skipped request info:
+	// Look into sendSelfRequest AND areas where we send requests for ActionResult to self:
+	/*
+		ActionResult{
+			Action:        curaction,
+			ExecutionId:   workflowExecution.ExecutionId,
+			Authorization: workflowExecution.Authorization,
+			Result:        `{"success": false, "reason": "Skipped because it's not under the startnode (1)"}`,
+			StartedAt:     0,
+			CompletedAt:   0,
+			Status:        "SKIPPED",
 		}
-	}
+	*/
+
 
 	return nextActions
 }
@@ -23658,9 +23742,7 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		}
 	}
 
-	log.Printf("ACTIONS: %d %d", len(workflowExecution.Workflow.Actions), len(nextActions))
-
-	if len(nextActions) == 0 {
+	if len(nextActions) == 0 { 
 		nextActions = CheckNextActions(ctx, &workflowExecution)
 	}
 
@@ -28098,60 +28180,6 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(respBody)
 }
 
-// func HandleSavePipelineInfo(resp http.ResponseWriter, request *http.Request) {
-//     cors := HandleCors(resp, request)
-//     if cors {
-//         return
-//     }
-
-//     // How do I make sure that Orborus is the one that made this request?
-
-//     var requestBody Pipeline
-//     err := json.NewDecoder(request.Body).Decode(&requestBody)
-// 	if err != nil {
-//         log.Printf("[WARNING] Failed to decode request body: %s", err)
-//         resp.WriteHeader(401)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-//     }
-// 	if len(requestBody.TriggerId) == 0 || len(requestBody.PipelineId) == 0 || len(requestBody.Status) == 0 {
-// 		log.Printf("[WARNING] Missing fields in the request body")
-//         resp.WriteHeader(400)
-//         resp.Write([]byte(`{"success": false, "reason": "Missing fields in the request body"}`))
-//         return
-// 	}
-
-//     ctx := GetContext(request)
-//     pipeline, err := GetPipeline(ctx, requestBody.TriggerId)
-//     if err != nil {
-// 		if strings.Contains(fmt.Sprintf("%s", err),"pipeline doesn't exist"){
-// 			log.Printf("[DEBUG] no matching document found for Pipeline: %s", requestBody.PipelineId)
-// 			resp.WriteHeader(404)
-// 			resp.Write([]byte(`{"success": false, "reason": "pipeline not found"}`))
-// 			return
-// 		} else {
-//         log.Printf("[WARNING] Failed getting pipeline: %s due to %s", requestBody.PipelineId, err)
-//         resp.WriteHeader(500)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-// 		}
-//     }
-
-//     pipeline.PipelineId = requestBody.PipelineId
-//     pipeline.Status = requestBody.Status
-
-//     err = savePipelineData(ctx, *pipeline)
-//     if err != nil {
-//         log.Printf("[WARNING] Failed updating pipeline with ID: %s due to %s", pipeline.PipelineId, err)
-//         resp.WriteHeader(500)
-//         resp.Write([]byte(`{"success": false}`))
-//         return
-//     }
-// 	log.Printf("[INFO] Sucessfully saved pipeline: %s", pipeline.PipelineId)
-//     resp.WriteHeader(200)
-//     resp.Write([]byte(`{"success": true}`))
-// }
-
 func LoadUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -29713,8 +29741,8 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 
 	relevantForms := []Workflow{}
 	for _, workflow := range workflows {
-		if validAuth {
-			if len(workflow.InputQuestions) == 0 && len(workflow.InputMarkdown) == 0 {
+		if validAuth { 
+			if len(workflow.InputQuestions) == 0 && len(workflow.FormControl.InputMarkdown) == 0 {
 				continue
 			}
 
@@ -29735,11 +29763,10 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 				Owner: workflow.Owner,
 				OrgId: workflow.OrgId,
 
-				OutputYields:   workflow.OutputYields,
-				Sharing:        workflow.Sharing,
+				FormControl:   	workflow.FormControl,
+				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
-				InputMarkdown:  workflow.InputMarkdown,
 			}
 		}
 

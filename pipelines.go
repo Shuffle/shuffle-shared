@@ -8,8 +8,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
-
-	uuid "github.com/satori/go.uuid"
+	
+	"github.com/google/uuid"
 )
 
 // Pipeline is a sequence of stages that are executed in order.
@@ -154,19 +154,20 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
-	log.Printf("[INFO] Pipeline type: %s", formattedType)
+	//log.Printf("[INFO] Pipeline type: %s", formattedType)
 
 	// 2. Send to environment queue
 	execRequest := ExecutionRequest{
 		Type:              formattedType,
-		ExecutionId:       uuid.NewV4().String(),
-		ExecutionSource:   pipeline.TriggerId,
+		ExecutionId:       uuid.New().String(),
+		ExecutionSource:   pipeline.Name,
 		ExecutionArgument: pipeline.Command,
 		Priority:          11,
 	}
 
-	pipelineData := Pipeline{}
+	//log.Printf("EXECREQUEST: Type: %s, Source: %s, Argument: %s", execRequest.Type, execRequest.ExecutionSource, execRequest.ExecutionArgument)
 
+	pipelineData := Pipeline{}
 	if startCommand == "DELETE" {
 
 		err := deletePipeline(ctx, *pipelineInfo)
@@ -186,7 +187,8 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-		log.Printf("[INFO] Stopped the pipeline %s sucessfully", pipelineInfo.TriggerId)
+
+		log.Printf("[INFO] Stopped the pipeline successfully", pipelineInfo.ID)
 	} else {
 
 		pipelineData.Name = pipeline.Name
@@ -220,7 +222,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true, "reason": "Pipeline will be created"}`))
+	resp.Write([]byte(`{"success": true, "reason": "Pipeline handled successfully."}`))
 }
 
 func deletePipeline(ctx context.Context, pipeline Pipeline) error {
