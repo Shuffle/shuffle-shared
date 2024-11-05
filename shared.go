@@ -9777,11 +9777,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				Owner:          workflow.Owner,
 				OrgId:          workflow.OrgId,
 
-				OutputYields:   workflow.OutputYields,
+				FormControl: 	workflow.FormControl,
 				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
-				InputMarkdown:  workflow.InputMarkdown,
 			}
 		} else {
 			log.Printf("[AUDIT] Wrong user %s (%s) for workflow '%s' (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, user.Id, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
@@ -22197,7 +22196,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 	}
 
-	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.InputMarkdown) > 0 {
+	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.FormControl.InputMarkdown) > 0 {
 		log.Printf("\n\nFORM. Running Org injection AND liquid template removal\n\n")
 
 		// 1. Add Org-Id from the user to the existing workflowExecution.ExecutionArgument
@@ -29644,7 +29643,7 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 	relevantForms := []Workflow{}
 	for _, workflow := range workflows {
 		if validAuth { 
-			if len(workflow.InputQuestions) == 0 && len(workflow.InputMarkdown) == 0 {
+			if len(workflow.InputQuestions) == 0 && len(workflow.FormControl.InputMarkdown) == 0 {
 				continue
 			}
 
@@ -29665,11 +29664,10 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 				Owner:          workflow.Owner,
 				OrgId:          workflow.OrgId,
 
-				OutputYields:   workflow.OutputYields,
+				FormControl:   	workflow.FormControl,
 				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
-				InputMarkdown:  workflow.InputMarkdown,
 			}
 		}
 
