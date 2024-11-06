@@ -8167,6 +8167,9 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 		if branch.ID == "" {
 			workflow.Branches[index].ID = uuid.NewV4().String()
 		}
+               if branch.DestinationID == branch.SourceID {
+                        workflow.Branches = append(workflow.Branches[:index], workflow.Branches[index+1:]...)
+               }
 	}
 
 	// Check validation if Schedule is started (?)
