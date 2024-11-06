@@ -2054,6 +2054,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	nameKey := "workflowexecution"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
+	// Loads of cache management to ensure we have the latest version of the execution no matter what
 	workflowExecution := &WorkflowExecution{}
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -2124,7 +2125,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 
 		wrapped := ExecWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
+		if err != nil && len(wrapped.Source.ExecutionId) == 0 {
 			return workflowExecution, err
 		}
 
@@ -4690,7 +4691,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 func DeleteKey(ctx context.Context, entity string, value string) error {
 	// Non indexed User data
 	if entity == "workflowexecution" {
-		log.Printf("[WARNING] Deleting workflowexecution: %s", value)
+		log.Printf("[WARNING] DELETING workflowexecution: %s", value)
 	}
 
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", entity, value))
@@ -10659,12 +10660,11 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
 					// log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-					break
-					//if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-					//} else {
-					//	//log.Printf("[WARNING] Workflow iterator issue: %s", err)
-					//	break
-					//}
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					} else {
+						//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+						break
+					}
 				}
 
 				executions = append(executions, innerWorkflow)
@@ -10807,7 +10807,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 
 		wrapped := ExecutionSearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
+		if err != nil && len(wrapped.Hits.Hits) == 0{
 			return executions, cursor, err
 		}
 
@@ -11168,7 +11168,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 
 		wrapped := ExecutionSearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
+		if err != nil && len(wrapped.Hits.Hits) == 0 {
 			return executions, err
 		}
 
@@ -11196,8 +11196,11 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
-					//log.Printf("[WARNING] Error getting workflow executions: %s", err)
-					break
+					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					} else {
+						log.Printf("[WARNING] CreateValue iterator issue: %s", err)
+						break
+					}
 				}
 
 				executions = append(executions, innerWorkflow)
@@ -13397,7 +13400,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 
 		wrapped := ExecutionSearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
+		if err != nil && len(wrapped.Hits.Hits) == 0 {
 			return executions, "", err
 		}
 
