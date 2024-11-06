@@ -4184,7 +4184,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Add timeout of 6 seconds to the ctx
-	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	cursor := ""
@@ -4804,9 +4804,11 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, workflow := range workflows {
 		for _, trigger := range workflow.Triggers {
 
+			/*
 			if trigger.Status == "uninitialized" {
 				continue
 			}
+			*/
 
 			switch trigger.TriggerType {
 			case "WEBHOOK":
@@ -4862,7 +4864,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						allHooks = append(allHooks, hook)
 					} else {
 						hookValue := storedHook
-						hookValue.Status = "running"
+						//hookValue.Status = "running"
 						for _, param := range trigger.Parameters {
 							if param.Name == "url" {
 								hookValue.Info.Url = param.Value
@@ -4913,7 +4915,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 					} else {
 						scheduleValue := storedschedule
 						scheduleValue.Name = trigger.Label
-						scheduleValue.Status = "running"
+						//scheduleValue.Status = "running"
 
 						allSchedules = append(allSchedules, scheduleValue)
 					}
@@ -9774,12 +9776,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 				ID:    workflow.ID,
 				Owner: workflow.Owner,
 				OrgId: workflow.OrgId,
-
-				OutputYields:   workflow.OutputYields,
-				Sharing:        workflow.Sharing,
+				FormControl: 	workflow.FormControl,
+				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
-				InputMarkdown:  workflow.InputMarkdown,
 			}
 		} else {
 			log.Printf("[AUDIT] Wrong user %s (%s) for workflow '%s' (get workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, user.Id, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
@@ -16175,219 +16175,6 @@ func FindChildNodes(workflow Workflow, nodeId string, parents, handledBranches [
 	return newNodes
 }
 
-// Also deactivates. It's a toggle for off and on.
-func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[WARNING] Api authentication failed in get active apps: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if user.Role == "org-reader" {
-		log.Printf("[WARNING] Org-reader doesn't have access to activate workflow app (shared): %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
-		return
-	}
-
-	ctx := GetContext(request)
-	location := strings.Split(request.URL.String(), "/")
-	var fileId string
-	activate := true
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		fileId = location[4]
-		if strings.ToLower(location[5]) == "deactivate" {
-			activate = false
-		}
-	}
-
-	app, err := GetApp(ctx, fileId, user, false)
-	if err != nil {
-		appName := request.URL.Query().Get("app_name")
-		appVersion := request.URL.Query().Get("app_version")
-
-		if len(appName) > 0 && len(appVersion) > 0 {
-			apps, err := FindWorkflowAppByName(ctx, appName)
-			//log.Printf("[INFO] Found %d apps for %s", len(apps), appName)
-			if err != nil || len(apps) == 0 {
-				log.Printf("[WARNING] Error getting app %s (app config): %s", appName, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
-				return
-			}
-
-			selectedApp := WorkflowApp{}
-			for _, app := range apps {
-				if !app.Sharing && !app.Public {
-					continue
-				}
-
-				if app.Name == appName {
-					selectedApp = app
-				}
-
-				if app.Name == appName && app.AppVersion == appVersion {
-					selectedApp = app
-				}
-			}
-
-			app = &selectedApp
-		} else {
-			log.Printf("[WARNING] Error getting app with ID %s (app config): %s", fileId, err)
-			if project.Environment == "cloud" && gceProject != "shuffler" {
-				app, err := HandleAlgoliaAppSearch(ctx, fileId)
-				if err == nil {
-					// this means that the app exists. so, let's
-					// ask our propagator to proagate it further.
-					log.Printf("[INFO] Found apps %s - %s in algolia", app.Name, app.ObjectID)
-
-					if app.ObjectID != fileId {
-						log.Printf("[WARNING] App %s doesn't exist in algolia", fileId)
-						resp.WriteHeader(401)
-						resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
-						return
-					}
-					// i can in theory, run this without using goroutines
-					// and then recursively call the same function. but that
-					// would make this request way too long.
-					go func() {
-						err = propagateApp(fileId, false)
-						if err != nil {
-							log.Printf("[WARNING] Error propagating app %s - %s: %s", app.Name, app.ObjectID, err)
-						} else {
-							log.Printf("[INFO] Propagated app %s - %s. Sending request again!", app.Name, app.ObjectID)
-						}
-					}()
-
-					resp.WriteHeader(202)
-					resp.Write([]byte(`{"success": false, "reason": "Taking care of some magic. Please try activation again in a few seconds!"}`))
-					return
-				} else {
-					log.Printf("[WARNING] Error getting app %s (algolia): %s", appName, err)
-				}
-			}
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
-			return
-		}
-	}
-
-	org := &Org{}
-	added := false
-	if app.Sharing || app.Public || !activate {
-		org, err = GetOrg(ctx, user.ActiveOrg.Id)
-		if err == nil {
-			if len(org.ActiveApps) > 150 {
-				// No reason for it to be this big. Arbitrarily reducing.
-				same := []string{}
-				samecnt := 0
-				for _, activeApp := range org.ActiveApps {
-					if ArrayContains(same, activeApp) {
-						samecnt += 1
-						continue
-					}
-
-					same = append(same, activeApp)
-				}
-
-				added = true
-				//log.Printf("Same: %d, total uniq: %d", samecnt, len(same))
-				org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
-			}
-
-			if activate {
-				if !ArrayContains(org.ActiveApps, app.ID) {
-					org.ActiveApps = append(org.ActiveApps, app.ID)
-					added = true
-				}
-			} else {
-				// Remove from the array
-				newActiveApps := []string{}
-				for _, activeApp := range org.ActiveApps {
-					if activeApp == app.ID {
-						continue
-					}
-
-					newActiveApps = append(newActiveApps, activeApp)
-				}
-
-				org.ActiveApps = newActiveApps
-				added = true
-			}
-
-			if added {
-				err = SetOrg(ctx, *org, org.Id)
-				if err != nil {
-					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
-				} else {
-					addRemove := "Added"
-					if !activate {
-						addRemove = "Removed"
-					}
-
-					log.Printf("[INFO] %s public app %s (%s) to/from org %s (%s). Activated apps: %d", addRemove, app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id, len(org.ActiveApps))
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
-
-					if project.Environment == "cloud" && gceProject != "shuffler" {
-						// propagate org.ActiveApps to the main region
-						go func() {
-							// wait for a second before propagating again
-							log.Printf("[INFO] Propagating org %s after sleeping for a second!", user.ActiveOrg.Id)
-							time.Sleep(1 * time.Second)
-							err = propagateOrg(*org, true)
-							if err != nil {
-								log.Printf("[WARNING] Error propagating org %s: %s", user.ActiveOrg.Id, err)
-							}
-						}()
-					}
-
-				}
-			}
-		}
-	} else {
-		log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if activate {
-		log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
-	} else {
-		log.Printf("[DEBUG] App %s (%s) deactivated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
-	}
-
-	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
-	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
-	DeleteCache(ctx, "all_apps")
-	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
-	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
-	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
-
-	// If onprem, it should autobuild the container(s) from here
-	if project.Environment == "cloud" && gceProject != "shuffler" {
-		go loadAppConfigFromMain(fileId)
-
-		RedirectUserRequest(resp, request)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true}`))
-}
 
 func GetExecutionbody(body []byte) string {
 	parsedBody := string(body)
@@ -16858,7 +16645,6 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 	}
 
 	childNodes := FindChildNodes(workflowExecution.Workflow, workflowAction, []string{}, []string{})
-	//log.Printf("Found %d childnodes of %s", len(childNodes), workflowAction)
 	newActions := []Action{}
 	branches := []Branch{}
 
@@ -22192,7 +21978,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		workflowExecution.WorkflowId = workflowExecution.Workflow.ID
 	}
 
-	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.InputMarkdown) > 0 {
+	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.FormControl.InputMarkdown) > 0 {
 		log.Printf("\n\nFORM. Running Org injection AND liquid template removal\n\n")
 
 		// 1. Add Org-Id from the user to the existing workflowExecution.ExecutionArgument
@@ -29459,10 +29245,10 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	if workflowChanged {
 		workflow.Actions = originalActions
 
-		err = SetWorkflow(ctx, *workflow, workflow.ID)
-		if err != nil {
-			log.Printf("[ERROR] Failed updating workflow from execution validator. This is NOT critical as we keep cache %s: %s", workflow.ID, err)
-		}
+		// This causes too many writes and can't be handled at scale. Removing for now. Only setting cache.
+		/*
+		// FIXME: Even removing cache due to possibility of workflow override if an execution is finishing after a users' save. Also fails with delays. For now, using validation_workflow_%s to handle it all
+		*/
 	}
 
 	exec.Workflow.Validation = workflow.Validation
@@ -29748,8 +29534,8 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 
 	relevantForms := []Workflow{}
 	for _, workflow := range workflows {
-		if validAuth {
-			if len(workflow.InputQuestions) == 0 && len(workflow.InputMarkdown) == 0 {
+		if validAuth { 
+			if len(workflow.InputQuestions) == 0 && len(workflow.FormControl.InputMarkdown) == 0 {
 				continue
 			}
 
@@ -29769,12 +29555,10 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 				ID:    workflow.ID,
 				Owner: workflow.Owner,
 				OrgId: workflow.OrgId,
-
-				OutputYields:   workflow.OutputYields,
-				Sharing:        workflow.Sharing,
+				FormControl:   	workflow.FormControl,
+				Sharing: 		workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
-				InputMarkdown:  workflow.InputMarkdown,
 			}
 		}
 

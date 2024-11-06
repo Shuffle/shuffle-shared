@@ -1262,6 +1262,13 @@ type InputQuestion struct {
 	Deleted  bool   `json:"deleted" datastore:"deleted"`
 }
 
+type FormControl struct {
+	InputMarkdown  string          `json:"input_markdown" datastore:"input_markdown,noindex"`
+	OutputYields   []string        `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+
+	FormWidth int64 `json:"form_width" datastore:"form_width"`
+}
+
 type Workflow struct {
 	Actions        []Action  `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch  `json:"branches" datastore:"branches,noindex"`
@@ -1308,8 +1315,8 @@ type Workflow struct {
 	UsecaseIds  []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
 
 	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
-	InputMarkdown  string          `json:"input_markdown" datastore:"input_markdown,noindex"`
-	OutputYields   []string        `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+
+	FormControl FormControl `json:"form_control" datastore:"form_control"`
 
 	Blogpost     string `json:"blogpost" yaml:"blogpost"`
 	Video        string `json:"video" yaml:"video"`
