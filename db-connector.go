@@ -2009,7 +2009,7 @@ func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowEx
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
-			if err == nil {
+			if err == nil || len(workflowExecution.ExecutionId) > 0 {
 				return workflowExecution, nil
 			}
 		}
@@ -2024,7 +2024,11 @@ func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowEx
 		_, err := project.Dbclient.GetAll(ctx, q, &allExecutions)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting workflow execution by auth: %s", err)
-			return nil, err
+			if strings.Contains(err.Error(), `cannot load field`) { 
+				err = nil
+			} else {
+				return nil, err
+			}
 		} else {
 			if len(allExecutions) > 0 {
 				workflowExecution = allExecutions[0]
@@ -2056,7 +2060,7 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
-			if err == nil {
+			if err == nil || len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
 				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
 					baseArgument := &ActionResult{
@@ -2128,7 +2132,11 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 	} else {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, workflowExecution); err != nil {
-			return workflowExecution, err
+			if strings.Contains(err.Error(), `cannot load field`) {
+				err = nil
+			} else {
+				return workflowExecution, err
+			}
 		}
 
 		// A workaround for large bits of information for execution argument
@@ -10834,11 +10842,20 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
 					if strings.Contains(err.Error(), "context deadline exceeded") {
-						log.Printf("[WARNING] Error getting workflow executions: %s", err)
+						log.Printf("[WARNING] Error getting workflow executions (1): %s", err)
 						breakOuter = true
+					} else {
+						if strings.Contains(err.Error(), `cannot load field`) { 
+							// Bug with moving types
+							err = nil
+						} else if strings.Contains(err.Error(), `no more items`) { 
+							//breakOuter = true
+							break
+						} else {
+							log.Printf("[WARNING] Error getting workflow executions (2): %s", err)
+							break
+						}
 					}
-
-					break
 				}
 
 				executions = append(executions, innerWorkflow)
@@ -13451,8 +13468,20 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if err != nil {
-					//log.Printf("[WARNING] Error getting workflow executions: %s", err)
-					break
+					if strings.Contains(err.Error(), "context deadline exceeded") {
+						log.Printf("[WARNING] Error getting workflow search executions (1): %s", err)
+					} else {
+						if strings.Contains(err.Error(), `cannot load field`) { 
+							// Bug with moving types
+							err = nil
+						} else if strings.Contains(err.Error(), `no more items`) { 
+							//breakOuter = true
+							break
+						} else {
+							log.Printf("[WARNING] Error getting workflow search executions (2): %s", err)
+							break
+						}
+					}
 				}
 
 				executions = append(executions, innerWorkflow)

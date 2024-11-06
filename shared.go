@@ -4184,7 +4184,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Add timeout of 6 seconds to the ctx
-	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 
 	cursor := ""
@@ -29142,16 +29142,9 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		workflow.Actions = originalActions
 
 		// This causes too many writes and can't be handled at scale. Removing for now. Only setting cache.
-		cacheKey := fmt.Sprintf("workflow_%s", workflow.ID)
-		data, err := json.Marshal(workflow)
-		if err != nil {
-			log.Printf("[ERROR] Failed marshalling validation of %s: %s", workflow.ID, err)
-		} else {
-			err = SetCache(ctx, cacheKey, data, 30)
-			if err != nil {
-				log.Printf("[ERROR] Failed setting cache for workflow '%s': %s", cacheKey, err)
-			}
-		}
+		/*
+		// FIXME: Even removing cache due to possibility of workflow override if an execution is finishing after a users' save. Also fails with delays. For now, using validation_workflow_%s to handle it all
+		*/
 	}
 
 	exec.Workflow.Validation = workflow.Validation
