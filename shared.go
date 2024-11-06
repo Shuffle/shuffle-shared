@@ -23626,27 +23626,32 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 
 	for index, actionId := range nextActions {
 		skippedParents := 0
+
+		if _, ok := parents[actionId]; !ok {
+			continue
+		}
+
 		for _, parent := range parents[actionId] {
 			_, result := GetActionResult(ctx, *workflowExecution, parent)
 			if result.Status == "SKIPPED" {
 				skippedParents += 1
 			}
 		}
-		if skippedParents >= len(parents[actionId]) {
-			if actionId != workflowExecution.Workflow.Start {
-				for _, action := range workflowExecution.Workflow.Actions {
-					if actionId != action.ID {
-						continue
-					}
-					foundAction := GetAction(*workflowExecution, actionId, action.Environment)
-					err := ActionSkip(foundAction, *workflowExecution, parents[actionId])
-					if err != nil {
-						log.Printf("ERROR %s", err)
-					}
-					copy(nextActions[index:], nextActions[index+1:])
-					nextActions[len(nextActions)-1] = ""
-					nextActions = nextActions[:len(nextActions)-1]
+
+		if skippedParents >= len(parents[actionId]) && actionId != workflowExecution.Start {
+			for _, action := range workflowExecution.Workflow.Actions {
+				if actionId != action.ID {
+					continue
 				}
+
+				foundAction := GetAction(*workflowExecution, actionId, action.Environment)
+				err := ActionSkip(ctx, foundAction, workflowExecution, parents[actionId])
+				if err != nil {
+					log.Printf("[ERROR][%s] Failed to skip action %s (%s): %s", workflowExecution.ExecutionId, action.Label, action.ID, err)
+					continue
+				}
+
+				nextActions = append(nextActions[:index], nextActions[index+1:]...)
 			}
 		}
 	}
@@ -23654,7 +23659,12 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 	return nextActions
 }
 
-func ActionSkip(foundAction Action, exec WorkflowExecution, parent []string) error {
+func ActionSkip(ctx context.Context, foundAction Action, exec *WorkflowExecution, parent []string) error {
+	_, actionResult := GetActionResult(ctx, *exec, foundAction.ID)
+	if actionResult.Action.ID == foundAction.ID {
+		log.Printf("[DEBUG][%s] Result already exist for the action %s (%s)", exec.ExecutionId, foundAction.Label, foundAction.ID)
+	}
+
 	newResult := ActionResult{
 		Action:        foundAction,
 		ExecutionId:   exec.ExecutionId,
@@ -23669,12 +23679,14 @@ func ActionSkip(foundAction Action, exec WorkflowExecution, parent []string) err
 		log.Printf("[ERROR] Failed skipping action")
 		return err
 	}
+
 	streamUrl := fmt.Sprintf("http://localhost:5001/api/v1/streams")
 	if project.Environment == "cloud" {
 		streamUrl = fmt.Sprintf("https://shuffler.io/api/v1/streams")
 		if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 			streamUrl = fmt.Sprintf("https://%s.%s.r.appspot.com/api/v1/streams", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 		}
+
 		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 			streamUrl = fmt.Sprintf("%s/api/v1/streams", os.Getenv("SHUFFLE_CLOUDRUN_URL"))
 		}
@@ -23682,6 +23694,7 @@ func ActionSkip(foundAction Action, exec WorkflowExecution, parent []string) err
 		if len(os.Getenv("WORKER_HOSTNAME")) > 0 {
 			streamUrl = fmt.Sprintf("http://%s:33333/api/v1/streams", os.Getenv("WORKER_HOSTNAME"))
 		}
+
 		if os.Getenv("SHUFFLE_OPTIMIZED") == "true" && len(os.Getenv("WORKER_PORT")) > 0 {
 			streamUrl = fmt.Sprintf("http://localhost:%s/api/v1/streams", os.Getenv("WORKER_PORT"))
 		} else if os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" && (project.Environment == "" || project.Environment == "worker") {
@@ -23692,6 +23705,7 @@ func ActionSkip(foundAction Action, exec WorkflowExecution, parent []string) err
 			}
 		}
 	}
+
 	//log.Printf("[DEBUG] Sending skip for action %s (%s) to URL %s", foundAction.Label, foundAction.AppName, streamUrl)
 	req, err := http.NewRequest(
 		"POST",
@@ -23702,18 +23716,21 @@ func ActionSkip(foundAction Action, exec WorkflowExecution, parent []string) err
 		log.Printf("[ERROR] Error building SKIPPED request (%s): %s", foundAction.Label, err)
 		return err
 	}
+
 	client := &http.Client{}
 	newresp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Error running SKIPPED request (%s): %s", foundAction.Label, err)
 		return err
 	}
+
 	defer newresp.Body.Close()
 	body, err := ioutil.ReadAll(newresp.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading body when running SKIPPED request (%s): %s", foundAction.Label, err)
 		return err
 	}
+
 	//log.Printf("[DEBUG] Skipped body return from %s (%d): %s", streamUrl, newresp.StatusCode, string(body))
 	if strings.Contains(string(body), "already finished") {
 		log.Printf("[WARNING] Data couldn't be re-inputted for %s.", foundAction.Label)
