@@ -27552,7 +27552,11 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 	// Removed check here as it may be a public workflow
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
+		//log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. Continuing because it may be public.", err)
+		log.Printf("[AUDIT] Api authentication failed in getting workflow revisions: %s. ", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	location := strings.Split(request.URL.String(), "/")
