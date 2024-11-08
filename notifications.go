@@ -637,12 +637,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	}
 
 	if project.Environment == "" {
-		log.Printf("\n\n\n[ERROR] Not generating notification, as no environment has been detected: %#v", project.Environment)
 
 		auth := os.Getenv("AUTH")
 		org := os.Getenv("ORG")
 		environment := os.Getenv("ENVIRONMENT_NAME")
 		if len(auth) == 0 || len(org) == 0 || len(environment) == 0 {
+			log.Printf("[ERROR] Not generating notification, as no environment has been detected: %#v. This should not happen in Orborus.", project.Environment)
 			return nil
 		}
 
@@ -666,7 +666,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		} else {
 			if project.Environment != "cloud" {
-				log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
+				//log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
 			}
 
 			err := SetCache(ctx, cacheKey, []byte("1"), 1)
