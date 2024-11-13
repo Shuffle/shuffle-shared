@@ -23408,10 +23408,13 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 	*/
 
-	for index, actionId := range nextActions {
+	var updatedActions []string
+
+	for _, actionId := range nextActions {
 		skippedParents := 0
 
 		if _, ok := parents[actionId]; !ok {
+			updatedActions = append(updatedActions, actionId)
 			continue
 		}
 
@@ -23435,32 +23438,33 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 					continue
 				}
 
-				nextActions = append(nextActions[:index], nextActions[index+1:]...)
 			}
+		} else {
+			updatedActions = append(updatedActions, actionId)
 		}
 	}
 
-	return nextActions
+	return updatedActions
 }
 
 func ActionSkip(ctx context.Context, foundAction Action, exec *WorkflowExecution, parent []string) error {
 	_, actionResult := GetActionResult(ctx, *exec, foundAction.ID)
 	if actionResult.Action.ID == foundAction.ID {
 		log.Printf("[DEBUG][%s] Result already exist for the action %s (%s)", exec.ExecutionId, foundAction.Label, foundAction.ID)
+		return nil
 	}
 
 	newResult := ActionResult{
 		Action:        foundAction,
 		ExecutionId:   exec.ExecutionId,
 		Authorization: exec.Authorization,
-		Result:        fmt.Sprintf(`{"success": false, "reason": "Skipped because of previous node - %d" - %v}`, len(parent), parent),
+		Result:        fmt.Sprintf(`{"success": false, "reason": "Skipped because of previous node - %d - %v"}`, len(parent), parent),
 		StartedAt:     0,
 		CompletedAt:   0,
 		Status:        "SKIPPED",
 	}
 	resultData, err := json.Marshal(newResult)
 	if err != nil {
-		log.Printf("[ERROR] Failed skipping action")
 		return err
 	}
 
