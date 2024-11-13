@@ -23408,10 +23408,13 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 		}
 	*/
 
-	for index, actionId := range nextActions {
+	var updatedActions []string
+
+	for _, actionId := range nextActions {
 		skippedParents := 0
 
 		if _, ok := parents[actionId]; !ok {
+			updatedActions = append(updatedActions, actionId)
 			continue
 		}
 
@@ -23435,12 +23438,13 @@ func CheckNextActions(ctx context.Context, workflowExecution *WorkflowExecution)
 					continue
 				}
 
-				nextActions = append(nextActions[:index], nextActions[index+1:]...)
 			}
+		} else {
+			updatedActions = append(updatedActions, actionId)
 		}
 	}
 
-	return nextActions
+	return updatedActions
 }
 
 func ActionSkip(ctx context.Context, foundAction Action, exec *WorkflowExecution, parent []string) error {
