@@ -6790,7 +6790,9 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 							if strings.Contains("no matching index found", fmt.Sprintf("%s", err)) {
 								log.Printf("[ERROR] No more apps for %s in user app load? Breaking: %s.", userId, err)
 							} else {
-								log.Printf("[WARNING] No more apps for %s in user app load? Breaking: %s.", userId, err)
+								if !strings.Contains(fmt.Sprintf("%s", err), "no more items") {
+									log.Printf("[WARNING] Error in app loading: %s", err)
+								}
 							}
 
 							break
