@@ -12836,11 +12836,9 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			// Checking if it's a special region. All user-specific requests should
 			// Update local stash here?
 			// Load config & update
-			// go loadAppConfigFromMain(fileId)
-
-			// go through shuffler.io and not subdomains
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				// Must be here to not override apps
 				go loadAppConfigFromMain(fileId)
 				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
 				RedirectUserRequest(resp, request)

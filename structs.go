@@ -4162,3 +4162,9 @@ type PipelineInfo struct {
 type PipelineInfoWrapper struct {
 	Pipelines []PipelineInfo `json:"pipelines"`
 }
+
+type RequestResponse struct {
+	Success bool   `json:"success"`
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
+}

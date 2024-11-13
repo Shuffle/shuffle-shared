@@ -154,6 +154,7 @@ func Copy(src, dst string) error {
 	}
 	return out.Close()
 }
+
 func ZipFiles(filename string, files []string) error {
 	newZipFile, err := os.Create(filename)
 	if err != nil {
