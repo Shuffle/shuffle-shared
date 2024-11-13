@@ -3628,7 +3628,7 @@ func HandleGetUserApps(resp http.ResponseWriter, request *http.Request) {
 	ctx := context.Background()
 	user, userErr := HandleApiAuthentication(resp, request)
 	if userErr != nil {
-		log.Printf("[WARNING] Api authentication failed in get user apps - this does NOT require auth in the cloud.: %s", userErr)
+		log.Printf("[WARNING] Api authentication failed in get user apps: %s", userErr)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
