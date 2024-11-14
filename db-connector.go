@@ -3282,7 +3282,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			} else if strings.Contains(err.Error(), `cannot load field`) {
 				// Due to form migration
 				if !strings.Contains(err.Error(), `input_markdown`) {
-					log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (1): %s", err)
+					log.Printf("[ERROR] Error in workflow loading. Migrating workflow to new workflow handler (5): %s", err)
 				}
 
 				err = nil
@@ -3623,7 +3623,10 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-						log.Printf("[ERROR] Error in workflow loading. Migrating workflow query outputs to new workflow handler (1): %s", err)
+
+						if !strings.Contains(fmt.Sprintf("%s", err), "input_markdown") {
+							log.Printf("[ERROR] Error in workflow loading. Migrating workflow query outputs to new workflow handler (6): %s", err)
+						}
 					} else if strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
 						break
 					} else {
@@ -11823,7 +11826,7 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
 
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[ERROR] Error in workflow loading. Migrating org cache to new workflow handler (2): %s", err)
+				log.Printf("[ERROR] Error in workflow loading. Migrating org cache to new workflow handler (3): %s", err)
 				err = nil
 			} else {
 				log.Printf("[WARNING] Error in cache key loading for %s: %s", id, err)
@@ -13127,7 +13130,7 @@ func GetSuggestion(ctx context.Context, id string) (*Suggestion, error) {
 		key := datastore.NameKey(nameKey, strings.ToLower(id), nil)
 		if err := project.Dbclient.Get(ctx, key, suggestion); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[ERROR] Error in workflow loading. Migrating suggestions to new workflow handler (1): %s", err)
+				log.Printf("[ERROR] Error in workflow loading. Migrating suggestions to new workflow handler (4): %s", err)
 				err = nil
 			} else {
 				return suggestion, err
