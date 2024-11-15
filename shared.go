@@ -1731,15 +1731,11 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 					continue
 				}
 
-				//log.Printf("Field '%s' has secret. Replace with the real value", field.Key)
 				for _, existingField := range originalAuth.Fields {
 					if existingField.Key != field.Key {
 						continue
 					}
 
-					//log.Printf("Replacing field %s with value '%s'", field.Key, existingField.Value)
-
-					//field.Value = existingField.Value
 					appAuth.Fields[fieldIndex].Value = existingField.Value
 
 					if originalAuth.Encrypted {
@@ -8199,6 +8195,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
+				// This is weird and for sure wrong somehow
 				newParams := []WorkflowAppActionParameter{}
 				for _, param := range curappaction.Parameters {
 					paramFound := false
@@ -8206,6 +8203,19 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					// Handles check for parameter exists + value not empty in used fields
 					for _, actionParam := range action.Parameters {
 						if actionParam.Name == param.Name {
+
+							newParamsContains := false
+							for _, newParam := range newParams {
+								if newParam.Name == actionParam.Name {
+									newParamsContains = true
+									break
+								}
+							}
+
+							if !newParamsContains {
+								newParams = append(newParams, actionParam)
+							}
+
 							continue
 						}
 
@@ -8292,30 +8302,23 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 							log.Printf("[WARNING] Handling oauth2 app saving, hence not throwing warnings (2)")
 							//workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (2)", action.Name))
 						} else {
-							thisError := fmt.Sprintf("Parameter %s is required", param.Name)
-							action.Errors = append(action.Errors, thisError)
+							if param.Name == "call" && action.AppName == "Shuffle Tools" {
+							} else {
+								thisError := fmt.Sprintf("Parameter %s is required", param.Name)
+								action.Errors = append(action.Errors, thisError)
 
-							workflow.Errors = append(workflow.Errors, thisError)
-							action.IsValid = false
+								workflow.Errors = append(workflow.Errors, thisError)
+								action.IsValid = false
+							}
 						}
-
-						//newActions = append(newActions, action)
-						//resp.WriteHeader(401)
-						//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Appaction %s with required param '%s' is empty."}`, action.Name, param.Name)))
-						//return
 					}
 				}
 
-				log.Printf("ACTION3: %#v: %d vs %d", action.Name, len(action.Parameters), len(newParams))
 				action.Parameters = newParams
 				newActions = append(newActions, action)
 			}
 
 		}
-	}
-
-	for _, action := range newActions {
-		log.Printf("ACTION6: %#v: %d", action.Name, len(action.Parameters))
 	}
 
 	for _, trigger := range workflow.Triggers {
@@ -8431,40 +8434,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 							_ = found
 
-							/*
-								if !found {
-									timeNow := int64(time.Now().Unix())
-									authFields := []AuthenticationStore{}
-									for _, param := range outerapp.Authentication.Parameters {
-										authFields = append(authFields, AuthenticationStore{
-											Key:   param.Name,
-											Value: "",
-										})
-									}
-
-									appAuth := AppAuthenticationStorage{
-										Active:        true,
-										Label:         fmt.Sprintf("default_%s", outerapp.Name),
-										Id:            uuid.NewV4().String(),
-										App:           outerapp,
-										Fields:        authFields,
-										Usage:         []AuthenticationUsage{},
-										WorkflowCount: 0,
-										NodeCount:     0,
-										OrgId:         user.ActiveOrg.Id,
-										Created:       timeNow,
-										Edited:        timeNow,
-									}
-
-									err = SetWorkflowAppAuthDatastore(ctx, appAuth, appAuth.Id)
-									if err != nil {
-										log.Printf("Failed setting appauth for with name %s", appAuth.Label)
-									} else {
-										appsAdded = append(appsAdded, outerapp.ID)
-									}
-								}
-							*/
-
 							log.Printf("[DEBUG] NOT adding authentication for workflow %s (%s) in org %s (%s) automatically as this should be done from within the workflow/during setup.", workflow.Name, workflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 							action.Errors = append(action.Errors, "Requires authentication")
@@ -8493,6 +8462,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			workflow.PreviouslySaved = true
 		}
 	}
+
+	workflow.Actions = newActions
 
 	auth, authOk := request.URL.Query()["set_auth"]
 	if authOk && len(auth) > 0 && auth[0] == "true" {
@@ -8524,7 +8495,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	workflow.Actions = newActions
 	workflow.IsValid = true
 
 	// TBD: Is this too drastic? May lead to issues in the future.
@@ -8645,10 +8615,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				workflow.BackupConfig.TokensEncrypted = true
 			}
 		}
-	}
-
-	for _, action := range workflow.Actions {
-		log.Printf("ACTION2: %#v: %d", action.Name, len(action.Parameters))
 	}
 
 	err = SetWorkflow(ctx, workflow, workflow.ID)
@@ -20150,7 +20116,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			newResults := []ActionResult{}
 			foundresult := ActionResult{}
 			for _, result := range oldExecution.Results {
-				log.Printf("\n\n[DEBUG] Action: %s: %s. Start: %s\n\n", result.Action.ID, result.Status, start[0])
 				if result.Action.ID == start[0] {
 					if result.Status == "ABORTED" {
 						log.Printf("[INFO] Found aborted result: %s (%s)", result.Action.Label, result.Action.ID)
