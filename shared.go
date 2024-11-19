@@ -4801,9 +4801,9 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		for _, trigger := range workflow.Triggers {
 
 			/*
-			if trigger.Status == "uninitialized" {
-				continue
-			}
+				if trigger.Status == "uninitialized" {
+					continue
+				}
 			*/
 
 			switch trigger.TriggerType {
@@ -6003,7 +6003,7 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 	ctx := context.Background()
 	childWorkflows, err := ListChildWorkflows(ctx, parentWorkflow.ID)
 	if err != nil {
-		return parentWorkflow 
+		return parentWorkflow
 	}
 
 	// Taking care of dedup in case there is a reduction in orgs
@@ -6074,7 +6074,7 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 
 	waitgroup.Wait()
 
-	return parentWorkflow 
+	return parentWorkflow
 }
 
 func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
@@ -7620,7 +7620,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	workflow.Actions = newActions
 
-
 	// Automatically adding new apps from imports
 	if len(newOrgApps) > 0 {
 		log.Printf("[WARNING] Adding new apps to org: %s", newOrgApps)
@@ -7687,39 +7686,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						//trigger.Parameters[paramIndex].Value = workflow.ID
 					}
 				}
-
-				//if len(param.Value) == 0 && param.Name != "argument" {
-				// FIXME: No longer necessary to use the org's users' actual APIkey
-				// Instead, this is replaced during runtime to use the executions' key
-				/*
-					if param.Name == "user_apikey" {
-						apikey := ""
-						if len(user.ApiKey) > 0 {
-							apikey = user.ApiKey
-						} else {
-							user, err = GenerateApikey(ctx, user)
-							if err != nil {
-								workflow.IsValid = false
-								workflow.Errors = []string{"Trigger is missing a parameter: %s", param.Name}
-
-								log.Printf("[DEBUG] No type specified for subflow node")
-
-								if workflow.PreviouslySaved {
-									resp.WriteHeader(400)
-									resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Trigger %s is missing the parameter %s"}`, trigger.Label, param.Name)))
-									return
-								}
-							}
-
-							apikey = user.ApiKey
-						}
-
-						log.Printf("[INFO] Set apikey in subflow trigger for user during save")
-						if len(apikey) > 0 {
-							trigger.Parameters[index].Value = apikey
-						}
-					}
-				*/
 			}
 		} else if trigger.TriggerType == "WEBHOOK" {
 			if trigger.Status != "uninitialized" && trigger.Status != "stopped" {
@@ -7918,7 +7884,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	// Check every app action and param to see whether they exist
 	allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	authGroups := []AppAuthenticationGroup{}
@@ -7941,6 +7906,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// 2. Update the node and workflow info in the auth
 		// 3. Get the values in the auth and add them to the action values
 		handleOauth := false
+		_ = handleOauth
 		if action.AuthenticationId == "authgroups" {
 			log.Printf("[DEBUG] Action %s (%s) in workflow %s (%s) uses authgroups", action.Label, action.ID, workflow.Name, workflow.ID)
 
@@ -8196,121 +8162,119 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				// This is weird and for sure wrong somehow
+				// Uses the current apps' actions and not the ones sent in. For comparison.
 				newParams := []WorkflowAppActionParameter{}
 				for _, param := range curappaction.Parameters {
-					paramFound := false
 
 					// Handles check for parameter exists + value not empty in used fields
+					foundWithValue := false
 					for _, actionParam := range action.Parameters {
-						if actionParam.Name == param.Name {
-
-							newParamsContains := false
-							for _, newParam := range newParams {
-								if newParam.Name == actionParam.Name {
-									newParamsContains = true
-									break
-								}
-							}
-
-							if !newParamsContains {
-								newParams = append(newParams, actionParam)
-							}
-
+						if actionParam.Name != param.Name {
 							continue
 						}
 
-						paramFound = true
-
-						if actionParam.Value == "" && actionParam.Variant == "STATIC_VALUE" && actionParam.Required == true {
-							// Validating if the field is an authentication field
-							if len(selectedAuth.Id) > 0 {
-								authFound := false
-								for _, field := range selectedAuth.Fields {
-									if field.Key == actionParam.Name {
-										authFound = true
-										//log.Printf("FOUND REQUIRED KEY %s IN AUTH", field.Key)
-										break
-									}
-								}
-
-								if authFound {
-									newParams = append(newParams, actionParam)
-									continue
-								}
-							}
-
-							// Some internal reserves
-							if ((strings.ToLower(action.AppName) == "http" && param.Name == "body") || (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
-								// Do nothing
-							} else {
-								thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
-								if actionParam.Configuration && len(action.AuthenticationId) == 0 {
-									thisError = fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
-								}
-
-								if !ArrayContains(action.Errors, thisError) {
-									action.Errors = append(action.Errors, thisError)
-								}
-
-								errorFound := false
-								for errIndex, oldErr := range workflow.Errors {
-									if oldErr == thisError {
-										errorFound = true
-										break
-									}
-
-									if strings.Contains(oldErr, action.Label) && strings.Contains(oldErr, "missing required parameter") {
-										workflow.Errors[errIndex] += ", " + param.Name
-										errorFound = true
-										break
-									}
-								}
-
-								if !errorFound {
-									workflow.Errors = append(workflow.Errors, thisError)
-								}
-
-								action.IsValid = false
-							}
+						param = actionParam
+						if len(actionParam.Value) > 0 {
+							foundWithValue = true 
 						}
 
-						if actionParam.Variant == "" {
-							actionParam.Variant = "STATIC_VALUE"
-						}
-
-						found := false
-						for paramIndex, newParam := range newParams { 
+						newParamsContains := false
+						for _, newParam := range newParams {
 							if newParam.Name == actionParam.Name {
-								if len(newParam.Value) == 0 && len(actionParam.Value) > 0 {
-									newParams[paramIndex].Value = actionParam.Value
-								}
+								newParamsContains = true
 
-								found = true 
 								break
 							}
 						}
 
-						if !found { 
+						if !newParamsContains {
 							newParams = append(newParams, actionParam)
+						}
+
+						break
+					}
+
+					if foundWithValue {
+						continue
+					}
+
+					//log.Printf("CHECK: %#v, %#v, %#v", action.Label, param.Name, param.Required)
+
+					// Missing actions go here
+					if param.Value == "" && param.Variant == "STATIC_VALUE" && param.Required == true {
+						// Validating if the field is an authentication field
+						if len(selectedAuth.Id) > 0 {
+							authFound := false
+							for _, field := range selectedAuth.Fields {
+								if field.Key == param.Name {
+									authFound = true
+									//log.Printf("FOUND REQUIRED KEY %s IN AUTH", field.Key)
+									break
+								}
+							}
+
+							if authFound {
+								newParams = append(newParams, param)
+								continue
+							}
+						}
+
+						// Some internal reserves
+						if ((strings.ToLower(action.AppName) == "http" && param.Name == "body") || (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
+							// Do nothing
+						} else {
+							log.Printf("PARAM: %s, required: %#v, value: %d", param.Name, param.Required, len(param.Value))
+
+							thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
+							if param.Configuration && len(action.AuthenticationId) == 0 {
+								thisError = fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+							}
+
+							if !ArrayContains(action.Errors, thisError) {
+								action.Errors = append(action.Errors, thisError)
+							}
+
+							// Updates an existing version of the same one for each missing param
+							errorFound := false
+							for errIndex, oldErr := range workflow.Errors {
+								if oldErr == thisError {
+									errorFound = true
+									break
+								}
+
+								if strings.Contains(oldErr, action.Label) && strings.Contains(oldErr, "missing required parameter") {
+									workflow.Errors[errIndex] += ", " + param.Name
+									errorFound = true
+									break
+								}
+							}
+
+							if !errorFound {
+								workflow.Errors = append(workflow.Errors, thisError)
+							}
+
+							action.IsValid = false
 						}
 					}
 
+					if param.Variant == "" {
+						param.Variant = "STATIC_VALUE"
+					}
 
-					// Handles check for required params
-					if !paramFound && param.Required {
-						if handleOauth {
-							log.Printf("[WARNING] Handling oauth2 app saving, hence not throwing warnings (2)")
-							//workflow.Errors = append(workflow.Errors, fmt.Sprintf("Debug: Handling one Oauth2 app (%s). May cause issues during initial configuration (2)", action.Name))
-						} else {
-							if param.Name == "call" && action.AppName == "Shuffle Tools" {
-							} else {
-								thisError := fmt.Sprintf("Parameter %s is required", param.Name)
-								action.Errors = append(action.Errors, thisError)
-
-								workflow.Errors = append(workflow.Errors, thisError)
-								action.IsValid = false
+					found := false
+					for paramIndex, newParam := range newParams {
+						if newParam.Name == param.Name {
+							if len(newParam.Value) == 0 && len(param.Value) > 0 {
+								newParams[paramIndex].Value = param.Value
 							}
+
+							found = true
+							break
 						}
+					}
+
+					if !found {
+						newParams = append(newParams, param)
 					}
 				}
 
@@ -8559,7 +8523,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// FIXME: Taking the value coming back here
-		// contains reference objects in the workflow that causes 
+		// contains reference objects in the workflow that causes
 		// e.g. authenticationIds to be reset.
 		// This is a temporary fix to avoid it.
 		go diffWorkflowWrapper(newWorkflow)
@@ -8693,7 +8657,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Success: true,
 		Errors:  workflow.Errors,
 	}
-
 
 	// Really don't know why this was happening
 	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
@@ -9792,12 +9755,12 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//user.ActiveOrg.Id = workflow.OrgId
 
 			workflow = &Workflow{
-				Name:  workflow.Name,
-				ID:    workflow.ID,
-				Owner: workflow.Owner,
-				OrgId: workflow.OrgId,
-				FormControl: 	workflow.FormControl,
-				Sharing: 		workflow.Sharing,
+				Name:           workflow.Name,
+				ID:             workflow.ID,
+				Owner:          workflow.Owner,
+				OrgId:          workflow.OrgId,
+				FormControl:    workflow.FormControl,
+				Sharing:        workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
 			}
@@ -12885,7 +12848,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("[INFO] Successfully got app %s", fileId)
+	//log.Printf("[INFO] Successfully got app %s", fileId)
 
 	app.ReferenceUrl = ""
 
@@ -16193,7 +16156,6 @@ func FindChildNodes(workflow Workflow, nodeId string, parents, handledBranches [
 	return newNodes
 }
 
-
 func GetExecutionbody(body []byte) string {
 	parsedBody := string(body)
 
@@ -17798,19 +17760,70 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		return workflowExecution, err
 	}
 
-	if app.Authentication.Required && len(action.AuthenticationId) == 0 {
-		log.Printf("[WARNING] Tried to execute SINGLE %s WITHOUT auth (missing)", app.Name)
 
-		found := false
+	if app.Authentication.Required && len(action.AuthenticationId) == 0 {
+
+		// Basic bypass check for valid headers just in case
+		authFound := false
 		for _, param := range action.Parameters {
-			if param.Configuration {
-				found = true
-				break
+			if param.Name == "headers" || param.Name == "queries" || param.Name == "url" {
+				lowercased := strings.ToLower(param.Value)
+				if strings.Contains(lowercased, "auth") || strings.Contains(lowercased, "bearer") || strings.Contains(lowercased, "basic") || strings.Contains(lowercased, "api") {
+					authFound = true 
+					break
+				}
 			}
 		}
 
-		if !found {
-			return workflowExecution, errors.New("You must authenticate the app first")
+		if !authFound {
+			log.Printf("[WARNING] Tried to execute SINGLE %s WITHOUT auth (missing)", app.Name)
+
+			found := false
+			for _, param := range action.Parameters {
+				if param.Configuration {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				return workflowExecution, errors.New("You must authenticate this API first")
+			}
+		} 
+	}
+
+	// FIXME: We need to inject missing empty auth here
+	// This is NOT a good solution, but a good bypass
+	if app.Authentication.Required {
+		authFields := 0
+		for _, actionParam := range action.Parameters {
+			if actionParam.Configuration {
+				authFields += 1
+			}
+		}
+
+		// Usually url
+		if authFields <= 2 {
+			//for _, param := range action.Parameters {
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "apikey",
+				Configuration: true,
+			})
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "access_token",
+				Configuration: true,
+			})
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "username_basic",
+				Configuration: true,
+			})
+
+			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+				Name:  "password_basic",
+				Configuration: true,
+			})
 		}
 	}
 
@@ -17866,6 +17879,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		}
 	}
 
+	action.AppID = fileId
 	workflow := Workflow{
 		Actions: []Action{
 			action,
@@ -17876,23 +17890,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		Hidden:    true,
 	}
 
-	//log.Printf("Sharing: %s, Public: %s, Generated: %s. Start: %s", action.Sharing, action.Public, action.Generated, workflow.Start)
-
-	/*
-		workflowExecution = WorkflowExecution{
-			Workflow:      workflow,
-			Start:         workflow.Start,
-			ExecutionId:   uuid.NewV4().String(),
-			WorkflowId:    workflow.ID,
-			StartedAt:     int64(time.Now().Unix()),
-			CompletedAt:   0,
-			Authorization: uuid.NewV4().String(),
-			Status:        "EXECUTING",
-		}
-	*/
-
 	// Make a fake request object as it's not necessary
-
 	if user.ActiveOrg.Id != "" {
 		workflow.Owner = user.Id
 		workflow.OrgId = user.ActiveOrg.Id
@@ -17901,7 +17899,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
-	// Add fake queries to it
+	// Add fake queries to it. Doesn't matter what is here.
 	badRequest := &http.Request{}
 	badRequest.URL, _ = url.Parse(fmt.Sprintf("http://localhost:3000/api/v1/workflows/%s/execute", workflow.ID))
 	badRequest.URL.RawQuery = fmt.Sprintf("")
@@ -17927,6 +17925,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	return workflowExecution, nil
 }
 
+// Handles the return of a single action
 func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int) SingleResult {
 	cnt := 0
 
@@ -17957,7 +17956,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		returnBody.Validation = newExecution.Workflow.Validation
 
-		//log.Printf("[INFO] Checking single execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
+		//log.Printf("\n\n\n[INFO] Checking single action execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
 
 		if len(newExecution.Results) > resultAmount-1 {
 			relevantIndex := len(newExecution.Results) - 1
@@ -17970,7 +17969,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 				//log.Printf("[INFO] Checking for errors in single execution %s", workflowExecution.ExecutionId)
 
 				for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
-					//log.Printf("Name: %s", param.Name)
 					if strings.Contains(param.Name, "liquid") && !ArrayContains(returnBody.Errors, param.Value) {
 						returnBody.Errors = append(returnBody.Errors, param.Value)
 					}
@@ -17978,6 +17976,30 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 				// Wait for validation to have ran
 				if newExecution.Workflow.Validation.ValidationRan {
+
+					// FIXME: Check the return here. If there is an issue with custom_action doesn't exist, we rebuild it in realtime 
+					if strings.Contains(returnBody.Result, "custom_action doesn't exist") {
+						log.Printf("[INFO] Custom action doesn't exist for action %s", newExecution.Results[relevantIndex].Action.ID)
+
+						// FIXME:
+						// 1. Get the app itself
+						// 2. Find the owner
+						// 3. Rebuild as if we are the owner from their own org-id
+						// 4. Run the validation again
+						if len(newExecution.Results[relevantIndex].Action.AppID) == 0 {
+							for _, action := range newExecution.Workflow.Actions {
+								if action.ID == newExecution.Results[relevantIndex].Action.ID {
+									newExecution.Results[relevantIndex].Action.AppID = action.AppID
+									break
+								}
+							}
+						}
+
+
+						go runAppRebuildFromSingleAction(newExecution.Results[relevantIndex].Action.AppID)
+
+					}
+
 					break
 				}
 			}
@@ -18000,7 +18022,107 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 	}
 
 	return returnBody
+}
 
+func runAppRebuildFromSingleAction(appId string) {
+	log.Printf("[INFO] Rebuilding app '%s' due to custom action not existing", appId)
+
+	if len(appId) == 0 {
+		return
+	}
+
+	ctx := context.Background()
+	app, err := GetApp(ctx, appId, User{}, false)
+	if err != nil {
+		log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", appId)
+		return 
+	}
+
+	if !app.Generated {
+		log.Printf("[INFO] App %s (%s) is not generated. Not rebuilding", app.Name, app.ID)
+		return
+	}
+
+
+	parsedApi, err := GetOpenApiDatastore(ctx, app.ID)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting openapi data for app %s: %s", app.Name, err)
+		return
+	}
+
+	// Get the owner account
+	user, err := GetUser(ctx, app.Owner)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting user %s for app %s: %s", app.Owner, app.Name, err)
+		return
+	}
+
+	log.Printf("[INFO] Rebuilding app %s (%s) due to custom action not existing. Impersonating owner for the request to ensure ownership stays equal: %s (%s)", app.Name, app.ID, user.Username, user.Id)
+
+
+	parsedSwagger := map[string]interface{}{}
+	err = json.Unmarshal([]byte(parsedApi.Body), &parsedSwagger)
+	if err != nil {
+		return
+	}
+
+	parsedSwagger["editing"] = true
+	parsedSwagger["id"] = app.ID
+
+	newSwagger, err := json.Marshal(parsedSwagger)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling parsed swagger for app %s: %s", app.Name, err)
+		return
+	}
+
+	// Sending a localhost request, properly based on cloud/not cloud
+	backendUrl := os.Getenv("BASE_URL")
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if len(backendUrl) == 0 && project.Environment != "cloud" {
+		backendUrl = "http://localhost:5001"
+	}
+
+	requestDestination := fmt.Sprintf("%s/api/v1/verify_openapi", backendUrl)
+
+	request, err := http.NewRequest(
+		"POST", 
+		requestDestination, 
+		bytes.NewBuffer(newSwagger),
+	)
+
+	if err != nil {
+		log.Printf("[WARNING] Failed creating request for app %s: %s", app.Name, err)
+		return
+	}
+
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", user.ApiKey))
+	request.Header.Set("Org-Id", user.ActiveOrg.Id)
+
+	log.Printf("[INFO] Sending rebuild request to %s for app %s", requestDestination, app.Name)
+	client := &http.Client{}
+	resp, err := client.Do(request)
+	if err != nil {
+		log.Printf("[WARNING] Failed sending request for app %s: %s", app.Name, err)
+		return
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading response for app rebuild %s: %s", app.Name, err)
+		return
+	}
+
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		log.Printf("[WARNING] Failed rebuilding app %s: %s", app.Name, string(body))
+		return
+	}
+
+	log.Printf("[INFO] Successfully rebuilt app %s (%s): %s", app.Name, app.ID, string(body))
 }
 
 func GetDocs(resp http.ResponseWriter, request *http.Request) {
@@ -21790,9 +21912,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			})
 
 			backendUrl := os.Getenv("BASE_URL")
+
+			/*
 			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
 			}
+			*/
 
 			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
 				backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -29282,7 +29407,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 		// This causes too many writes and can't be handled at scale. Removing for now. Only setting cache.
 		/*
-		// FIXME: Even removing cache due to possibility of workflow override if an execution is finishing after a users' save. Also fails with delays. For now, using validation_workflow_%s to handle it all
+			// FIXME: Even removing cache due to possibility of workflow override if an execution is finishing after a users' save. Also fails with delays. For now, using validation_workflow_%s to handle it all
 		*/
 	}
 
@@ -29569,7 +29694,7 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 
 	relevantForms := []Workflow{}
 	for _, workflow := range workflows {
-		if validAuth { 
+		if validAuth {
 			if len(workflow.InputQuestions) == 0 && len(workflow.FormControl.InputMarkdown) == 0 {
 				continue
 			}
@@ -29586,12 +29711,12 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 
 			// Overwrite to remove anything unecessary for most locations
 			workflow = Workflow{
-				Name:  workflow.Name,
-				ID:    workflow.ID,
-				Owner: workflow.Owner,
-				OrgId: workflow.OrgId,
-				FormControl:   	workflow.FormControl,
-				Sharing: 		workflow.Sharing,
+				Name:           workflow.Name,
+				ID:             workflow.ID,
+				Owner:          workflow.Owner,
+				OrgId:          workflow.OrgId,
+				FormControl:    workflow.FormControl,
+				Sharing:        workflow.Sharing,
 				Description:    workflow.Description,
 				InputQuestions: workflow.InputQuestions,
 			}
