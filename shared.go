@@ -20206,7 +20206,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								log.Printf("[ERROR] Failed unmarshalling userinput note: %s", err)
 							}
 
+							missingFields := []string{}
 							for _, actualQuestion := range actualQuestions {
+
+								if strings.Contains(actualQuestion.Value, ";") {
+									actualQuestion.Value = strings.Split(actualQuestion.Value, ";")[0]
+								}
+
 								/*
 									// FIXME: Required check here
 									if actualQuestion.Required == false {
@@ -20228,8 +20234,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								}
 
 								if !found {
-									return *oldExecution, ExecInfo{}, "Answer all questions first.", errors.New("Answer all questions first")
+									missingFields = append(missingFields, actualQuestion.Value)
 								}
+							}
+
+							if len(missingFields) > 0 {
+								return *oldExecution, ExecInfo{}, "Answer all questions first.", errors.New(fmt.Sprintf("Answer all questions: %s", strings.Join(missingFields, ", ")))
 							}
 						}
 					}
@@ -29591,7 +29601,7 @@ func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(relevantForms) == 0 {
-		log.Printf("[INFO] No forms found for user %s (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
+		log.Printf("[INFO] No forms found for user '%s' (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
 		return
