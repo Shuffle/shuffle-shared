@@ -6554,7 +6554,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					continue
 				}
 
-				//log.Printf("[INFO] App %s' action %s has %d auth fields, but only %d required", app.Name, action.Name, len(authFields), len(requiredAuthFields))
 				for _, requiredField := range requiredAuthFields {
 					allApps[appIndex].Actions[actionIndex].Parameters = append(allApps[appIndex].Actions[actionIndex].Parameters, requiredField)
 				}
