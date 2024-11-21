@@ -17837,7 +17837,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		}
 	}
 
-
 	if runValidationAction {
 		log.Printf("[INFO] Running validation action for %s for org %s (%s)", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
@@ -24496,9 +24495,8 @@ func GetExternalClient(baseUrl string) *http.Client {
 		}
 	}
 
-	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
-		//client = &http.Client{}
-		if len(httpProxy) > 0 && httpProxy != "noproxy" {
+	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && (strings.ToLower(httpProxy) != "noproxy" || strings.ToLower(httpsProxy) != "noproxy") {
+		if len(httpProxy) > 0 && strings.ToLower(httpProxy) != "noproxy" {
 			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 
 			url_i := url.URL{}
@@ -24507,27 +24505,8 @@ func GetExternalClient(baseUrl string) *http.Client {
 				transport.Proxy = http.ProxyURL(url_proxy)
 			}
 		}
-		if len(httpsProxy) > 0 && httpsProxy != "noproxy" {
-			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
 
-			url_i := url.URL{}
-			url_proxy, err := url_i.Parse(httpsProxy)
-			if err == nil {
-				transport.Proxy = http.ProxyURL(url_proxy)
-			}
-		}
-	} else {
-		// keeping this here for now
-		if len(httpProxy) > 0 && httpProxy != "noproxy" {
-			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
-
-			url_i := url.URL{}
-			url_proxy, err := url_i.Parse(httpProxy)
-			if err == nil {
-				transport.Proxy = http.ProxyURL(url_proxy)
-			}
-		}
-		if len(httpsProxy) > 0 && httpsProxy != "noproxy" {
+		if len(httpsProxy) > 0 && strings.ToLower(httpsProxy) != "noproxy" {
 			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
 
 			url_i := url.URL{}
