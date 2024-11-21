@@ -8223,8 +8223,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 						if ((strings.ToLower(action.AppName) == "http" && param.Name == "body") || (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
 							// Do nothing
 						} else {
-							log.Printf("PARAM: %s, required: %#v, value: %d", param.Name, param.Required, len(param.Value))
-
 							thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 							if param.Configuration && len(action.AuthenticationId) == 0 {
 								thisError = fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
