@@ -8175,7 +8175,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						param = actionParam
 						if len(actionParam.Value) > 0 {
-							foundWithValue = true 
+							foundWithValue = true
 						}
 
 						newParamsContains := false
@@ -17760,72 +17760,85 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		return workflowExecution, err
 	}
 
+	/*
+		// FIXME: Is this required? I don't think so
+		if app.Authentication.Required && len(action.AuthenticationId) == 0 {
 
-	if app.Authentication.Required && len(action.AuthenticationId) == 0 {
+			// Basic bypass check for valid headers just in case
+			authFound := false
+			for _, param := range action.Parameters {
+				if param.Name == "headers" || param.Name == "queries" || param.Name == "url" {
+					lowercased := strings.ToLower(param.Value)
+					if strings.Contains(lowercased, "auth") || strings.Contains(lowercased, "bearer") || strings.Contains(lowercased, "basic") || strings.Contains(lowercased, "api") {
+						authFound = true
+						break
+					}
+				}
+			}
 
-		// Basic bypass check for valid headers just in case
-		authFound := false
-		for _, param := range action.Parameters {
-			if param.Name == "headers" || param.Name == "queries" || param.Name == "url" {
-				lowercased := strings.ToLower(param.Value)
-				if strings.Contains(lowercased, "auth") || strings.Contains(lowercased, "bearer") || strings.Contains(lowercased, "basic") || strings.Contains(lowercased, "api") {
-					authFound = true 
-					break
+			if !authFound {
+				log.Printf("[WARNING] Tried to execute SINGLE %s WITHOUT auth (missing)", app.Name)
+
+				found := false
+				for _, param := range action.Parameters {
+					if param.Configuration {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					return workflowExecution, errors.New("You must authenticate this API first")
 				}
 			}
 		}
-
-		if !authFound {
-			log.Printf("[WARNING] Tried to execute SINGLE %s WITHOUT auth (missing)", app.Name)
-
-			found := false
-			for _, param := range action.Parameters {
-				if param.Configuration {
-					found = true
-					break
-				}
-			}
-
-			if !found {
-				return workflowExecution, errors.New("You must authenticate this API first")
-			}
-		} 
-	}
+	*/
 
 	// FIXME: We need to inject missing empty auth here
 	// This is NOT a good solution, but a good bypass
 	if app.Authentication.Required {
 		authFields := 0
+
+		foundFields := []string{}
 		for _, actionParam := range action.Parameters {
 			if actionParam.Configuration {
 				authFields += 1
+				foundFields = append(foundFields, actionParam.Name)
 			}
 		}
 
 		// Usually url
 		if authFields <= 2 {
-			//for _, param := range action.Parameters {
-			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name:  "apikey",
-				Configuration: true,
-			})
+			if !ArrayContains(foundFields, "apikey") {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:          "apikey",
+					Configuration: true,
+				})
+			}
 
-			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name:  "access_token",
-				Configuration: true,
-			})
+			if !ArrayContains(foundFields, "access_token") {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:          "access_token",
+					Configuration: true,
+				})
+			}
 
-			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name:  "username_basic",
-				Configuration: true,
-			})
+			if !ArrayContains(foundFields, "username_basic") {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:          "username_basic",
+					Configuration: true,
+				})
+			}
 
-			action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-				Name:  "password_basic",
-				Configuration: true,
-			})
+			if !ArrayContains(foundFields, "password_basic") {
+				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+					Name:          "password_basic",
+					Configuration: true,
+				})
+			}
 		}
 	}
+
 
 	if runValidationAction {
 		log.Printf("[INFO] Running validation action for %s for org %s (%s)", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
@@ -17845,14 +17858,22 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	newParams := []WorkflowAppActionParameter{}
 
 	// Auth is handled in PrepareWorkflowExec, so this may not be needed
+
+	originalUrl := ""
 	for _, param := range action.Parameters {
 		newName := GetValidParameters([]string{param.Name})
 		if len(newName) > 0 {
 			param.Name = newName[0]
 		}
 
+		if strings.ToLower(param.Name) == "url" {
+			originalUrl = param.Value
+		}
+
 		newParams = append(newParams, param)
 	}
+
+	log.Printf("URL %#v", originalUrl)
 
 	action.Parameters = newParams
 
@@ -17908,6 +17929,16 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 	workflowExecution, _, errString, err := PrepareWorkflowExecution(ctx, workflow, badRequest, 10)
 	if err != nil || len(errString) > 0 {
 		log.Printf("[ERROR] Failed preparing single execution (%s): %s", workflowExecution.ExecutionId, err)
+	}
+
+	// Overwriting as auth may also do
+	if len(originalUrl) > 0 && len(workflowExecution.Workflow.Actions) > 0 {
+		for paramIndex, param := range workflowExecution.Workflow.Actions[0].Parameters {
+			if param.Name == "url" {
+				workflowExecution.Workflow.Actions[0].Parameters[paramIndex].Value = originalUrl
+				break
+			}
+		}
 	}
 
 	if user.ActiveOrg.Id != "" {
@@ -17977,7 +18008,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 				// Wait for validation to have ran
 				if newExecution.Workflow.Validation.ValidationRan {
 
-					// FIXME: Check the return here. If there is an issue with custom_action doesn't exist, we rebuild it in realtime 
+					// FIXME: Check the return here. If there is an issue with custom_action doesn't exist, we rebuild it in realtime
 					if strings.Contains(returnBody.Result, "custom_action doesn't exist") {
 						log.Printf("[INFO] Custom action doesn't exist for action %s", newExecution.Results[relevantIndex].Action.ID)
 
@@ -17994,7 +18025,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 								}
 							}
 						}
-
 
 						go runAppRebuildFromSingleAction(newExecution.Results[relevantIndex].Action.AppID)
 
@@ -18035,14 +18065,13 @@ func runAppRebuildFromSingleAction(appId string) {
 	app, err := GetApp(ctx, appId, User{}, false)
 	if err != nil {
 		log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", appId)
-		return 
+		return
 	}
 
 	if !app.Generated {
 		log.Printf("[INFO] App %s (%s) is not generated. Not rebuilding", app.Name, app.ID)
 		return
 	}
-
 
 	parsedApi, err := GetOpenApiDatastore(ctx, app.ID)
 	if err != nil {
@@ -18058,7 +18087,6 @@ func runAppRebuildFromSingleAction(appId string) {
 	}
 
 	log.Printf("[INFO] Rebuilding app %s (%s) due to custom action not existing. Impersonating owner for the request to ensure ownership stays equal: %s (%s)", app.Name, app.ID, user.Username, user.Id)
-
 
 	parsedSwagger := map[string]interface{}{}
 	err = json.Unmarshal([]byte(parsedApi.Body), &parsedSwagger)
@@ -18088,8 +18116,8 @@ func runAppRebuildFromSingleAction(appId string) {
 	requestDestination := fmt.Sprintf("%s/api/v1/verify_openapi", backendUrl)
 
 	request, err := http.NewRequest(
-		"POST", 
-		requestDestination, 
+		"POST",
+		requestDestination,
 		bytes.NewBuffer(newSwagger),
 	)
 
@@ -21914,9 +21942,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			backendUrl := os.Getenv("BASE_URL")
 
 			/*
-			if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
-				backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
-			}
+				if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+					backendUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+				}
 			*/
 
 			if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {

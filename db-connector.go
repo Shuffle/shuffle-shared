@@ -3923,6 +3923,12 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
 	nameKey := "Organizations"
+
+
+	if id == "public" {
+		return &Org{}, errors.New("'public' org is used for single action without being logged in. Not relevant.")
+	}
+
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 
 	curOrg := &Org{}
@@ -6461,15 +6467,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			continue
 		}
 
-		//log.Printf("[INFO] Found duplicate app: %s (%s). Dedup index: %d", app.Name, app.ID, replaceIndex)
-		// If owner of dedup, don't change
-		/*
-			if dedupedApps[replaceIndex].Owner == user.Id {
-				log.Printf("[INFO] Owner of deduped app is user. Not replacing.")
-				continue
-			}
-		*/
-
 		// Check if one is referenceOrg not
 		if dedupedApps[replaceIndex].ReferenceOrg == user.ActiveOrg.Id {
 			continue
@@ -6481,7 +6478,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 
 		if app.Edited > dedupedApps[replaceIndex].Edited {
-			//log.Printf("[INFO] Replacing deduped app with newer app in get apps: %s", app.Name)
 			dedupedApps[replaceIndex] = app
 			continue
 		}
@@ -6494,12 +6490,32 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	allApps = dedupedApps
-
 	for appIndex, app := range allApps {
+		requiredAuthFields := []WorkflowAppActionParameter{}
+		if app.Authentication.Required {
+			for _, param := range app.Authentication.Parameters {
+				requiredAuthFields = append(requiredAuthFields, WorkflowAppActionParameter{
+					Description: param.Description,
+					ID:          param.ID,
+					Name:        param.Name,
+					Example:     param.Example,
+					Value:       param.Value,
+					Multiline:   param.Multiline,
+					Required:    param.Required,
+				})
+			}
+		}
+
 		for actionIndex, action := range app.Actions {
 			lastRequiredIndex := -1
 			bodyIndex := -1
+
+			authFields := []string{}
 			for paramIndex, param := range action.Parameters {
+				if param.Configuration {
+					authFields = append(authFields, param.Name)
+				}
+
 				if param.Required {
 					lastRequiredIndex = paramIndex
 				}
@@ -6527,6 +6543,21 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			// Add bodyIndex parameter in the next index after lastRequiredIndex, but retain all fields
 			if bodyIndex > -1 {
 				//log.Printf("[INFO] Moving body parameter to index %d after %d", lastRequiredIndex+1, bodyIndex)
+			}
+
+			if len(authFields) < len(requiredAuthFields) {
+				if app.Authentication.Type == "oauth2" || app.Authentication.Type == "oauth2-app" {
+					continue
+				}
+
+				if action.Name == "custom_action" {
+					continue
+				}
+
+				//log.Printf("[INFO] App %s' action %s has %d auth fields, but only %d required", app.Name, action.Name, len(authFields), len(requiredAuthFields))
+				for _, requiredField := range requiredAuthFields {
+					allApps[appIndex].Actions[actionIndex].Parameters = append(allApps[appIndex].Actions[actionIndex].Parameters, requiredField)
+				}
 			}
 		}
 	}
