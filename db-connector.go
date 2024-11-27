@@ -6818,7 +6818,10 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 					if err != nil {
 
 						if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-							log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+
+							if !strings.Contains(fmt.Sprintf("%s", err), "no more items") {
+								log.Printf("[ERROR] Failed fetching user apps (1): %v", err)
+							}
 
 							if strings.Contains("no matching index found", fmt.Sprintf("%s", err)) {
 								log.Printf("[ERROR] No more apps for %s in user app load? Breaking: %s.", userId, err)
@@ -6848,7 +6851,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 					break
 				}
 
-				if err != iterator.Done {
+				if err != iterator.Done && err != nil {
 					log.Printf("[ERROR] Failed fetching user apps (2): %v", err)
 				}
 

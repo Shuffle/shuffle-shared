@@ -24496,6 +24496,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 		}
 	}
 
+	// Normal proxying?
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && baseUrl != "http://shuffle-backend:5001" {
 		//client = &http.Client{}
 		if len(httpProxy) > 0 && httpProxy != "noproxy" {
@@ -29128,7 +29129,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			singleHttpItem := HTTPOutput{}
 			err := json.Unmarshal([]byte(result.Result), &singleHttpItem)
 			if err != nil {
-				log.Printf("[WARNING] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
+				//log.Printf("[WARNING] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
 				//continue
 			} else {
 				listUnmarshalled = []HTTPOutput{singleHttpItem}
