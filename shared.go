@@ -5641,45 +5641,94 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			for _, item := range workflowapps {
-				//log.Printf("NAME: %s", item.Name)
-				if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.2.0" {
-					//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
-					nodeId := uuid.NewV4().String()
-					workflow.Start = nodeId
-					newAction := Action{
-						Label:       "Change Me",
-						Name:        "repeat_back_to_me",
-						Environment: envName,
-						Parameters: []WorkflowAppActionParameter{
-							WorkflowAppActionParameter{
-								Name:      "call",
-								Value:     "Hello world",
-								Example:   "Repeating: Hello World",
-								Multiline: true,
+			if workflow.WorkflowAsCode {
+				// if cloud, activate the app with name Shuffle Tools Fork: 3e320a20966d33c9b7e6790b2705f0bf
+				if project.Environment == "cloud" {
+					app, err := GetApp(ctx, "3e320a20966d33c9b7e6790b2705f0bf", user, false)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting app: %s", err)
+					} else {
+						nodeId := uuid.NewV4().String()
+						workflow.Start = nodeId
+						newAction := Action{
+							Label:       "Change Me",
+							Name:        "execute_python",
+							Environment: envName,
+							Parameters: []WorkflowAppActionParameter{
+								WorkflowAppActionParameter{
+									Name:      "call",
+									Value:     "print('Hello world')",
+									Example:   "Repeating: Hello World",
+									Multiline: true,
+								},
 							},
-						},
-						Priority:    0,
-						Errors:      []string{},
-						ID:          nodeId,
-						IsValid:     true,
-						IsStartNode: true,
-						Sharing:     true,
-						PrivateID:   "",
-						SmallImage:  "",
-						AppName:     item.Name,
-						AppVersion:  item.AppVersion,
-						AppID:       item.ID,
-						LargeImage:  item.LargeImage,
+							Priority:    0,
+							Errors:      []string{},
+							ID:          nodeId,
+							IsValid:     true,
+							IsStartNode: true,
+							Sharing:     true,
+							PrivateID:   "",
+							SmallImage:  "",
+							AppName:     app.Name,
+							AppVersion:  app.AppVersion,
+							AppID:       app.ID,
+							LargeImage:  app.LargeImage,
 					}
+
 					newAction.Position = Position{
 						X: 449.5,
 						Y: 446,
 					}
 
 					newActions = append(newActions, newAction)
+				}
 
-					break
+			} else {
+				// figure out a way to activate Shuffle-Tools-Fork for everyone onprem
+			}
+
+			} else {
+				for _, item := range workflowapps {
+					//log.Printf("NAME: %s", item.Name)
+					if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.2.0" {
+						//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
+						nodeId := uuid.NewV4().String()
+						workflow.Start = nodeId
+						newAction := Action{
+							Label:       "Change Me",
+							Name:        "repeat_back_to_me",
+							Environment: envName,
+							Parameters: []WorkflowAppActionParameter{
+								WorkflowAppActionParameter{
+									Name:      "call",
+									Value:     "Hello world",
+									Example:   "Repeating: Hello World",
+									Multiline: true,
+								},
+							},
+							Priority:    0,
+							Errors:      []string{},
+							ID:          nodeId,
+							IsValid:     true,
+							IsStartNode: true,
+							Sharing:     true,
+							PrivateID:   "",
+							SmallImage:  "",
+							AppName:     item.Name,
+							AppVersion:  item.AppVersion,
+							AppID:       item.ID,
+							LargeImage:  item.LargeImage,
+						}
+						newAction.Position = Position{
+							X: 449.5,
+							Y: 446,
+						}
+
+						newActions = append(newActions, newAction)
+
+						break
+					}
 				}
 			}
 		}
