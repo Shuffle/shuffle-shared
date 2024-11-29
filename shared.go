@@ -5674,19 +5674,19 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 							AppVersion:  app.AppVersion,
 							AppID:       app.ID,
 							LargeImage:  app.LargeImage,
+						}
+
+						newAction.Position = Position{
+							X: 449.5,
+							Y: 446,
+						}
+
+						newActions = append(newActions, newAction)
 					}
 
-					newAction.Position = Position{
-						X: 449.5,
-						Y: 446,
-					}
-
-					newActions = append(newActions, newAction)
+				} else {
+					// figure out a way to activate Shuffle-Tools-Fork for everyone onprem
 				}
-
-			} else {
-				// figure out a way to activate Shuffle-Tools-Fork for everyone onprem
-			}
 
 			} else {
 				for _, item := range workflowapps {
@@ -17886,7 +17886,6 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		}
 	}
 
-
 	if runValidationAction {
 		log.Printf("[INFO] Running validation action for %s for org %s (%s)", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
@@ -29880,4 +29879,32 @@ func SendDeleteWorkflowRequest(childWorkflow Workflow, request *http.Request) er
 	log.Printf("[INFO] Deleted child workflow %s. Resp: %s", childWorkflow.ID, string(resp.Status))
 
 	return nil
+}
+
+func NewTimeWindow(duration time.Duration) *TimeWindow {
+	return &TimeWindow{
+		Duration: duration,
+		Events:   []time.Time{},
+	}
+}
+
+func (tw *TimeWindow) AddEvent(event time.Time) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	tw.Events = append(tw.Events, event)
+	tw.cleanOldEvents(event)
+}
+
+func (tw *TimeWindow) CountEvents(now time.Time) int {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	tw.cleanOldEvents(now)
+	return len(tw.Events)
+}
+
+func (tw *TimeWindow) cleanOldEvents(now time.Time) {
+	cutoff := now.Add(-tw.Duration)
+	for len(tw.Events) > 0 && tw.Events[0].Before(cutoff) {
+		tw.Events = tw.Events[1:]
+	}
 }
