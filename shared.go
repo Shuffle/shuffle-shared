@@ -7512,8 +7512,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if !handled {
-					action.IsValid = false
 					action.Errors = []string{fmt.Sprintf("Couldn't find app %s:%s", action.AppName, action.AppVersion)}
+					action.IsValid = false
 				}
 			}
 		}
@@ -8009,7 +8009,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if !authFound {
 				log.Printf("[WARNING] App auth %s doesn't exist. Setting error", action.AuthenticationId)
 
-				errorMsg := fmt.Sprintf("Selected app Authentication for app %s doesn't exist!", strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
+				errorMsg := fmt.Sprintf("Authentication for action '%s' in app '%s' doesn't exist!", action.Label, strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
 				if !ArrayContains(workflow.Errors, errorMsg) {
 					workflow.Errors = append(workflow.Errors, errorMsg)
 				}
@@ -8186,7 +8186,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					if authRequired && fieldsFilled > 1 {
 						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
-
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("\n\n[DEBUG] Adding auth error 1: %s\n\n", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
@@ -8194,6 +8193,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						if !ArrayContains(action.Errors, foundErr) {
 							action.Errors = append(action.Errors, foundErr)
+							action.IsValid = false
 						}
 					} else if authRequired && fieldsFilled == 1 {
 						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
@@ -8206,6 +8206,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						if !ArrayContains(action.Errors, foundErr) {
 							action.Errors = append(action.Errors, foundErr)
+							action.IsValid = false
 						}
 					}
 				}
@@ -8279,6 +8280,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 							if !ArrayContains(action.Errors, thisError) {
 								action.Errors = append(action.Errors, thisError)
+								action.IsValid = false
 							}
 
 							// Updates an existing version of the same one for each missing param
@@ -28891,8 +28893,6 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("categorylabel_fail_%s", key), value)
 	}
 }
-
-// FIXME: Always fails:
 
 func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
