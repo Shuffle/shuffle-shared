@@ -1270,6 +1270,7 @@ type FormControl struct {
 }
 
 type Workflow struct {
+	WorkflowAsCode bool 	 `json:"workflow_as_code" datastore:"workflow_as_code"`
 	Actions        []Action  `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch  `json:"branches" datastore:"branches,noindex"`
 	VisualBranches []Branch  `json:"visual_branches" datastore:"visual_branches,noindex"`

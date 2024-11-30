@@ -5641,45 +5641,94 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
-			for _, item := range workflowapps {
-				//log.Printf("NAME: %s", item.Name)
-				if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.2.0" {
-					//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
-					nodeId := uuid.NewV4().String()
-					workflow.Start = nodeId
-					newAction := Action{
-						Label:       "Change Me",
-						Name:        "repeat_back_to_me",
-						Environment: envName,
-						Parameters: []WorkflowAppActionParameter{
-							WorkflowAppActionParameter{
-								Name:      "call",
-								Value:     "Hello world",
-								Example:   "Repeating: Hello World",
-								Multiline: true,
+			if workflow.WorkflowAsCode {
+				// if cloud, activate the app with name Shuffle Tools Fork: 3e320a20966d33c9b7e6790b2705f0bf
+				if project.Environment == "cloud" {
+					app, err := GetApp(ctx, "3e320a20966d33c9b7e6790b2705f0bf", user, false)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting app: %s", err)
+					} else {
+						nodeId := uuid.NewV4().String()
+						workflow.Start = nodeId
+						newAction := Action{
+							Label:       "Change Me",
+							Name:        "execute_python",
+							Environment: envName,
+							Parameters: []WorkflowAppActionParameter{
+								WorkflowAppActionParameter{
+									Name:      "call",
+									Value:     "print('Hello world')",
+									Example:   "Repeating: Hello World",
+									Multiline: true,
+								},
 							},
-						},
-						Priority:    0,
-						Errors:      []string{},
-						ID:          nodeId,
-						IsValid:     true,
-						IsStartNode: true,
-						Sharing:     true,
-						PrivateID:   "",
-						SmallImage:  "",
-						AppName:     item.Name,
-						AppVersion:  item.AppVersion,
-						AppID:       item.ID,
-						LargeImage:  item.LargeImage,
+							Priority:    0,
+							Errors:      []string{},
+							ID:          nodeId,
+							IsValid:     true,
+							IsStartNode: true,
+							Sharing:     true,
+							PrivateID:   "",
+							SmallImage:  "",
+							AppName:     app.Name,
+							AppVersion:  app.AppVersion,
+							AppID:       app.ID,
+							LargeImage:  app.LargeImage,
 					}
+
 					newAction.Position = Position{
 						X: 449.5,
 						Y: 446,
 					}
 
 					newActions = append(newActions, newAction)
+				}
 
-					break
+			} else {
+				// figure out a way to activate Shuffle-Tools-Fork for everyone onprem
+			}
+
+			} else {
+				for _, item := range workflowapps {
+					//log.Printf("NAME: %s", item.Name)
+					if (item.Name == "Shuffle Tools" || item.Name == "Shuffle-Tools") && item.AppVersion == "1.2.0" {
+						//nodeId := "40447f30-fa44-4a4f-a133-4ee710368737"
+						nodeId := uuid.NewV4().String()
+						workflow.Start = nodeId
+						newAction := Action{
+							Label:       "Change Me",
+							Name:        "repeat_back_to_me",
+							Environment: envName,
+							Parameters: []WorkflowAppActionParameter{
+								WorkflowAppActionParameter{
+									Name:      "call",
+									Value:     "Hello world",
+									Example:   "Repeating: Hello World",
+									Multiline: true,
+								},
+							},
+							Priority:    0,
+							Errors:      []string{},
+							ID:          nodeId,
+							IsValid:     true,
+							IsStartNode: true,
+							Sharing:     true,
+							PrivateID:   "",
+							SmallImage:  "",
+							AppName:     item.Name,
+							AppVersion:  item.AppVersion,
+							AppID:       item.ID,
+							LargeImage:  item.LargeImage,
+						}
+						newAction.Position = Position{
+							X: 449.5,
+							Y: 446,
+						}
+
+						newActions = append(newActions, newAction)
+
+						break
+					}
 				}
 			}
 		}
@@ -7463,8 +7512,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if !handled {
-					action.IsValid = false
 					action.Errors = []string{fmt.Sprintf("Couldn't find app %s:%s", action.AppName, action.AppVersion)}
+					action.IsValid = false
 				}
 			}
 		}
@@ -7960,7 +8009,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			if !authFound {
 				log.Printf("[WARNING] App auth %s doesn't exist. Setting error", action.AuthenticationId)
 
-				errorMsg := fmt.Sprintf("Selected app Authentication for app %s doesn't exist!", strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
+				errorMsg := fmt.Sprintf("Authentication for action '%s' in app '%s' doesn't exist!", action.Label, strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
 				if !ArrayContains(workflow.Errors, errorMsg) {
 					workflow.Errors = append(workflow.Errors, errorMsg)
 				}
@@ -8137,7 +8186,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					if authRequired && fieldsFilled > 1 {
 						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
-
 						if !ArrayContains(workflow.Errors, foundErr) {
 							log.Printf("\n\n[DEBUG] Adding auth error 1: %s\n\n", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
@@ -8145,6 +8193,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						if !ArrayContains(action.Errors, foundErr) {
 							action.Errors = append(action.Errors, foundErr)
+							action.IsValid = false
 						}
 					} else if authRequired && fieldsFilled == 1 {
 						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
@@ -8157,6 +8206,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						if !ArrayContains(action.Errors, foundErr) {
 							action.Errors = append(action.Errors, foundErr)
+							action.IsValid = false
 						}
 					}
 				}
@@ -8230,6 +8280,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 							if !ArrayContains(action.Errors, thisError) {
 								action.Errors = append(action.Errors, thisError)
+								action.IsValid = false
 							}
 
 							// Updates an existing version of the same one for each missing param
@@ -28821,8 +28872,6 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	}
 }
 
-// FIXME: Always fails:
-
 func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -29107,7 +29156,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			singleHttpItem := HTTPOutput{}
 			err := json.Unmarshal([]byte(result.Result), &singleHttpItem)
 			if err != nil {
-				log.Printf("[WARNING] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
+				//log.Printf("[WARNING] Failed unmarshalling http result for %s: %s", result.Action.Label, err)
 				//continue
 			} else {
 				listUnmarshalled = []HTTPOutput{singleHttpItem}
