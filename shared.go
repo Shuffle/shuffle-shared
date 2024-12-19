@@ -6429,17 +6429,17 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify
-	log.Printf("\n ===== Parent: %#v, Child: %#v =====", parentWorkflow.ID, oldWorkflow.ID)
-	log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
+	// log.Printf("\n ===== Parent: %#v, Child: %#v =====", parentWorkflow.ID, oldWorkflow.ID)
+	// log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 
 	if update {
 		// FIXME: This doesn't work does it?
 		childWorkflow := oldWorkflow
 
-		log.Printf("\n\nSTART")
-		log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
-		log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
-		log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
+		// log.Printf("\n\nSTART")
+		// log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
+		// log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
+		// log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
 
 		if nameChanged {
 			childWorkflow.Name = parentWorkflow.Name
@@ -6792,23 +6792,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			if !found {
 				newBranches = append(newBranches, childBranch)
-			}
-		}
-
-		// print newTrigger params with old ones
-		for _, childTrigger := range childWorkflow.Triggers {
-			log.Printf("[DEBUG] Trigger %s (%s) has %d parameters", childTrigger.Label, childTrigger.ID, len(childTrigger.Parameters))
-			for _, param := range childTrigger.Parameters {
-				log.Printf("%+v", childTrigger.Parameters)
-				log.Printf("[DEBUG] Trigger %s (%s) param %s: %s", childTrigger.Label, childTrigger.ID, param.Name, param.Value)
-			}
-		}
-
-		for _, newTrigger := range newTriggers {
-			log.Printf("[DEBUG] New Trigger %s (%s) has %d parameters", newTrigger.Label, newTrigger.ID, len(newTrigger.Parameters))
-			for _, param := range newTrigger.Parameters {
-				log.Printf("%+v", newTrigger.Parameters)
-				log.Printf("[DEBUG] New Trigger %s (%s) param %s: %s", newTrigger.Label, newTrigger.ID, param.Name, param.Value)
 			}
 		}
 
