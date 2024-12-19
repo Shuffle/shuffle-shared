@@ -9707,6 +9707,22 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 					}
 				}
 			}
+		} else if newWf.Triggers[triggerIndex].TriggerType == "SCHEDULE" {
+			oldID := newWf.Triggers[triggerIndex].ID
+			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
+
+			newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID	
+
+
+			for branchIndex, branch := range newWf.Branches {
+				if branch.SourceID == oldID {
+					newWf.Branches[branchIndex].SourceID = newWf.Triggers[triggerIndex].ID
+				}
+
+				if branch.DestinationID == oldID {
+					newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
+				}
+			}
 		}
 	}
 
