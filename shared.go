@@ -6554,19 +6554,25 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			}
 		}
 
-		
-		for _, trigger := range childWorkflow.Triggers {
-
+		replacedTriggers := []string{}
+		for _, trigger := range oldWorkflow.Triggers {
+			if len(trigger.ReplacementForTrigger) > 0 {
+				replacedTriggers = append(replacedTriggers, trigger.ReplacementForTrigger)
+			}
+		}
 
 		if len(addedTriggers) > 0 {
-			log.Printf("[DEBUG] Triggers added: %d", len(addedTriggers))
 			triggers := childTriggers
 			for _, trigger := range parentWorkflow.Triggers {
 				if !ArrayContains(addedTriggers, trigger.ID) {
 					continue
 				}
 
-				log.Printf("[DEBUG] ID of the added trigger: %s", trigger.ID)
+				if ArrayContains(replacedTriggers, trigger.ID) {
+					continue
+				}
+
+				// log.Printf("[DEBUG] ID of the added trigger: %s", trigger.ID)
 
 				triggers = append(triggers, trigger)
 			}
