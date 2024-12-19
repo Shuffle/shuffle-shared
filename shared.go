@@ -6429,17 +6429,17 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify
-	//log.Printf("\n ===== Parent: %#v, Child: %#v =====", parentWorkflow.ID, oldWorkflow.ID)
-	//log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
+	log.Printf("\n ===== Parent: %#v, Child: %#v =====", parentWorkflow.ID, oldWorkflow.ID)
+	log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 
 	if update {
 		// FIXME: This doesn't work does it?
 		childWorkflow := oldWorkflow
 
-		//log.Printf("\n\nSTART")
-		//log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
-		//log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
-		//log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
+		log.Printf("\n\nSTART")
+		log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
+		log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
+		log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
 
 		if nameChanged {
 			childWorkflow.Name = parentWorkflow.Name
@@ -6698,68 +6698,66 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			// FIXME: Add specific handlers for each type based on oldWorkflow params that may have been locally configured
 			// FIXME: THIS DOES NOT WORK YET FOR TRIGGER FIELD MAPPING TO OLD SETTING
 			if childTrigger.ParentControlled {
-				/*
-					for _, oldTrigger := range oldWorkflow.Triggers {
-						if oldTrigger.ID != childTrigger.ID {
-							continue
-						}
+				// for _, oldTrigger := range oldWorkflow.Triggers {
+				// 	if oldTrigger.ID != childTrigger.ID {
+				// 		continue
+				// 	}
 
-						childTrigger.Status = oldTrigger.Status
+				// 	childTrigger.Status = oldTrigger.Status
 
-						reservedArguments := []string{}
-						if oldTrigger.TriggerType == "SUBFLOW" {
-							reservedArguments = []string{"workflow", "user_apikey", "startnode"}
-						} else if oldTrigger.TriggerType == "USERINPUT" {
-							reservedArguments = []string{"subflow", "sms", "email", "type"}
-						} else if oldTrigger.TriggerType == "SCHEDULE" {
-						} else if oldTrigger.TriggerType == "WEBHOOK" {
-							reservedArguments = []string{"url", "tmp", "auth_headers"}
-						} else if oldTrigger.TriggerType == "PIPELINE" {
-							reservedArguments = []string{"pipeline"}
-						}
+				// 	reservedArguments := []string{}
+				// 	if oldTrigger.TriggerType == "SUBFLOW" {
+				// 		reservedArguments = []string{"workflow", "user_apikey", "startnode"}
+				// 	} else if oldTrigger.TriggerType == "USERINPUT" {
+				// 		reservedArguments = []string{"subflow", "sms", "email", "type"}
+				// 	} else if oldTrigger.TriggerType == "SCHEDULE" {
+				// 	} else if oldTrigger.TriggerType == "WEBHOOK" {
+				// 		reservedArguments = []string{"url", "tmp", "auth_headers"}
+				// 	} else if oldTrigger.TriggerType == "PIPELINE" {
+				// 		reservedArguments = []string{"pipeline"}
+				// 	}
 
-						fieldsFound := []string{}
-						for paramIndex, param := range childTrigger.Parameters {
-							if !ArrayContains(reservedArguments, param.Name) {
-								continue
-							}
+				// 	fieldsFound := []string{}
+				// 	for paramIndex, param := range childTrigger.Parameters {
+				// 		if !ArrayContains(reservedArguments, param.Name) {
+				// 			continue
+				// 		}
 
-							fieldsFound = append(fieldsFound, param.Name)
-							for _, oldParam := range oldTrigger.Parameters {
-								if oldParam.Name != param.Name {
-									continue
-								}
+				// 		fieldsFound = append(fieldsFound, param.Name)
+				// 		for _, oldParam := range oldTrigger.Parameters {
+				// 			if oldParam.Name != param.Name {
+				// 				continue
+				// 			}
 
-								childWorkflow.Triggers[childTriggerIndex].Parameters[paramIndex].Value = oldParam.Value
-								childTrigger.Parameters[paramIndex].Value = oldParam.Value
-								break
-							}
-						}
+				// 			childWorkflow.Triggers[childTriggerIndex].Parameters[paramIndex].Value = oldParam.Value
+				// 			childTrigger.Parameters[paramIndex].Value = oldParam.Value
+				// 			break
+				// 		}
+				// 	}
 
-						if len(fieldsFound) != len(reservedArguments) {
-							for _, field := range reservedArguments {
-								if ArrayContains(fieldsFound, field) {
-									continue
-								}
+				// 	if len(fieldsFound) != len(reservedArguments) {
+				// 		for _, field := range reservedArguments {
+				// 			if ArrayContains(fieldsFound, field) {
+				// 				continue
+				// 			}
 
-								oldParamFound := false
-								for _, oldParam := range oldTrigger.Parameters {
-									if oldParam.Name != field {
-										continue
-									}
+				// 			oldParamFound := false
+				// 			for _, oldParam := range oldTrigger.Parameters {
+				// 				if oldParam.Name != field {
+				// 					continue
+				// 				}
 
-									oldParamFound = true
-									childTrigger.Parameters = append(childTrigger.Parameters, oldParam)
-									childWorkflow.Triggers[childTriggerIndex].Parameters = append(childWorkflow.Triggers[childTriggerIndex].Parameters, oldParam)
-								}
+				// 				oldParamFound = true
+				// 				childTrigger.Parameters = append(childTrigger.Parameters, oldParam)
+				// 				childWorkflow.Triggers[childTriggerIndex].Parameters = append(childWorkflow.Triggers[childTriggerIndex].Parameters, oldParam)
+				// 			}
 
-								if !oldParamFound {
-									//log.Printf("[DEBUG] MISSING IN OLDPARAM TOO: %s", field)
-								}
-							}
-						}
-					}
-				*/
+				// 			if !oldParamFound {
+				// 				//log.Printf("[DEBUG] MISSING IN OLDPARAM TOO: %s", field)
+				// 			}
+				// 		}
+				// 	}
+				// }
 			}
 
 			found := false
@@ -6794,6 +6792,23 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			if !found {
 				newBranches = append(newBranches, childBranch)
+			}
+		}
+
+		// print newTrigger params with old ones
+		for _, childTrigger := range childWorkflow.Triggers {
+			log.Printf("[DEBUG] Trigger %s (%s) has %d parameters", childTrigger.Label, childTrigger.ID, len(childTrigger.Parameters))
+			for _, param := range childTrigger.Parameters {
+				log.Printf("%+v", childTrigger.Parameters)
+				log.Printf("[DEBUG] Trigger %s (%s) param %s: %s", childTrigger.Label, childTrigger.ID, param.Name, param.Value)
+			}
+		}
+
+		for _, newTrigger := range newTriggers {
+			log.Printf("[DEBUG] New Trigger %s (%s) has %d parameters", newTrigger.Label, newTrigger.ID, len(newTrigger.Parameters))
+			for _, param := range newTrigger.Parameters {
+				log.Printf("%+v", newTrigger.Parameters)
+				log.Printf("[DEBUG] New Trigger %s (%s) param %s: %s", newTrigger.Label, newTrigger.ID, param.Name, param.Value)
 			}
 		}
 
@@ -9640,32 +9655,30 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 		}
 	}
 
-	for actionIndex, _ := range workflow.Actions {
+	for actionIndex, _ := range newWf.Actions {
 		workflow.Actions[actionIndex].ParentControlled = true
 		workflow.Actions[actionIndex].AuthenticationId = ""
 		workflow.Actions[actionIndex].Environment = defaultEnvironment
 	}
 
-	for triggerIndex, _ := range workflow.Triggers {
-		workflow.Triggers[triggerIndex].ParentControlled = true
-		workflow.Triggers[triggerIndex].Environment = defaultEnvironment
+	for triggerIndex, _ := range newWf.Triggers {
+		newWf.Triggers[triggerIndex].ParentControlled = true
+		newWf.Triggers[triggerIndex].Environment = defaultEnvironment
 
 		// FIXME: How do we manage secondary IDs?
 		// E.g. for webhooks, how do we have a URL correctly, and start/stop properly?
-
-		workflow.Triggers[triggerIndex].Status = "uninitialized"
-		if workflow.Triggers[triggerIndex].TriggerType == "WEBHOOK" {
-			for paramIndex, param := range workflow.Triggers[triggerIndex].Parameters {
+		newWf.Triggers[triggerIndex].Status = "uninitialized"
+		if newWf.Triggers[triggerIndex].TriggerType == "WEBHOOK" {
+			for paramIndex, param := range newWf.Triggers[triggerIndex].Parameters {
 				if param.Name == "url" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
+					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
 				}
 
 				if param.Name == "tmp" {
-					workflow.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
+					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
 				}
 			}
 		}
-
 	}
 
 	err = SetWorkflow(ctx, newWf, newWf.ID)
