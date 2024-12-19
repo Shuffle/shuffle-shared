@@ -6554,12 +6554,19 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			}
 		}
 
+		
+		for _, trigger := range childWorkflow.Triggers {
+
+
 		if len(addedTriggers) > 0 {
+			log.Printf("[DEBUG] Triggers added: %d", len(addedTriggers))
 			triggers := childTriggers
 			for _, trigger := range parentWorkflow.Triggers {
 				if !ArrayContains(addedTriggers, trigger.ID) {
 					continue
 				}
+
+				log.Printf("[DEBUG] ID of the added trigger: %s", trigger.ID)
 
 				triggers = append(triggers, trigger)
 			}
@@ -6583,7 +6590,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 
 		if len(updatedTriggers) > 0 {
+			log.Printf("[DEBUG] Triggers updated: %d", len(updatedTriggers))
 			for _, action := range updatedTriggers {
+				log.Printf("[DEBUG] ID of the updated trigger: %s", action.ID)
 				for index, childAction := range childWorkflow.Triggers {
 					if childAction.ID != action.ID {
 						continue
@@ -6792,6 +6801,22 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			if !found {
 				newBranches = append(newBranches, childBranch)
+			}
+		}
+
+		// Old childWorkflow triggers:
+		for _, oldTrigger := range oldWorkflow.Triggers {
+			// params
+			for _, param := range oldTrigger.Parameters {
+				log.Printf("[DEBUG] Old trigger %s (%s) has param %s and value: %s", oldTrigger.Label, oldTrigger.ID, param.Name, param.Value)
+			}
+		}
+
+		// to be updated triggers
+		for _, trigger := range newTriggers {
+			// params
+			for _, param := range trigger.Parameters {
+				log.Printf("[DEBUG] New trigger %s (%s) has param %s and value: %s", trigger.Label, trigger.ID, param.Name, param.Value)
 			}
 		}
 
@@ -9652,6 +9677,8 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 		// E.g. for webhooks, how do we have a URL correctly, and start/stop properly?
 		newWf.Triggers[triggerIndex].Status = "uninitialized"
 		if newWf.Triggers[triggerIndex].TriggerType == "WEBHOOK" {
+			oldID := newWf.Triggers[triggerIndex].ID
+			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
 			for paramIndex, param := range newWf.Triggers[triggerIndex].Parameters {
 				if param.Name == "url" {
 					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
@@ -9659,6 +9686,19 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 				if param.Name == "tmp" {
 					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
+				}
+
+				newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID
+
+				// edit all branch source ids where the ID is changed
+				for branchIndex, branch := range newWf.Branches {
+					if branch.SourceID == oldID {
+						newWf.Branches[branchIndex].SourceID = newWf.Triggers[triggerIndex].ID
+					}
+
+					if branch.DestinationID == oldID {
+						newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
+					}
 				}
 			}
 		}

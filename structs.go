@@ -1206,8 +1206,9 @@ type Trigger struct {
 	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
-
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+
+	ReplacementForTrigger string `json:"replacement_for_trigger" datastore:"replacement_for_trigger"` // If this trigger is a replacement for another trigger
 }
 
 type Branch struct {
