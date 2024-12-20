@@ -13201,7 +13201,11 @@ func GetRequestIp(r *http.Request) string {
 	}
 
 	remoteAddrSplit := strings.Split(r.RemoteAddr, ":")
-	return remoteAddrSplit[0]
+	if len(remoteAddrSplit) > 0 { 
+		return remoteAddrSplit[0]
+	}
+
+	return r.RemoteAddr
 
 }
 
