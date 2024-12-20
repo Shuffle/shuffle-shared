@@ -11806,6 +11806,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
+	if tmpData.SSOConfig.AutoProvision != org.SSOConfig.AutoProvision {
+		org.SSOConfig.AutoProvision = tmpData.SSOConfig.AutoProvision
+	}
+
 	if (tmpData.SSOConfig.OpenIdClientId != org.SSOConfig.OpenIdClientId) || (tmpData.SSOConfig.OpenIdAuthorization != org.SSOConfig.OpenIdAuthorization) {
 		org.SSOConfig = tmpData.SSOConfig
 	}
@@ -19327,6 +19331,14 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	//Don't create user if auto-provisioning is disabled
+	if org.SSOConfig.AutoProvision {
+		log.Printf("[INFO] Auto-provisioning is disable for id: %s", org.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Auto-provisioning is disabled for this organization. Please ask your administrator to enable it."}`)))
+		return
+	}
+
 	log.Printf("[AUDIT] Adding user %s to org %s (%s) through single sign-on", userName, org.Name, org.Id)
 	newUser := new(User)
 	// Random password to ensure its not empty
@@ -19853,6 +19865,14 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
+		return
+	}
+
+	//Don't create user if auto-provisioning is disabled
+	if foundOrg.SSOConfig.AutoProvision {
+		log.Printf("[INFO] Auto-provisioning is disable for id: %s", foundOrg.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Auto-provisioning is disabled for this organization. Please ask your administrator to enable it."}`)))
 		return
 	}
 
