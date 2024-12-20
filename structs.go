@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	"encoding/xml"
+	"sync"
 	"time"
 )
 
@@ -24,7 +25,7 @@ type LogRequest struct {
 }
 
 type PipelineRequest struct {
-	ID string `json:"id"`
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Command     string `json:"command"`
@@ -39,7 +40,7 @@ type PipelineRequest struct {
 
 type Pipeline struct {
 	Name        string   `json:"name" datastore:"name"`
-	ID		  	string   `json:"id" datastore:"id"`
+	ID          string   `json:"id" datastore:"id"`
 	Type        string   `json:"type" datastore:"type"`
 	Command     string   `json:"command" datastore:"command"`
 	Environment string   `json:"environment" datastore:"environment"`
@@ -1205,8 +1206,9 @@ type Trigger struct {
 	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
 	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
-
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+
+	ReplacementForTrigger string `json:"replacement_for_trigger" datastore:"replacement_for_trigger"` // If this trigger is a replacement for another trigger
 }
 
 type Branch struct {
@@ -1263,14 +1265,14 @@ type InputQuestion struct {
 }
 
 type FormControl struct {
-	InputMarkdown  string          `json:"input_markdown" datastore:"input_markdown,noindex"`
-	OutputYields   []string        `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+	InputMarkdown string   `json:"input_markdown" datastore:"input_markdown,noindex"`
+	OutputYields  []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
 
 	FormWidth int64 `json:"form_width" datastore:"form_width"`
 }
 
 type Workflow struct {
-	WorkflowAsCode bool 	 `json:"workflow_as_code" datastore:"workflow_as_code"`
+	WorkflowAsCode bool      `json:"workflow_as_code" datastore:"workflow_as_code"`
 	Actions        []Action  `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch  `json:"branches" datastore:"branches,noindex"`
 	VisualBranches []Branch  `json:"visual_branches" datastore:"visual_branches,noindex"`
@@ -2737,6 +2739,7 @@ type SSOConfig struct {
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
+	AutoProvision       bool   `json:"auto_provision" datastore:"auto_provision"`
 }
 
 type SamlRequest struct {
@@ -4168,4 +4171,10 @@ type RequestResponse struct {
 	Success bool   `json:"success"`
 	Reason  string `json:"reason"`
 	Details string `json:"details"`
+}
+
+type TimeWindow struct {
+	Duration time.Duration
+	Events   []time.Time
+	mu       sync.Mutex
 }
