@@ -582,6 +582,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 
 	// Use channel for getting RunOpsWorkflow function results
 	workflowHealthChannel := make(chan WorkflowHealth)
+	errorChannel := make(chan error)
 	go func() {
 		log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
@@ -590,6 +591,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		workflowHealthChannel <- workflowHealth
+		errorChannel <- err
 	}()
 
 	// go func() {
@@ -605,6 +607,16 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	// Use channel for getting RunOpsWorkflow function results
 	// platformHealth.Apps = <-appHealthChannel
 	platformHealth.Workflows = <-workflowHealthChannel
+	err = <-errorChannel
+
+	if err != nil {
+		if err.Error() == "High number of requests. Try again later" {
+			log.Printf("[DEBUG] High number of requests sent to the backend. Skipping this run.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "High number of requests sent to the backend. Try again later."}`))
+			return
+		}
+	}
 
 	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true {
 		log.Printf("[DEBUG] Platform health check successful! All necessary values are true.")
@@ -901,6 +913,12 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	// 1. Get workflow
 	opsWorkflowID, err := InitOpsWorkflow(apiKey, orgId)
 	if err != nil {
+		// if error string contains "High number of requests. Try again later", skip this run
+		if strings.Contains(err.Error(), "High number of requests. Try again later") {
+			log.Printf("[DEBUG] High number of requests sent to the backend. Skipping this run.")
+			return workflowHealth, err
+		}
+
 		log.Printf("[ERROR] Failed creating Health check workflow: %s", err)
 		return workflowHealth, err
 	}
@@ -1261,6 +1279,19 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	if err != nil {
 		log.Println("[ERROR] sending Ops create workflow HTTP request:", err)
 		return "", errors.New("Error sending HTTP request: " + err.Error())
+	}
+
+	if resp.StatusCode == 503 {
+		log.Printf("[ERROR] This happened because of a high number of requests. We will try again later")
+
+		respBodyErr, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		} else {
+			log.Printf("[ERROR] Ops dashboard creating Workflow Response: %s", respBodyErr)
+		}
+
+		return "", errors.New("High number of requests. Try again later")
 	}
 
 	if resp.StatusCode != 200 {
