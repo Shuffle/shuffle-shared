@@ -571,15 +571,15 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 			// FIXME: This double control is silly
 			fileResponse.Files = append(fileResponse.Files, file)
 			fileResponse.List = append(fileResponse.List, BaseFile{
-				Name:              file.Filename,
-				ID:                file.Id,
-				Type:              file.Type,
-				UpdatedAt:         file.UpdatedAt,
-				Md5Sum:            file.Md5sum,
-				Status:            file.Status,
-				FileSize:          file.FileSize,
-				OrgId:             file.OrgId,
-				SuborgDistributed: file.SuborgDistributed,
+				Name:               file.Filename,
+				ID:                 file.Id,
+				Type:               file.Type,
+				UpdatedAt:          file.UpdatedAt,
+				Md5Sum:             file.Md5sum,
+				Status:             file.Status,
+				FileSize:           file.FileSize,
+				OrgId:              file.OrgId,
+				SuborgDistribution: file.SuborgDistribution,
 			})
 		}
 	}
@@ -592,21 +592,23 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 			parentFiles, err := GetAllFiles(ctx, parentOrg.Id, namespace)
 			if err == nil {
 				for _, file := range parentFiles {
-					if !file.SuborgDistributed {
+
+					if !ArrayContains(file.SuborgDistribution, user.ActiveOrg.Id) {
 						continue
 					}
+
 					if file.Namespace == namespace {
 						fileResponse.Files = append(fileResponse.Files, file)
 						fileResponse.List = append(fileResponse.List, BaseFile{
-							Name:              file.Filename,
-							ID:                file.Id,
-							Type:              file.Type,
-							UpdatedAt:         file.UpdatedAt,
-							Md5Sum:            file.Md5sum,
-							Status:            file.Status,
-							FileSize:          file.FileSize,
-							OrgId:             file.OrgId,
-							SuborgDistributed: file.SuborgDistributed,
+							Name:               file.Filename,
+							ID:                 file.Id,
+							Type:               file.Type,
+							UpdatedAt:          file.UpdatedAt,
+							Md5Sum:             file.Md5sum,
+							Status:             file.Status,
+							FileSize:           file.FileSize,
+							OrgId:              file.OrgId,
+							SuborgDistribution: file.SuborgDistribution,
 						})
 					}
 				}
@@ -2144,8 +2146,9 @@ func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type configFile struct {
-		Id     string `json:"id"`
-		Action string `json:"action"`
+		Id             string   `json:"id"`
+		Action         string   `json:"action"`
+		SelectedSuborg []string `json:"selected_suborgs"`
 	}
 
 	var config configFile
@@ -2173,27 +2176,11 @@ func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if config.Action == "suborg_distribute" {
-		org, err := GetOrg(ctx, user.ActiveOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting org %s: %s", file.OrgId, err)
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false, "reason": "Failed getting org"}`))
-			return
-		}
 
-		// Check if org doesn't have a creator org
-		if len(org.CreatorOrg) != 0 {
-			log.Printf("[INFO] Org %s has creator org %s, can't distribute", org.Id, org.CreatorOrg)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false, "reason": "Can't distribute auth for suborgs"}`))
-			return
-		}
-
-		if file.SuborgDistributed {
-			file.SuborgDistributed = false
-
+		if len(config.SelectedSuborg) == 0 {
+			file.SuborgDistribution = []string{}
 		} else {
-			file.SuborgDistributed = true
+			file.SuborgDistribution = config.SelectedSuborg
 		}
 
 		err = SetFile(ctx, *file)
@@ -2211,7 +2198,6 @@ func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
 	if err == nil {
 		for _, childOrg := range foundOrg.ChildOrgs {
 			cacheKey := fmt.Sprintf("files_%s_%s", childOrg.Id, file.Namespace)
-			log.Printf("Clearing cache for %s", cacheKey)
 			DeleteCache(ctx, cacheKey)
 		}
 	}
