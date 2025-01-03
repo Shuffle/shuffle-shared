@@ -571,14 +571,48 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 			// FIXME: This double control is silly
 			fileResponse.Files = append(fileResponse.Files, file)
 			fileResponse.List = append(fileResponse.List, BaseFile{
-				Name: file.Filename,
-				ID:   file.Id,
-				Type: file.Type,
-				UpdatedAt: file.UpdatedAt,
-				Md5Sum: file.Md5sum,
-				Status: file.Status,
-				FileSize: file.FileSize,
+				Name:               file.Filename,
+				ID:                 file.Id,
+				Type:               file.Type,
+				UpdatedAt:          file.UpdatedAt,
+				Md5Sum:             file.Md5sum,
+				Status:             file.Status,
+				FileSize:           file.FileSize,
+				OrgId:              file.OrgId,
+				SuborgDistribution: file.SuborgDistribution,
 			})
+		}
+	}
+
+	// If current org is sub org and file suborg distributed is true than add file to list
+	foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 {
+		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+		if err == nil {
+			parentFiles, err := GetAllFiles(ctx, parentOrg.Id, namespace)
+			if err == nil {
+				for _, file := range parentFiles {
+
+					if !ArrayContains(file.SuborgDistribution, user.ActiveOrg.Id) {
+						continue
+					}
+
+					if file.Namespace == namespace {
+						fileResponse.Files = append(fileResponse.Files, file)
+						fileResponse.List = append(fileResponse.List, BaseFile{
+							Name:               file.Filename,
+							ID:                 file.Id,
+							Type:               file.Type,
+							UpdatedAt:          file.UpdatedAt,
+							Md5Sum:             file.Md5sum,
+							Status:             file.Status,
+							FileSize:           file.FileSize,
+							OrgId:              file.OrgId,
+							SuborgDistribution: file.SuborgDistribution,
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -1970,4 +2004,207 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func HandleShareNamespace(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in share namespace: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("User (%s) isn't admin during namespace share", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "only admin can share namespace"}`))
+		return
+	}
+
+	var namespace string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		namespace = location[5]
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type shareNamespace struct {
+		SelectedFiles []string `json:"selectedFiles"`
+	}
+
+	var share shareNamespace
+	err = json.Unmarshal(body, &share)
+	if err != nil {
+		log.Printf("Failed unmarshaling (appauth): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(namespace) == 0 {
+		log.Printf("[ERROR] Missing namespace in share namespace")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Missing namespace"}`))
+		return
+	}
+
+	if len(share.SelectedFiles) == 0 {
+		log.Printf("[ERROR] Missing selectedFiles in share namespace")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Missing selectedFiles"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	for _, fileId := range share.SelectedFiles {
+		file, err := GetFile(ctx, fileId)
+		if err != nil {
+			log.Printf("[INFO] File %s not found: %s", fileId, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		file.Namespace = namespace
+		err = SetFile(ctx, *file)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting file back to active")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to active"}`))
+			return
+		}
+	}
+
+	log.Printf("[INFO] Successfully shared namespace %s for %d files", namespace, len(share.SelectedFiles))
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Namespace shared successfully!"}`)))
+}
+
+// destribute files to all sub orgs of parent org
+func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in load files: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("User (%s) isn't admin during file edit config", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "only admin can edit file config"}`))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type configFile struct {
+		Id             string   `json:"id"`
+		Action         string   `json:"action"`
+		SelectedSuborg []string `json:"selected_suborgs"`
+	}
+
+	var config configFile
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("Failed unmarshaling (appauth): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if config.Id != fileId {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Bad ID match"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	file, err := GetFile(ctx, fileId)
+	if err != nil {
+		log.Printf("[INFO] File %s not found: %s", fileId, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if config.Action == "suborg_distribute" {
+
+		if len(config.SelectedSuborg) == 0 {
+			file.SuborgDistribution = []string{}
+		} else {
+			file.SuborgDistribution = config.SelectedSuborg
+		}
+
+		err = SetFile(ctx, *file)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting file back to active")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to active"}`))
+			return
+		}
+
+	}
+
+	//if current org is suborg and file is distributed, get the parent org file
+	foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err == nil {
+		for _, childOrg := range foundOrg.ChildOrgs {
+			cacheKey := fmt.Sprintf("files_%s_%s", childOrg.Id, file.Namespace)
+			DeleteCache(ctx, cacheKey)
+		}
+	}
+
+	log.Printf("[INFO] Successfully updated file: %s for org: %s", file.Id, user.ActiveOrg.Id)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "File updated successfully!"}`)))
+
 }

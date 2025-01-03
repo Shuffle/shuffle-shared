@@ -10070,6 +10070,23 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 		}
 	}
 
+	// Should check if it's a child org and get parent orgs files if that is distributed to that child org
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+		if err == nil {
+			parentFiles, err := GetAllFiles(ctx, parentOrg.Id, namespace)
+			if err == nil {
+				for _, f := range parentFiles {
+					if !ArrayContains(f.SuborgDistribution, orgId) {
+						continue
+					}
+					files = append(files, f)
+				}
+			}
+		}
+	}
+
 	if project.CacheDb {
 		data, err := json.Marshal(files)
 		if err != nil {
