@@ -18,6 +18,8 @@ import (
 	"sort"
 	"sync"
 
+	scheduler "cloud.google.com/go/scheduler/apiv1"
+	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"gopkg.in/yaml.v3"
 
 	//"os/exec"
@@ -4794,6 +4796,21 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		pipelineMap[pipeline.ID] = pipeline
 	}
 
+	if project.Environment == "cloud" {
+		for index, schedule := range schedules {
+			// Check if the schedule exist in the gcp
+			GcpSchedule, err := GetGcpSchedule(ctx, schedule.Id)
+			if err != nil {
+				schedules[index].Status = "stopped"
+				scheduleMap[schedule.Id] = schedule
+			}
+			if err == nil {
+				schedules[index].Status = GcpSchedule.Status
+				scheduleMap[schedule.Id] = schedule
+			}
+		}
+	}
+
 	allHooks := []Hook{}
 	allSchedules := []ScheduleOld{}
 	// Now loop through the workflow triggers to see if anything is not in sync
@@ -4972,6 +4989,35 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
+}
+
+func GetGcpSchedule(ctx context.Context, id string) (*ScheduleOld, error) {
+	schedule := &ScheduleOld{}
+	c, err := scheduler.NewCloudSchedulerClient(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Client error: %s", err)
+		return schedule, err
+	}
+	location := "europe-west2"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		location = os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
+	}
+	req := &schedulerpb.GetJobRequest{
+		Name: fmt.Sprintf("projects/%s/locations/%s/jobs/schedule_%s", gceProject, location, id),
+	}
+	resp, err := c.GetJob(ctx, req)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting schedule %s: %s", id, err)
+		return schedule, err
+	}
+	schedule.Id = id
+	schedule.Name = resp.Name
+	if resp.State == schedulerpb.Job_ENABLED {
+		schedule.Status = "running"
+	} else {
+		schedule.Status = "stopped"
+	}
+	return schedule, nil
 }
 
 func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
@@ -9711,8 +9757,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 			oldID := newWf.Triggers[triggerIndex].ID
 			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
 
-			newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID	
-
+			newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID
 
 			for branchIndex, branch := range newWf.Branches {
 				if branch.SourceID == oldID {
@@ -10083,6 +10128,24 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			workflow.BackupConfig.UploadBranch = string(newValue)
 		}
+	}
+
+	//Check if workflow trigger schedule is in sync with the gcp cron job
+	if workflow.Triggers != nil {
+
+		for index, trigger := range workflow.Triggers {
+			if trigger.TriggerType == "SCHEDULE" {
+				//Check if the schedule is in sync with the gcp cron job
+				GcpSchedule, err := GetGcpSchedule(ctx, trigger.ID)
+				if err != nil {
+					log.Printf("[ERROR] Failed getting gcp schedule for trigger %s: %s", trigger.ID, err)
+					workflow.Triggers[index].Status = "stopped"
+				} else {
+					workflow.Triggers[index].Status = GcpSchedule.Status
+				}
+			}
+		}
+		SetWorkflow(ctx, *workflow, workflow.ID)
 	}
 
 	log.Printf("[INFO] Got new version of workflow %s (%s) for org %s and user %s (%s). Actions: %d, Triggers: %d", workflow.Name, workflow.ID, user.ActiveOrg.Id, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
@@ -13263,7 +13326,7 @@ func GetRequestIp(r *http.Request) string {
 	}
 
 	remoteAddrSplit := strings.Split(r.RemoteAddr, ":")
-	if len(remoteAddrSplit) > 0 { 
+	if len(remoteAddrSplit) > 0 {
 		return remoteAddrSplit[0]
 	}
 
@@ -25358,7 +25421,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	//RunAiQuery(systemMessage, userMessage)
 
-	partialMatch := true 
+	partialMatch := true
 	availableLabels := []string{}
 
 	matchName := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value.AppName)), " ", "_")
@@ -25421,11 +25484,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 				//selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
 				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true)
-				partialMatch = false 
+				partialMatch = false
 
 				break
 
-			// Finds a random match, but doesn't break in case it finds exact
+				// Finds a random match, but doesn't break in case it finds exact
 			} else if selectedApp.ID == "" && len(matchName) > 0 && (strings.Contains(appName, matchName) || strings.Contains(matchName, appName)) {
 				selectedApp = app
 
@@ -26070,7 +26133,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	client := GetExternalClient(baseUrl)
 
-
 	selectedAction.AppName = selectedApp.Name
 	selectedAction.AppID = selectedApp.ID
 	selectedAction.AppVersion = selectedApp.AppVersion
@@ -26449,7 +26511,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-
 			// Ensures frontend has something to debug if things go wrong
 			for key, value := range newresp.Header {
 				if strings.HasSuffix(strings.ToLower(key), "-url") {
@@ -26478,7 +26539,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 			httpOutput, marshalledBody, httpParseErr := FindHttpBody(apprunBody)
 			//log.Printf("\n\nGOT RESPONSE (%d): %s. STATUS: %d\n\n",  newresp.StatusCode, string(apprunBody), httpOutput.Status)
-			if successStruct.Success == false && len(successStruct.Reason) > 0 && httpOutput.Status == 0 && strings.Contains(strings.ReplaceAll(string(apprunBody), " ", ""), `"success":false`){
+			if successStruct.Success == false && len(successStruct.Reason) > 0 && httpOutput.Status == 0 && strings.Contains(strings.ReplaceAll(string(apprunBody), " ", ""), `"success":false`) {
 				log.Printf("[WARNING][AI] Failed running app %s (%s). Contact support. Reason: %s", selectedAction.Name, selectedAction.AppID, successStruct.Reason)
 
 				resp.WriteHeader(400)
@@ -27101,7 +27162,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 				}
 
 				if newLabel == lowercaseLabel {
-					exactMatch = true 
+					exactMatch = true
 					break
 				}
 			}
@@ -27112,7 +27173,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 		}
 	}
 
-	// Decides if we are to autocomplete the app if labels are not found 
+	// Decides if we are to autocomplete the app if labels are not found
 	if len(selectedAction.ID) == 0 {
 		if fixLabels == true {
 			//log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Autodiscovering and updating the app!!!\n\n", app.Name, app.ID, label)
