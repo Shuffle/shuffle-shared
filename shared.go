@@ -6292,6 +6292,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			continue
 		}
 
+		// cover case: when new trigger is added to a previously distributed workflow
+		// instead of distributing it right away, create a new ID for it.
+
 		found := false
 		for _, oldAction := range oldWorkflow.Triggers {
 			if !oldAction.ParentControlled {
@@ -6491,6 +6494,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				continue
 			}
 
+			// those of which aren't parent controlled triggers,
+			// are added to childTriggers.
 			childTriggers = append(childTriggers, trigger)
 		}
 
@@ -6562,6 +6567,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 
 		if len(addedTriggers) > 0 {
+			// the case where a new trigger is
+			// added to a previously distributed workflow
 			triggers := childTriggers
 			for _, trigger := range parentWorkflow.Triggers {
 				if !ArrayContains(addedTriggers, trigger.ID) {
@@ -6572,7 +6579,33 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					continue
 				}
 
-				// log.Printf("[DEBUG] ID of the added trigger: %s", trigger.ID)
+				// change ID, and replace in branch ID
+				oldID := trigger.ID
+				trigger.ID = uuid.NewV4().String()
+
+				trigger.ReplacementForTrigger = oldID
+
+				if trigger.TriggerType == "WEBHOOK" {
+					for paramIndex, param := range trigger.Parameters {
+						if param.Name == "url" {
+							trigger.Parameters[paramIndex].Value = ""
+						}
+
+						if param.Name == "tmp" {
+							trigger.Parameters[paramIndex].Value = ""
+						}
+					}
+				}
+
+				for _, branch := range childWorkflow.Branches {
+					if branch.SourceID == oldID {
+						branch.SourceID = trigger.ID
+					}
+
+					if branch.DestinationID == oldID {
+						branch.DestinationID = trigger.ID
+					}
+				}
 
 				triggers = append(triggers, trigger)
 			}
@@ -9723,6 +9756,35 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 					newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
 				}
 			}
+		} else if newWf.Triggers[triggerIndex].TriggerType == "SUBFLOW" {
+			oldID := newWf.Triggers[triggerIndex].ID
+			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
+
+			newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID
+
+			// loop through workflow trigger parameters
+			for paramIndex, param := range newWf.Triggers[triggerIndex].Parameters {
+				if param.Name == "workflow" {
+					if len(param.Value) == 0 {
+						break
+					}
+
+					subflow, err := GetWorkflow(ctx, param.Value)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting subflow %s: %s", param.Value, err)
+						break
+					}
+
+					// distribute the subflow further to this suborg, and then take the new id
+					childWorkflow, err := GenerateWorkflowFromParent(ctx, *subflow, parentOrgId, subOrgId)
+					if err != nil {
+						log.Printf("[ERROR] Failed generating subflow %s: %s", subflow.ID, err)
+						break
+					}
+
+					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = childWorkflow.ID
+				}
+			}
 		}
 	}
 
@@ -11806,10 +11868,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
-	if tmpData.SSOConfig.AutoProvision != org.SSOConfig.AutoProvision {
-		org.SSOConfig.AutoProvision = tmpData.SSOConfig.AutoProvision
-	}
-
 	if (tmpData.SSOConfig.OpenIdClientId != org.SSOConfig.OpenIdClientId) || (tmpData.SSOConfig.OpenIdAuthorization != org.SSOConfig.OpenIdAuthorization) {
 		org.SSOConfig = tmpData.SSOConfig
 	}
@@ -13263,11 +13321,7 @@ func GetRequestIp(r *http.Request) string {
 	}
 
 	remoteAddrSplit := strings.Split(r.RemoteAddr, ":")
-	if len(remoteAddrSplit) > 0 { 
-		return remoteAddrSplit[0]
-	}
-
-	return r.RemoteAddr
+	return remoteAddrSplit[0]
 
 }
 
@@ -18525,264 +18579,6 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
-func GetArticles(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	if len(location) < 5 {
-		resp.WriteHeader(404)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"`)))
-		return
-	}
-
-	if strings.Contains(location[4], "?") {
-		location[4] = strings.Split(location[4], "?")[0]
-	}
-
-	ctx := GetContext(request)
-	downloadLocation, downloadOk := request.URL.Query()["location"]
-	version, versionOk := request.URL.Query()["version"]
-	cacheKey := fmt.Sprintf("articles_%s", location[4])
-	if downloadOk {
-		cacheKey = fmt.Sprintf("%s_%s", cacheKey, downloadLocation[0])
-	}
-
-	if versionOk {
-		cacheKey = fmt.Sprintf("%s_%s", cacheKey, version[0])
-	}
-
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		resp.WriteHeader(200)
-		resp.Write(cacheData)
-		return
-	}
-
-	owner := "shuffle"
-	repo := "shuffle-docs"
-	path := "articles"
-	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
-
-	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
-	realPath := ""
-
-	newname := location[4]
-	if downloadOk {
-		if downloadLocation[0] == "openapi" {
-			newname = strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "_")
-			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", newname)
-			realPath = fmt.Sprintf("https://github.com/Shuffle/openapi-apps/blob/master/docs/%s.md", newname)
-
-		} else if downloadLocation[0] == "python" && versionOk {
-			// Apparently this uses dashes for no good reason?
-			// Should maybe move everything over to underscores later?
-			newname = strings.ReplaceAll(newname, `%20`, "-")
-			newname = strings.ReplaceAll(newname, ` `, "-")
-			newname = strings.ReplaceAll(newname, `_`, "-")
-			newname = strings.ToLower(newname)
-
-			if version[0] == "1.0.0" {
-				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)
-				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/1.0.0/README.md", newname)
-
-				log.Printf("[INFO] Should download python app for version %s: %s", version[0], docPath)
-
-			} else {
-				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/README.md", newname)
-				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/README.md", newname)
-			}
-
-		}
-	}
-
-	//log.Printf("Docpath: %s", docPath)
-
-	httpClient := &http.Client{}
-	req, err := http.NewRequest(
-		"GET",
-		docPath,
-		nil,
-	)
-
-	if err != nil {
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
-		resp.WriteHeader(404)
-		return
-	}
-
-	newresp, err := httpClient.Do(req)
-	if err != nil {
-		resp.WriteHeader(404)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
-		return
-	}
-
-	defer newresp.Body.Close()
-	body, err := ioutil.ReadAll(newresp.Body)
-	if err != nil {
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't parse data"}`)))
-		return
-	}
-
-	commitOptions := &github.CommitsListOptions{
-		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
-	}
-
-	parsedLink := fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s.md", owner, repo, path, location[4])
-	if len(realPath) > 0 {
-		parsedLink = realPath
-	}
-
-	client := github.NewClient(nil)
-	githubResp := GithubResp{
-		Name:         location[4],
-		Contributors: []GithubAuthor{},
-		Edited:       "",
-		ReadTime:     len(body) / 10 / 250,
-		Link:         parsedLink,
-	}
-
-	if githubResp.ReadTime == 0 {
-		githubResp.ReadTime = 1
-	}
-
-	info, _, err := client.Repositories.ListCommits(ctx, owner, repo, commitOptions)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting commit info: %s", err)
-	} else {
-		//log.Printf("Info: %s", info)
-		for _, commit := range info {
-			//log.Printf("Commit: %s", commit.Author)
-			newAuthor := GithubAuthor{}
-			if commit.Author != nil && commit.Author.AvatarURL != nil {
-				newAuthor.ImageUrl = *commit.Author.AvatarURL
-			}
-
-			if commit.Author != nil && commit.Author.HTMLURL != nil {
-				newAuthor.Url = *commit.Author.HTMLURL
-			}
-
-			found := false
-			for _, contributor := range githubResp.Contributors {
-				if contributor.Url == newAuthor.Url {
-					found = true
-					break
-				}
-			}
-
-			if !found && len(newAuthor.Url) > 0 && len(newAuthor.ImageUrl) > 0 {
-				githubResp.Contributors = append(githubResp.Contributors, newAuthor)
-			}
-		}
-	}
-
-	type Result struct {
-		Success bool       `json:"success"`
-		Reason  string     `json:"reason"`
-		Meta    GithubResp `json:"meta"`
-	}
-
-	var result Result
-	result.Success = true
-	result.Meta = githubResp
-
-	result.Reason = string(body)
-	b, err := json.Marshal(result)
-	if err != nil {
-		http.Error(resp, err.Error(), 500)
-		return
-	}
-
-	err = SetCache(ctx, cacheKey, b, 180)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for articles %s: %s", location[4], err)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(b)
-}
-
-func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	ctx := GetContext(request)
-	cacheKey := "articles_list"
-	cache, err := GetCache(ctx, cacheKey)
-	result := FileList{}
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		resp.WriteHeader(200)
-		resp.Write(cacheData)
-		return
-	}
-
-	client := github.NewClient(nil)
-	owner := "shuffle"
-	repo := "shuffle-docs"
-	path := "articles"
-	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting articles list: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
-		return
-	}
-
-	if len(item1) == 0 {
-		resp.WriteHeader(500)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No articles available."}`)))
-		return
-	}
-
-	names := []GithubResp{}
-	for _, item := range item1 {
-		if !strings.HasSuffix(*item.Name, "md") {
-			continue
-		}
-
-		// FIXME: Scuffed readtime calc
-		// Average word length = 5. Space = 1. 5+1 = 6 avg.
-		// Words = *item.Size/6/250
-		//250 = average read time / minute
-		// Doubling this for bloat removal in Markdown~
-		githubResp := GithubResp{
-			Name:         (*item.Name)[0 : len(*item.Name)-3],
-			Contributors: []GithubAuthor{},
-			Edited:       "",
-			ReadTime:     *item.Size / 6 / 250,
-			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
-		}
-
-		names = append(names, githubResp)
-	}
-
-	//log.Printf(names)
-	result.Success = true
-	result.Reason = "Success"
-	result.List = names
-	b, err := json.Marshal(result)
-	if err != nil {
-		http.Error(resp, err.Error(), 500)
-		return
-	}
-
-	err = SetCache(ctx, cacheKey, b, 300)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(b)
-}
-
 func md5sum(data []byte) string {
 	hasher := md5.New()
 	hasher.Write(data)
@@ -19593,14 +19389,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	//Don't create user if auto-provisioning is disabled
-	if org.SSOConfig.AutoProvision {
-		log.Printf("[INFO] Auto-provisioning is disable for id: %s", org.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Auto-provisioning is disabled for this organization. Please ask your administrator to enable it."}`)))
-		return
-	}
-
 	log.Printf("[AUDIT] Adding user %s to org %s (%s) through single sign-on", userName, org.Name, org.Id)
 	newUser := new(User)
 	// Random password to ensure its not empty
@@ -20127,14 +19915,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
-		return
-	}
-
-	//Don't create user if auto-provisioning is disabled
-	if foundOrg.SSOConfig.AutoProvision {
-		log.Printf("[INFO] Auto-provisioning is disable for id: %s", foundOrg.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Auto-provisioning is disabled for this organization. Please ask your administrator to enable it."}`)))
 		return
 	}
 

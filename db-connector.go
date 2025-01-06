@@ -7971,10 +7971,10 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 			workflows = append(workflows, hit.Source)
 		}
 	} else {
-		query := datastore.NewQuery(nameKey).Filter("id =", originalId).Limit(50)
-		//if project.Environment != "cloud" {
-		//	query = query.Order("-edited")
-		//}
+		query := datastore.NewQuery(nameKey).Filter("id =", originalId)
+		// if project.Environment == "cloud" {
+		query = query.Order("-edited").Limit(50)
+		// }
 
 		cursorStr := ""
 		for {
