@@ -6653,6 +6653,16 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					continue
 				}
 
+				// if a new branch is added to add a trigger,
+				// make sure it has the new trigger ID
+				for branchIndex, trigger := range childWorkflow.Triggers {
+					if trigger.ReplacementForTrigger == branch.SourceID {
+						childWorkflow.Branches[branchIndex].SourceID = trigger.ID
+					} else if trigger.ReplacementForTrigger == branch.DestinationID {
+						childWorkflow.Branches[branchIndex].DestinationID = trigger.ID
+					}
+				}
+
 				branches = append(branches, branch)
 			}
 
