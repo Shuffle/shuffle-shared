@@ -6597,13 +6597,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					}
 				}
 
-				for _, branch := range childWorkflow.Branches {
+				for branchIndex, branch := range childWorkflow.Branches {
 					if branch.SourceID == oldID {
-						branch.SourceID = trigger.ID
+						childWorkflow.Branches[branchIndex].SourceID = trigger.ID
 					}
 
 					if branch.DestinationID == oldID {
-						branch.DestinationID = trigger.ID
+						childWorkflow.Branches[branchIndex].DestinationID = trigger.ID
 					}
 				}
 
