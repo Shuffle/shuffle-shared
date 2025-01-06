@@ -17987,7 +17987,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		newParams = append(newParams, param)
 	}
 
-	log.Printf("URL %#v", originalUrl)
+	//log.Printf("URL %#v", originalUrl)
 
 	action.Parameters = newParams
 
@@ -18042,6 +18042,13 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 
 	workflowExecution, _, errString, err := PrepareWorkflowExecution(ctx, workflow, badRequest, 10)
 	if err != nil || len(errString) > 0 {
+
+		// FIXME: Handle other error returns as well?
+		if strings.Contains(errString, "App Auth ID") {
+			log.Printf("[DEBUG] Bad auth ID provided for single action: %s", errString)
+			return workflowExecution, errors.New("The authentication ID provided is invalid. Please try another.")
+		}
+
 		log.Printf("[ERROR] Failed preparing single execution (%s): %s", workflowExecution.ExecutionId, err)
 	}
 
@@ -25235,8 +25242,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	categories := GetAllAppCategories()
 
 	value.Category = strings.ToLower(value.Category)
-	value.Label = strings.ReplaceAll(strings.ToLower(value.Label), " ", "_")
-	value.AppName = strings.ReplaceAll(strings.ToLower(value.AppName), " ", "_")
+	value.Label = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value.Label)), " ", "_")
+	value.AppName = strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value.AppName)), " ", "_")
 
 	if value.AppName == "email" {
 		value.Category = "email"
@@ -25351,14 +25358,17 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	//RunAiQuery(systemMessage, userMessage)
 
+	partialMatch := true 
 	availableLabels := []string{}
+
+	matchName := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value.AppName)), " ", "_")
 	for _, app := range newapps {
 		if app.Name == "" || len(app.Categories) == 0 {
 			continue
 		}
 
 		// If we HAVE an app as a category already
-		if len(value.AppName) == 0 {
+		if len(matchName) == 0 {
 			availableLabels = []string{}
 			if len(app.Categories) == 0 {
 				continue
@@ -25403,21 +25413,32 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 
 		} else {
+			appName := strings.TrimSpace(strings.ReplaceAll(strings.ToLower(app.Name), " ", "_"))
+
 			// If we DONT have a category app already
-			if app.ID == value.AppName || strings.ReplaceAll(strings.ToLower(app.Name), " ", "_") == value.AppName {
-				//log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
+			if app.ID == matchName || appName == matchName {
+				selectedApp = app
+				log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
+				//selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true)
+				partialMatch = false 
 
 				break
 
-			} else if selectedApp.ID == "" && len(value.AppName) > 0 && (strings.Contains(strings.ToLower(app.Name), strings.ToLower(value.AppName)) || strings.Contains(strings.ToLower(value.AppName), strings.ToLower(app.Name))) {
+			// Finds a random match, but doesn't break in case it finds exact
+			} else if selectedApp.ID == "" && len(matchName) > 0 && (strings.Contains(appName, matchName) || strings.Contains(matchName, appName)) {
 				selectedApp = app
 
-				log.Printf("[WARNING] Set selected app to partial match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
+				log.Printf("[WARNING] Set selected app to PARTIAL match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true)
+
+				partialMatch = true
 			}
 		}
 	}
+
+	// In case we wanna use this to get good matches
+	_ = partialMatch
 
 	if len(selectedApp.ID) == 0 {
 		log.Printf("[WARNING] Couldn't find app with ID or name '%s' active in org %s (%s)", value.AppName, user.ActiveOrg.Name, user.ActiveOrg.Id)
@@ -25501,6 +25522,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if strings.Contains(strings.ToLower(strings.Join(selectedApp.ReferenceInfo.Triggers, ",")), "webhook") {
+		log.Printf("[INFO] App %s (%s) has a webhook trigger as default. Setting available labels to Webhook", selectedApp.Name, selectedApp.ID)
 		availableLabels = append(availableLabels, "Webhook")
 
 		if len(selectedAction.Name) == 0 {
@@ -26048,6 +26070,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	client := GetExternalClient(baseUrl)
 
+
 	selectedAction.AppName = selectedApp.Name
 	selectedAction.AppID = selectedApp.ID
 	selectedAction.AppVersion = selectedApp.AppVersion
@@ -26221,6 +26244,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		//streamUrl = "http://localhost:5002"
 		conversationUrl := fmt.Sprintf("%s/api/v1/conversation", baseUrl)
+		log.Printf("[DEBUG][AI] Sending single conversation execution to %s", conversationUrl)
 
 		// Check if "execution_id" & "authorization" queries exist
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
@@ -26360,6 +26384,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		// The app run url to use. Default delete is false
 		shouldDelete := "false"
 		apprunUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=%s", baseUrl, secondAction.AppID, shouldDelete)
+
 		if len(request.Header.Get("Authorization")) == 0 && len(request.URL.Query().Get("execution_id")) > 0 && len(request.URL.Query().Get("authorization")) > 0 {
 			apprunUrl = fmt.Sprintf("%s&execution_id=%s&authorization=%s", apprunUrl, request.URL.Query().Get("execution_id"), request.URL.Query().Get("authorization"))
 
@@ -26381,6 +26406,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		// Runs attempts up to X times
 		maxAttempts := 7
+
+		log.Printf("[DEBUG][AI] Sending single API run execution to %s", apprunUrl)
 		for i := 0; i < maxAttempts; i++ {
 
 			// Sends back how many translations happened
@@ -26422,6 +26449,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
+
 			// Ensures frontend has something to debug if things go wrong
 			for key, value := range newresp.Header {
 				if strings.HasSuffix(strings.ToLower(key), "-url") {
@@ -26444,6 +26472,20 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
+			// Parse success struct
+			successStruct := ResultChecker{}
+			json.Unmarshal(apprunBody, &successStruct)
+
+			httpOutput, marshalledBody, httpParseErr := FindHttpBody(apprunBody)
+			//log.Printf("\n\nGOT RESPONSE (%d): %s. STATUS: %d\n\n",  newresp.StatusCode, string(apprunBody), httpOutput.Status)
+			if successStruct.Success == false && len(successStruct.Reason) > 0 && httpOutput.Status == 0 && strings.Contains(strings.ReplaceAll(string(apprunBody), " ", ""), `"success":false`){
+				log.Printf("[WARNING][AI] Failed running app %s (%s). Contact support. Reason: %s", selectedAction.Name, selectedAction.AppID, successStruct.Reason)
+
+				resp.WriteHeader(400)
+				resp.Write(apprunBody)
+				return
+			}
+
 			// Input value to get raw output instead of translated
 			if value.SkipOutputTranslation {
 				resp.WriteHeader(202)
@@ -26451,7 +26493,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-			httpOutput, marshalledBody, httpParseErr := FindHttpBody(apprunBody)
 			parsedTranslation := SchemalessOutput{
 				Success: false,
 				Action:  value.Label,
@@ -27029,6 +27070,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 
 	categories := GetAllAppCategories()
 	lowercaseLabel := strings.ReplaceAll(strings.ToLower(label), " ", "_")
+	exactMatch := false
 	for _, action := range app.Actions {
 		if len(action.CategoryLabel) == 0 {
 			//log.Printf("%s: %#v\n", action.Name, action.CategoryLabel)
@@ -27037,15 +27079,18 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 
 		//log.Printf("FOUND LABELS: %s -> %#v\n", action.Name, action.CategoryLabel)
 
-		for labelIndex, _ := range action.CategoryLabel {
-			if strings.ReplaceAll(strings.ToLower(action.CategoryLabel[labelIndex]), " ", "_") == "no_label" {
+		for _, label := range action.CategoryLabel {
+			newLabel := strings.ReplaceAll(strings.ToLower(label), " ", "_")
+			if newLabel == "no_label" {
 				continue
 			}
 
-			availableLabels = append(availableLabels, action.CategoryLabel[labelIndex])
-			actionCategory := strings.ReplaceAll(strings.ToLower(action.CategoryLabel[labelIndex]), " ", "_")
+			// To ensure we have both normal + parsed label
+			availableLabels = append(availableLabels, newLabel)
+			availableLabels = append(availableLabels, label)
 
-			if actionCategory == lowercaseLabel || strings.HasPrefix(actionCategory, lowercaseLabel) {
+			if newLabel == lowercaseLabel || strings.HasPrefix(newLabel, lowercaseLabel) {
+				//log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, app.Name, app.ID, action.Name)
 				selectedAction = action
 
 				for _, category := range categories {
@@ -27054,13 +27099,20 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 						break
 					}
 				}
+
+				if newLabel == lowercaseLabel {
+					exactMatch = true 
+					break
+				}
 			}
+		}
+
+		if len(selectedAction.ID) > 0 && exactMatch {
+			break
 		}
 	}
 
-	//log.Printf("\n\n[DEBUG] SELECTED: %#v\n\n", selectedAction)
-
-	// FIXME: If selectedAction isn't chosen, then we need to try to discover it in the app
+	// Decides if we are to autocomplete the app if labels are not found 
 	if len(selectedAction.ID) == 0 {
 		if fixLabels == true {
 			//log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Autodiscovering and updating the app!!!\n\n", app.Name, app.ID, label)
