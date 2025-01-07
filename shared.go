@@ -6131,6 +6131,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// Check if there is a difference in triggers, and what they are
 	// Check if there is a difference in branches, and what they are
 
+	// We create a new ID for each trigger. 
+	// Older ID is stored in trigger.ReplacementForTrigger
+
 	nameChanged := false
 	descriptionChanged := false
 	tagsChanged := false
@@ -6292,9 +6295,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			continue
 		}
 
-		// cover case: when new trigger is added to a previously distributed workflow
-		// instead of distributing it right away, create a new ID for it.
-
 		found := false
 		for _, oldAction := range oldWorkflow.Triggers {
 			if !oldAction.ParentControlled {
@@ -6312,6 +6312,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
+	// checks if parentWorkflow removed a trigger 
+	// that was distributed to child workflow.
 	for _, oldAction := range oldWorkflow.Triggers {
 		if !oldAction.ParentControlled {
 			continue
@@ -6323,7 +6325,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				continue
 			}
 
-			if oldAction.ID == newAction.ID {
+			if oldAction.ReplacementForTrigger == newAction.ID {
 				found = true
 				break
 			}
@@ -6655,11 +6657,11 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 				// if a new branch is added to add a trigger,
 				// make sure it has the new trigger ID
-				for branchIndex, trigger := range childWorkflow.Triggers {
+				for _, trigger := range childWorkflow.Triggers {
 					if trigger.ReplacementForTrigger == branch.SourceID {
-						childWorkflow.Branches[branchIndex].SourceID = trigger.ID
+						branch.SourceID = trigger.ID
 					} else if trigger.ReplacementForTrigger == branch.DestinationID {
-						childWorkflow.Branches[branchIndex].DestinationID = trigger.ID
+						branch.DestinationID = trigger.ID
 					}
 				}
 
