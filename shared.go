@@ -25737,6 +25737,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed getting auths for org %s: %s", user.ActiveOrg.Id, err)
 		} else {
 			latestEdit := int64(0)
+
+			lastValid := false
 			for _, auth := range auth {
 				if auth.Edited < latestEdit {
 					continue
@@ -25745,6 +25747,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				// Check if the app name or ID is correct
 				if auth.App.Name != selectedApp.Name && auth.App.ID != selectedApp.ID {
 					continue
+				}
+
+				if lastValid == true {
+					log.Printf("\n\n\n[DEBUG] Skipping auth %s as it's not the latest valid\n\n", auth.Id)
+					continue
+				}
+
+				// Check if the auth is valid
+				if auth.Validation.Valid {
+					lastValid = true
 				}
 
 				foundAuthenticationId = auth.Id
