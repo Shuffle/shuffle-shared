@@ -4796,21 +4796,6 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		pipelineMap[pipeline.ID] = pipeline
 	}
 
-	if project.Environment == "cloud" {
-		for index, schedule := range schedules {
-			// Check if the schedule exist in the gcp
-			GcpSchedule, err := GetGcpSchedule(ctx, schedule.Id)
-			if err != nil {
-				schedules[index].Status = "stopped"
-				scheduleMap[schedule.Id] = schedule
-			}
-			if err == nil {
-				schedules[index].Status = GcpSchedule.Status
-				scheduleMap[schedule.Id] = schedule
-			}
-		}
-	}
-
 	allHooks := []Hook{}
 	allSchedules := []ScheduleOld{}
 	// Now loop through the workflow triggers to see if anything is not in sync
@@ -4959,6 +4944,20 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 						}
 					*/
 				}
+			}
+		}
+	}
+
+	if project.Environment == "cloud" {
+		for index, schedule := range allSchedules {
+			// Check if the schedule exist in the gcp
+			GcpSchedule, err := GetGcpSchedule(ctx, schedule.Id)
+			if err != nil {
+				allSchedules[index].Status = "stopped"
+			}
+
+			if err == nil {
+				allSchedules[index].Status = GcpSchedule.Status
 			}
 		}
 	}
