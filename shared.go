@@ -5983,6 +5983,13 @@ func hasTriggerChanged(newAction Trigger, oldAction Trigger) (string, bool) {
 		for _, oldParam := range oldAction.Parameters {
 			if param.Name == oldParam.Name {
 				if param.Value != oldParam.Value {
+					// if the changed param value is in WEBHOOK, we should not consider it as a change
+					// if it is in SUBFLOW, we will distribute subflow and user input,
+					// it needs to be handled a certain way.
+					if newAction.TriggerType == "WEBHOOK" {
+						continue
+					}
+
 					return "param_value", true
 				}
 
@@ -6350,7 +6357,11 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				continue
 			}
 
-			if newAction.ID != oldAction.ID {
+			// if newAction.ID != oldAction.ID {
+			// 	continue
+			// }
+
+			if newAction.ReplacementForTrigger != oldAction.ID {
 				continue
 			}
 
