@@ -7971,10 +7971,10 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 			workflows = append(workflows, hit.Source)
 		}
 	} else {
-		query := datastore.NewQuery(nameKey).Filter("id =", originalId).Limit(50)
-		//if project.Environment != "cloud" {
-		//	query = query.Order("-edited")
-		//}
+		query := datastore.NewQuery(nameKey).Filter("id =", originalId)
+		// if project.Environment == "cloud" {
+		query = query.Order("-edited").Limit(50)
+		// }
 
 		cursorStr := ""
 		for {
@@ -10064,6 +10064,23 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 				if !ArrayContains(foundNamespaces, f.Namespace) {
 					foundNamespaces = append(foundNamespaces, f.Namespace)
 
+					files = append(files, f)
+				}
+			}
+		}
+	}
+
+	// Should check if it's a child org and get parent orgs files if that is distributed to that child org
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+		if err == nil {
+			parentFiles, err := GetAllFiles(ctx, parentOrg.Id, namespace)
+			if err == nil {
+				for _, f := range parentFiles {
+					if !ArrayContains(f.SuborgDistribution, orgId) {
+						continue
+					}
 					files = append(files, f)
 				}
 			}
