@@ -42,7 +42,7 @@ var appSearchIndex = "appsearch"
 
 // CONFIGURE APP LOCATIONS TO USE
 // ALSO REQUIRES ACCESS TO UPLOAD TO CLOUD
-var appbasefile = "/Users/frikky/git/shuffle/backend/app_sdk/app_base.py"
+var appbasefile = "/Users/frikky/git/app_sdk/shuffle_sdk/shuffle_sdk.py"
 var appfolder = "/Users/frikky/git/python-apps"
 var baseUrl = ""
 var apikey = ""
