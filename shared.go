@@ -6296,6 +6296,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
+	replacedTriggers_ := []string{}
+	for _, trigger := range oldWorkflow.Triggers {
+		if len(trigger.ReplacementForTrigger) > 0 {
+			replacedTriggers_ = append(replacedTriggers_, trigger.ReplacementForTrigger)
+		}
+	}
+
 	// Triggers
 	for _, newAction := range parentWorkflow.Triggers {
 		if !newAction.ParentControlled {
@@ -6308,6 +6315,12 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				continue
 			}
 
+			// because this means that it's already been taken care of
+			if ArrayContains(replacedTriggers_, newAction.ID) {
+				found = true
+				break
+			}
+
 			if newAction.ID == oldAction.ID {
 				found = true
 				break
@@ -6315,6 +6328,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 
 		if !found {
+			log.Printf("[DEBUG] Trigger %s (%s) has been added.", newAction.Label, newAction.ID)
 			addedTriggers = append(addedTriggers, newAction.ID)
 		}
 	}
@@ -6343,6 +6357,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
+	// fun. newAction is from parentWorkflow, of course.
+	// and oldAction is from child. This can get confusing!
 	for _, newAction := range parentWorkflow.Triggers {
 		if !newAction.ParentControlled {
 			continue
@@ -6361,13 +6377,14 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			// 	continue
 			// }
 
-			if newAction.ReplacementForTrigger != oldAction.ID {
+			if oldAction.ReplacementForTrigger != newAction.ID {	
 				continue
 			}
 
-			changeType, changed := hasTriggerChanged(newAction, oldAction)
+			changeType, changed := hasTriggerChanged(newAction, oldAction)	
 			if changed {
 				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
+				// updatedTriggers always has parent workflow's new trigger.
 				updatedTriggers = append(updatedTriggers, newAction)
 			}
 		}
@@ -6589,6 +6606,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				}
 
 				if ArrayContains(replacedTriggers, trigger.ID) {
+					// this is supposed to have been already taken care of
 					continue
 				}
 
@@ -6674,7 +6692,18 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						childWorkflow.Triggers[index].Position = action.Position
 						childWorkflow.Triggers[index].AppVersion = action.AppVersion
 						childWorkflow.Triggers[index].IsStartNode = action.IsStartNode
-						childWorkflow.Triggers[index].Parameters = action.Parameters
+						// i don't want schedules to start or stop according to the parent workflow.
+						// thus, doing what i did here.
+						for paramIndex, param := range action.Parameters {
+							if param.Name == "execution_argument" {
+								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+							}
+
+							if param.Name == "cron" {
+								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+							}
+						}
+
 						break
 					}
 
