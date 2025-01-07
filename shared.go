@@ -6646,12 +6646,37 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			for _, action := range updatedTriggers {
 				log.Printf("[DEBUG] ID of the updated trigger: %s", action.ID)
 				for index, childAction := range childWorkflow.Triggers {
-					if childAction.ID != action.ID {
+					// if childAction.ID != action.ID {
+					// 	continue
+					// }
+
+					if childAction.ReplacementForTrigger != action.ID {
 						continue
 					}
 
 					// FIXME:
 					// Make sure it changes things such as URL & references properly
+					if action.TriggerType == "WEBHOOK" {
+						// make sure to only override: name, label, position, 
+						// app_version, startnode and nothing else
+
+						childWorkflow.Triggers[index].Name = action.Name
+						childWorkflow.Triggers[index].Label = action.Label
+						childWorkflow.Triggers[index].Position = action.Position
+						childWorkflow.Triggers[index].AppVersion = action.AppVersion
+						childWorkflow.Triggers[index].IsStartNode = action.IsStartNode
+						break
+					} else if action.TriggerType == "SCHEDULE" {
+						// make sure to override: name, label, position,
+						// app_version, startnode and parameters
+						childWorkflow.Triggers[index].Name = action.Name
+						childWorkflow.Triggers[index].Label = action.Label
+						childWorkflow.Triggers[index].Position = action.Position
+						childWorkflow.Triggers[index].AppVersion = action.AppVersion
+						childWorkflow.Triggers[index].IsStartNode = action.IsStartNode
+						childWorkflow.Triggers[index].Parameters = action.Parameters
+						break
+					}
 
 					childWorkflow.Triggers[index] = action
 					break
