@@ -4949,17 +4949,30 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		for index, schedule := range allSchedules {
-			// Check if the schedule exist in the gcp
-			GcpSchedule, err := GetGcpSchedule(ctx, schedule.Id)
-			if err != nil {
-				allSchedules[index].Status = "stopped"
-			}
+		var wg sync.WaitGroup
+		scheduleMutex := sync.Mutex{}
 
-			if err == nil {
-				allSchedules[index].Status = GcpSchedule.Status
-			}
+		for index, schedule := range allSchedules {
+			wg.Add(1)
+			go func(index int, schedule ScheduleOld) {
+				defer wg.Done()
+
+				// Check if the schedule exist in the gcp
+				GcpSchedule, err := GetGcpSchedule(ctx, schedule.Id)
+
+				// Use mutex to safely update the schedule status
+				scheduleMutex.Lock()
+				if err != nil {
+					allSchedules[index].Status = "stopped"
+				} else {
+					allSchedules[index].Status = GcpSchedule.Status
+				}
+
+				scheduleMutex.Unlock()
+			}(index, schedule)
 		}
+
+		wg.Wait()
 	}
 
 	sort.SliceStable(allHooks, func(i, j int) bool {
@@ -4991,6 +5004,24 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetGcpSchedule(ctx context.Context, id string) (*ScheduleOld, error) {
+
+	// Check if we have the schedule in cache
+	cacheData, err := GetCache(ctx, fmt.Sprintf("schedule-%s", id))
+	if err == nil {
+		data, ok := cacheData.([]byte)
+		if !ok {
+			log.Printf("[ERROR] Cache data for %s is not of type []byte", id)
+		} else {
+			schedule := &ScheduleOld{}
+			err = json.Unmarshal(data, schedule)
+			if err != nil {
+				log.Printf("[ERROR] Failed to unmarshal schedule cache for %s: %s", id, err)
+			} else {
+				return schedule, nil
+			}
+		}
+	}
+
 	schedule := &ScheduleOld{}
 	c, err := scheduler.NewCloudSchedulerClient(ctx)
 	if err != nil {
@@ -5016,6 +5047,18 @@ func GetGcpSchedule(ctx context.Context, id string) (*ScheduleOld, error) {
 	} else {
 		schedule.Status = "stopped"
 	}
+
+	// Set cache for 5 minutes just to make it fast
+	scheduleJSON, err := json.Marshal(schedule)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal schedule for cache: %s", err)
+		return schedule, err
+	}
+	err = SetCache(ctx, fmt.Sprintf("schedule-%s", id), scheduleJSON, 300)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting cache for schedule %s: %s", id, err)
+	}
+
 	return schedule, nil
 }
 
@@ -10131,19 +10174,33 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	//Check if workflow trigger schedule is in sync with the gcp cron job
 	if workflow.Triggers != nil {
+		var wg sync.WaitGroup
+		triggerMutex := sync.Mutex{}
 
 		for index, trigger := range workflow.Triggers {
 			if trigger.TriggerType == "SCHEDULE" {
-				//Check if the schedule is in sync with the gcp cron job
-				GcpSchedule, err := GetGcpSchedule(ctx, trigger.ID)
-				if err != nil {
-					log.Printf("[ERROR] Failed getting gcp schedule for trigger %s: %s", trigger.ID, err)
-					workflow.Triggers[index].Status = "stopped"
-				} else {
-					workflow.Triggers[index].Status = GcpSchedule.Status
-				}
+				wg.Add(1)
+				go func(index int, trigger Trigger) {
+					defer wg.Done()
+
+					// Check if the schedule is in sync with the gcp cron job
+					GcpSchedule, err := GetGcpSchedule(ctx, trigger.ID)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting gcp schedule for trigger %s: %s", trigger.ID, err)
+
+						triggerMutex.Lock()
+						workflow.Triggers[index].Status = "stopped"
+						triggerMutex.Unlock()
+					} else {
+						triggerMutex.Lock()
+						workflow.Triggers[index].Status = GcpSchedule.Status
+						triggerMutex.Unlock()
+					}
+				}(index, trigger)
 			}
 		}
+
+		wg.Wait()
 		SetWorkflow(ctx, *workflow, workflow.ID)
 	}
 
