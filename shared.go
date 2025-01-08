@@ -6655,14 +6655,19 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							}
 
 							propagatedEarlier := false
+							alreadyPropagatedSubflow := ""
+
 							for _, workflow := range childOrgWorkflows {
 								if workflow.ParentWorkflowId == parentSubflowPointedId {
 									propagatedEarlier = true
+									alreadyPropagatedSubflow = workflow.ID
 									break
 								}	
 							}
 
 							if propagatedEarlier {
+								// just make sure that it now points to that workflow
+								trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
 								continue
 							}
 
