@@ -6140,7 +6140,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 	// We create a new ID for each trigger. 
 	// Older ID is stored in trigger.ReplacementForTrigger
-
 	nameChanged := false
 	descriptionChanged := false
 	tagsChanged := false
@@ -6624,6 +6623,106 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 						if param.Name == "tmp" {
 							trigger.Parameters[paramIndex].Value = ""
+						}
+					}
+				} else if trigger.TriggerType == "SUBFLOW" {
+					// params: workflow, argument, user_apikey, startnode,
+					// check_result and auth_override
+
+					for paramIndex, param := range trigger.Parameters {
+						// since this is an added subflow, the workflow being referred
+						// is most likely not already distributed. let's do that.
+						if param.Name == "workflow" {
+							parentSubflowPointedId := param.Value
+
+							if len(parentSubflowPointedId) == 0 {
+								continue
+							}
+
+							// propagate reference workflow to child org
+							// check first if the workflow has been propagated before
+							// to the suborg (ParentWorkflowId is this workflow's ID)
+							childOrg, err := GetOrg(ctx, childWorkflow.OrgId)
+							if err != nil {
+								log.Printf("[WARNING] Failed getting org: %s", err)
+								continue
+							}
+
+							childOrgWorkflows, err := GetAllWorkflowsByQuery(ctx, childOrg, 0, "")
+							if err != nil {
+								log.Printf("[WARNING] Failed getting org workflows: %s", err)
+								continue
+							}
+
+							propagatedEarlier := false
+							for _, workflow := range childOrgWorkflows {
+								if workflow.ParentWorkflowId == parentSubflowPointedId {
+									propagatedEarlier = true
+									break
+								}	
+							}
+
+							if propagatedEarlier {
+								continue
+							}
+
+							parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
+							if err != nil {
+								log.Printf("[WARNING] Failed getting parent subflow: %s", err)
+								continue
+							}
+
+							parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId)
+
+							parentSubflowPointed, err = SetWorkflow(ctx, parentSubflowPointed, parentSubflowPointedId)
+							if err != nil {
+								log.Printf("[WARNING] Failed setting parent subflow: %s", err)
+								continue
+							}
+
+							propagatedSubflow, err := GenerateWorkflowFromParent(ctx, parentSubflowPointed, parentSubflowPointed.OrgId, suborgId)
+							if err != nil {
+								log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+							} else {
+								log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
+			
+								triggers[index].Parameters[paramIndex].Value = propagatedSubflow.ID
+							}
+
+							startnode := ""
+							startNodeParamIndex := -1
+
+							// now handle startnode
+							for startNodeParamIndex_, param_ := range trigger.Parameters {
+								if param_.Name == "startnode" {
+									startnode = param_.Value
+									startNodeParamIndex = startNodeParamIndex_
+								}
+							}
+
+							if len(startnode) == 0 {
+								continue
+							}
+
+							// find the equivalent of the startnode in the new workflow
+							for _, action := range propagatedSubflow.Actions {
+								if action.ID == startnode {
+									triggers[index].Parameters[startNodeParamIndex].Value = action.ID
+									break
+								}
+							}
+
+							// sometimes, it can happen that it's a replaced trigger
+							for _, trigger := range propagatedSubflow.Triggers {
+								if trigger.ReplacementForTrigger == startnode {
+									triggers[index].Parameters[startNodeParamIndex].Value = trigger.ID
+									break
+								}
+							}
+
+						} else if param.Name != "startnode" && param.Name != "startnode" {
+							// just use it
+							triggers[index].Parameters[paramIndex].Value = param.Value
 						}
 					}
 				}
