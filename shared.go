@@ -6133,6 +6133,150 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 	return parentWorkflow
 }
 
+func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, parentTrigger Trigger) Trigger {
+	// remember: when this function is used, the parent trigger is passed to 
+	// create the new child trigger.
+	trigger := parentTrigger
+
+	for paramIndex, param := range trigger.Parameters {
+		// since this is an added subflow, the workflow being referred
+		// is most likely not already distributed. let's do that.
+		if param.Name == "workflow" {
+			parentSubflowPointedId := param.Value
+
+			if len(parentSubflowPointedId) == 0 {
+				continue
+			}
+
+			ctx := context.Background()
+
+			// propagate reference workflow to child org
+			// check first if the workflow has been propagated before
+			// to the suborg (ParentWorkflowId is this workflow's ID)
+			childOrg, err := GetOrg(ctx, childWorkflow.OrgId)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org: %s", err)
+				continue
+			}
+
+			user := User{
+				Role: "admin",
+				ActiveOrg: OrgMini{
+					Id: childOrg.Id,
+				},
+			}
+
+			childOrgWorkflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org workflows: %s", err)
+				continue
+			}
+
+			propagatedEarlier := false
+			alreadyPropagatedSubflow := ""
+
+			for _, workflow := range childOrgWorkflows {
+				// this means that the subflow has been propagated to 
+				// child workflow already. no need to complicate things further.
+				if workflow.ParentWorkflowId == parentSubflowPointedId {
+					propagatedEarlier = true
+					alreadyPropagatedSubflow = workflow.ID
+					break
+				}	
+			}
+
+			if propagatedEarlier {
+				// just make sure that it now points to that workflow
+				trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
+
+				// get workflow
+				workflow, err := GetWorkflow(ctx, alreadyPropagatedSubflow)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting propagated subflow: %s", err)
+					continue
+				}
+
+				startNodeIndexToOverwrite := -1
+				currentStartNode := ""
+
+				// taking the right startnode is important
+				for startNodeIndex, startNode := range trigger.Parameters {
+					if startNode.Name == "startnode" {
+						startNodeIndexToOverwrite = startNodeIndex
+						currentStartNode = startNode.Value
+					}
+				}
+
+				if len(currentStartNode) == 0 {
+					continue
+				}
+
+				for _, action := range workflow.Actions {
+					if action.ID == currentStartNode {
+						trigger.Parameters[startNodeIndexToOverwrite].Value = action.ID
+						break
+					}
+				}
+
+				continue
+			}
+
+			parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
+				continue
+			}
+
+			parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId)
+
+			err = SetWorkflow(ctx, *parentSubflowPointed, parentSubflowPointedId)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting parent subflow: %s", err)
+				continue
+			}
+
+			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
+			if err != nil {
+				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+			} else {
+				log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
+
+				trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
+			}
+
+			startnode := ""
+			startNodeParamIndex := -1
+
+			// now handle startnode
+			for startNodeParamIndex_, param_ := range trigger.Parameters {
+				if param_.Name == "startnode" {
+					startnode = param_.Value
+					startNodeParamIndex = startNodeParamIndex_
+				}
+			}
+
+			if len(startnode) == 0 {
+				continue
+			}
+
+			// actions are always startnodes
+			// find the equivalent of the startnode in the new workflow
+			for _, action := range propagatedSubflow.Actions {
+				if action.ID == startnode {
+					trigger.Parameters[startNodeParamIndex].Value = action.ID
+					break
+				}
+			}
+
+		} else if param.Name != "startnode" && param.Name != "startnode" {
+			// just use it
+			trigger.Parameters[paramIndex].Value = param.Value
+		}
+	}
+
+	return trigger
+}
+
 func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// Check if there is a difference in actions, and what they are
 	// Check if there is a difference in triggers, and what they are
@@ -6140,7 +6284,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 	// We create a new ID for each trigger. 
 	// Older ID is stored in trigger.ReplacementForTrigger
-
 	nameChanged := false
 	descriptionChanged := false
 	tagsChanged := false
@@ -6296,6 +6439,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
+	replacedTriggers_ := []string{}
+	for _, trigger := range oldWorkflow.Triggers {
+		if len(trigger.ReplacementForTrigger) > 0 {
+			replacedTriggers_ = append(replacedTriggers_, trigger.ReplacementForTrigger)
+		}
+	}
+
 	// Triggers
 	for _, newAction := range parentWorkflow.Triggers {
 		if !newAction.ParentControlled {
@@ -6308,6 +6458,12 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				continue
 			}
 
+			// because this means that it's already been taken care of
+			if ArrayContains(replacedTriggers_, newAction.ID) {
+				found = true
+				break
+			}
+
 			if newAction.ID == oldAction.ID {
 				found = true
 				break
@@ -6315,6 +6471,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 
 		if !found {
+			log.Printf("[DEBUG] Trigger %s (%s) has been added.", newAction.Label, newAction.ID)
 			addedTriggers = append(addedTriggers, newAction.ID)
 		}
 	}
@@ -6343,6 +6500,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
+	// fun. newAction is from parentWorkflow, of course.
+	// and oldAction is from child. This can get confusing!
 	for _, newAction := range parentWorkflow.Triggers {
 		if !newAction.ParentControlled {
 			continue
@@ -6361,13 +6520,24 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			// 	continue
 			// }
 
-			if newAction.ReplacementForTrigger != oldAction.ID {
+			if oldAction.ReplacementForTrigger != newAction.ID {	
 				continue
 			}
 
-			changeType, changed := hasTriggerChanged(newAction, oldAction)
+			// if removed trigger is cron and is running in the child workflow,
+			// try to stop it first.
+			// if oldAction.TriggerType == "SCHEDULE" {
+			// 	for paramIndex, param := range oldAction.Parameters {
+			// 		if param.Name == "cron" {
+
+			// 		}
+			// 	}
+			// }
+
+			changeType, changed := hasTriggerChanged(newAction, oldAction)	
 			if changed {
 				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
+				// updatedTriggers always has parent workflow's new trigger.
 				updatedTriggers = append(updatedTriggers, newAction)
 			}
 		}
@@ -6589,6 +6759,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				}
 
 				if ArrayContains(replacedTriggers, trigger.ID) {
+					// this is supposed to have been already taken care of
 					continue
 				}
 
@@ -6608,6 +6779,10 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							trigger.Parameters[paramIndex].Value = ""
 						}
 					}
+				} else if trigger.TriggerType == "SUBFLOW" {
+					// params: workflow, argument, user_apikey, startnode,
+					// check_result and auth_override
+					trigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, trigger)
 				}
 
 				for branchIndex, branch := range childWorkflow.Branches {
@@ -6646,12 +6821,69 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			for _, action := range updatedTriggers {
 				log.Printf("[DEBUG] ID of the updated trigger: %s", action.ID)
 				for index, childAction := range childWorkflow.Triggers {
-					if childAction.ID != action.ID {
+					// if childAction.ID != action.ID {
+					// 	continue
+					// }
+
+					if childAction.ReplacementForTrigger != action.ID {
 						continue
 					}
 
 					// FIXME:
 					// Make sure it changes things such as URL & references properly
+					if action.TriggerType == "WEBHOOK" {
+						// make sure to only override: name, label, position, 
+						// app_version, startnode and nothing else
+
+						childWorkflow.Triggers[index].Name = action.Name
+						childWorkflow.Triggers[index].Label = action.Label
+						childWorkflow.Triggers[index].Position = action.Position
+						childWorkflow.Triggers[index].AppVersion = action.AppVersion
+						break
+					} else if action.TriggerType == "SCHEDULE" {
+						// make sure to override: name, label, position,
+						// app_version and parameters
+						childWorkflow.Triggers[index].Name = action.Name
+						childWorkflow.Triggers[index].Label = action.Label
+						childWorkflow.Triggers[index].Position = action.Position
+						childWorkflow.Triggers[index].AppVersion = action.AppVersion
+						// i don't want schedules to start or stop according to the parent workflow.
+						// thus, doing what i did here.
+						for paramIndex, param := range action.Parameters {
+							if param.Name == "execution_argument" {
+								// to avoid speed related nil pointer issues
+								// for when users are saving parent workflows fast
+								if len(childWorkflow.Triggers[index].Parameters) > paramIndex {
+									childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								}
+							}
+
+							if param.Name == "cron" {
+								// to avoid speed related nil pointer issues
+								// for when users are saving parent workflows fast
+								if len(childWorkflow.Triggers[index].Parameters) > paramIndex {
+									childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								}
+							}
+						}
+
+						break
+					} else if action.TriggerType == "SUBFLOW" {
+						// make sure to override: name, label, position,
+						// app_version, startnode and parameters
+						childWorkflow.Triggers[index].Name = action.Name
+						childWorkflow.Triggers[index].Label = action.Label
+						childWorkflow.Triggers[index].Position = action.Position
+						childWorkflow.Triggers[index].AppVersion = action.AppVersion
+
+						// essentially, now we try to verify:
+						// okay, new workflow? we see it's a subflow that's 
+						// what changed? is it the workflow?
+
+						action = subflowPropagationWrapper(parentWorkflow, childWorkflow, action)
+						childWorkflow.Triggers[index].Parameters = action.Parameters
+						break
+					}
 
 					childWorkflow.Triggers[index] = action
 					break
@@ -9777,35 +10009,6 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 				if branch.DestinationID == oldID {
 					newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
-				}
-			}
-		} else if newWf.Triggers[triggerIndex].TriggerType == "SUBFLOW" {
-			oldID := newWf.Triggers[triggerIndex].ID
-			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
-
-			newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID
-
-			// loop through workflow trigger parameters
-			for paramIndex, param := range newWf.Triggers[triggerIndex].Parameters {
-				if param.Name == "workflow" {
-					if len(param.Value) == 0 {
-						break
-					}
-
-					subflow, err := GetWorkflow(ctx, param.Value)
-					if err != nil {
-						log.Printf("[ERROR] Failed getting subflow %s: %s", param.Value, err)
-						break
-					}
-
-					// distribute the subflow further to this suborg, and then take the new id
-					childWorkflow, err := GenerateWorkflowFromParent(ctx, *subflow, parentOrgId, subOrgId)
-					if err != nil {
-						log.Printf("[ERROR] Failed generating subflow %s: %s", subflow.ID, err)
-						break
-					}
-
-					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = childWorkflow.ID
 				}
 			}
 		}
@@ -18565,6 +18768,264 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	if len(item1) == 0 {
 		resp.WriteHeader(500)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No docs available."}`)))
+		return
+	}
+
+	names := []GithubResp{}
+	for _, item := range item1 {
+		if !strings.HasSuffix(*item.Name, "md") {
+			continue
+		}
+
+		// FIXME: Scuffed readtime calc
+		// Average word length = 5. Space = 1. 5+1 = 6 avg.
+		// Words = *item.Size/6/250
+		//250 = average read time / minute
+		// Doubling this for bloat removal in Markdown~
+		githubResp := GithubResp{
+			Name:         (*item.Name)[0 : len(*item.Name)-3],
+			Contributors: []GithubAuthor{},
+			Edited:       "",
+			ReadTime:     *item.Size / 6 / 250,
+			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
+		}
+
+		names = append(names, githubResp)
+	}
+
+	//log.Printf(names)
+	result.Success = true
+	result.Reason = "Success"
+	result.List = names
+	b, err := json.Marshal(result)
+	if err != nil {
+		http.Error(resp, err.Error(), 500)
+		return
+	}
+
+	err = SetCache(ctx, cacheKey, b, 300)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for cachekey %s: %s", cacheKey, err)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
+func GetArticles(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	if len(location) < 5 {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"`)))
+		return
+	}
+
+	if strings.Contains(location[4], "?") {
+		location[4] = strings.Split(location[4], "?")[0]
+	}
+
+	ctx := GetContext(request)
+	downloadLocation, downloadOk := request.URL.Query()["location"]
+	version, versionOk := request.URL.Query()["version"]
+	cacheKey := fmt.Sprintf("articles_%s", location[4])
+	if downloadOk {
+		cacheKey = fmt.Sprintf("%s_%s", cacheKey, downloadLocation[0])
+	}
+
+	if versionOk {
+		cacheKey = fmt.Sprintf("%s_%s", cacheKey, version[0])
+	}
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		resp.WriteHeader(200)
+		resp.Write(cacheData)
+		return
+	}
+
+	owner := "shuffle"
+	repo := "shuffle-docs"
+	path := "articles"
+	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
+
+	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
+	realPath := ""
+
+	newname := location[4]
+	if downloadOk {
+		if downloadLocation[0] == "openapi" {
+			newname = strings.ReplaceAll(strings.ToLower(location[4]), `%20`, "_")
+			docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/openapi-apps/master/docs/%s.md", newname)
+			realPath = fmt.Sprintf("https://github.com/Shuffle/openapi-apps/blob/master/docs/%s.md", newname)
+
+		} else if downloadLocation[0] == "python" && versionOk {
+			// Apparently this uses dashes for no good reason?
+			// Should maybe move everything over to underscores later?
+			newname = strings.ReplaceAll(newname, `%20`, "-")
+			newname = strings.ReplaceAll(newname, ` `, "-")
+			newname = strings.ReplaceAll(newname, `_`, "-")
+			newname = strings.ToLower(newname)
+
+			if version[0] == "1.0.0" {
+				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/1.0.0/README.md", newname)
+				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/1.0.0/README.md", newname)
+
+				log.Printf("[INFO] Should download python app for version %s: %s", version[0], docPath)
+
+			} else {
+				realPath = fmt.Sprintf("https://github.com/Shuffle/python-apps/blob/master/%s/README.md", newname)
+				docPath = fmt.Sprintf("https://raw.githubusercontent.com/Shuffle/python-apps/master/%s/README.md", newname)
+			}
+
+		}
+	}
+
+	//log.Printf("Docpath: %s", docPath)
+
+	httpClient := &http.Client{}
+	req, err := http.NewRequest(
+		"GET",
+		docPath,
+		nil,
+	)
+
+	if err != nil {
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
+		resp.WriteHeader(404)
+		return
+	}
+
+	newresp, err := httpClient.Do(req)
+	if err != nil {
+		resp.WriteHeader(404)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Bad path. Use e.g. /api/v1/articles/workflows.md"}`)))
+		return
+	}
+
+	defer newresp.Body.Close()
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't parse data"}`)))
+		return
+	}
+
+	commitOptions := &github.CommitsListOptions{
+		Path: fmt.Sprintf("%s/%s.md", path, location[4]),
+	}
+
+	parsedLink := fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s.md", owner, repo, path, location[4])
+	if len(realPath) > 0 {
+		parsedLink = realPath
+	}
+
+	client := github.NewClient(nil)
+	githubResp := GithubResp{
+		Name:         location[4],
+		Contributors: []GithubAuthor{},
+		Edited:       "",
+		ReadTime:     len(body) / 10 / 250,
+		Link:         parsedLink,
+	}
+
+	if githubResp.ReadTime == 0 {
+		githubResp.ReadTime = 1
+	}
+
+	info, _, err := client.Repositories.ListCommits(ctx, owner, repo, commitOptions)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting commit info: %s", err)
+	} else {
+		//log.Printf("Info: %s", info)
+		for _, commit := range info {
+			//log.Printf("Commit: %s", commit.Author)
+			newAuthor := GithubAuthor{}
+			if commit.Author != nil && commit.Author.AvatarURL != nil {
+				newAuthor.ImageUrl = *commit.Author.AvatarURL
+			}
+
+			if commit.Author != nil && commit.Author.HTMLURL != nil {
+				newAuthor.Url = *commit.Author.HTMLURL
+			}
+
+			found := false
+			for _, contributor := range githubResp.Contributors {
+				if contributor.Url == newAuthor.Url {
+					found = true
+					break
+				}
+			}
+
+			if !found && len(newAuthor.Url) > 0 && len(newAuthor.ImageUrl) > 0 {
+				githubResp.Contributors = append(githubResp.Contributors, newAuthor)
+			}
+		}
+	}
+
+	type Result struct {
+		Success bool       `json:"success"`
+		Reason  string     `json:"reason"`
+		Meta    GithubResp `json:"meta"`
+	}
+
+	var result Result
+	result.Success = true
+	result.Meta = githubResp
+
+	result.Reason = string(body)
+	b, err := json.Marshal(result)
+	if err != nil {
+		http.Error(resp, err.Error(), 500)
+		return
+	}
+
+	err = SetCache(ctx, cacheKey, b, 180)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for articles %s: %s", location[4], err)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
+func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+	cacheKey := "articles_list"
+	cache, err := GetCache(ctx, cacheKey)
+	result := FileList{}
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		resp.WriteHeader(200)
+		resp.Write(cacheData)
+		return
+	}
+
+	client := github.NewClient(nil)
+	owner := "shuffle"
+	repo := "shuffle-docs"
+	path := "articles"
+	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting articles list: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Error listing directory"}`)))
+		return
+	}
+
+	if len(item1) == 0 {
+		resp.WriteHeader(500)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No articles available."}`)))
 		return
 	}
 
