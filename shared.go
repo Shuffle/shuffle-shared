@@ -6524,6 +6524,16 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				continue
 			}
 
+			// if removed trigger is cron and is running in the child workflow,
+			// try to stop it first.
+			// if oldAction.TriggerType == "SCHEDULE" {
+			// 	for paramIndex, param := range oldAction.Parameters {
+			// 		if param.Name == "cron" {
+
+			// 		}
+			// 	}
+			// }
+
 			changeType, changed := hasTriggerChanged(newAction, oldAction)	
 			if changed {
 				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
@@ -6841,11 +6851,19 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						// thus, doing what i did here.
 						for paramIndex, param := range action.Parameters {
 							if param.Name == "execution_argument" {
-								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								// to avoid speed related nil pointer issues
+								// for when users are saving parent workflows fast
+								if len(childWorkflow.Triggers[index].Parameters) > paramIndex {
+									childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								}
 							}
 
 							if param.Name == "cron" {
-								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								// to avoid speed related nil pointer issues
+								// for when users are saving parent workflows fast
+								if len(childWorkflow.Triggers[index].Parameters) > paramIndex {
+									childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								}
 							}
 						}
 
@@ -6864,7 +6882,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 						action = subflowPropagationWrapper(parentWorkflow, childWorkflow, action)
 						childWorkflow.Triggers[index].Parameters = action.Parameters
-					break
+						break
 					}
 
 					childWorkflow.Triggers[index] = action
