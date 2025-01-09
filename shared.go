@@ -9970,48 +9970,6 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 		// FIXME: How do we manage secondary IDs?
 		// E.g. for webhooks, how do we have a URL correctly, and start/stop properly?
 		newWf.Triggers[triggerIndex].Status = "uninitialized"
-		if newWf.Triggers[triggerIndex].TriggerType == "WEBHOOK" {
-			oldID := newWf.Triggers[triggerIndex].ID
-			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
-			for paramIndex, param := range newWf.Triggers[triggerIndex].Parameters {
-				if param.Name == "url" {
-					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
-				}
-
-				if param.Name == "tmp" {
-					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
-				}
-
-				newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID
-
-				// edit all branch source ids where the ID is changed
-				for branchIndex, branch := range newWf.Branches {
-					if branch.SourceID == oldID {
-						newWf.Branches[branchIndex].SourceID = newWf.Triggers[triggerIndex].ID
-					}
-
-					if branch.DestinationID == oldID {
-						newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
-					}
-				}
-			}
-		} else if newWf.Triggers[triggerIndex].TriggerType == "SCHEDULE" {
-			oldID := newWf.Triggers[triggerIndex].ID
-			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
-
-			newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID	
-
-
-			for branchIndex, branch := range newWf.Branches {
-				if branch.SourceID == oldID {
-					newWf.Branches[branchIndex].SourceID = newWf.Triggers[triggerIndex].ID
-				}
-
-				if branch.DestinationID == oldID {
-					newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
-				}
-			}
-		}
 	}
 
 	err = SetWorkflow(ctx, newWf, newWf.ID)
