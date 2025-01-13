@@ -15597,7 +15597,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 				resultExists := false
 				for _, result := range workflowExecution.Results {
-					log.Printf("[DEBUG][%s] Checking if result %s (%s) exists in results", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID)
+					//log.Printf("[DEBUG][%s] Checking if result %s (%s) exists in results", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID)
 					if result.Action.ID == curAction.ID {
 						resultExists = true
 						break
@@ -15615,7 +15615,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							for _, trigger := range workflowExecution.Workflow.Triggers {
 								if trigger.ID == branch.SourceID {
 									if trigger.AppName != "User Input" && trigger.AppName != "Shuffle Workflow" {
-										log.Printf("[DEBUG][%s] Parent %s (%s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, curAction.Label)
+										//log.Printf("[DEBUG][%s] Parent %s (%s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, curAction.Label)
 										parentTrigger = true
 									}
 								}
@@ -15626,7 +15626,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								continue
 							}
 
-							log.Printf("[DEBUG][%s] Parent %s (of child %s) is NOT a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
+							//log.Printf("[DEBUG][%s] Parent %s (of child %s) is NOT a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
 
 							sourceNodeFound := false
 							for _, item := range childNodes {
@@ -30004,7 +30004,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 			marshalledListData := []SubflowData{}
 			err := json.Unmarshal([]byte(res.Result), &marshalledListData)
 			if err != nil {
-				log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
+				//log.Printf("[ERROR] Failed unmarshalling subflow data for %s: %s", res.Action.Label, err)
+
 				marshalledData := SubflowData{}
 				err := json.Unmarshal([]byte(res.Result), &marshalledData)
 				if err != nil {
