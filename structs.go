@@ -1202,11 +1202,11 @@ type Trigger struct {
 		X float64 `json:"x" datastore:"x"`
 		Y float64 `json:"y" datastore:"y"`
 	} `json:"position"`
-	Priority       int         `json:"priority" datastore:"priority"`
-	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
-	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
-	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
-	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+	Priority         int         `json:"priority" datastore:"priority"`
+	SourceWorkflow   string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	ExecutionDelay   int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
+	AppAssociation   WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
+	ParentControlled bool        `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 
 	ReplacementForTrigger string `json:"replacement_for_trigger" datastore:"replacement_for_trigger"` // If this trigger is a replacement for another trigger
 }
@@ -3954,13 +3954,14 @@ type AppHealth struct {
 }
 
 type WorkflowHealth struct {
-	Create      bool   `json:"create"`
-	Run         bool   `json:"run"`
-	RunFinished bool   `json:"run_finished"`
-	RunStatus   string `json:"run_status"`
-	Delete      bool   `json:"delete"`
-	ExecutionId string `json:"execution_id"`
-	WorkflowId  string `json:"workflow_id"`
+	Create             bool   `json:"create"`
+	Run                bool   `json:"run"`
+	RunFinished        bool   `json:"run_finished"`
+	RunStatus          string `json:"run_status"`
+	Delete             bool   `json:"delete"`
+	ExecutionId        string `json:"execution_id"`
+	WorkflowId         string `json:"workflow_id"`
+	WorkflowValidation bool   `json:"workflow_validation"`
 }
 
 type HealthCheck struct {

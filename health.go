@@ -399,7 +399,6 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 		return err
 	}
 
-
 	if len(workflows) == 0 {
 		//log.Printf("[DEBUG] Couldn't find any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
 		return errors.New("Failed finding workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW")
@@ -539,7 +538,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			resp.WriteHeader(200)
 			resp.Write(platformData)
 			return
-		} 
+		}
 
 		log.Printf("[WARNING] Failed getting platform health from database: %s", err)
 		resp.WriteHeader(500)
@@ -552,7 +551,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	var err error
 	userInfo := User{
 		ApiKey: apiKey,
-		Role: "admin",
+		Role:   "admin",
 	}
 
 	if project.Environment != "onprem" {
@@ -618,7 +617,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true {
+	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true && platformHealth.Workflows.RunStatus == "FINISHED" {
 		log.Printf("[DEBUG] Platform health check successful! All necessary values are true.")
 		platformHealth.Success = true
 	}
@@ -692,7 +691,7 @@ func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 
 	healthChecks, err := GetPlatformHealth(ctx, afterInt, beforeInt, limitInt)
 	if err != nil && strings.Contains(err.Error(), "Bad statuscode: 404") && project.Environment == "onprem" {
-		log.Printf("[WARNING] Failed getting platform health from database: %s. Probably because no workflowexecutions have been done",err)
+		log.Printf("[WARNING] Failed getting platform health from database: %s. Probably because no workflowexecutions have been done", err)
 		resp.WriteHeader(200)
 		resp.Write([]byte(`[]`))
 		return
@@ -859,7 +858,7 @@ func fixOpensearch() error {
 	// Create a new HTTP client
 	client := &http.Client{}
 
-// Send the request in a loop until a 200 status code is received
+	// Send the request in a loop until a 200 status code is received
 	res, err := client.Do(req)
 	if err != nil {
 		log.Printf("Error sending the request while fixing execution body: %s", err)
@@ -962,7 +961,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending health check HTTP request: %s", err)
-		return workflowHealth, err	
+		return workflowHealth, err
 	}
 
 	defer resp.Body.Close()
@@ -1002,6 +1001,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	if resp.StatusCode == 200 {
 		workflowHealth.Run = true
 		workflowHealth.ExecutionId = execution.ExecutionId
+		workflowHealth.WorkflowValidation = execution.Workflow.Validation.Valid
 	}
 
 	updateOpsCache(workflowHealth)
@@ -1146,13 +1146,12 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	log.Printf("[DEBUG] Ops dashboard user found. Setting up ops workflow")
 
-
 	client := &http.Client{}
 	body := GetWorkflowTest()
 	if project.Environment == "cloud" {
 		// url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
 		// url := "https://shuffler.io/api/v1/workflows/7b729319-b395-4ba3-b497-d8246da67b1c"
-        url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
+		url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Println("[ERROR] creating HTTP request:", err)
