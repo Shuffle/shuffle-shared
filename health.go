@@ -1001,6 +1001,7 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	if resp.StatusCode == 200 {
 		workflowHealth.Run = true
 		workflowHealth.ExecutionId = execution.ExecutionId
+		workflowHealth.WorkflowValidation = execution.Workflow.Validation.Valid
 	}
 
 	updateOpsCache(workflowHealth)
