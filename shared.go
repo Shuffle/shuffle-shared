@@ -6282,10 +6282,6 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 
 
 func deleteScheduleGeneral(ctx context.Context, scheduleId string) error {
-	// make an API request to:
-	// /api/v1/workflows/{key}/schedule/{schedule}
-	// with DELETE method
-
 	schedule, err := GetSchedule(ctx, scheduleId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting schedule %s: %s", scheduleId, err)
