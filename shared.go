@@ -55,6 +55,9 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Masterminds/semver"
+
+	scheduler "cloud.google.com/go/scheduler/apiv1"
+	schedulerpb "google.golang.org/genproto/googleapis/cloud/scheduler/v1"
 )
 
 var project ShuffleStorage
@@ -6277,6 +6280,90 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 	return trigger
 }
 
+
+func deleteScheduleGeneral(ctx context.Context, scheduleId string) error {
+	schedule, err := GetSchedule(ctx, scheduleId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting schedule %s: %s", scheduleId, err)
+		return err
+	}
+
+	if project.Environment == "cloud" && (schedule.Environment == "" || schedule.Environment == "cloud") {
+		log.Printf("[INFO] Deleting schedule with ID %s", scheduleId)
+
+		c, err := scheduler.NewCloudSchedulerClient(ctx)
+		if err != nil {
+			log.Printf("[WARNING] Failed deleting %s", err)
+			return err
+		}
+
+		defaultLocation := os.Getenv("SHUFFLE_GCE_LOCATION")
+
+		req := &schedulerpb.DeleteJobRequest{
+			Name: fmt.Sprintf("projects/%s/locations/%s/jobs/schedule_%s", gceProject, defaultLocation, scheduleId),
+		}
+
+		log.Printf("[INFO] Request made to GCP to delete schedule %s", scheduleId)
+
+		err = c.DeleteJob(ctx, req)
+		if err != nil {
+			log.Printf("[WARNING] Failed deleting cloud schedule %s", err)
+			return err
+		}
+
+		log.Printf("[INFO] Deleted schedule with ID %s", scheduleId)
+		err = DeleteKey(ctx, "schedules", scheduleId)
+		if err != nil {
+			log.Printf("[WARNING] Failed deleting schedule %s locally: %s", scheduleId, err)
+			return err
+		}
+	} else if project.Environment == "onprem" && (schedule.Environment == "onprem" || schedule.Environment == "") {
+		// TODO: to be handled
+	} else if project.Environment == "cloud" && schedule.Environment == "onprem" {
+		// hybrid case
+		// TODO: to be handled
+	} else if project.Environment == "onprem" && (schedule.Environment == "cloud" ) {
+		scheduleWorkflow, err := GetWorkflow(ctx, schedule.WorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting schedule workflow %s: %s", schedule.WorkflowId, err)
+			return err
+		}
+
+		org, err := GetOrg(ctx, schedule.Org)
+		if err != nil {
+			log.Printf("Failed finding org %s: %s", org.Id, err)
+			return err
+		}
+
+		// 1. Send request to cloud
+		// 2. Remove schedule if success
+		action := CloudSyncJob{
+			Type:          "schedule",
+			Action:        "stop",
+			OrgId:         org.Id,
+			PrimaryItemId: scheduleId,
+			SecondaryItem: schedule.Frequency,
+			ThirdItem:     scheduleWorkflow.ID,
+		}
+
+		err = executeCloudAction(action, org.SyncConfig.Apikey)
+		if err != nil {
+			log.Printf("[WARNING] Failed cloud action STOP schedule: %s", err)
+			return err
+		} else {
+			log.Printf("[INFO] Successfully ran cloud action STOP schedule")
+			err = DeleteKey(ctx, "schedules", scheduleId)
+			if err != nil {
+				log.Printf("[WARNING] Failed deleting schedule %s locally: %s", scheduleId, err)
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+
 func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// Check if there is a difference in actions, and what they are
 	// Check if there is a difference in triggers, and what they are
@@ -6523,16 +6610,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			if oldAction.ReplacementForTrigger != newAction.ID {	
 				continue
 			}
-
-			// if removed trigger is cron and is running in the child workflow,
-			// try to stop it first.
-			// if oldAction.TriggerType == "SCHEDULE" {
-			// 	for paramIndex, param := range oldAction.Parameters {
-			// 		if param.Name == "cron" {
-
-			// 		}
-			// 	}
-			// }
 
 			changeType, changed := hasTriggerChanged(newAction, oldAction)	
 			if changed {
@@ -6806,6 +6883,43 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			newChildTriggers := childTriggers
 			for _, trigger := range childWorkflow.Triggers {
 				if ArrayContains(removedTriggers, trigger.ID) {
+					// while removing triggers, 
+					// make sure to stop them as well
+
+					// need to handle this better
+					// Q: is there a generic API that we can call
+					// to have this handled?
+
+					if trigger.TriggerType == "WEBHOOK" {
+						ctx := context.Background()
+						hook, err := GetHook(ctx, trigger.ID)
+						if err == nil {
+							// this anyhow, means it is a webhook
+							err = DeleteKey(ctx, "hooks",  hook.Id)
+							if err != nil {
+								log.Printf("[WARNING] Failed deleting hook: %s", err)
+							}
+
+							continue
+						}
+
+						log.Printf("[WARNING] Failed getting hook: %s", err)
+					} else if trigger.TriggerType == "SCHEDULE" {
+						log.Printf("[DEBUG] This trigger is a schedule. Will proceed to delete it")
+
+						ctx := context.Background()
+						schedule, err := GetSchedule(ctx, trigger.ID)
+						if err == nil {
+							err = deleteScheduleGeneral(ctx, schedule.Id)
+							if err != nil {
+								log.Printf("[WARNING] Failed deleting schedule: %s", err)
+							}
+							continue
+						}
+
+						log.Printf("[WARNING] Failed getting schedule: %s", err)
+					}
+
 					continue
 				}
 
@@ -6851,19 +6965,11 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						// thus, doing what i did here.
 						for paramIndex, param := range action.Parameters {
 							if param.Name == "execution_argument" {
-								// to avoid speed related nil pointer issues
-								// for when users are saving parent workflows fast
-								if len(childWorkflow.Triggers[index].Parameters) > paramIndex {
-									childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
-								}
+								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
 							}
 
 							if param.Name == "cron" {
-								// to avoid speed related nil pointer issues
-								// for when users are saving parent workflows fast
-								if len(childWorkflow.Triggers[index].Parameters) > paramIndex {
-									childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
-								}
+								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
 							}
 						}
 
@@ -6882,7 +6988,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 						action = subflowPropagationWrapper(parentWorkflow, childWorkflow, action)
 						childWorkflow.Triggers[index].Parameters = action.Parameters
-						break
+					break
 					}
 
 					childWorkflow.Triggers[index] = action
@@ -9970,48 +10076,6 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 		// FIXME: How do we manage secondary IDs?
 		// E.g. for webhooks, how do we have a URL correctly, and start/stop properly?
 		newWf.Triggers[triggerIndex].Status = "uninitialized"
-		if newWf.Triggers[triggerIndex].TriggerType == "WEBHOOK" {
-			oldID := newWf.Triggers[triggerIndex].ID
-			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
-			for paramIndex, param := range newWf.Triggers[triggerIndex].Parameters {
-				if param.Name == "url" {
-					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
-				}
-
-				if param.Name == "tmp" {
-					newWf.Triggers[triggerIndex].Parameters[paramIndex].Value = ""
-				}
-
-				newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID
-
-				// edit all branch source ids where the ID is changed
-				for branchIndex, branch := range newWf.Branches {
-					if branch.SourceID == oldID {
-						newWf.Branches[branchIndex].SourceID = newWf.Triggers[triggerIndex].ID
-					}
-
-					if branch.DestinationID == oldID {
-						newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
-					}
-				}
-			}
-		} else if newWf.Triggers[triggerIndex].TriggerType == "SCHEDULE" {
-			oldID := newWf.Triggers[triggerIndex].ID
-			newWf.Triggers[triggerIndex].ID = uuid.NewV4().String()
-
-			newWf.Triggers[triggerIndex].ReplacementForTrigger = oldID	
-
-
-			for branchIndex, branch := range newWf.Branches {
-				if branch.SourceID == oldID {
-					newWf.Branches[branchIndex].SourceID = newWf.Triggers[triggerIndex].ID
-				}
-
-				if branch.DestinationID == oldID {
-					newWf.Branches[branchIndex].DestinationID = newWf.Triggers[triggerIndex].ID
-				}
-			}
-		}
 	}
 
 	err = SetWorkflow(ctx, newWf, newWf.ID)
