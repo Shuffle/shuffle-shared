@@ -601,7 +601,7 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		ctx := GetContext(request)
 		workflow, err = ConfigureDetectionWorkflow(ctx, user.ActiveOrg.Id, "TENZIR-SIGMA")
 		if err != nil {
-			log.Printf("\n\n\n[ERROR] Failed to create Sigma handling workflow: %s\n\n\n", err)
+			log.Printf("[ERROR] Failed to create Sigma handling workflow: %s", err)
 		}
 
 		log.Printf("[DEBUG] Sending orborus request to start Sigma handling workflow")
@@ -654,9 +654,9 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 	success := true
 	if len(workflow.ID) == 0 {
 		success = false
+	} else {
+		log.Printf("[INFO] '%s' detection workflow in org '%s' ID: %s", detectionType, workflow.OrgId, workflow.ID)
 	}
-
-	log.Printf("[INFO] '%s' detection workflow in org '%s' ID: %s", detectionType, workflow.OrgId, workflow.ID)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "workflow_id": "%s", "workflow_valid": %v}`, success, workflow.ID, workflow.Validation.Valid)))
@@ -664,6 +664,7 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 
 func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, executionSource, environmentName string) error {
 	if len(orgId) == 0 {
+		log.Printf("[ERROR] No org ID provided for Orborus")
 		return fmt.Errorf("No org ID provided")
 	}
 
@@ -707,7 +708,7 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 
 	if len(selectedEnvironments) == 0 {
 		if lakeNodes > 0 {
-			//log.Printf("[ERROR] No environments needing a lake. Found lake nodes: %d", lakeNodes)
+			log.Printf("[ERROR] No environments needing a lake. Found lake nodes: %d", lakeNodes)
 			return nil
 		} else {
 			return fmt.Errorf("No valid environments found")
@@ -779,8 +780,9 @@ func HandleListDetectionCategories(resp http.ResponseWriter, request *http.Reque
 	resp.Write(data)
 }
 
+// FIXME: This is not ready - just a starting point
 func ConfigureDetectionWorkflow(ctx context.Context, orgId, workflowType string) (Workflow, error) {
-	log.Printf("\n\n[DEBUG] Creating detection workflow for org %s (not implemented)\n\n", orgId)
+	log.Printf("[ERROR] Creating detection workflow for org %s (not implemented for all types). Type: %s", orgId, workflowType)
 	/*
 		// FIXME: Use Org to find the correct tools according to the Usecase
 		// SHOULD map usecase from workflowType -> actual Usecase in blobs
@@ -835,6 +837,9 @@ func ConfigureDetectionWorkflow(ctx context.Context, orgId, workflowType string)
 	usecaseNames := []string{}
 	if workflowType == "TENZIR-SIGMA" {
 		log.Printf("[INFO] Creating SIEM handling workflow for org %s", orgId)
+
+		// FIXME: Add a cloud workflow id here
+
 	} else if workflowType == "EMAIL-DETECTION" {
 		// How do we check what email tool they use?
 		//log.Printf("[INFO] Creating email handling workflow for org %s", orgId)

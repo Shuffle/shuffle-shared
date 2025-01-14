@@ -8,6 +8,7 @@ import (
 	"github.com/shuffle/shuffle-shared"
 
 	"archive/zip"
+	"runtime"
 	"bytes"
 	"context"
 	"crypto/md5"
@@ -20,6 +21,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"time"
@@ -42,8 +44,8 @@ var appSearchIndex = "appsearch"
 
 // CONFIGURE APP LOCATIONS TO USE
 // ALSO REQUIRES ACCESS TO UPLOAD TO CLOUD
-var appbasefile = "/Users/frikky/git/app_sdk/shuffle_sdk/shuffle_sdk.py"
-var appfolder = "/Users/frikky/git/python-apps"
+var appbasefile = "/home/$USER/git/app_sdk/shuffle_sdk/shuffle_sdk.py"
+var appfolder = "/home/$USER/git/python-apps"
 var baseUrl = ""
 var apikey = ""
 
@@ -831,6 +833,24 @@ func main() {
 
 	if len(os.Getenv("SHUFFLE_GCEPROJECT_REGION")) > 0 {
 		gceRegion = os.Getenv("SHUFFLE_GCEPROJECT_REGION")
+	}
+
+	// Check if macos, then replace /home/ with /Users/
+	if runtime.GOOS == "darwin" {
+		log.Printf("[INFO] Running on MacOS. Replacing /home/ with /Users/")
+		appbasefile = strings.Replace(appbasefile, "/home/", "/Users/", -1)
+		appfolder = strings.Replace(appfolder, "/home/", "/Users/", -1)
+	}
+	
+	if strings.Contains(appbasefile, "$USER") || strings.Contains(appfolder, "$USER") {
+		log.Printf("[INFO] Replacing $USER with current user in paths")
+		currentUser, err := user.Current()
+		if err != nil {
+			log.Fatalf("[WARNING] Error getting current user: %v", err)
+		}
+
+		appbasefile = strings.Replace(appbasefile, "$USER", currentUser.Username, -1)
+		appfolder = strings.Replace(appfolder, "$USER", currentUser.Username, -1)
 	}
 
 	baseUrl = os.Args[2]
