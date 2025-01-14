@@ -806,7 +806,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 		// FIXME: Decrypt here 
 		if workflow.BackupConfig.TokensEncrypted {
-			log.Printf("\n\n[DEBUG] Should realtime decrypt token for org %s (%s)\n\n", org.Name, org.Id) 
+			log.Printf("[DEBUG] Should realtime decrypt token for org %s (%s)", org.Name, org.Id) 
 			org.Defaults.TokensEncrypted = true
 		} else {
 			org.Defaults.TokensEncrypted = false 
@@ -814,7 +814,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	if org.Defaults.TokensEncrypted == true {
-		log.Printf("\n\n[DEBUG] Decrypting token for org %s (%s)\n\n", org.Name, org.Id)
+		log.Printf("[DEBUG] Decrypting token for org %s (%s)", org.Name, org.Id)
 
 		parsedKey := fmt.Sprintf("%s_upload_token", org.Id)
 		newValue, err := HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadToken), parsedKey)
@@ -894,9 +894,11 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	commitMessage := fmt.Sprintf("User '%s' updated workflow '%s' with status '%s'", workflow.UpdatedBy, workflow.Name, workflow.Status)
-	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, org.Defaults.WorkflowUploadToken, org.Defaults.WorkflowUploadRepo)
+	urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken)
+	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, urlEncodedPassword, org.Defaults.WorkflowUploadRepo)
 
-	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, strings.Replace(location, org.Defaults.WorkflowUploadToken, "****", -1))
+	newRepoName := strings.Replace(strings.Replace(location, org.Defaults.WorkflowUploadToken, "****", -1), urlEncodedPassword, "****", -1)
+	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, newRepoName)
 
 	fs := memfs.New()
 	if len(workflow.Status) == 0 {
@@ -910,25 +912,33 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{
     	URL: location,
 	})
+	if err != nil {
+		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
+		newErr = strings.ReplaceAll(newErr, urlEncodedPassword, "****")
+
+		log.Printf("[ERROR] Error cloning repo '%s' (workflow backup): %s", newRepoName, newErr)
+		return err
+	} 
 
 	// Initialize a new Git repository in memory
 	w := &git.Worktree{}
-	if err != nil {
-		log.Printf("[ERROR] Error cloning repo (workflow backup): %s", err)
-		return err
-	} 
 
 	// Create a new commit with the in-memory file
 	w, err = repo.Worktree()
 	if err != nil {
-		log.Printf("[ERROR] Error getting worktree (2): %s", err)
+		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
+		newErr = strings.ReplaceAll(newErr, urlEncodedPassword, "****")
+
+		log.Printf("[ERROR] Error getting worktree for repo '%s' (2): %s", newRepoName, newErr)
 		return err
 	}
 
 	// Write the byte blob to the in-memory file system
 	file, err := fs.Create(filePath)
 	if err != nil {
-		log.Printf("[ERROR] Creating file: %v", err)
+		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
+
+		log.Printf("[ERROR] Creating git file: %v", newErr)
 		return err
 	}
 
@@ -936,14 +946,14 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	//_, err = io.Copy(file, bytes.NewReader(workflowData))
 	_, err = io.Copy(file, bytes.NewReader(workflowData))
 	if err != nil {
-		log.Printf("[ERROR] Writing data to file: %v", err)
+		log.Printf("[ERROR] Writing data to git file: %v", err)
 		return err
 	}
 
 	// Add the file to the staging area
 	_, err = w.Add(filePath)
 	if err != nil {
-		log.Printf("[ERROR] Error adding file to staging area (2): %s", err)
+		log.Printf("[ERROR] Error adding file to git staging area (2): %s", err)
 		return err
 	}
 
@@ -956,7 +966,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		},
 	})
 	if err != nil {
-		log.Printf("[ERROR] Committing changes: %v (2)", err)
+		log.Printf("[ERROR] Committing git changes: %v (2)", err)
 		return err
 	}
 
@@ -971,11 +981,11 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		RemoteURL:  location,
 	})
 	if err != nil {
-		log.Printf("[ERROR] Change Push issue: %v (2)", err)
+		log.Printf("[ERROR] Change git Push issue: %v (2)", err)
 		return err
 	}
 
-	log.Println("[DEBUG] File uploaded successfully!")
+	log.Printf("[DEBUG] File uploaded successfully to '%s'!", newRepoName)
 
 
 
