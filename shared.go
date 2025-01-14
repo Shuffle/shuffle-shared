@@ -18,6 +18,8 @@ import (
 	"sort"
 	"sync"
 
+	scheduler "cloud.google.com/go/scheduler/apiv1"
+	"cloud.google.com/go/scheduler/apiv1/schedulerpb"
 	"gopkg.in/yaml.v3"
 
 	//"os/exec"
@@ -4949,6 +4951,33 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if project.Environment == "cloud" {
+		var wg sync.WaitGroup
+		scheduleMutex := sync.Mutex{}
+
+		for index, schedule := range allSchedules {
+			wg.Add(1)
+			go func(index int, schedule ScheduleOld) {
+				defer wg.Done()
+
+				// Check if the schedule exist in the gcp
+				GcpSchedule, err := GetGcpSchedule(ctx, schedule.Id)
+
+				// Use mutex to safely update the schedule status
+				scheduleMutex.Lock()
+				if err != nil {
+					allSchedules[index].Status = "stopped"
+				} else {
+					allSchedules[index].Status = GcpSchedule.Status
+				}
+
+				scheduleMutex.Unlock()
+			}(index, schedule)
+		}
+
+		wg.Wait()
+	}
+
 	sort.SliceStable(allHooks, func(i, j int) bool {
 		return allHooks[i].Info.Name < allHooks[j].Info.Name
 	})
@@ -4975,6 +5004,65 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
+}
+
+func GetGcpSchedule(ctx context.Context, id string) (*ScheduleOld, error) {
+
+	// Check if we have the schedule in cache
+	cacheData, err := GetCache(ctx, fmt.Sprintf("schedule-%s", id))
+	if err == nil {
+		data, ok := cacheData.([]byte)
+		if !ok {
+			log.Printf("[ERROR] Cache data for %s is not of type []byte", id)
+		} else {
+			schedule := &ScheduleOld{}
+			err = json.Unmarshal(data, schedule)
+			if err != nil {
+				log.Printf("[ERROR] Failed to unmarshal schedule cache for %s: %s", id, err)
+			} else {
+				return schedule, nil
+			}
+		}
+	}
+
+	schedule := &ScheduleOld{}
+	c, err := scheduler.NewCloudSchedulerClient(ctx)
+	if err != nil {
+		log.Printf("[ERROR] Client error: %s", err)
+		return schedule, err
+	}
+	location := "europe-west2"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		location = os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
+	}
+	req := &schedulerpb.GetJobRequest{
+		Name: fmt.Sprintf("projects/%s/locations/%s/jobs/schedule_%s", gceProject, location, id),
+	}
+	resp, err := c.GetJob(ctx, req)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting schedule %s: %s", id, err)
+		return schedule, err
+	}
+	schedule.Id = id
+	schedule.Name = resp.Name
+	if resp.State == schedulerpb.Job_ENABLED {
+		schedule.Status = "running"
+	} else {
+		schedule.Status = "stopped"
+	}
+
+	// Set cache for 5 minutes just to make it fast
+	scheduleJSON, err := json.Marshal(schedule)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal schedule for cache: %s", err)
+		return schedule, err
+	}
+	err = SetCache(ctx, fmt.Sprintf("schedule-%s", id), scheduleJSON, 300)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting cache for schedule %s: %s", id, err)
+	}
+
+	return schedule, nil
 }
 
 func HandleGetSchedules(resp http.ResponseWriter, request *http.Request) {
@@ -6137,7 +6225,7 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 }
 
 func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, parentTrigger Trigger) Trigger {
-	// remember: when this function is used, the parent trigger is passed to 
+	// remember: when this function is used, the parent trigger is passed to
 	// create the new child trigger.
 	trigger := parentTrigger
 
@@ -6179,13 +6267,13 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 			alreadyPropagatedSubflow := ""
 
 			for _, workflow := range childOrgWorkflows {
-				// this means that the subflow has been propagated to 
+				// this means that the subflow has been propagated to
 				// child workflow already. no need to complicate things further.
 				if workflow.ParentWorkflowId == parentSubflowPointedId {
 					propagatedEarlier = true
 					alreadyPropagatedSubflow = workflow.ID
 					break
-				}	
+				}
 			}
 
 			if propagatedEarlier {
@@ -6280,7 +6368,6 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 	return trigger
 }
 
-
 func deleteScheduleGeneral(ctx context.Context, scheduleId string) error {
 	schedule, err := GetSchedule(ctx, scheduleId)
 	if err != nil {
@@ -6322,7 +6409,7 @@ func deleteScheduleGeneral(ctx context.Context, scheduleId string) error {
 	} else if project.Environment == "cloud" && schedule.Environment == "onprem" {
 		// hybrid case
 		// TODO: to be handled
-	} else if project.Environment == "onprem" && (schedule.Environment == "cloud" ) {
+	} else if project.Environment == "onprem" && (schedule.Environment == "cloud") {
 		scheduleWorkflow, err := GetWorkflow(ctx, schedule.WorkflowId)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting schedule workflow %s: %s", schedule.WorkflowId, err)
@@ -6363,13 +6450,12 @@ func deleteScheduleGeneral(ctx context.Context, scheduleId string) error {
 	return nil
 }
 
-
 func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// Check if there is a difference in actions, and what they are
 	// Check if there is a difference in triggers, and what they are
 	// Check if there is a difference in branches, and what they are
 
-	// We create a new ID for each trigger. 
+	// We create a new ID for each trigger.
 	// Older ID is stored in trigger.ReplacementForTrigger
 	nameChanged := false
 	descriptionChanged := false
@@ -6563,7 +6649,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
-	// checks if parentWorkflow removed a trigger 
+	// checks if parentWorkflow removed a trigger
 	// that was distributed to child workflow.
 	for _, oldAction := range oldWorkflow.Triggers {
 		if !oldAction.ParentControlled {
@@ -6607,11 +6693,11 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			// 	continue
 			// }
 
-			if oldAction.ReplacementForTrigger != newAction.ID {	
+			if oldAction.ReplacementForTrigger != newAction.ID {
 				continue
 			}
 
-			changeType, changed := hasTriggerChanged(newAction, oldAction)	
+			changeType, changed := hasTriggerChanged(newAction, oldAction)
 			if changed {
 				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
 				// updatedTriggers always has parent workflow's new trigger.
@@ -6923,7 +7009,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			newChildTriggers := childTriggers
 			for _, trigger := range childWorkflow.Triggers {
 				if ArrayContains(removedTriggers, trigger.ID) {
-					// while removing triggers, 
+					// while removing triggers,
 					// make sure to stop them as well
 
 					// need to handle this better
@@ -6935,7 +7021,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						hook, err := GetHook(ctx, trigger.ID)
 						if err == nil {
 							// this anyhow, means it is a webhook
-							err = DeleteKey(ctx, "hooks",  hook.Id)
+							err = DeleteKey(ctx, "hooks", hook.Id)
 							if err != nil {
 								log.Printf("[WARNING] Failed deleting hook: %s", err)
 							}
@@ -6986,7 +7072,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					// FIXME:
 					// Make sure it changes things such as URL & references properly
 					if action.TriggerType == "WEBHOOK" {
-						// make sure to only override: name, label, position, 
+						// make sure to only override: name, label, position,
 						// app_version, startnode and nothing else
 
 						childWorkflow.Triggers[index].Name = action.Name
@@ -7023,12 +7109,12 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						childWorkflow.Triggers[index].AppVersion = action.AppVersion
 
 						// essentially, now we try to verify:
-						// okay, new workflow? we see it's a subflow that's 
+						// okay, new workflow? we see it's a subflow that's
 						// what changed? is it the workflow?
 
 						action = subflowPropagationWrapper(parentWorkflow, childWorkflow, action)
 						childWorkflow.Triggers[index].Parameters = action.Parameters
-					break
+						break
 					}
 
 					childWorkflow.Triggers[index] = action
@@ -10475,6 +10561,38 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		} else {
 			workflow.BackupConfig.UploadBranch = string(newValue)
 		}
+	}
+
+	//Check if workflow trigger schedule is in sync with the gcp cron job
+	if workflow.Triggers != nil {
+		var wg sync.WaitGroup
+		triggerMutex := sync.Mutex{}
+
+		for index, trigger := range workflow.Triggers {
+			if trigger.TriggerType == "SCHEDULE" {
+				wg.Add(1)
+				go func(index int, trigger Trigger) {
+					defer wg.Done()
+
+					// Check if the schedule is in sync with the gcp cron job
+					GcpSchedule, err := GetGcpSchedule(ctx, trigger.ID)
+					if err != nil {
+						log.Printf("[ERROR] Failed getting gcp schedule for trigger %s: %s", trigger.ID, err)
+
+						triggerMutex.Lock()
+						workflow.Triggers[index].Status = "stopped"
+						triggerMutex.Unlock()
+					} else {
+						triggerMutex.Lock()
+						workflow.Triggers[index].Status = GcpSchedule.Status
+						triggerMutex.Unlock()
+					}
+				}(index, trigger)
+			}
+		}
+
+		wg.Wait()
+		SetWorkflow(ctx, *workflow, workflow.ID)
 	}
 
 	log.Printf("[INFO] Got new version of workflow %s (%s) for org %s and user %s (%s). Actions: %d, Triggers: %d", workflow.Name, workflow.ID, user.ActiveOrg.Id, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
@@ -25726,7 +25844,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	//RunAiQuery(systemMessage, userMessage)
 
-	partialMatch := true 
+	partialMatch := true
 	availableLabels := []string{}
 
 	matchName := strings.ReplaceAll(strings.ToLower(strings.TrimSpace(value.AppName)), " ", "_")
@@ -25789,11 +25907,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 				//selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
 				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true)
-				partialMatch = false 
+				partialMatch = false
 
 				break
 
-			// Finds a random match, but doesn't break in case it finds exact
+				// Finds a random match, but doesn't break in case it finds exact
 			} else if selectedApp.ID == "" && len(matchName) > 0 && (strings.Contains(appName, matchName) || strings.Contains(matchName, appName)) {
 				selectedApp = app
 
@@ -26450,7 +26568,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	client := GetExternalClient(baseUrl)
 
-
 	selectedAction.AppName = selectedApp.Name
 	selectedAction.AppID = selectedApp.ID
 	selectedAction.AppVersion = selectedApp.AppVersion
@@ -26829,7 +26946,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				return
 			}
 
-
 			// Ensures frontend has something to debug if things go wrong
 			for key, value := range newresp.Header {
 				if strings.HasSuffix(strings.ToLower(key), "-url") {
@@ -26858,7 +26974,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 			httpOutput, marshalledBody, httpParseErr := FindHttpBody(apprunBody)
 			//log.Printf("\n\nGOT RESPONSE (%d): %s. STATUS: %d\n\n",  newresp.StatusCode, string(apprunBody), httpOutput.Status)
-			if successStruct.Success == false && len(successStruct.Reason) > 0 && httpOutput.Status == 0 && strings.Contains(strings.ReplaceAll(string(apprunBody), " ", ""), `"success":false`){
+			if successStruct.Success == false && len(successStruct.Reason) > 0 && httpOutput.Status == 0 && strings.Contains(strings.ReplaceAll(string(apprunBody), " ", ""), `"success":false`) {
 				log.Printf("[WARNING][AI] Failed running app %s (%s). Contact support. Reason: %s", selectedAction.Name, selectedAction.AppID, successStruct.Reason)
 
 				resp.WriteHeader(400)
@@ -27481,7 +27597,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 				}
 
 				if newLabel == lowercaseLabel {
-					exactMatch = true 
+					exactMatch = true
 					break
 				}
 			}
@@ -27492,7 +27608,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 		}
 	}
 
-	// Decides if we are to autocomplete the app if labels are not found 
+	// Decides if we are to autocomplete the app if labels are not found
 	if len(selectedAction.ID) == 0 {
 		if fixLabels == true {
 			//log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Autodiscovering and updating the app!!!\n\n", app.Name, app.ID, label)
