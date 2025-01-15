@@ -1139,6 +1139,11 @@ type Position struct {
 	Y float64 `json:"y" datastore:"y"`
 }
 
+type ParameterLock struct {
+	ParameterName string `json:"parameter_name" datastore:"parameter_name"`
+	ActionName    string `json:"action_name" datastore:"action_name"`
+}
+
 // This is for the nodes in a workflow, NOT the app action itself.
 type Action struct {
 	AppName           string                       `json:"app_name" datastore:"app_name"`
@@ -1177,6 +1182,8 @@ type Action struct {
 	Suggestion        bool                         `json:"suggestion" datastore:"suggestion"`         // Whether it was a suggestion in the workflow or not
 
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+
+	ParameterLocks   []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
 }
 
 // Added environment for location to execute
