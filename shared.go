@@ -57,9 +57,6 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/Masterminds/semver"
-
-	scheduler "cloud.google.com/go/scheduler/apiv1"
-	schedulerpb "google.golang.org/genproto/googleapis/cloud/scheduler/v1"
 )
 
 var project ShuffleStorage
@@ -6901,10 +6898,10 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					// Make sure it changes things such as environment & app auth appropriately
 
 					// implement by default parameter "unlocking"
-					// ie: unless action itself is changed, 
+					// ie: unless action itself is changed,
 					// preserve child paramter.
 
-					// Also, allow a "locking" mechanism that 
+					// Also, allow a "locking" mechanism that
 					// overwrites to child if enabled.
 					finalLocks := []ParameterLock{}
 					finalParamters := action.Parameters
@@ -6924,7 +6921,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							// so, action itself is not changed
 							// preserve child parameters by default
 							finalParamters = childAction.Parameters
-						}  else {
+						} else {
 							log.Printf("[DEBUG] Action %s (Name: %s, AppID: %s) is different from child action %s (Name: %s, AppID: %s)", action.ID, action.Name, action.AppID, childAction.ID, childAction.Name, childAction.AppID)
 						}
 					} else {
