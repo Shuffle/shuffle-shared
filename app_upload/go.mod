@@ -19,6 +19,7 @@ require (
 	cloud.google.com/go/compute/metadata v0.3.0 // indirect
 	cloud.google.com/go/datastore v1.15.0 // indirect
 	cloud.google.com/go/iam v1.1.5 // indirect
+	cloud.google.com/go/scheduler v1.10.5 // indirect
 	dario.cat/mergo v1.0.0 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/Microsoft/go-winio v0.6.1 // indirect

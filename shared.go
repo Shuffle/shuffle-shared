@@ -19617,9 +19617,9 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		clientId := org.SSOConfig.OpenIdClientId
 		tokenUrl := org.SSOConfig.OpenIdToken
 		if len(tokenUrl) == 0 {
-			log.Printf("[ERROR] No token URL specified for OpenID")
+			log.Printf("[ERROR] No token URL specified for OpenID. OrgID: %s", foundOrg)
 			resp.WriteHeader(401)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No token URL specified. Please make sure to specify a token URL in the /admin panel in Shuffle for OpenID Connect"}`)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No token URL specified in org %s. Please make sure to specify a token URL in the /admin panel in Shuffle for OpenID Connect"}`, foundOrg)))
 			return
 		}
 
