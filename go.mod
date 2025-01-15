@@ -31,7 +31,7 @@ require (
 	github.com/satori/go.uuid v1.2.0
 	github.com/sendgrid/sendgrid-go v3.14.0+incompatible
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
-	golang.org/x/crypto v0.30.0
+	golang.org/x/crypto v0.31.0
 	golang.org/x/oauth2 v0.23.0
 	google.golang.org/api v0.126.0
 	google.golang.org/appengine v1.6.8
@@ -105,7 +105,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.33.0 // indirect
 	go4.org v0.0.0-20201209231011-d4a079459e60 // indirect
 	golang.org/x/mod v0.17.0 // indirect
-	golang.org/x/net v0.32.0 // indirect
+	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sync v0.10.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/term v0.27.0 // indirect
