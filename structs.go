@@ -986,10 +986,10 @@ type CacheKeyData struct {
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
 
-	FormattedKey        string `json:"formatted_key,omitempty" datastore:"FormattedKey"`
-	PublicAuthorization string `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
+	FormattedKey        string   `json:"formatted_key,omitempty" datastore:"FormattedKey"`
+	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
+	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
-
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
@@ -1183,7 +1183,7 @@ type Action struct {
 
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 
-	ParameterLocks   []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
+	ParameterLocks []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
 }
 
 // Added environment for location to execute
@@ -1209,12 +1209,12 @@ type Trigger struct {
 		X float64 `json:"x" datastore:"x"`
 		Y float64 `json:"y" datastore:"y"`
 	} `json:"position"`
-	Priority       int         `json:"priority" datastore:"priority"`
-	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
-	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
-	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
-	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
-	
+	Priority         int         `json:"priority" datastore:"priority"`
+	SourceWorkflow   string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	ExecutionDelay   int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
+	AppAssociation   WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
+	ParentControlled bool        `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+
 	// TODO: make this a predictable field
 	// generated from current ID + workflow ID + orgid as seed
 	ReplacementForTrigger string `json:"replacement_for_trigger" datastore:"replacement_for_trigger"` // If this trigger is a replacement for another trigger
