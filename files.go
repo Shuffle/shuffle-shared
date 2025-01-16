@@ -2117,7 +2117,7 @@ func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if user.Role != "admin" {
+	if user.ActiveOrg.Role != "admin" {
 		log.Printf("User (%s) isn't admin during file edit config", user.Username)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "only admin can edit file config"}`))
