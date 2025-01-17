@@ -17548,6 +17548,105 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
+func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[DEBUG] Api authentication failed in cache config: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	}
+
+	if user.ActiveOrg.Role != "admin" {
+		log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Only admins can distribute cache to sub-orgs"}`))
+		return
+	}
+
+	var orgId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		orgId = location[4]
+	}
+
+	if len(orgId) == 0 {
+		log.Printf("[ERROR] Missing org id in cache config")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Missing org id"}`))
+		return
+	}
+
+	type cacheConfig struct {
+		Key            string   `json:"key"`
+		Action         string   `json:"action"`
+		SelectedSuborg []string `json:"selected_suborgs"`
+	}
+
+	var config cacheConfig
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling in cache config: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	cacheId := fmt.Sprintf("%s_%s", orgId, config.Key)
+	cache, err := GetCacheKey(ctx, cacheId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting cache key '%s' for org %s (config)", config.Key, orgId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get key. Does it exist?", "extra": "%s"}`, cache.Key)))
+		return
+	}
+
+	if config.Action == "suborg_distribute" {
+
+		if len(config.SelectedSuborg) == 0 {
+			cache.SuborgDistribution = []string{}
+		} else {
+			cache.SuborgDistribution = config.SelectedSuborg
+		}
+
+		err = SetCacheKey(ctx, *cache)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache key '%s' for org %s (config)", config.Key, orgId)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to set key. Does it exist?", "extra": "%s"}`, cache.Key)))
+			return
+		}
+	}
+
+	log.Printf("[INFO] Successfully updated cache key '%s' for org %s", config.Key, orgId)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "reason" : "Cache updated successfully!"}`))
+}
+
 func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
