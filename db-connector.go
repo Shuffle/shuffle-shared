@@ -12600,6 +12600,22 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 		}
 	}
 
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+		if err == nil {
+			parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, max, inputcursor)
+			if err == nil {
+				for _, parentCache := range parentOrgCache {
+					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
+						continue
+					}
+					cacheKeys = append(cacheKeys, parentCache)
+				}
+			}
+		}
+	}
+
 	return cacheKeys, cursor, nil
 }
 
