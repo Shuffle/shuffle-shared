@@ -3963,13 +3963,14 @@ type AppHealth struct {
 }
 
 type WorkflowHealth struct {
-	Create      bool   `json:"create"`
-	Run         bool   `json:"run"`
-	RunFinished bool   `json:"run_finished"`
-	RunStatus   string `json:"run_status"`
-	Delete      bool   `json:"delete"`
-	ExecutionId string `json:"execution_id"`
-	WorkflowId  string `json:"workflow_id"`
+	Create             bool   `json:"create"`
+	Run                bool   `json:"run"`
+	RunFinished        bool   `json:"run_finished"`
+	RunStatus          string `json:"run_status"`
+	Delete             bool   `json:"delete"`
+	ExecutionId        string `json:"execution_id"`
+	WorkflowId         string `json:"workflow_id"`
+	WorkflowValidation bool   `json:"workflow_validation"`
 }
 
 type HealthCheck struct {
