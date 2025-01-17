@@ -838,7 +838,9 @@ func ConfigureDetectionWorkflow(ctx context.Context, orgId, workflowType string)
 	if workflowType == "TENZIR-SIGMA" {
 		log.Printf("[INFO] Creating SIEM handling workflow for org %s", orgId)
 
-		// FIXME: Add a cloud workflow id here
+		// FIXME: Fix the detection workflow
+		cloudWorkflowId = "b7b878c8-4302-4ab5-9492-de2539f7dc6b"
+		usecaseNames = []string{"Search SIEM (Sigma)"}
 
 	} else if workflowType == "EMAIL-DETECTION" {
 		// How do we check what email tool they use?

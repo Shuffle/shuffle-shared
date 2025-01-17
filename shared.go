@@ -58,8 +58,8 @@ import (
 
 	"github.com/Masterminds/semver"
 
-	scheduler "cloud.google.com/go/scheduler/apiv1"
-	schedulerpb "google.golang.org/genproto/googleapis/cloud/scheduler/v1"
+	//scheduler "cloud.google.com/go/scheduler/apiv1"
+	//schedulerpb "google.golang.org/genproto/googleapis/cloud/scheduler/v1"
 )
 
 var project ShuffleStorage
@@ -13497,7 +13497,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("SHARING: %s. PUBLIC: %s", app.Sharing, app.Public)
 	if app.Sharing || app.Public {
 		if openapiok && len(openapi) > 0 && strings.ToLower(openapi[0]) == "false" {
-			log.Printf("[DEBUG] Returning app '%s' without OpenAPI", fileId)
+			//log.Printf("[DEBUG] Returning app '%s' without OpenAPI", fileId)
 		} else {
 			//log.Printf("CAN SHARE APP!")
 			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
@@ -22694,8 +22694,8 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
 				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
-				log.Printf("[WARNING] Couldn't find environment %s. Maybe it's inactive?", action.Environment)
-				return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env %s in org %s", action.Environment, workflowExecution.ExecutionOrg))
+				log.Printf("[WARNING][%s] Couldn't find environment %s when running workflow '%s'. Maybe it's inactive?", workflowExecution.Id, action.Environment, workflowExecution.Workflow.ID)
+				return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
 			}
 		}
 
