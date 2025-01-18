@@ -2,10 +2,10 @@
 A repository containing structures and commonly used functions between different deployments on Shuffle. Here to ensure consistency and not re-making the same functions multiple places.
 
 ### Sample areas
-- Shuffle backend (open source)
-- Shuffle orborus (open source)
-- Shuffle worker (open source)
-- shuffler.io (cloud deployment)
+- [Shuffle backend (APIs)](https://github.com/Shuffle/Shuffle/tree/main/backend/go-app) (open source)
+- [Shuffle orborus (hybrid job-handler)](https://github.com/Shuffle/Shuffle/tree/main/functions/onprem/orborus) (open source)
+- [Shuffle worker (workflow-runner)](https://github.com/Shuffle/Shuffle/tree/main/functions/onprem/worker) (open source)
+- [Shuffle SaaS (Cloud: shuffler.io)](https://github.com/Shuffle/shaffuru) (cloud deployment)
 - CI/CD systems that verify data types
 
 ### Issue / PR management
