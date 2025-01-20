@@ -30409,7 +30409,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 	workflow.Validation.TotalProblems = len(workflow.Validation.Errors) + len(workflow.Validation.SubflowApps)
 
-	log.Printf("\n\n\nVALIDATION RUNNING\n\n\n")
+	//log.Printf("\n\n\nVALIDATION RUNNING\n\n\n")
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true

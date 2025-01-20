@@ -11997,9 +11997,6 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 
 	// In case of downtime / large requests
 	if len(memcached) > 0 {
-		mc.Timeout = 10 * time.Second
-
-
 		if strings.Contains(memcached, ",") {
 
 			newMemcached := []string{}
@@ -12013,6 +12010,8 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			log.Printf("[DEBUG] Multiple memcached servers detected. Split into %#v", newMemcached)
 			mc = gomemcache.New(newMemcached...)
 		}
+
+		mc.Timeout = 10 * time.Second
 	}
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
