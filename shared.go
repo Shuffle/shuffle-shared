@@ -22790,7 +22790,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			if strings.ToLower(action.Environment) == "cloud" && project.Environment == "cloud" {
 				//log.Printf("[DEBUG] Couldn't find environment %s in cloud for some reason.", action.Environment)
 			} else {
-				log.Printf("[WARNING][%s] Couldn't find environment %s when running workflow '%s'. Maybe it's inactive?", workflowExecution.Id, action.Environment, workflowExecution.Workflow.ID)
+				log.Printf("[WARNING][%s] Couldn't find environment %s when running workflow '%s'. Maybe it's inactive?", workflowExecution.ExecutionId, action.Environment, workflowExecution.Workflow.ID)
 				return workflowExecution, ExecInfo{}, "Couldn't find the environment", errors.New(fmt.Sprintf("Couldn't find env '%s' in org '%s'", action.Environment, workflowExecution.ExecutionOrg))
 			}
 		}

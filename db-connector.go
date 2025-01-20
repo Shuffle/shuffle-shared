@@ -9566,6 +9566,9 @@ func GetDisabledRules(ctx context.Context, orgId string) (*DisabledRules, error)
 
 		defer res.Body.Close()
 		if res.StatusCode == 404 {
+			// Index empty
+			//log.Printf("[DEBUG] No disabled rules for org %s. Should auto-index?", orgId)
+
 			return disabledRules, nil
 		}
 
@@ -9584,6 +9587,11 @@ func GetDisabledRules(ctx context.Context, orgId string) (*DisabledRules, error)
 	} else {
 		key := datastore.NameKey(nameKey, orgId, nil)
 		if err := project.Dbclient.Get(ctx, key, disabledRules); err != nil {
+			if strings.Contains(err.Error(), "no such entity") {
+				//log.Printf("[DEBUG] No disabled rules for org %s. Should auto-index?", orgId)
+				return disabledRules, nil
+			}
+
 			log.Printf("[WARNING] Error getting disabled for org %s: %s", orgId, err)
 			return disabledRules, err
 		}

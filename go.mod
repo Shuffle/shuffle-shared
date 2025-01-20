@@ -1,6 +1,6 @@
 module github.com/shuffle/shuffle-shared
 
-go 1.22.7
+go 1.22.2
 
 toolchain go1.23.1
 

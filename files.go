@@ -515,16 +515,21 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		namespace = strings.Split(namespace, "?")[0]
 	}
 
-	namespace = strings.Replace(namespace, "%20", " ", -1)
+	// URL decode namespace
+	namespace, err := url.QueryUnescape(namespace)
+	if err != nil {
+		log.Printf("[WARNING] Failed to decode namespace value '%s': %s", namespace, err)
+	}
 
 	// 1. Check user directly
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		//log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
-		orgId, err := fileAuthentication(request)
-		if err != nil {
-			log.Printf("[WARNING] Bad file authentication in get namespace %s: %s", namespace, err)
+
+		orgId, fileerr := fileAuthentication(request)
+		if fileerr != nil {
+			log.Printf("[WARNING] Bad authentication in get namespace AFTER trying normal user auth %s: %s & %s", namespace, err, fileerr)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -771,62 +776,23 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//zipfile := fmt.Sprintf("%s.zip", namespace)
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
+	// FIXME: Goroutine this + Cache it for future requests
+
 	packed := 0
 	for _, file := range fileResponse.Files {
-		var filedata = []byte{}
-		if file.Encrypted {
-			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-				log.Printf("[ERROR] No namespace handler for cloud decryption (files)!")
-			} else {
-				Openfile, err := os.Open(file.DownloadPath)
-				defer Openfile.Close() //Close after function return
-
-				allText := []byte{}
-				buf := make([]byte, 1024)
-				for {
-					n, err := Openfile.Read(buf)
-					if err == io.EOF {
-						break
-					}
-
-					if err != nil {
-						continue
-					}
-
-					if n > 0 {
-						//fmt.Println(string(buf[:n]))
-						allText = append(allText, buf[:n]...)
-					}
-				}
-
-				passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-				if len(file.ReferenceFileId) > 0 {
-					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
-				}
-
-				data, err := HandleKeyDecryption(allText, passphrase)
-				if err != nil {
-					log.Printf("[ERROR] Failed decrypting file (3): %s", err)
-				} else {
-					//log.Printf("[DEBUG] File size of %s reduced from %d to %d after decryption (1)", file.Id, len(allText), len(data))
-					allText = []byte(data)
-				}
-
-				filedata = allText
-			}
-		} else {
-			filedata, err = ioutil.ReadFile(file.DownloadPath)
-			if err != nil {
-				log.Printf("Filereading failed for %s create zip file : %v", file.Filename, err)
-				continue
-			}
+		// Goroutine this get file section
+		filedata, err := GetFileContent(ctx, &file, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting file content for %s (%s): %s", file.Filename, file.Id, err)
+			continue
 		}
 
-		//log.Printf("DATA: %s", string(filedata))
+		if len(filedata) == 0 {
+			log.Printf("[ERROR] No data found for file %s (%s)", file.Filename, file.Id)
+		}
 
 		zipFile, err := zipWriter.Create(file.Filename)
 		if err != nil {
@@ -834,7 +800,6 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		// Have to use Fprintln otherwise it tries to parse all strings etc.
 		if _, err := fmt.Fprintln(zipFile, string(filedata)); err != nil {
 			log.Printf("[WARNING] Datapasting failed for %s when creating zip file from bucket: %v", file.Filename, err)
 			continue
@@ -846,19 +811,20 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	err = zipWriter.Close()
 	if err != nil {
 		log.Printf("[WARNING] Packing failed to close zip file writer: %v", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if packed == 0 {
 		log.Printf("[WARNING] Couldn't find anything for namespace %s in org %s", namespace, user.ActiveOrg.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	log.Printf("[DEBUG] Packed %d files from namespace %s into the zip for %s (%s)", packed, namespace, user.Username, user.Id)
+
 	FileHeader := make([]byte, 512)
 	FileContentType := http.DetectContentType(FileHeader)
 	resp.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zip", namespace))
@@ -981,6 +947,7 @@ func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) (
 					resp.WriteHeader(500)
 					resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
 				}
+
 				return []byte{}, err
 			}
 

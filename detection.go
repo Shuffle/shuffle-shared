@@ -75,8 +75,11 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		var fileContent []byte
+		if file.Status != "active" {
+			continue
+		}
 
+		var fileContent []byte
 		if file.Encrypted {
 			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
 				log.Printf("[ERROR] No namespace handler for cloud decryption (detection)!")
@@ -329,19 +332,21 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	location := strings.Split(request.URL.String(), "/")
-	if location[1] != "api" || len(location) < 6 {
-		log.Printf("Path too short or incorrect: %s", request.URL.String())
+	if location[1] != "api" || len(location) < 7 {
+		log.Printf("[ERROR] Path too short or incorrect for detection toggle (2): %s", request.URL.String())
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	ctx := GetContext(request)
-	action := location[5]
+
+	detectionType := location[4]
+	_ = detectionType
+	action := location[6]
 
 	rules, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Cannot get the rules, reason %s", err)
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -467,8 +472,8 @@ func HandleGetSelectedRules(resp http.ResponseWriter, request *http.Request) {
 	var triggerId string
 	location := strings.Split(request.URL.String(), "/")
 	if len(location) < 5 || location[1] != "api" {
-		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
-		resp.WriteHeader(401)
+		log.Printf("[ERROR] Path too short or incorrect: %d", len(location))
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -520,8 +525,8 @@ func HandleSaveSelectedRules(resp http.ResponseWriter, request *http.Request) {
 
 	location := strings.Split(request.URL.String(), "/")
 	if len(location) < 5 || location[1] != "api" {
-		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
-		resp.WriteHeader(http.StatusBadRequest)
+		log.Printf("[INFO] Path too short or incorrect (1): %d", len(location))
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -604,7 +609,7 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 			log.Printf("[ERROR] Failed to create Sigma handling workflow: %s", err)
 		}
 
-		log.Printf("[DEBUG] Sending orborus request to start Sigma handling workflow")
+		log.Printf("[DEBUG] Sending orborus request to start Sigma handling IF an available environment is found.")
 
 		execType := "START_TENZIR"
 		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, "", "SIGMA", "SHUFFLE_DISCOVER")
@@ -646,6 +651,8 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		}
 
 	} else {
+		log.Printf("[ERROR] Detection Type '%s' not implemented", detectionType)
+
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Detection Type '%s' not implemented"}`, detectionType)))
 		return
@@ -689,6 +696,8 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 			continue
 		}
 
+		// Validates if the environment already has a lake running
+		/*
 		cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -702,6 +711,7 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 				}
 			}
 		}
+		*/
 
 		selectedEnvironments = append(selectedEnvironments, env)
 	}
@@ -711,11 +721,11 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 			log.Printf("[ERROR] No environments needing a lake. Found lake nodes: %d", lakeNodes)
 			return nil
 		} else {
-			return fmt.Errorf("No valid environments found")
+			return fmt.Errorf("No valid environments found for detection distribution")
 		}
 	}
 
-	log.Printf("[DEBUG] Found %d potentially valid environment(s)", len(selectedEnvironments))
+	log.Printf("[DEBUG] Found %d potentially valid environment for detection distribution (s)", len(selectedEnvironments))
 
 	deployedToActiveEnv := false
 	for _, env := range selectedEnvironments {
