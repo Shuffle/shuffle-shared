@@ -22474,35 +22474,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 								})
 							}
 
-							// Commented out as we don't want to stop the app, but just continue with the old tokens
-							/*
-								actionRes := ActionResult{
-									Action:        action,
-									ExecutionId:   workflowExecution.ExecutionId,
-									Authorization: workflowExecution.Authorization,
-									Result:        fmt.Sprintf(`{"success": false, "reason": "Failed running oauth2 request to refresh oauth2 tokens for this app."}`),
-									StartedAt:     workflowExecution.StartedAt,
-									CompletedAt:   workflowExecution.StartedAt,
-									Status:        "FAILURE",
-								}
-
-								workflowExecution.Results = append(workflowExecution.Results, actionRes)
-								cacheData := []byte("1")
-
-								newExecId := fmt.Sprintf("%s_%s", workflowExecution.ExecutionId, action.ID)
-								err = SetCache(ctx, newExecId, cacheData, 2)
-								if err != nil {
-									log.Printf("[WARNING] Failed setting base cache for failed Oauth2 action %s: %s", newExecId, err)
-								}
-
-								b, err := json.Marshal(actionRes)
-								if err == nil {
-									err = SetCache(ctx, fmt.Sprintf("%s_result", newExecId), b, 2)
-									if err != nil {
-										log.Printf("[WARNING] Failed setting result cache for failed Oauth2 action %s: %s", newExecId, err)
-									}
-								}
-							*/
+							// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens
 						}
 
 						allAuths[authIndex] = newAuth
@@ -30436,6 +30408,8 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	}
 
 	workflow.Validation.TotalProblems = len(workflow.Validation.Errors) + len(workflow.Validation.SubflowApps)
+
+	log.Printf("\n\n\nVALIDATION RUNNING\n\n\n")
 
 	// Updating the workflow to show the right status every time for now
 	workflowChanged = true

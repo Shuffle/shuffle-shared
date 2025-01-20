@@ -8330,7 +8330,6 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		}
 
 		// Find the key for "workflows_<workflow.org_id>" and update the cache for this one. If it doesn't exist, add it
-
 		// Get the cache for the workflows
 		cacheKey = fmt.Sprintf("%s_workflows", workflow.OrgId)
 		cache, err := GetCache(ctx, cacheKey)
@@ -11999,6 +11998,21 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 	// In case of downtime / large requests
 	if len(memcached) > 0 {
 		mc.Timeout = 10 * time.Second
+
+
+		if strings.Contains(memcached, ",") {
+
+			newMemcached := []string{}
+			for _, memcached := range strings.Split(memcached, ",") {
+				memcached = strings.TrimSpace(memcached)
+				if len(memcached) > 0 {
+					newMemcached = append(newMemcached, memcached)
+				}
+			}
+
+			log.Printf("[DEBUG] Multiple memcached servers detected. Split into %#v", newMemcached)
+			mc = gomemcache.New(newMemcached...)
+		}
 	}
 
 	requestCache = cache.New(35*time.Minute, 35*time.Minute)
@@ -13008,7 +13022,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
-	log.Printf("[INFO][%s] Workflow Validation. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	log.Printf("[INFO][%s] Workflow Finished Check. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
 		invalidResults := 0
