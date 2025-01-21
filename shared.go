@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -25355,44 +25356,81 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	return workflowExecution, relevantActions
 }
 
-func HandleInternalProxy(handler *http.Client) *http.Client {
-	httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
-	httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
+func isNoProxyHost(noProxy, host string) bool {
+	// Normalize the host by removing the port if present
+	host, _, err := net.SplitHostPort(host)
+	if err != nil {
+		host = strings.TrimSpace(host) // Fallback to trimming
+	}
 
-	transport := &http.Transport{}
+	for _, noProxyEntry := range strings.Split(noProxy, ",") {
+		noProxyEntry = strings.TrimSpace(noProxyEntry)
 
-	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && (strings.ToLower(httpProxy) != "noproxy" || strings.ToLower(httpsProxy) != "noproxy") {
-		if len(httpProxy) > 0 && strings.ToLower(httpProxy) != "noproxy" {
-			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
-
-			url_i := url.URL{}
-			url_proxy, err := url_i.Parse(httpProxy)
-			if err == nil {
-				transport.Proxy = http.ProxyURL(url_proxy)
+		// Handle wildcards or suffix matching
+		if strings.HasPrefix(noProxyEntry, ".") {
+			if strings.HasSuffix(host, noProxyEntry) || host == noProxyEntry[1:] {
+				return true
 			}
-		}
-
-		if len(httpsProxy) > 0 && strings.ToLower(httpsProxy) != "noproxy" {
-			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
-
-			url_i := url.URL{}
-			url_proxy, err := url_i.Parse(httpsProxy)
-			if err == nil {
-				transport.Proxy = http.ProxyURL(url_proxy)
+		} else if host == noProxyEntry {
+			// Exact match
+			return true
+		} else if ip := net.ParseIP(noProxyEntry); ip != nil {
+			// Handle exact IP matches
+			if ip.Equal(net.ParseIP(host)) {
+				return true
 			}
 		}
 	}
 
-	handler.Transport = transport
-
-	return handler
+	return false
 }
 
 func GetExternalClient(baseUrl string) *http.Client {
 	// Look for internal proxy instead
 	// in case apps need a different one: https://jamboard.google.com/d/1KNr4JJXmTcH44r5j_5goQYinIe52lWzW-12Ii_joi-w/viewer?mtt=9r8nrqpnbz6z&f=0
-	httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
-	httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
+	//httpProxy := os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
+	//httpsProxy := os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
+
+	httpProxy := os.Getenv("HTTP_PROXY")
+	httpsProxy := os.Getenv("HTTPS_PROXY")
+
+	noProxy := os.Getenv("NO_PROXY")
+	if len(os.Getenv("NOPROXY")) > 0 {
+		noProxy = os.Getenv("NOPROXY")
+	}
+
+	// Check if the IP in the baseUrl is a local one
+	parsedUrl, err := url.Parse(baseUrl)
+	if err == nil {
+		// Check if host has shuffle- as prefix
+
+		// Check until 33350 (Orborus -> Worker and Worker -> Apps)
+		if strings.HasSuffix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" {
+
+			log.Printf("[INFO] Running with internal proxy for %s", parsedUrl)
+			httpProxy = os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
+			httpsProxy = os.Getenv("SHUFFLE_INTERNAL_HTTPS_PROXY")
+
+			if len(os.Getenv("SHUFFLE_INTERNAL_NO_PROXY")) > 0 {
+				noProxy = os.Getenv("SHUFFLE_INTERNAL_NO_PROXY")
+			} 
+
+			if len(os.Getenv("SHUFFLE_INTERNAL_NOPROXY")) > 0 {
+				noProxy = os.Getenv("SHUFFLE_INTERNAL_NOPROXY")
+			}
+		}
+
+		// Manage noproxy
+		if len(noProxy) > 0 {
+			isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host) 
+			if isNoProxy {
+				log.Printf("[INFO] Skipping proxy for %s", parsedUrl)
+
+				httpProxy = ""
+				httpsProxy = ""
+			}
+		}
+	}
 
 	transport := http.DefaultTransport.(*http.Transport)
 	transport.MaxIdleConnsPerHost = 100
@@ -25448,6 +25486,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 	}
 
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && (strings.ToLower(httpProxy) != "noproxy" || strings.ToLower(httpsProxy) != "noproxy") {
+
 		if len(httpProxy) > 0 && strings.ToLower(httpProxy) != "noproxy" {
 			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
 
