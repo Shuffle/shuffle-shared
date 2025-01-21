@@ -3322,6 +3322,10 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			newEnvironments[envIndex].Licensed = false
 			newEnvironments[envIndex].DataLake.Enabled = false
 		}
+
+		if len(env.SuborgDistribution) != 0 {
+			newEnvironments[envIndex].SuborgDistribution = env.SuborgDistribution
+		}
 	}
 
 	newjson, err := json.Marshal(newEnvironments)
@@ -28272,6 +28276,113 @@ func HandleGetenvStats(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func HandleSetenvConfig(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in set env config: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during set env config")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	var environmentId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		environmentId = location[4]
+	}
+
+	if len(environmentId) == 0 {
+		log.Printf("[Error] No environment ID found in path")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type environmentConfig struct {
+		Action         string   `json:"action"`
+		SelectedSuborg []string `json:"selected_suborgs"`
+	}
+
+	var config environmentConfig
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[Error] Failed reading body in set env config: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("[Error] Failed unmarshalling body in set env config: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	environment, err := GetEnvironment(ctx, environmentId, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[Error] Failed getting environment in set env config: %s for Id: %s", err, environmentId)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if config.Action == "suborg_distribute" {
+
+		if len(config.SelectedSuborg) == 0 {
+			environment.SuborgDistribution = []string{}
+		} else {
+			environment.SuborgDistribution = config.SelectedSuborg
+		}
+
+		err = SetEnvironment(ctx, environment)
+		if err != nil {
+			log.Printf("[Error] Failed setting environment in set env config: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil {
+			for _, childOrg := range foundOrg.ChildOrgs {
+				nameKey := "Environments"
+				cacheKey := fmt.Sprintf("%s_%s", nameKey, childOrg.Id)
+				DeleteCache(ctx, cacheKey)
+			}
+		}
+
+		log.Printf("[INFO] Successfully updated environment in set env config for environment id: %s", environmentId)
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true, "reason" : "Successfully updated environment"}`))
+
+	}
 }
 
 func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated bool, amount int) (*Org, bool) {
