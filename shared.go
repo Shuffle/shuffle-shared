@@ -12235,7 +12235,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.Description = tmpData.Description
 	}
 
-	if len(tmpData.Defaults.AppDownloadRepo) > 0 || len(tmpData.Defaults.AppDownloadBranch) > 0 || len(tmpData.Defaults.WorkflowDownloadRepo) > 0 || len(tmpData.Defaults.WorkflowDownloadBranch) > 0 || len(tmpData.Defaults.NotificationWorkflow) > 0 {
+	if len(tmpData.Defaults.AppDownloadRepo) > 0 || len(tmpData.Defaults.AppDownloadBranch) > 0 || len(tmpData.Defaults.WorkflowDownloadRepo) > 0 || len(tmpData.Defaults.WorkflowDownloadBranch) > 0 || len(tmpData.Defaults.NotificationWorkflow) > 0 || len(tmpData.Defaults.DocumentationReference) > 0 {
 		org.Defaults = tmpData.Defaults
 	}
 
