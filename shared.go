@@ -28816,7 +28816,7 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Access is granted -> get revisions
-	revisions, err := ListWorkflowRevisions(ctx, workflow.ID)
+	revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 50)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting revisions for workflow %s: %s", workflow.ID, err)
 		resp.WriteHeader(400)
