@@ -2601,7 +2601,7 @@ func HandleSetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		item.RunningIp = ""
-		if item.OrgId != user.ActiveOrg.Id {
+		if item.OrgId != user.ActiveOrg.Id && len(item.SuborgDistribution) == 0 {
 			item.OrgId = user.ActiveOrg.Id
 		}
 
