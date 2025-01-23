@@ -4646,6 +4646,13 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Failed updating auth. Please try again."}`))
 			return
 		}
+
+		for _, childOrg := range org.ChildOrgs {
+			nameKey := "workflowappauth"
+			cacheKey := fmt.Sprintf("%s_%s", nameKey, childOrg.Id)
+			DeleteCache(ctx, cacheKey)
+		}
+
 	} else {
 		log.Printf("[WARNING] Unknown auth change action %s", config.Action)
 	}
