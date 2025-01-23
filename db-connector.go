@@ -5991,6 +5991,23 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		}
 	}
 
+	//Check if this is suborg and get parent org environments if it distributed
+	foundOrg, err := GetOrg(ctx, orgId)
+	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+		if err == nil {
+			parentEnvs, err := GetEnvironments(ctx, parentOrg.Id)
+			if err == nil {
+				for _, parentEnv := range parentEnvs {
+					if !ArrayContains(parentEnv.SuborgDistribution, orgId) {
+						continue
+					}
+					environments = append(environments, parentEnv)
+				}
+			}
+		}
+	}
+
 	// Fixing environment return search problems
 	timenow := time.Now().Unix()
 	for envIndex, env := range environments {

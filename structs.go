@@ -496,6 +496,8 @@ type Environment struct {
 	Licensed bool       `json:"licensed" datastore:"licensed"`
 	RunType  string     `json:"run_type" datastore:"run_type"`
 	DataLake LakeConfig `json:"data_lake" datastore:"data_lake"`
+
+	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
 
 type LakeConfig struct {
