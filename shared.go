@@ -6918,36 +6918,36 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					// Also, allow a "locking" mechanism that
 					// overwrites to child if enabled.
-					finalLocks := []ParameterLock{}
+					// finalLocks := []ParameterLock{}
 					finalParamters := action.Parameters
 
-					// lock clean up in incoming action
-					for _, lock := range action.ParameterLocks {
-						if action.Name == lock.ActionName {
-							finalLocks = append(finalLocks, lock)
-						}
-					}
+					// // lock clean up in incoming action
+					// for _, lock := range action.ParameterLocks {
+					// 	if action.Name == lock.ActionName {
+					// 		finalLocks = append(finalLocks, lock)
+					// 	}
+					// }
 
-					action.ParameterLocks = finalLocks
-					if len(action.ParameterLocks) == 0 {
-						log.Printf("[DEBUG] No locks found for action %s", action.ID)
-						if childAction.Name == action.Name {
-							log.Printf("[DEBUG] Action %s is the same as child action %s", action.ID, childAction.ID)
-							// so, action itself is not changed
-							// preserve child parameters by default
-							finalParamters = childAction.Parameters
-						} else {
-							log.Printf("[DEBUG] Action %s (Name: %s, AppID: %s) is different from child action %s (Name: %s, AppID: %s)", action.ID, action.Name, action.AppID, childAction.ID, childAction.Name, childAction.AppID)
-						}
-					} else {
-						for _, lock := range action.ParameterLocks {
-							for paramIndex, param := range finalParamters {
-								if param.Name == lock.ParameterName && action.Name == lock.ActionName {
-									finalParamters[paramIndex].Value = childAction.Parameters[paramIndex].Value
-								}
-							}
-						}
-					}
+					// action.ParameterLocks = finalLocks
+					// if len(action.ParameterLocks) == 0 {
+					// 	log.Printf("[DEBUG] No locks found for action %s", action.ID)
+					// 	if childAction.Name == action.Name {
+					// 		log.Printf("[DEBUG] Action %s is the same as child action %s", action.ID, childAction.ID)
+					// 		// so, action itself is not changed
+					// 		// preserve child parameters by default
+					// 		finalParamters = childAction.Parameters
+					// 	} else {
+					// 		log.Printf("[DEBUG] Action %s (Name: %s, AppID: %s) is different from child action %s (Name: %s, AppID: %s)", action.ID, action.Name, action.AppID, childAction.ID, childAction.Name, childAction.AppID)
+					// 	}
+					// } else {
+					// 	for _, lock := range action.ParameterLocks {
+					// 		for paramIndex, param := range finalParamters {
+					// 			if param.Name == lock.ParameterName && action.Name == lock.ActionName {
+					// 				finalParamters[paramIndex].Value = childAction.Parameters[paramIndex].Value
+					// 			}
+					// 		}
+					// 	}
+					// }
 
 					action.Parameters = finalParamters
 
