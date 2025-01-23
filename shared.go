@@ -7343,29 +7343,25 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			}
 		}
 
-		// Old childWorkflow triggers:
-		for _, oldTrigger := range oldWorkflow.Triggers {
-			// params
-			for _, param := range oldTrigger.Parameters {
-				log.Printf("[DEBUG] Old trigger %s (%s) has param %s and value: %s", oldTrigger.Label, oldTrigger.ID, param.Name, param.Value)
-			}
-		}
+		// // Old childWorkflow triggers:
+		// for _, oldTrigger := range oldWorkflow.Triggers {
+		// 	// params
+		// 	for _, param := range oldTrigger.Parameters {
+		// 		// log.Printf("[DEBUG] Old trigger %s (%s) has param %s and value: %s", oldTrigger.Label, oldTrigger.ID, param.Name, param.Value)
+		// 	}
+		// }
 
-		// to be updated triggers
-		for _, trigger := range newTriggers {
-			// params
-			for _, param := range trigger.Parameters {
-				log.Printf("[DEBUG] New trigger %s (%s) has param %s and value: %s", trigger.Label, trigger.ID, param.Name, param.Value)
-			}
-		}
+		// // to be updated triggers
+		// for _, trigger := range newTriggers {
+		// 	// params
+		// 	for _, param := range trigger.Parameters {
+		// 		// log.Printf("[DEBUG] New trigger %s (%s) has param %s and value: %s", trigger.Label, trigger.ID, param.Name, param.Value)
+		// 	}
+		// }
 
 		childWorkflow.Actions = newActions
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
-
-		for _, childAction := range childWorkflow.Actions {
-			log.Printf("[DEBUG] (1) Authentication ID of action %s: %s", childAction.ID, childAction.AuthenticationId)
-		}
 
 		//log.Printf("\n\nEND")
 		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
