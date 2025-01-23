@@ -6501,8 +6501,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		parentWorkflowEnvironment = "Shuffle"
 	}
 
-	// for actionIndex, action := range parentWorkflow.Actions {
-	for _, action := range parentWorkflow.Actions {
+	for actionIndex, action := range parentWorkflow.Actions {
 		if len(action.Environment) > 0 {
 			discoveredEnvironment = action.Environment
 		}
@@ -6511,24 +6510,24 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		// authenticationIDs. Let's just remove it for now.
 
 		// In case of replication, 
-		// parentWorkflow.Actions[actionIndex].AuthenticationId = ""
+		parentWorkflow.Actions[actionIndex].AuthenticationId = ""
 
-		// idFound := false
-		// for _, oldWorkflowAction := range oldWorkflow.Actions {
-		// 	if oldWorkflowAction.ID == action.ID {
-		// 		idFound = true
-		// 		parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
-		// 	}
-		// }
+		idFound := false
+		for _, oldWorkflowAction := range oldWorkflow.Actions {
+			if oldWorkflowAction.ID == action.ID {
+				idFound = true
+				parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+			}
+		}
 
-		// if !idFound {
-		// 	for _, oldWorkflowAction := range oldWorkflow.Actions {
-		// 		if oldWorkflowAction.AppID == action.AppID {
-		// 			parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
-		// 			break
-		// 		}
-		// 	}
-		// }
+		if !idFound {
+			for _, oldWorkflowAction := range oldWorkflow.Actions {
+				if oldWorkflowAction.AppID == action.AppID {
+					parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+					break
+				}
+			}
+		}
 	}
 
 	for _, action := range oldWorkflow.Actions {
@@ -7220,7 +7219,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			}
 
 			// looks like a hack stitched together
-			// only to make sure to never miss actions.
+			// only to make sure to never miss action.
 			if !found {
 				newActions = append(newActions, childAction)
 			}
@@ -10202,7 +10201,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 	for actionIndex, _ := range newWf.Actions {
 		workflow.Actions[actionIndex].ParentControlled = true
-		// workflow.Actions[actionIndex].AuthenticationId = ""
+		workflow.Actions[actionIndex].AuthenticationId = ""
 		workflow.Actions[actionIndex].Environment = defaultEnvironment
 	}
 
