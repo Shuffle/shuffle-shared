@@ -6501,30 +6501,34 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		parentWorkflowEnvironment = "Shuffle"
 	}
 
-	for actionIndex, action := range parentWorkflow.Actions {
+	// for actionIndex, action := range parentWorkflow.Actions {
+	for _, action := range parentWorkflow.Actions {
 		if len(action.Environment) > 0 {
 			discoveredEnvironment = action.Environment
 		}
 
-		// In case of replication
-		parentWorkflow.Actions[actionIndex].AuthenticationId = ""
+		// i think the following messes everything up with
+		// authenticationIDs. Let's just remove it for now.
 
-		idFound := false
-		for _, oldWorkflowAction := range oldWorkflow.Actions {
-			if oldWorkflowAction.ID == action.ID {
-				idFound = true
-				parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
-			}
-		}
+		// In case of replication, 
+		// parentWorkflow.Actions[actionIndex].AuthenticationId = ""
 
-		if !idFound {
-			for _, oldWorkflowAction := range oldWorkflow.Actions {
-				if oldWorkflowAction.AppID == action.AppID {
-					parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
-					break
-				}
-			}
-		}
+		// idFound := false
+		// for _, oldWorkflowAction := range oldWorkflow.Actions {
+		// 	if oldWorkflowAction.ID == action.ID {
+		// 		idFound = true
+		// 		parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+		// 	}
+		// }
+
+		// if !idFound {
+		// 	for _, oldWorkflowAction := range oldWorkflow.Actions {
+		// 		if oldWorkflowAction.AppID == action.AppID {
+		// 			parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
+		// 			break
+		// 		}
+		// 	}
+		// }
 	}
 
 	for _, action := range oldWorkflow.Actions {
@@ -6937,6 +6941,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					action.Parameters = finalParamters
 
+					// the updated action is given the right authentication ID every time.
+					log.Printf("[DEBUG] Authentication ID that's literally being passed in: %s", action.AuthenticationId)
 					childWorkflow.Actions[index] = action
 					break
 				}
@@ -7187,6 +7193,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				}
 			}
 
+			// the below authentication overwriting doesn't work.
 			idFound := false
 			for _, oldWorkflowAction := range oldWorkflow.Actions {
 				if oldWorkflowAction.ID == childAction.ID {
@@ -7212,6 +7219,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				}
 			}
 
+			// looks like a hack stitched together
+			// only to make sure to never miss actions.
 			if !found {
 				newActions = append(newActions, childAction)
 			}
@@ -7347,6 +7356,10 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		childWorkflow.Actions = newActions
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
+
+		for _, childAction := range childWorkflow.Actions {
+			log.Printf("[DEBUG] (1) Authentication ID of action %s: %s", childAction.ID, childAction.AuthenticationId)
+		}
 
 		//log.Printf("\n\nEND")
 		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
@@ -10189,7 +10202,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 	for actionIndex, _ := range newWf.Actions {
 		workflow.Actions[actionIndex].ParentControlled = true
-		workflow.Actions[actionIndex].AuthenticationId = ""
+		// workflow.Actions[actionIndex].AuthenticationId = ""
 		workflow.Actions[actionIndex].Environment = defaultEnvironment
 	}
 
