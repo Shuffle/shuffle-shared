@@ -5040,10 +5040,16 @@ func GetGcpSchedule(ctx context.Context, id string) (*ScheduleOld, error) {
 		log.Printf("[ERROR] Client error: %s", err)
 		return schedule, err
 	}
+
 	location := "europe-west2"
-	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+	if len(os.Getenv("SHUFFLE_GCE_LOCATION")) > 0 {
+		location = os.Getenv("SHUFFLE_GCE_LOCATION")
+	}
+
+	if len(os.Getenv("SHUFFLE_GCE_LOCATION")) == 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 		location = os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")
 	}
+
 	req := &schedulerpb.GetJobRequest{
 		Name: fmt.Sprintf("projects/%s/locations/%s/jobs/schedule_%s", gceProject, location, id),
 	}
@@ -18540,7 +18546,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		if err != nil {
 			log.Printf("[ERROR] Failed getting auth for single action: %s", err)
 		} else {
-			latestTimestamp := int64(0)
+			//latestTimestamp := int64(0)
 			for _, auth := range auths {
 				if auth.App.ID != fileId {
 					continue
