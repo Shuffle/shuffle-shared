@@ -3235,6 +3235,30 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil && workflow.ID != "" {
+				// Somehow this can happen. Reverting to LATEST revision
+				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
+					} else {
+						if len(revisions) > 0 {
+							for _, revision := range revisions {
+								if revision.ID != workflow.ID {
+									continue
+								}
+
+								if len(revision.Triggers) > 0 {
+									workflow.Triggers = revision.Triggers
+									break
+								}
+							}
+
+							log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+							workflow.Triggers = revisions[0].Triggers
+						}
+					}
+				}
+
 				return workflow, nil
 			}
 		} else {
@@ -8202,6 +8226,10 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		}
 
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
+
+		// For workflow revision backups
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
 	}
 
 	return nil
