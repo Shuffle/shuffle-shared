@@ -1928,7 +1928,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 
 		if !skipFinished {
-			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented) - just returning for now for parent function to handle.", workflowExecution.ExecutionId)
+			// FIXME: Is this subflow result (not implemented) valid? I think it should have been added? Hmm.
+			//log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented) - just returning for now for parent function to handle.", workflowExecution.ExecutionId)
 			finalWorkflowExecution.Status = "FINISHED"
 			dbsave = true
 			if finalWorkflowExecution.CompletedAt == 0 {
@@ -3234,6 +3235,30 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil && workflow.ID != "" {
+				// Somehow this can happen. Reverting to LATEST revision
+				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
+					} else {
+						if len(revisions) > 0 {
+							for _, revision := range revisions {
+								if revision.ID != workflow.ID {
+									continue
+								}
+
+								if len(revision.Triggers) > 0 {
+									workflow.Triggers = revision.Triggers
+									break
+								}
+							}
+
+							log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+							workflow.Triggers = revisions[0].Triggers
+						}
+					}
+				}
+
 				return workflow, nil
 			}
 		} else {
@@ -8211,6 +8236,10 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		}
 
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
+
+		// For workflow revision backups
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
 	}
 
 	return nil
