@@ -6520,7 +6520,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		// i think the following messes everything up with
 		// authenticationIDs. Let's just remove it for now.
 
-		// In case of replication, 
+		// In case of replication,
 		parentWorkflow.Actions[actionIndex].AuthenticationId = ""
 
 		idFound := false
@@ -18493,45 +18493,10 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		return workflowExecution, err
 	}
 
-	/*
-		// FIXME: Is this required? I don't think so
-		if app.Authentication.Required && len(action.AuthenticationId) == 0 {
-
-			// Basic bypass check for valid headers just in case
-			authFound := false
-			for _, param := range action.Parameters {
-				if param.Name == "headers" || param.Name == "queries" || param.Name == "url" {
-					lowercased := strings.ToLower(param.Value)
-					if strings.Contains(lowercased, "auth") || strings.Contains(lowercased, "bearer") || strings.Contains(lowercased, "basic") || strings.Contains(lowercased, "api") {
-						authFound = true
-						break
-					}
-				}
-			}
-
-			if !authFound {
-				log.Printf("[WARNING] Tried to execute SINGLE %s WITHOUT auth (missing)", app.Name)
-
-				found := false
-				for _, param := range action.Parameters {
-					if param.Configuration {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					return workflowExecution, errors.New("You must authenticate this API first")
-				}
-			}
-		}
-	*/
-
-	// FIXME: We need to inject missing empty auth here
+	// FIXME: We need to inject missing empty auth here in some cases
 	// This is NOT a good solution, but a good bypass
-	if app.Authentication.Required {
+	if app.Authentication.Required && len(action.AuthenticationId) == 0 {
 		authFields := 0
-
 		foundFields := []string{}
 		for _, actionParam := range action.Parameters {
 			if actionParam.Configuration {
@@ -18568,6 +18533,32 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 					Name:          "password_basic",
 					Configuration: true,
 				})
+			}
+		}
+
+		auths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting auth for single action: %s", err)
+		} else {
+			latestTimestamp := int64(0)
+			for _, auth := range auths {
+				if auth.App.ID != fileId {
+					continue
+				}
+
+				// Fallback to latest created
+				/*
+				if latestTimestamp < auth.Created {
+					latestTimestamp = auth.Created
+					action.AuthenticationId = auth.Id
+				}
+				*/
+
+				// If valid, just choose it
+				if auth.Validation.Valid {
+					action.AuthenticationId = auth.Id
+					break
+				}
 			}
 		}
 	}
@@ -25431,7 +25422,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 			if len(os.Getenv("SHUFFLE_INTERNAL_NO_PROXY")) > 0 {
 				noProxy = os.Getenv("SHUFFLE_INTERNAL_NO_PROXY")
-			} 
+			}
 
 			if len(os.Getenv("SHUFFLE_INTERNAL_NOPROXY")) > 0 {
 				noProxy = os.Getenv("SHUFFLE_INTERNAL_NOPROXY")
@@ -25440,7 +25431,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 		// Manage noproxy
 		if len(noProxy) > 0 {
-			isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host) 
+			isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host)
 			if isNoProxy {
 				log.Printf("[INFO] Skipping proxy for %s", parsedUrl)
 

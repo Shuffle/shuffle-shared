@@ -1928,7 +1928,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 
 		if !skipFinished {
-			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented) - just returning for now for parent function to handle.", workflowExecution.ExecutionId)
+			// FIXME: Is this subflow result (not implemented) valid? I think it should have been added? Hmm.
+			//log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented) - just returning for now for parent function to handle.", workflowExecution.ExecutionId)
 			finalWorkflowExecution.Status = "FINISHED"
 			dbsave = true
 			if finalWorkflowExecution.CompletedAt == 0 {
