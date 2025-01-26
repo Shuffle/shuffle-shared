@@ -5016,6 +5016,9 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetGcpSchedule(ctx context.Context, id string) (*ScheduleOld, error) {
+	if project.Environment != "cloud" {
+		return &ScheduleOld{}, nil
+	}
 
 	// Check if we have the schedule in cache
 	cacheData, err := GetCache(ctx, fmt.Sprintf("schedule-%s", id))
@@ -5055,9 +5058,13 @@ func GetGcpSchedule(ctx context.Context, id string) (*ScheduleOld, error) {
 	}
 	resp, err := c.GetJob(ctx, req)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting schedule %s: %s", id, err)
+		if !strings.Contains(err.Error(), "NotFound") {
+			log.Printf("[ERROR] Failed getting schedule %s: %s", id, err)
+		}
+
 		return schedule, err
 	}
+
 	schedule.Id = id
 	schedule.Name = resp.Name
 	if resp.State == schedulerpb.Job_ENABLED {
@@ -10587,7 +10594,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//Check if workflow trigger schedule is in sync with the gcp cron job
-	if workflow.Triggers != nil {
+	if project.Environment == "cloud" && workflow.Triggers != nil {
 		var wg sync.WaitGroup
 		triggerMutex := sync.Mutex{}
 
@@ -23299,7 +23306,7 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 // 2. Parent workflow's owner is same org?
 // 3. Parent execution auth is correct
 func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool, string) {
-	log.Printf("[DEBUG] Inside execute validation for workflow %s (%s)! Request method: %s", workflow.Name, workflow.ID, request.Method)
+	//log.Printf("[DEBUG] Inside execute validation for workflow %s (%s)! Request method: %s", workflow.Name, workflow.ID, request.Method)
 
 	//if request.Method == "POST" {
 	ctx := GetContext(request)
@@ -30585,6 +30592,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		*/
 	}
 
+	exec.Workflow.Validation.NotificationsCreated = exec.NotificationsCreated
 	exec.Workflow.Validation = workflow.Validation
 	marshalledValidation, err := json.Marshal(workflow.Validation)
 	if err != nil {
@@ -30597,7 +30605,6 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	SetCache(backgroundContext, cacheKey, marshalledValidation, 120)
 
 	// ALWAYS have correct exec id for current execution, but not always in workflow
-
 	//log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to '%s'\n\n", exec.ExecutionId, len(workflow.Validation.Errors), marshalledValidation)
 
 	return exec

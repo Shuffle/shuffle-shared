@@ -1698,11 +1698,15 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	if workflowExecution.Status != "EXECUTING" {
-		validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
-		if err == nil {
-			workflowExecution.Workflow.Validation = validation
+	// FIXME: May be a problem here with setting it at all times~ 
+	//if workflowExecution.Status != "EXECUTING" {
+	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
+	if err == nil {
+		if workflowExecution.NotificationsCreated > 0 {
+			validation.NotificationsCreated = workflowExecution.NotificationsCreated
 		}
+
+		workflowExecution.Workflow.Validation = validation
 	}
 
 	// Make sure to not having missing items in the execution
@@ -3235,6 +3239,15 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil && workflow.ID != "" {
+				validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
+				if err == nil {
+					cacheData := []byte(validationData.([]uint8))
+					err = json.Unmarshal(cacheData, &workflow.Validation)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling cache data for execution status (4): %s", err)
+					}
+				}
+
 				// Somehow this can happen. Reverting to LATEST revision
 				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
 					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
