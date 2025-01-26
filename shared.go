@@ -6964,8 +6964,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					action.Parameters = finalParamters
 
-					// the updated action is given the right authentication ID every time.
-					log.Printf("[DEBUG] Authentication ID that's literally being passed in: %s", action.AuthenticationId)
 					childWorkflow.Actions[index] = action
 					break
 				}
@@ -28945,8 +28943,19 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	revisionCount := 50
+	if request.URL.Query().Get("count") != "" {
+		revisionCount, err = strconv.Atoi(request.URL.Query().Get("count"))
+		if err != nil {
+			log.Printf("[WARNING] Failed converting count to int: %s", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed converting count to int"}`))
+			return
+		}
+	}
+
 	// Access is granted -> get revisions
-	revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 50)
+	revisions, err := ListWorkflowRevisions(ctx, workflow.ID, revisionCount)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting revisions for workflow %s: %s", workflow.ID, err)
 		resp.WriteHeader(400)

@@ -8058,8 +8058,10 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 	} else {
 		query := datastore.NewQuery(nameKey).Filter("id =", originalId)
 		// if project.Environment == "cloud" {
-		query = query.Order("-edited").Limit(amount)
+		query = query.Order("-edited")
 		// }
+
+		iterCount := 0
 
 		cursorStr := ""
 		for {
@@ -8076,7 +8078,15 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 					}
 				}
 
+				iterCount++;
 				workflows = append(workflows, innerWorkflow)
+				if iterCount >= amount {
+					break
+				}
+			}
+
+			if iterCount >= amount {
+				break
 			}
 
 			if err != iterator.Done {
