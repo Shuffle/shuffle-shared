@@ -3272,6 +3272,16 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 					}
 				}
 
+				healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+				if err != nil {
+					if !strings.Contains(err.Error(), "Org ID not set") {
+						log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+					}
+
+				} else {
+					workflow = &healthWorkflow
+				}
+
 				return workflow, nil
 			}
 		} else {
@@ -3365,6 +3375,16 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
+
+	healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+	if err != nil {
+		if !strings.Contains(err.Error(), "Org ID not set") {
+			log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+		}
+	} else {
+		workflow = &healthWorkflow 
+	}
+
 	if project.CacheDb && workflow.ID != "" {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
