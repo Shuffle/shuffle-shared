@@ -7731,9 +7731,25 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s (save workflow)", user.Username, workflow.ID)
 
 			workflow.ID = tmpworkflow.ID
+
 		} else if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
 			log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID
+		} else if ArrayContains(user.Orgs, tmpworkflow.OrgId) {
+			tmpWorkflowOrg, err := GetOrg(ctx, tmpworkflow.OrgId)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org for workflow %s: %s", tmpworkflow.OrgId, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			for _, User := range tmpWorkflowOrg.Users {
+				if user.Id == User.Id && User.Role != "org-reader" {
+					log.Printf("[AUDIT] (1) User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
+					workflow.ID = tmpworkflow.ID
+				}
+			}
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (save)", user.Username, tmpworkflow.ID)
 			resp.WriteHeader(401)
