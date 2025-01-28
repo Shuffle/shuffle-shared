@@ -14,6 +14,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	uuid "github.com/satori/go.uuid"
+	"github.com/Masterminds/semver"
 )
 
 type appConfig struct {
@@ -1236,9 +1239,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	workflowData.Actions = actions
 
-	// // Save the workflow
-	// err = SetWorkflow(ctx, workflowData, workflowData.ID)
-
 	// if err != nil {
 	// 	log.Println("[ERROR] saving ops dashboard workflow:", err)
 	// 	return "", errors.New("Error saving ops dashboard workflow: " + err.Error())
@@ -1378,4 +1378,1058 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 
 	//log.Printf("[INFO] Ops dashboard workflow saved successfully with ID: %s", workflowData.ID)
 	return workflowData.ID, nil
+}
+
+func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, []string, error) {
+	orgUpdated := false
+	startnodeFound := false
+	newOrgApps := []string{}
+	org := &Org{}
+
+	if len(workflow.OrgId) == 0 {
+		//log.Printf("[ERROR] Org ID not set for workflow %s in GetStaticWorkflowHealth()", workflow.ID)
+		return workflow, []string{}, errors.New("Org ID not set")
+	}
+
+	workflow.Errors = []string{}
+	user := User{
+		Username: "HealthWorkflowFunction",
+		Id: "HealthWorkflowFunction",
+		ActiveOrg: OrgMini{
+			Id: workflow.OrgId,
+		},
+	}
+
+	environments := []Environment{
+		Environment{
+			Name:       "Cloud",
+			Type:       "cloud",
+			Archived:   false,
+			Registered: true,
+			Default:    false,
+			OrgId:      user.ActiveOrg.Id,
+			Id:         uuid.NewV4().String(),
+		},
+	}
+
+	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting environments for org %s", user.ActiveOrg.Id)
+		environments = []Environment{}
+	}
+
+	defaultEnv := ""
+	for _, env := range environments {
+		if env.Default {
+			defaultEnv = env.Name
+			break
+		}
+	}
+
+	if defaultEnv == "" {
+		if project.Environment == "cloud" {
+			defaultEnv = "Cloud"
+		} else {
+			defaultEnv = "Shuffle"
+		}
+	}
+
+	workflowapps, apperr := GetPrioritizedApps(ctx, user)
+	if apperr != nil {
+		log.Printf("[ERROR] Failed getting apps for org %s", user.ActiveOrg.Id)
+	}
+
+	allNodes := []string{}
+	newActions := []Action{}
+	allNames := []string{}
+	for _, action := range workflow.Actions {
+
+		if action.AppID == "integration" {
+			if action.IsStartNode {
+				startnodeFound = true
+			}
+
+			newActions = append(newActions, action)
+			continue
+		}
+
+		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
+			continue
+		}
+
+		newLabelName := strings.Replace(strings.ToLower(action.Label), " ", "_", -1)
+		if len(action.Label) > 0 && ArrayContains(allNames, newLabelName) {
+			parsedError := fmt.Sprintf("Multiple actions with name '%s'. May cause problems unless changed.", action.Label)
+			if !ArrayContains(workflow.Errors, parsedError) {
+				workflow.Errors = append(workflow.Errors, parsedError)
+			}
+		}
+
+		allNames = append(allNames, newLabelName)
+		allNodes = append(allNodes, action.ID)
+		if workflow.Start == action.ID {
+			//log.Printf("[INFO] FOUND STARTNODE %d", workflow.Start)
+			startnodeFound = true
+			action.IsStartNode = true
+		}
+
+		if len(action.Errors) > 0 || !action.IsValid {
+			action.IsValid = true
+			action.Errors = []string{}
+		}
+
+		if action.ExecutionDelay > 86400 {
+			parsedError := fmt.Sprintf("Max execution delay for an action is 86400 (1 day)")
+			if !ArrayContains(workflow.Errors, parsedError) {
+				workflow.Errors = append(workflow.Errors, parsedError)
+			}
+
+			action.ExecutionDelay = 86400
+		}
+
+		if action.Environment == "" {
+			if project.Environment == "cloud" {
+				action.Environment = defaultEnv
+			} else {
+				if len(environments) > 0 {
+					for _, env := range environments {
+						if !env.Archived && env.Default {
+							//log.Printf("FOUND ENV %s", env)
+							action.Environment = env.Name
+							break
+						}
+					}
+				}
+
+				if action.Environment == "" {
+					action.Environment = defaultEnv
+				}
+
+				action.IsValid = true
+			}
+		} else {
+			warned := []string{}
+			found := false
+			for _, env := range environments {
+				if env.Name == action.Environment {
+					found = true
+					if env.Archived {
+						log.Printf("[DEBUG] Environment %s is archived. Changing to default.", env.Name)
+						action.Environment = defaultEnv
+					}
+
+					break
+				}
+			}
+
+			if !found {
+				if ArrayContains(warned, action.Environment) {
+					log.Printf("[DEBUG] Environment %s isn't available. Changing to default.", action.Environment)
+					warned = append(warned, action.Environment)
+				}
+
+				action.Environment = defaultEnv
+			}
+		}
+
+		// Fixing apps with bad IDs. This can happen a lot because of
+		// autogeneration of app IDs, and export/imports of workflows
+		idFound := false
+		nameVersionFound := false
+		nameFound := false
+
+		discoveredApp := WorkflowApp{}
+		for _, innerApp := range workflowapps {
+			if innerApp.ID == action.AppID {
+				discoveredApp = innerApp
+				//log.Printf("[INFO] ID, Name AND version for %s:%s (%s) was FOUND", action.AppName, action.AppVersion, action.AppID)
+				action.Sharing = innerApp.Sharing
+				action.Public = innerApp.Public
+				action.Generated = innerApp.Generated
+				action.ReferenceUrl = innerApp.ReferenceUrl
+
+				idFound = true
+				break
+			}
+		}
+
+		if !idFound {
+			for _, innerApp := range workflowapps {
+				if innerApp.Name == action.AppName && innerApp.AppVersion == action.AppVersion {
+					discoveredApp = innerApp
+
+					action.AppID = innerApp.ID
+					action.Sharing = innerApp.Sharing
+					action.Public = innerApp.Public
+					action.Generated = innerApp.Generated
+					action.ReferenceUrl = innerApp.ReferenceUrl
+					nameVersionFound = true
+					break
+				}
+			}
+		}
+
+		if !idFound {
+			for _, innerApp := range workflowapps {
+				if innerApp.Name == action.AppName {
+					discoveredApp = innerApp
+
+					action.AppID = innerApp.ID
+					action.Sharing = innerApp.Sharing
+					action.Public = innerApp.Public
+					action.Generated = innerApp.Generated
+					action.ReferenceUrl = innerApp.ReferenceUrl
+
+					nameFound = true
+					break
+				}
+			}
+		}
+
+		// Handles backend labeling
+		if len(action.CategoryLabel) == 0 && len(discoveredApp.ID) > 0 {
+			for _, discoveredAction := range discoveredApp.Actions {
+				if action.Name != discoveredAction.Name {
+					continue
+				}
+
+				if len(discoveredAction.CategoryLabel) == 0 {
+					break
+				}
+
+				action.CategoryLabel = discoveredAction.CategoryLabel
+				break
+			}
+		}
+
+		if !idFound {
+			if nameVersionFound {
+			} else if nameFound {
+			} else {
+				log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
+				handled := false
+
+				if project.Environment == "cloud" {
+					appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
+					if err == nil && len(appid.ObjectID) > 0 {
+						//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
+						tmpApp, err := GetApp(ctx, appid.ObjectID, user, false)
+						if err == nil {
+							handled = true
+							action.AppID = tmpApp.ID
+							newOrgApps = append(newOrgApps, action.AppID)
+
+							workflowapps = append(workflowapps, *tmpApp)
+						}
+					} else {
+						log.Printf("[WARNING] Failed finding name %s in Algolia", action.AppName)
+					}
+				}
+
+				if !handled {
+					action.Errors = []string{fmt.Sprintf("Couldn't find app %s:%s", action.AppName, action.AppVersion)}
+					action.IsValid = false
+				}
+			}
+		}
+
+		if !action.IsValid && len(action.Errors) > 0 {
+			log.Printf("[INFO] Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
+		}
+
+		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
+		newActions = append(newActions, action)
+
+		// FIXMe: Should be authenticated first?
+		if len(discoveredApp.Categories) > 0 {
+			category := discoveredApp.Categories[0]
+
+			if org.Id == "" {
+				org, err = GetOrg(ctx, user.ActiveOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting org: %s", err)
+					continue
+				}
+			}
+
+			if strings.ToLower(category) == "siem" && org.SecurityFramework.SIEM.ID == "" {
+				org.SecurityFramework.SIEM.Name = discoveredApp.Name
+				org.SecurityFramework.SIEM.Description = discoveredApp.Description
+				org.SecurityFramework.SIEM.ID = discoveredApp.ID
+				org.SecurityFramework.SIEM.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else if strings.ToLower(category) == "network" && org.SecurityFramework.Network.ID == "" {
+				org.SecurityFramework.Network.Name = discoveredApp.Name
+				org.SecurityFramework.Network.Description = discoveredApp.Description
+				org.SecurityFramework.Network.ID = discoveredApp.ID
+				org.SecurityFramework.Network.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else if strings.ToLower(category) == "edr" || strings.ToLower(category) == "edr & av" && org.SecurityFramework.EDR.ID == "" {
+				org.SecurityFramework.EDR.Name = discoveredApp.Name
+				org.SecurityFramework.EDR.Description = discoveredApp.Description
+				org.SecurityFramework.EDR.ID = discoveredApp.ID
+				org.SecurityFramework.EDR.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else if strings.ToLower(category) == "cases" && org.SecurityFramework.Cases.ID == "" {
+				org.SecurityFramework.Cases.Name = discoveredApp.Name
+				org.SecurityFramework.Cases.Description = discoveredApp.Description
+				org.SecurityFramework.Cases.ID = discoveredApp.ID
+				org.SecurityFramework.Cases.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else if strings.ToLower(category) == "iam" && org.SecurityFramework.IAM.ID == "" {
+				org.SecurityFramework.IAM.Name = discoveredApp.Name
+				org.SecurityFramework.IAM.Description = discoveredApp.Description
+				org.SecurityFramework.IAM.ID = discoveredApp.ID
+				org.SecurityFramework.IAM.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else if strings.ToLower(category) == "assets" && org.SecurityFramework.Assets.ID == "" {
+				log.Printf("Setting assets?")
+				org.SecurityFramework.Assets.Name = discoveredApp.Name
+				org.SecurityFramework.Assets.Description = discoveredApp.Description
+				org.SecurityFramework.Assets.ID = discoveredApp.ID
+				org.SecurityFramework.Assets.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else if strings.ToLower(category) == "intel" && org.SecurityFramework.Intel.ID == "" {
+				org.SecurityFramework.Intel.Name = discoveredApp.Name
+				org.SecurityFramework.Intel.Description = discoveredApp.Description
+				org.SecurityFramework.Intel.ID = discoveredApp.ID
+				org.SecurityFramework.Intel.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else if strings.ToLower(category) == "comms" && org.SecurityFramework.Communication.ID == "" {
+				org.SecurityFramework.Communication.Name = discoveredApp.Name
+				org.SecurityFramework.Communication.Description = discoveredApp.Description
+				org.SecurityFramework.Communication.ID = discoveredApp.ID
+				org.SecurityFramework.Communication.LargeImage = discoveredApp.LargeImage
+
+				orgUpdated = true
+			} else {
+				//log.Printf("[WARNING] No handler for type %s in app framework", category)
+			}
+
+		}
+	}
+
+	// Handle app versions & upgrades
+	for _, action := range workflow.Actions {
+		if action.AppID == "integration" {
+			if action.IsStartNode {
+				startnodeFound = true
+			}
+
+			continue
+		}
+
+		actionApp := strings.ToLower(strings.Replace(action.AppName, " ", "", -1))
+
+		for _, app := range workflowapps {
+			if strings.ToLower(strings.Replace(app.Name, " ", "", -1)) != actionApp {
+				continue
+			}
+
+			if len(app.Versions) <= 1 {
+				continue
+			}
+
+			v2, err := semver.NewVersion(action.AppVersion)
+			if err != nil {
+				log.Printf("[ERROR] Failed parsing original app version %s: %s", app.AppVersion, err)
+				continue
+			}
+
+			newVersion := ""
+			for _, loopedApp := range app.Versions {
+				if action.AppVersion == loopedApp.Version {
+					continue
+				}
+
+				appConstraint := fmt.Sprintf("< %s", loopedApp.Version)
+				c, err := semver.NewConstraint(appConstraint)
+				if err != nil {
+					log.Printf("[ERROR] Failed preparing constraint %s: %s", appConstraint, err)
+					continue
+				}
+
+				if c.Check(v2) {
+					newVersion = loopedApp.Version
+					action.AppVersion = loopedApp.Version
+				}
+			}
+
+			if len(newVersion) > 0 {
+				newError := fmt.Sprintf("App %s has version %s available.", app.Name, newVersion)
+				if !ArrayContains(workflow.Errors, newError) {
+					workflow.Errors = append(workflow.Errors, newError)
+				}
+			}
+		}
+	}
+
+	if !startnodeFound {
+		log.Printf("[WARNING] No startnode during cleanup (save) of of workflow %s!!", workflow.ID)
+
+		// Select the first action as startnode
+		if len(newActions) > 0 {
+			workflow.Start = newActions[0].ID
+			newActions[0].IsStartNode = true
+			startnodeFound = true
+		}
+	}
+
+	workflow.Actions = newActions
+
+	// Automatically adding new apps from imports
+	if len(newOrgApps) > 0 {
+		log.Printf("[WARNING] Adding new apps to org: %s", newOrgApps)
+
+		if org.Id == "" {
+			org, err = GetOrg(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting org during new app update for %s: %s", user.ActiveOrg.Id, err)
+			}
+		}
+
+		if org.Id != "" {
+			added := false
+			for _, newApp := range newOrgApps {
+				if !ArrayContains(org.ActiveApps, newApp) {
+					org.ActiveApps = append(org.ActiveApps, newApp)
+					added = true
+				}
+			}
+
+			if added {
+				orgUpdated = true
+				//log.Printf("[DEBUG] Org updated with new apps: %s", org.ActiveApps)
+
+				//DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+				DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
+				DeleteCache(ctx, fmt.Sprintf("user_%s", user.Username))
+				DeleteCache(ctx, fmt.Sprintf("user_%s", user.Id))
+				DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+				DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+			}
+			//}
+		}
+	}
+
+	newTriggers := []Trigger{}
+	for _, trigger := range workflow.Triggers {
+		if trigger.SourceWorkflow != workflow.ID && len(trigger.SourceWorkflow) > 0 {
+			continue
+		}
+
+		// Check if it's actually running
+		if trigger.TriggerType == "SCHEDULE" && trigger.Status != "uninitialized" {
+			schedule, err := GetSchedule(ctx, trigger.ID)
+			if err != nil {
+				trigger.Status = "stopped"
+			} else if schedule.Id == "" {
+				trigger.Status = "stopped"
+			}
+		} else if trigger.TriggerType == "SUBFLOW" {
+			for _, param := range trigger.Parameters {
+				if param.Name != "workflow" {
+					continue
+				}
+
+				/*
+				// Validate workflow exists
+				_, err := GetWorkflow(ctx, param.Value)
+				if err != nil {
+					parsedError := fmt.Sprintf("Selected Subflow in Action %s doesn't exist", trigger.Label)
+					if !ArrayContains(workflow.Errors, parsedError) {
+						workflow.Errors = append(workflow.Errors, parsedError)
+					}
+
+					log.Printf("[ERROR] Couldn't find subflow '%s' for workflow %s (%s). NOT setting to self as failover for now, and trusting authentication system instead.", param.Value, workflow.Name, workflow.ID)
+					//trigger.Parameters[paramIndex].Value = workflow.ID
+				}
+				*/
+			}
+		} else if trigger.TriggerType == "WEBHOOK" {
+			if trigger.Status != "uninitialized" && trigger.Status != "stopped" {
+				hook, err := GetHook(ctx, trigger.ID)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting webhook %s (%s)", trigger.ID, trigger.Status)
+					trigger.Status = "stopped"
+				} else if hook.Id == "" {
+					trigger.Status = "stopped"
+				}
+			}
+
+			//log.Printf("WEBHOOK: %d", len(trigger.Parameters))
+			if len(trigger.Parameters) < 2 {
+				log.Printf("[WARNING] Issue with parameters in webhook %s - missing params", trigger.ID)
+			} else {
+				if !strings.Contains(trigger.Parameters[0].Value, trigger.ID) {
+					log.Printf("[INFO] Fixing webhook URL for %s", trigger.ID)
+					baseUrl := "https://shuffler.io"
+					if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+						baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+					}
+
+					if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+						baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+					}
+
+					if project.Environment != "cloud" {
+						baseUrl = "http://localhost:3001"
+					}
+
+					newTriggerName := fmt.Sprintf("webhook_%s", trigger.ID)
+					trigger.Parameters[0].Value = fmt.Sprintf("%s/api/v1/hooks/%s", baseUrl, newTriggerName)
+					trigger.Parameters[1].Value = newTriggerName
+				}
+			}
+		} else if trigger.TriggerType == "USERINPUT" {
+			// E.g. check email
+			sms := ""
+			email := ""
+			subflow := ""
+			triggerType := ""
+			triggerInformation := ""
+			for _, item := range trigger.Parameters {
+				if item.Name == "alertinfo" {
+					triggerInformation = item.Value
+				} else if item.Name == "type" {
+					triggerType = item.Value
+				} else if item.Name == "email" {
+					email = item.Value
+				} else if item.Name == "sms" {
+					sms = item.Value
+				} else if item.Name == "subflow" {
+					subflow = item.Value
+				}
+			}
+
+			_ = subflow
+
+			if len(triggerType) == 0 {
+				log.Printf("[DEBUG] No type specified for user input node")
+				if workflow.PreviouslySaved {
+					//resp.WriteHeader(401)
+					//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No contact option specified in user input"}`)))
+					//return
+				}
+			}
+
+			// FIXME: This is not the right time to send them, BUT it's well served for testing. Save -> send email / sms
+			_ = triggerInformation
+			if strings.Contains(triggerType, "email") {
+				if email == "test@test.com" {
+					log.Printf("Email isn't specified during save.")
+					if workflow.PreviouslySaved {
+						workflow.Errors = append(workflow.Errors, "Email field in user input can't be empty")
+						continue
+					}
+				}
+
+				//log.Printf("[DEBUG] Should send email to %s during execution.", email)
+			}
+
+			if strings.Contains(triggerType, "sms") {
+				if sms == "0000000" {
+					log.Printf("Email isn't specified during save.")
+					if workflow.PreviouslySaved {
+						workflow.Errors = append(workflow.Errors, "SMS field in user input can't be empty")
+						continue
+					}
+				}
+
+				log.Printf("[DEBUG] Should send SMS to %s during execution.", sms)
+			}
+		}
+
+		allNodes = append(allNodes, trigger.ID)
+		newTriggers = append(newTriggers, trigger)
+	}
+
+	newComments := []Comment{}
+	for _, comment := range workflow.Comments {
+		if comment.Height < 50 {
+			comment.Height = 150
+		}
+
+		if comment.Width < 50 {
+			comment.Height = 150
+		}
+
+		if len(comment.BackgroundColor) == 0 {
+			comment.BackgroundColor = "#1f2023"
+		}
+
+		if len(comment.Color) == 0 {
+			comment.Color = "#ffffff"
+		}
+
+		comment.Position.X = float64(comment.Position.X)
+		comment.Position.Y = float64(comment.Position.Y)
+
+		newComments = append(newComments, comment)
+	}
+
+	workflow.Comments = newComments
+	workflow.Triggers = newTriggers
+
+	if len(workflow.Actions) == 0 {
+		workflow.Actions = []Action{}
+	}
+	if len(workflow.Branches) == 0 {
+		workflow.Branches = []Branch{}
+	}
+	if len(workflow.Triggers) == 0 {
+		workflow.Triggers = []Trigger{}
+	}
+	if len(workflow.Errors) == 0 {
+		workflow.Errors = []string{}
+	}
+	if len(workflow.Comments) == 0 {
+		workflow.Comments = []Comment{}
+	}
+
+	//log.Printf("PRE VARIABLES")
+	for _, variable := range workflow.WorkflowVariables {
+		if len(variable.Value) == 0 {
+			log.Printf("[WARNING] Variable %s is empty!", variable.Name)
+			workflow.Errors = append(workflow.Errors, fmt.Sprintf("Variable %s is empty!", variable.Name))
+		}
+	}
+
+	if len(workflow.ExecutionVariables) > 0 {
+		//log.Printf("[INFO] Found %d runtime variable(s) for workflow %s", len(workflow.ExecutionVariables), workflow.ID)
+	}
+
+	if len(workflow.WorkflowVariables) > 0 {
+		//log.Printf("[INFO] Found %d workflow variable(s) for workflow %s", len(workflow.WorkflowVariables), workflow.ID)
+	}
+
+	// Check every app action and param to see whether they exist
+	allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+	authGroups := []AppAuthenticationGroup{}
+	newActions = []Action{}
+	for _, action := range workflow.Actions {
+		reservedApps := []string{
+			"0ca8887e-b4af-4e3e-887c-87e9d3bc3d3e",
+		}
+
+		builtin := false
+		for _, id := range reservedApps {
+			if id == action.AppID {
+				builtin = true
+				break
+			}
+		}
+
+		// Check auth
+		// 1. Find the auth in question
+		// 2. Update the node and workflow info in the auth
+		// 3. Get the values in the auth and add them to the action values
+		handleOauth := false
+		_ = handleOauth
+		if action.AuthenticationId == "authgroups" {
+			log.Printf("[DEBUG] Action %s (%s) in workflow %s (%s) uses authgroups", action.Label, action.ID, workflow.Name, workflow.ID)
+
+			// Check if the authgroups exists
+			if len(workflow.AuthGroups) > 0 && len(authGroups) == 0 {
+				authGroups, err = GetAuthGroups(ctx, user.ActiveOrg.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed getting authgroups for org %s: %s", user.ActiveOrg.Id, err)
+				} else {
+					log.Printf("[INFO] Found %d authgroups for org %s", len(authGroups), user.ActiveOrg.Id)
+
+					// Validate the workflow groups to see if they exist. Remove if not.
+					newGroups := []string{}
+					for _, group := range workflow.AuthGroups {
+						found := false
+
+						for _, authGroup := range authGroups {
+							if group == authGroup.Id {
+								found = true
+								break
+							}
+						}
+
+						if !found {
+							log.Printf("[WARNING] Authgroup %s doesn't exist. Removing from workflow", group)
+						} else {
+							newGroups = append(newGroups, group)
+						}
+					}
+
+					workflow.AuthGroups = newGroups
+				}
+			}
+
+		} else if len(action.AuthenticationId) > 0 {
+			authFound := false
+			for _, auth := range allAuths {
+				if auth.Id == action.AuthenticationId {
+					authFound = true
+
+					if strings.ToLower(auth.Type) == "oauth2" {
+						handleOauth = true
+					}
+
+					// Updates the auth item itself IF necessary
+					UpdateAppAuth(ctx, auth, workflow.ID, action.ID, true)
+					break
+				}
+			}
+
+			if !authFound {
+				log.Printf("[WARNING] App auth %s doesn't exist. Setting error", action.AuthenticationId)
+
+				errorMsg := fmt.Sprintf("Authentication for action '%s' in app '%s' doesn't exist!", action.Label, strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
+				if !ArrayContains(workflow.Errors, errorMsg) {
+					workflow.Errors = append(workflow.Errors, errorMsg)
+				}
+
+				workflow.IsValid = false
+				action.Errors = append(action.Errors, "App authentication doesn't exist")
+				action.IsValid = false
+				action.AuthenticationId = ""
+			}
+		}
+
+		if builtin {
+			newActions = append(newActions, action)
+		} else {
+			curapp := WorkflowApp{}
+
+			// ID first, then name + version
+			// If it can't find param, it will swap it over farther down
+			for _, app := range workflowapps {
+				if app.ID == "" {
+					break
+				}
+
+				if app.ID == action.AppID {
+					curapp = app
+					break
+				}
+			}
+
+			if curapp.ID == "" && action.AppID != "integration" {
+				//log.Printf("[WARNING] Didn't find the App ID for action %s (%s) with appname %s", action.Label, action.AppID, action.AppName)
+				for _, app := range workflowapps {
+					if app.ID == action.AppID {
+						curapp = app
+						break
+					}
+
+					// Has to NOT be generated
+					if app.Name == action.AppName {
+						if app.AppVersion == action.AppVersion {
+							curapp = app
+							break
+						} else if ArrayContains(app.LoopVersions, action.AppVersion) {
+							// Get the real app
+							for _, item := range app.Versions {
+								if item.Version == action.AppVersion {
+									//log.Printf("Should get app %s - %s", item.Version, item.ID)
+
+									tmpApp, err := GetApp(ctx, item.ID, user, false)
+									if err != nil && tmpApp.ID == "" {
+										log.Printf("[WARNING] Failed getting app %s (%s): %s", app.Name, item.ID, err)
+									}
+
+									curapp = *tmpApp
+									break
+								}
+							}
+
+							//curapp = app
+							break
+						}
+					}
+				}
+			} else {
+				//log.Printf("[DEBUG] Found correct App ID for %s", action.AppID)
+			}
+
+			if curapp.ID != action.AppID && curapp.Name != action.AppName {
+				if action.AppID == "integration" {
+					for _, param := range action.Parameters {
+						if param.Name == "action" {
+							if len(param.Value) > 0 {
+								continue
+							}
+
+							errorMsg := fmt.Sprintf("Parameter %s in Action %s is empty", param.Name, action.Label)
+							if !ArrayContains(workflow.Errors, errorMsg) {
+								workflow.Errors = append(workflow.Errors, errorMsg)
+							}
+						}
+					}
+				} else {
+					errorMsg := fmt.Sprintf("App %s version %s doesn't exist", action.AppName, action.AppVersion)
+
+					action.Errors = append(action.Errors, "This app doesn't exist.")
+
+					if !ArrayContains(workflow.Errors, errorMsg) {
+						workflow.Errors = append(workflow.Errors, errorMsg)
+						log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
+					}
+
+					action.IsValid = false
+					workflow.IsValid = false
+
+				}
+
+				newActions = append(newActions, action)
+			} else {
+				// Check to see if the appaction is valid
+				curappaction := WorkflowAppAction{}
+				for _, curAction := range curapp.Actions {
+					if action.Name == curAction.Name {
+						curappaction = curAction
+						break
+					}
+				}
+
+				if curappaction.Name != action.Name {
+					for _, app := range workflowapps {
+						if app.ID == curapp.ID {
+							continue
+						}
+
+						// Has to NOT be generated
+						if app.Name == action.AppName && app.AppVersion == action.AppVersion {
+							for _, curAction := range app.Actions {
+								if action.Name == curAction.Name {
+									log.Printf("[DEBUG] Found app %s (NOT %s) with the param: %s", app.ID, curapp.ID, curAction.Name)
+									curappaction = curAction
+									action.AppID = app.ID
+									curapp = app
+									break
+								}
+							}
+						}
+
+						if curappaction.Name == action.Name {
+							break
+						}
+					}
+				}
+
+				// Check to see if the action is valid
+				if curappaction.Name != action.Name {
+					//log.Printf("[ERROR] Action '%s' in app %s doesn't exist. Workflow: %s (%s)", action.Name, curapp.Name, workflow.Name, workflow.ID)
+					// Reserved names
+					if action.Name != "router" {
+						thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)
+						workflow.Errors = append(workflow.Errors, thisError)
+						workflow.IsValid = false
+
+						if !ArrayContains(action.Errors, thisError) {
+							action.Errors = append(action.Errors, thisError)
+						}
+
+						action.IsValid = false
+					}
+				}
+
+				selectedAuth := AppAuthenticationStorage{}
+				if len(action.AuthenticationId) > 0 && autherr == nil {
+					for _, auth := range allAuths {
+						if auth.Id == action.AuthenticationId {
+							selectedAuth = auth
+							break
+						}
+					}
+				}
+
+				// Check if it uses oauth2 and if it's authenticated or not
+				if selectedAuth.Id == "" && len(action.AuthenticationId) == 0 {
+					authRequired := false
+					fieldsFilled := 0
+					for _, param := range curappaction.Parameters {
+						if param.Configuration {
+							if len(param.Value) > 0 {
+								fieldsFilled += 1
+							}
+
+							authRequired = true
+							break
+						}
+					}
+
+					if authRequired && fieldsFilled > 1 {
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+						if !ArrayContains(workflow.Errors, foundErr) {
+							log.Printf("\n\n[DEBUG] Adding auth error 1: %s\n\n", foundErr)
+							workflow.Errors = append(workflow.Errors, foundErr)
+						}
+
+						if !ArrayContains(action.Errors, foundErr) {
+							action.Errors = append(action.Errors, foundErr)
+							action.IsValid = false
+						}
+					} else if authRequired && fieldsFilled == 1 {
+						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+
+						if !ArrayContains(workflow.Errors, foundErr) {
+							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
+							workflow.Errors = append(workflow.Errors, foundErr)
+							//continue
+						}
+
+						if !ArrayContains(action.Errors, foundErr) {
+							action.Errors = append(action.Errors, foundErr)
+							action.IsValid = false
+						}
+					}
+				}
+
+				// This is weird and for sure wrong somehow
+				// Uses the current apps' actions and not the ones sent in. For comparison.
+				newParams := []WorkflowAppActionParameter{}
+				for _, param := range curappaction.Parameters {
+
+					// Handles check for parameter exists + value not empty in used fields
+					foundWithValue := false
+					for _, actionParam := range action.Parameters {
+						if actionParam.Name != param.Name {
+							continue
+						}
+
+						param = actionParam
+						if len(actionParam.Value) > 0 {
+							foundWithValue = true
+						}
+
+						newParamsContains := false
+						for _, newParam := range newParams {
+							if newParam.Name == actionParam.Name {
+								newParamsContains = true
+
+								break
+							}
+						}
+
+						if !newParamsContains {
+							newParams = append(newParams, actionParam)
+						}
+
+						break
+					}
+
+					if foundWithValue {
+						continue
+					}
+
+					//log.Printf("CHECK: %#v, %#v, %#v", action.Label, param.Name, param.Required)
+
+					// Missing actions go here
+					if param.Value == "" && param.Variant == "STATIC_VALUE" && param.Required == true {
+						// Validating if the field is an authentication field
+						if len(selectedAuth.Id) > 0 {
+							authFound := false
+							for _, field := range selectedAuth.Fields {
+								if field.Key == param.Name {
+									authFound = true
+									//log.Printf("FOUND REQUIRED KEY %s IN AUTH", field.Key)
+									break
+								}
+							}
+
+							if authFound {
+								newParams = append(newParams, param)
+								continue
+							}
+						}
+
+						// Some internal reserves
+						if ((strings.ToLower(action.AppName) == "http" && param.Name == "body") || (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
+							// Do nothing
+						} else {
+							thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
+							if param.Configuration && len(action.AuthenticationId) == 0 {
+								thisError = fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
+							}
+
+							if !ArrayContains(action.Errors, thisError) {
+								action.Errors = append(action.Errors, thisError)
+								action.IsValid = false
+							}
+
+							// Updates an existing version of the same one for each missing param
+							errorFound := false
+							for errIndex, oldErr := range workflow.Errors {
+								if oldErr == thisError {
+									errorFound = true
+									break
+								}
+
+								if strings.Contains(oldErr, action.Label) && strings.Contains(oldErr, "missing required parameter") {
+									workflow.Errors[errIndex] += ", " + param.Name
+									errorFound = true
+									break
+								}
+							}
+
+							if !errorFound {
+								workflow.Errors = append(workflow.Errors, thisError)
+							}
+
+							action.IsValid = false
+						}
+					}
+
+					if param.Variant == "" {
+						param.Variant = "STATIC_VALUE"
+					}
+
+					found := false
+					for paramIndex, newParam := range newParams {
+						if newParam.Name == param.Name {
+							if len(newParam.Value) == 0 && len(param.Value) > 0 {
+								newParams[paramIndex].Value = param.Value
+							}
+
+							found = true
+							break
+						}
+					}
+
+					if !found {
+						newParams = append(newParams, param)
+					}
+				}
+
+				action.Parameters = newParams
+				newActions = append(newActions, action)
+			}
+
+		}
+	}
+
+	for _, trigger := range workflow.Triggers {
+		if trigger.Status != "running" && trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+			errorInfo := fmt.Sprintf("Trigger %s needs to be started", trigger.Name)
+			if !ArrayContains(workflow.Errors, errorInfo) {
+				workflow.Errors = append(workflow.Errors, errorInfo)
+			}
+		}
+	}
+
+	if orgUpdated && len(org.Name) > 0 && len(org.Id) > 0 && len(org.Users) > 0 {
+		err = SetOrg(ctx, *org, org.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org when autoadding apps and updating framework on save workflow save (%s): %s", workflow.ID, err)
+		} else {
+			log.Printf("[DEBUG] Successfully updated org %s during save of %s for user %s (%s", user.ActiveOrg.Id, workflow.ID, user.Username, user.Id)
+		}
+	}
+
+	return workflow, allNodes, nil
 }

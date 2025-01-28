@@ -1698,11 +1698,15 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	if workflowExecution.Status != "EXECUTING" {
-		validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
-		if err == nil {
-			workflowExecution.Workflow.Validation = validation
+	// FIXME: May be a problem here with setting it at all times~ 
+	//if workflowExecution.Status != "EXECUTING" {
+	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
+	if err == nil {
+		if workflowExecution.NotificationsCreated > 0 {
+			validation.NotificationsCreated = workflowExecution.NotificationsCreated
 		}
+
+		workflowExecution.Workflow.Validation = validation
 	}
 
 	// Make sure to not having missing items in the execution
@@ -3235,6 +3239,15 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil && workflow.ID != "" {
+				validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
+				if err == nil {
+					cacheData := []byte(validationData.([]uint8))
+					err = json.Unmarshal(cacheData, &workflow.Validation)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling cache data for execution status (4): %s", err)
+					}
+				}
+
 				// Somehow this can happen. Reverting to LATEST revision
 				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
 					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
@@ -3257,6 +3270,16 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 							workflow.Triggers = revisions[0].Triggers
 						}
 					}
+				}
+
+				healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+				if err != nil {
+					if !strings.Contains(err.Error(), "Org ID not set") {
+						log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+					}
+
+				} else {
+					workflow = &healthWorkflow
 				}
 
 				return workflow, nil
@@ -3352,6 +3375,16 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
+
+	healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+	if err != nil {
+		if !strings.Contains(err.Error(), "Org ID not set") {
+			log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+		}
+	} else {
+		workflow = &healthWorkflow 
+	}
+
 	if project.CacheDb && workflow.ID != "" {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
