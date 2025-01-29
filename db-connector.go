@@ -54,6 +54,7 @@ var maxCacheSize = 1020000
 // var dbInterval = 0x19
 // var dbInterval = 0x1
 var dbInterval = 500
+
 // var dbInterval = 0xA
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
@@ -421,7 +422,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(tmpOrgDetail)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err 
+			return err
 		}
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
@@ -439,7 +440,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
 		if err != nil {
 			log.Printf("[WARNING] Error in org STATS get: %s", err)
-			return err 
+			return err
 		}
 
 		defer res.Body.Close()
@@ -466,7 +467,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 				}
 			}
 
-			return err 
+			return err
 		}
 
 		orgStatsWrapper := &ExecutionInfoWrapper{}
@@ -493,7 +494,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		marshalledData, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[ERROR] Failed marshalling org STATS body (2): %s", err)
-			return err 
+			return err
 		}
 
 		err = indexEs(ctx, nameKey, id, marshalledData)
@@ -506,7 +507,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		tx, err := project.Dbclient.NewTransaction(ctx)
 		if err != nil {
 			log.Printf("[WARNING] Error in cache dump: %s", err)
-			return err 
+			return err
 		}
 
 		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
@@ -517,7 +518,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			} else {
 				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
 				tx.Rollback()
-				return err 
+				return err
 			}
 		}
 
@@ -554,7 +555,7 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		data, err := json.Marshal(orgStatistics)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err 
+			return err
 		}
 
 		err = SetCache(ctx, cacheKey, data, 30)
@@ -601,7 +602,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		}
 
 		if appendForQuickDump {
-		// check if the cache already key is indexed in memcache
+			// check if the cache already key is indexed in memcache
 			keyItems, err := mc.Get("stat_cache_keys_" + orgId)
 			if err == gomemcache.ErrCacheMiss {
 				keyItem := []string{key}
@@ -613,7 +614,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					item := &gomemcache.Item{
 						Key:        "stat_cache_keys_" + orgId,
 						Value:      data,
-						Expiration: 86400*30,
+						Expiration: 86400 * 30,
 					}
 
 					if err := mc.Set(item); err != nil {
@@ -638,7 +639,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 							item := &gomemcache.Item{
 								Key:        "stat_cache_keys_" + orgId,
 								Value:      data,
-								Expiration: 86400*30,
+								Expiration: 86400 * 30,
 							}
 
 							if err := mc.Set(item); err != nil {
@@ -655,7 +656,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		item, err := mc.Get(key)
 		if err == gomemcache.ErrCacheMiss {
 			incrementItem := IncrementInCache{
-				Amount: uint64(incrementAmount),
+				Amount:    uint64(incrementAmount),
 				CreatedAt: time.Now().Unix(),
 			}
 
@@ -668,7 +669,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 			item := &gomemcache.Item{
 				Key:        key,
 				Value:      data,
-				Expiration: 86400*30,
+				Expiration: 86400 * 30,
 			}
 
 			if err := mc.Set(item); err != nil {
@@ -680,7 +681,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 		} else {
 			if item == nil || item.Value == nil {
 				incrementItem := IncrementInCache{
-					Amount: uint64(incrementAmount),
+					Amount:    uint64(incrementAmount),
 					CreatedAt: time.Now().Unix(),
 				}
 
@@ -693,7 +694,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				item = &gomemcache.Item{
 					Key:        key,
 					Value:      data,
-					Expiration: 86400*30,
+					Expiration: 86400 * 30,
 				}
 
 				// log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
@@ -709,11 +710,11 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 				// log.Printf("[DEBUG] new num: %d", num)
 
-				// there is some bug here. i would much rather lose the data here. 
+				// there is some bug here. i would much rather lose the data here.
 				num := uint64(incrementAmount)
 
 				incrementItem := IncrementInCache{
-					Amount: num,
+					Amount:    num,
 					CreatedAt: time.Now().Unix(),
 				}
 
@@ -726,7 +727,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				item := &gomemcache.Item{
 					Key:        key,
 					Value:      data,
-					Expiration: 86400*30,
+					Expiration: 86400 * 30,
 				}
 
 				if err := mc.Set(item); err != nil {
@@ -756,8 +757,8 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 
 				// make it a random number between
 				// (10-60 seconds)
-				randomSeconds := (rand.Intn(50) + 10)*5 // to make the number longer
-		
+				randomSeconds := (rand.Intn(50) + 10) * 5 // to make the number longer
+
 				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > uint64(dbInterval) {
 					// Memcache dump first to keep the counter going for other executions
 					oldNum := num
@@ -781,7 +782,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
 							// log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
 							incrementedItemInCache.Amount = oldNum
-							
+
 							data, err := json.Marshal(incrementedItemInCache)
 							if err != nil {
 								log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
@@ -790,7 +791,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 							item := &gomemcache.Item{
 								Key:        key,
 								Value:      data,
-								Expiration: 86400*30,
+								Expiration: 86400 * 30,
 							}
 
 							if err := mc.Set(item); err != nil {
@@ -803,13 +804,12 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 						item := &gomemcache.Item{
 							Key:        key,
 							Value:      data,
-							Expiration: 86400*30,
+							Expiration: 86400 * 30,
 						}
 						if err := mc.Set(item); err != nil {
 							log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
 						}
 					}
-
 
 				} else {
 					//log.Printf("NOT Dumping!")
@@ -859,7 +859,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 					item = &gomemcache.Item{
 						Key:        key,
 						Value:      data,
-						Expiration: 86400*30,
+						Expiration: 86400 * 30,
 					}
 
 					if err := mc.Set(item); err != nil {
@@ -1618,7 +1618,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 
 func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 	// New form REQUIRES sanitization no matter what
-	//if workflowExecution.Workflow.Sharing != "form" { 
+	//if workflowExecution.Workflow.Sharing != "form" {
 	sanitizeLiquid := os.Getenv("LIQUID_SANITIZE_INPUT")
 	if sanitizeLiquid == "" {
 		sanitizeLiquid = "true" // Set default value to "true" if not set
@@ -1698,11 +1698,15 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	if workflowExecution.Status != "EXECUTING" {
-		validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
-		if err == nil {
-			workflowExecution.Workflow.Validation = validation
+	// FIXME: May be a problem here with setting it at all times~ 
+	//if workflowExecution.Status != "EXECUTING" {
+	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
+	if err == nil {
+		if workflowExecution.NotificationsCreated > 0 {
+			validation.NotificationsCreated = workflowExecution.NotificationsCreated
 		}
+
+		workflowExecution.Workflow.Validation = validation
 	}
 
 	// Make sure to not having missing items in the execution
@@ -1928,7 +1932,8 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		}
 
 		if !skipFinished {
-			log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented) - just returning for now for parent function to handle.", workflowExecution.ExecutionId)
+			// FIXME: Is this subflow result (not implemented) valid? I think it should have been added? Hmm.
+			//log.Printf("[DEBUG][%s] Setting execution to finished because all results are in and it was still in EXECUTING mode. Should set subflow parent result as well (not implemented) - just returning for now for parent function to handle.", workflowExecution.ExecutionId)
 			finalWorkflowExecution.Status = "FINISHED"
 			dbsave = true
 			if finalWorkflowExecution.CompletedAt == 0 {
@@ -2024,7 +2029,7 @@ func GetWorkflowExecutionByAuth(ctx context.Context, authId string) (*WorkflowEx
 		_, err := project.Dbclient.GetAll(ctx, q, &allExecutions)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting workflow execution by auth: %s", err)
-			if strings.Contains(err.Error(), `cannot load field`) { 
+			if strings.Contains(err.Error(), `cannot load field`) {
 				err = nil
 			} else {
 				return nil, err
@@ -3234,6 +3239,49 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflow)
 			if err == nil && workflow.ID != "" {
+				validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
+				if err == nil {
+					cacheData := []byte(validationData.([]uint8))
+					err = json.Unmarshal(cacheData, &workflow.Validation)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling cache data for execution status (4): %s", err)
+					}
+				}
+
+				// Somehow this can happen. Reverting to LATEST revision
+				if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+					revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
+					} else {
+						if len(revisions) > 0 {
+							for _, revision := range revisions {
+								if revision.ID != workflow.ID {
+									continue
+								}
+
+								if len(revision.Triggers) > 0 {
+									workflow.Triggers = revision.Triggers
+									break
+								}
+							}
+
+							log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+							workflow.Triggers = revisions[0].Triggers
+						}
+					}
+				}
+
+				healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+				if err != nil {
+					if !strings.Contains(err.Error(), "Org ID not set") {
+						log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+					}
+
+				} else {
+					workflow = &healthWorkflow
+				}
+
 				return workflow, nil
 			}
 		} else {
@@ -3301,8 +3349,42 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		}
 	}
 
+	// Somehow this can happen. Reverting to LATEST revision
+	if len(workflow.Actions) > 0 && len(workflow.Triggers) == 0 {
+		revisions, err := ListWorkflowRevisions(ctx, workflow.ID, 2)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting revisions during trigger load for workflow %s: %s", workflow.ID, err)
+		} else {
+			if len(revisions) > 0 {
+				for _, revision := range revisions {
+					if revision.ID != workflow.ID {
+						continue
+					}
+
+					if len(revision.Triggers) > 0 {
+						workflow.Triggers = revision.Triggers
+						break
+					}
+				}
+
+				log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+				workflow.Triggers = revisions[0].Triggers
+			}
+		}
+	}
+
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
+
+	healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+	if err != nil {
+		if !strings.Contains(err.Error(), "Org ID not set") {
+			log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+		}
+	} else {
+		workflow = &healthWorkflow 
+	}
+
 	if project.CacheDb && workflow.ID != "" {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(workflow)
@@ -3923,7 +4005,6 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
 	nameKey := "Organizations"
-
 
 	if id == "public" {
 		return &Org{}, errors.New("'public' org is used for single action without being logged in. Not relevant.")
@@ -7135,7 +7216,6 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 		//log.Printf("[DEBUG] Adding execution to queue: %s", nameKey)
 	}
 
-
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
 		data, err := json.Marshal(executionRequest)
@@ -7893,12 +7973,20 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 	return workflows, nil
 }
 
-func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, error) {
+func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) ([]Workflow, error) {
 	var workflows []Workflow
 	var err error
 
+	if amount <= 0 {
+		amount = 50
+	}
+
+	if amount >= 200 {
+		amount = 200
+	}
+
 	nameKey := "workflow_revisions"
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, originalId)
+	cacheKey := fmt.Sprintf("%s_%s_%d", nameKey, originalId, amount)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
 		if err == nil {
@@ -7921,7 +8009,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
-			"size": 1000,
+			"size": amount,
 			"query": map[string]interface{}{
 				"match": map[string]interface{}{
 					"id": originalId,
@@ -7990,8 +8078,10 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 	} else {
 		query := datastore.NewQuery(nameKey).Filter("id =", originalId)
 		// if project.Environment == "cloud" {
-		query = query.Order("-edited").Limit(50)
+		query = query.Order("-edited")
 		// }
+
+		iterCount := 0
 
 		cursorStr := ""
 		for {
@@ -8008,7 +8098,15 @@ func ListWorkflowRevisions(ctx context.Context, originalId string) ([]Workflow, 
 					}
 				}
 
+				iterCount++;
 				workflows = append(workflows, innerWorkflow)
+				if iterCount >= amount {
+					break
+				}
+			}
+
+			if iterCount >= amount {
+				break
 			}
 
 			if err != iterator.Done {
@@ -8171,6 +8269,10 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		}
 
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
+
+		// For workflow revision backups
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
 	}
 
 	return nil
@@ -8211,7 +8313,7 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 	}
 
 	// Fix branches & triggers
-	scheduleNotStarted := "" 
+	scheduleNotStarted := ""
 	for index, trigger := range workflow.Triggers {
 		if trigger.TriggerType == "SCHEDULE" {
 			if trigger.Status != "RUNNING" {
@@ -8228,13 +8330,14 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 		if branch.ID == "" {
 			workflow.Branches[index].ID = uuid.NewV4().String()
 		}
-               if branch.DestinationID == branch.SourceID {
-                        workflow.Branches = append(workflow.Branches[:index], workflow.Branches[index+1:]...)
-               }
+
+		if branch.DestinationID == branch.SourceID {
+			workflow.Branches = append(workflow.Branches[:index], workflow.Branches[index+1:]...)
+		}
 	}
 
 	// Check validation if Schedule is started (?)
-	if len(scheduleNotStarted) > 0  {
+	if len(scheduleNotStarted) > 0 {
 		// Add validation problem
 		found := false
 		for _, problem := range workflow.Validation.Errors {
@@ -8246,10 +8349,10 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 
 		if !found {
 			workflow.Validation.Errors = append(workflow.Validation.Errors, ValidationProblem{
-				Order: -1,
-				Type:  "SCHEDULE",
+				Order:    -1,
+				Type:     "SCHEDULE",
 				ActionId: scheduleNotStarted,
-				Error: "Schedule not started",
+				Error:    "Schedule not started",
 			})
 		}
 	}
@@ -8333,7 +8436,7 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if len(workflow.ParentWorkflowId) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ParentWorkflowId))
-	} 
+	}
 
 	if len(workflow.ChildWorkflowIds) > 0 {
 		DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
@@ -10895,7 +10998,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 
 		wrapped := ExecutionSearchWrapper{}
 		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil && len(wrapped.Hits.Hits) == 0{
+		if err != nil && len(wrapped.Hits.Hits) == 0 {
 			return executions, cursor, err
 		}
 
@@ -10933,10 +11036,10 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 						log.Printf("[WARNING] Error getting workflow executions (1): %s", err)
 						breakOuter = true
 					} else {
-						if strings.Contains(err.Error(), `cannot load field`) { 
+						if strings.Contains(err.Error(), `cannot load field`) {
 							// Bug with moving types
 							err = nil
-						} else if strings.Contains(err.Error(), `no more items`) { 
+						} else if strings.Contains(err.Error(), `no more items`) {
 							//breakOuter = true
 							break
 						} else {
@@ -13592,10 +13695,10 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 					if strings.Contains(err.Error(), "context deadline exceeded") {
 						log.Printf("[WARNING] Error getting workflow search executions (1): %s", err)
 					} else {
-						if strings.Contains(err.Error(), `cannot load field`) { 
+						if strings.Contains(err.Error(), `cannot load field`) {
 							// Bug with moving types
 							err = nil
-						} else if strings.Contains(err.Error(), `no more items`) { 
+						} else if strings.Contains(err.Error(), `no more items`) {
 							//breakOuter = true
 							break
 						} else {

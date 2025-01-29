@@ -39,7 +39,7 @@ func init() {
 		// Using standard bucket
 	}
 
-	log.Printf("[DEBUG] Inside Files Init with org bucket name %#v", orgFileBucket)
+	//log.Printf("[DEBUG] Inside Files Init with org bucket name %#v", orgFileBucket)
 }
 
 func fileAuthentication(request *http.Request) (string, error) {

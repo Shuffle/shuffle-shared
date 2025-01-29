@@ -1532,6 +1532,7 @@ type TypeValidation struct {
 	ChangedAt     int64 `json:"changed_at" datastore:"changed_at"`
 	LastValid     int64 `json:"last_valid" datastore:"last_valid"`
 	ValidationRan bool  `json:"validation_ran" datastore:"validation_ran"`
+	NotificationsCreated int64  `json:"notifications_created" datastore:"notifications_created"`
 
 	// For the last update, which did it
 	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
