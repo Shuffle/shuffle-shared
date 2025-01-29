@@ -1322,7 +1322,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		"parentOrg": returnParent,
 	}
 
-	if len(parentOrg.Id) == 0 || !parentUser {
+	if (len(parentOrg.Id) == 0 || !parentUser) && !user.SupportAccess {
 		data["parentOrg"] = nil
 	}
 
