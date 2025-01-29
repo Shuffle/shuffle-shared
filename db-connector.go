@@ -2082,6 +2082,8 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
+
+
 			if err == nil || len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
 				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
@@ -3282,7 +3284,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 								}
 							}
 
-							log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+							//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
 							workflow.Triggers = revisions[0].Triggers
 						}
 					}
@@ -7840,7 +7842,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		}
 	}
 
-	log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
+	//log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8021,7 +8023,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 		}
 	}
 
-	log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
+	//log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8287,8 +8289,11 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
 
 		// For workflow revision backups
-		DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("%s_%s_200", nameKey, workflow.ID))
+		// Actively used keys
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflow.ID))
 	}
 
 	return nil
