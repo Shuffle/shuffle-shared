@@ -7748,6 +7748,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s (save workflow)", user.Username, workflow.ID)
 
 			workflow.ID = tmpworkflow.ID
+
 		} else if tmpworkflow.OrgId == user.ActiveOrg.Id && user.Role != "org-reader" {
 			log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
 			workflow.ID = tmpworkflow.ID

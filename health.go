@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -34,6 +35,11 @@ type executionResult struct {
 	Success bool   `json:"success"`
 	Result  string `json:"result"`
 	ID      string `json:"id"`
+}
+
+type testRun struct {
+	CRUrl string `json:"cloudrun_url"`
+	Region string `json:"region"`
 }
 
 func updateOpsCache(workflowHealth WorkflowHealth) {
@@ -587,7 +593,7 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	errorChannel := make(chan error)
 	go func() {
 		log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
-		workflowHealth, err := RunOpsWorkflow(apiKey, orgId)
+		workflowHealth, err := RunOpsWorkflow(apiKey, orgId, "")
 		if err != nil {
 			log.Printf("[ERROR] Failed workflow health check: %s", err)
 		}
@@ -887,7 +893,7 @@ func fixOpensearch() error {
 	return nil
 }
 
-func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
+func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHealth, error) {
 	// run workflow with id 602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
 	ctx := context.Background()
 
@@ -902,9 +908,13 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	}
 
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	if len(baseUrl) == 0 {
+	if len(baseUrl) == 0 && (cloudRunUrl == "" || len(cloudRunUrl) == 0) {
 		log.Printf("[DEBUG] Base url not set. Setting to default")
 		baseUrl = "https://shuffler.io"
+	}
+
+	if len(baseUrl) == 0 {
+		baseUrl = cloudRunUrl
 	}
 
 	if project.Environment == "onprem" {
@@ -1081,6 +1091,19 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 			workflowHealth.RunStatus = executionResults.Status
 		}
 
+		if executionResults.Status == "FINISHED" {
+			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
+
+			// yash asked to comment these out
+			// for _, r := range executionResults.Results {
+			// 	if r.Status != "SUCCESS" {
+			// 		workflowHealth.RunStatus = "FAILED"
+			// 		break
+			// 	}
+			// }
+		}
+
+
 		updateOpsCache(workflowHealth)
 
 		//log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, workflowHealth.ExecutionId)
@@ -1106,6 +1129,38 @@ func RunOpsWorkflow(apiKey string, orgId string) (WorkflowHealth, error) {
 	}
 
 	return workflowHealth, nil
+}
+
+func RunHealthTest(resp http.ResponseWriter, req *http.Request) {
+	response, err := io.ReadAll(req.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read body of the health test case: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "failed to read the body"}`))
+		return
+	}
+
+	var execData testRun
+	err = json.Unmarshal(response, &execData)
+	if err != nil {
+		log.Printf("[ERROR] Error unmarshaling test data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "failed to unmarshal the data"}`))
+		return
+	}
+
+	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
+	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
+	
+	health, err := RunOpsWorkflow(apiKey, orgId, execData.CRUrl)
+	if err != nil {
+		log.Printf("[ERROR] Health test failed %v", err)
+	}
+
+	jsonHealth, err := json.Marshal(health)
+	resp.WriteHeader(200)
+	resp.Write(jsonHealth)
 }
 
 func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
