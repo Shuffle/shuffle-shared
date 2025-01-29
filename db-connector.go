@@ -1603,14 +1603,13 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	if err != nil {
 		log.Printf("[ERROR] Failed reading file from bucket %s: %s. Will try with alternative solution.", bucketName, err)
 
-		// try reading instead from other bucket
 		if projectName != "shuffler" {
 			bucketName = fmt.Sprintf("%s.appspot.com", projectName)
+			bucket = project.StorageClient.Bucket(bucketName)
+			obj = bucket.Object(fullParsedPath)
+			fileReader, err = obj.NewReader(ctx)
 		}
 
-		bucket = project.StorageClient.Bucket(bucketName)
-		obj = bucket.Object(fullParsedPath)
-		fileReader, err = obj.NewReader(ctx)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading file again from bucket %s: %s", bucketName, err)
 		}
