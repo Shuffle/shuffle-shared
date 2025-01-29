@@ -3968,7 +3968,10 @@ type AppHealth struct {
 type WorkflowHealth struct {
 	Create             bool   `json:"create"`
 	Run                bool   `json:"run"`
+	BackendVersion	   string `json:"backend_version"`
 	RunFinished        bool   `json:"run_finished"`
+	// NOTE: This does not represent the actual time execution took, it includes the time took to send an API request for the exeution + get back the results for every action.
+	ExecutionTook      float64 `json:"execution_took"`
 	RunStatus          string `json:"run_status"`
 	Delete             bool   `json:"delete"`
 	ExecutionId        string `json:"execution_id"`

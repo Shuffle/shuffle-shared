@@ -485,13 +485,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		apiKey = org.Users[validIndex].ApiKey
 	}
 
-	if len(apiKey) == 0 || len(orgId) == 0 {
-		log.Printf("[WARNING] Ops dashboard api key or org not set. Not setting up ops workflow")
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "SHUFFLE_OPS_DASHBOARD_APIKEY or SHUFFLE_OPS_DASHBOARD_ORG not set. Please set these to use this feature!"}`))
-		return
-	}
-
 	platformHealth := HealthCheck{}
 	force := request.URL.Query().Get("force")
 	cacheKey := fmt.Sprintf("ops-health-check")
@@ -535,7 +528,6 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		health := healths[0]
 
 		if err == nil {
-			log.Printf("[DEBUG] Last health check was: %#v", health)
 			platformData, err := json.Marshal(health)
 			if err != nil {
 				log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
@@ -893,18 +885,57 @@ func fixOpensearch() error {
 	return nil
 }
 
+func FixSubflow(ctx context.Context, workflowId string) error {
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil {
+		log.Printf("[ERROR] Cannot able to get the workflow %s", err)
+		return err
+	}
+	
+	subflowActionId := ""
+	for _, action := range workflow.Actions {
+		if action.Label == "call_subflow" {
+			subflowActionId = action.ID
+		}
+	}
+
+	for _, trigger := range workflow.Triggers {
+		if trigger.AppName == "Shuffle Workflow" {
+			for _, parameter := range trigger.Parameters {
+				if parameter.Name == "workflow" {
+					parameter.Value = workflowId
+				}
+				if parameter.Name == "startnode" {
+					parameter.Value = subflowActionId
+				}
+			}
+		}
+	}
+
+	err = SetWorkflow(ctx, *workflow, workflowId)
+	if err != nil {
+		log.Printf("[Eroor] Failed to save the workflow in ops %s", workflowId)
+		return err
+	}
+
+	return nil
+}
+
 func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHealth, error) {
 	// run workflow with id 602c7cf5-500e-4bd1-8a97-aa5bc8a554e6
 	ctx := context.Background()
 
 	workflowHealth := WorkflowHealth{
 		Create:      false,
+		BackendVersion: os.Getenv("SHUFFLE_BACKEND_VERSION"),
 		Run:         false,
 		RunFinished: false,
+		ExecutionTook: 0,
 		Delete:      false,
 		RunStatus:   "",
 		ExecutionId: "",
 		WorkflowId:  "",
+		WorkflowValidation: false,
 	}
 
 	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
@@ -939,6 +970,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		log.Printf("[ERROR] Failed creating Health check workflow. Exiting..")
 		return workflowHealth, err
 	}
+	err = FixSubflow(ctx, opsWorkflowID)
 
 	workflowPtr, err := GetWorkflow(ctx, opsWorkflowID)
 	if err != nil {
@@ -970,6 +1002,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	req.Header.Set("Org-Id", orgId)
 
 	// send the request
+	startTime := time.Now()
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1014,7 +1047,6 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	if resp.StatusCode == 200 {
 		workflowHealth.Run = true
 		workflowHealth.ExecutionId = execution.ExecutionId
-		workflowHealth.WorkflowValidation = execution.Workflow.Validation.Valid
 	}
 
 	updateOpsCache(workflowHealth)
@@ -1093,14 +1125,10 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 
 		if executionResults.Status == "FINISHED" {
 			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
-
-			// yash asked to comment these out
-			// for _, r := range executionResults.Results {
-			// 	if r.Status != "SUCCESS" {
-			// 		workflowHealth.RunStatus = "FAILED"
-			// 		break
-			// 	}
-			// }
+			workflowHealth.WorkflowValidation = executionResults.Workflow.Validation.Valid
+			finishTime := time.Since(startTime).Seconds()
+			workflowHealth.ExecutionTook = finishTime
+			//workflowHealth = time.Since(startTime)
 		}
 
 
@@ -1209,7 +1237,8 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	if project.Environment == "cloud" {
 		// url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
 		// url := "https://shuffler.io/api/v1/workflows/7b729319-b395-4ba3-b497-d8246da67b1c"
-		url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
+		//url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
+		url := "http://shuffler.io/api/v1/workflows/ae89a788-a26b-4866-8a0b-ce0b31d354ea"
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Println("[ERROR] creating HTTP request:", err)
@@ -2312,7 +2341,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 							if len(param.Value) > 0 {
 								fieldsFilled += 1
 							}
-
 							authRequired = true
 							break
 						}
