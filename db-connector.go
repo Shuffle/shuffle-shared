@@ -1583,6 +1583,9 @@ func GetExecutionVariables(ctx context.Context, executionId string) (string, int
 }
 
 func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecution, action ActionResult) (string, error) {
+	projectName := os.Getenv("SHUFFLE_GCEPROJECT")
+	bucketName := project.BucketName
+
 	fullParsedPath := fmt.Sprintf("large_executions/%s/%s_%s", workflowExecution.ExecutionOrg, workflowExecution.ExecutionId, action.Action.ID)
 
 	cacheKey := fmt.Sprintf("%s_%s_action_replace", workflowExecution.ExecutionId, action.Action.ID)
@@ -1594,10 +1597,24 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	bucket := project.StorageClient.Bucket(project.BucketName)
+	bucket := project.StorageClient.Bucket(bucketName)
 	obj := bucket.Object(fullParsedPath)
 	fileReader, err := obj.NewReader(ctx)
 	if err != nil {
+		log.Printf("[ERROR] Failed reading file from bucket %s: %s. Will try with alternative solution.", bucketName, err)
+
+		// try reading instead from other bucket
+		if projectName != "shuffler" {
+			bucketName = fmt.Sprintf("%s.appspot.com", projectName)
+		}
+
+		bucket = project.StorageClient.Bucket(bucketName)
+		obj = bucket.Object(fullParsedPath)
+		fileReader, err = obj.NewReader(ctx)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading file again from bucket %s: %s", bucketName, err)
+		}
+
 		return "", err
 	}
 
