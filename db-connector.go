@@ -3367,7 +3367,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 					}
 				}
 
-				log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+				//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
 				workflow.Triggers = revisions[0].Triggers
 			}
 		}

@@ -22157,6 +22157,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if err != nil {
 			log.Printf("[ERROR] Failed to find user during form execution: %s", err)
 		} else {
+			validMap["type"] = "Manual form run"
 			validMap["org_id"] = discoveredUser.ActiveOrg.Id
 			marshalMap, err := json.Marshal(validMap)
 			if err != nil {
