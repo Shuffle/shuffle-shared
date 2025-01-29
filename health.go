@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
+	// "io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -1093,12 +1093,14 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 
 		if executionResults.Status == "FINISHED" {
 			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
-			for _, r := range executionResults.Results {
-				if r.Status != "SUCCESS" {
-					workflowHealth.RunStatus = "FAILED"
-					break
-				}
-			}
+
+			// yash asked to comment these out
+			// for _, r := range executionResults.Results {
+			// 	if r.Status != "SUCCESS" {
+			// 		workflowHealth.RunStatus = "FAILED"
+			// 		break
+			// 	}
+			// }
 		}
 
 
