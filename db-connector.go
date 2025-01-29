@@ -1608,13 +1608,13 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 			bucket = project.StorageClient.Bucket(bucketName)
 			obj = bucket.Object(fullParsedPath)
 			fileReader, err = obj.NewReader(ctx)
+			if err != nil {
+				log.Printf("[ERROR] Failed reading file again from bucket %s: %s", bucketName, err)
+				return "", err
+			}
+		} else {
+			return "", err
 		}
-
-		if err != nil {
-			log.Printf("[ERROR] Failed reading file again from bucket %s: %s", bucketName, err)
-		}
-
-		return "", err
 	}
 
 	data, err := ioutil.ReadAll(fileReader)
