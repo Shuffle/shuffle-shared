@@ -6972,6 +6972,68 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					// 	}
 					// }
 
+					// ctx := context.Background()
+
+					// // check with revisions, if the child workflow has the same last revision,
+					// // where the value of this param is the same.as the parent. if not, it might
+					// // have been changed by the child, and we should not overwrite it and respect it.
+					// childRevisions, err := ListChildWorkflows(ctx, childWorkflow.ID)
+					// if err != nil {
+					// 	log.Printf("[WARNING] Failed getting child revisions (in diff workflows for %s workflow): %s", err, childWorkflow.ID)
+					// 	continue
+					// }
+
+					// parentRevisions, err := ListChildWorkflows(ctx, parentWorkflow.ID)
+					// if err != nil {
+					// 	log.Printf("[WARNING] Failed getting parent revisions (in diff workflows for %s workflow): %s", err, parentWorkflow.ID)
+					// }
+
+					// // if the child workflow has no revisions, it means it's the first one.
+					// // so, we can safely overwrite the parameters.
+					// if len(childRevisions) == 0 {
+					// 	log.Printf("[DEBUG] No revisions found for child workflow %s", childWorkflow.ID)
+					// 	childWorkflow.Actions[index] = action
+					// 	break
+					// }
+
+					// if len(parentRevisions) < 2 {
+					// 	log.Printf("[DEBUG] No/One revision found for parent workflow %s", parentWorkflow.ID)
+					// 	childWorkflow.Actions[index] = action
+					// 	continue
+					// }
+
+					// // last child revision
+					// lastChildRevision := childRevisions[0]
+
+					// // second last parent revision
+					// lastParentRevision := parentRevisions[1]
+
+					// for _, childAction := range lastChildRevision.Actions {
+					// 	if childAction.ID != action.ID {
+					// 		continue
+					// 	}
+
+					// 	for _, parentAction := range lastParentRevision.Actions {
+					// 		if parentAction.ID != action.ID {
+					// 			continue
+					// 		}
+
+					// 		for _, parentParam := range parentAction.Parameters {
+					// 			for _, childParam := range childAction.Parameters {
+					// 				if parentParam.Name == childParam.Name {
+					// 					if parentParam.Value != childParam.Value {
+					// 						// if revision was made in child AFTER the parent
+					// 						// we should respect it.
+					// 						if lastChildRevision.Edited > lastParentRevision.Edited {
+
+					// 						}
+					// 					}
+					// 				}
+					// 			}
+					// 		}
+					// 	}
+					// }
+
 					action.Parameters = finalParamters
 
 					childWorkflow.Actions[index] = action
