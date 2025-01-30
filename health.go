@@ -1569,7 +1569,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				if env.Name == action.Environment {
 					found = true
 					if env.Archived {
-						log.Printf("[DEBUG] Environment %s is archived. Changing to default.", env.Name)
+						//log.Printf("[DEBUG] Environment %s is archived. Changing to default.", env.Name)
 						action.Environment = defaultEnv
 					}
 

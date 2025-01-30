@@ -1322,7 +1322,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 		"parentOrg": returnParent,
 	}
 
-	if len(parentOrg.Id) == 0 || !parentUser {
+	if (len(parentOrg.Id) == 0 || !parentUser) && !user.SupportAccess {
 		data["parentOrg"] = nil
 	}
 
@@ -22206,7 +22206,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.FormControl.InputMarkdown) > 0 {
-		log.Printf("\n\nFORM. Running Org injection AND liquid template removal\n\n")
+		log.Printf("[DEBUG][%s] FORM RUN. Running Org injection AND liquid template removal", workflowExecution.ExecutionId)
 
 		// 1. Add Org-Id from the user to the existing workflowExecution.ExecutionArgument
 		validMap := map[string]interface{}{}
@@ -22216,10 +22216,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		// Overwriting it either way. Input NEEDS to be valid for map[string]interface{}{}
+		workflowExecution.ExecutionSource = "form"
 		discoveredUser, err := HandleApiAuthentication(nil, request)
 		if err != nil {
 			log.Printf("[ERROR] Failed to find user during form execution: %s", err)
 		} else {
+			validMap["form"] = "Manual form run. Less results returned."
 			validMap["org_id"] = discoveredUser.ActiveOrg.Id
 			marshalMap, err := json.Marshal(validMap)
 			if err != nil {

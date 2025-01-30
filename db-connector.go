@@ -2082,6 +2082,8 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
+
+
 			if err == nil || len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
 				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
@@ -3282,7 +3284,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 								}
 							}
 
-							log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+							//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
 							workflow.Triggers = revisions[0].Triggers
 						}
 					}
@@ -3383,7 +3385,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 					}
 				}
 
-				log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+				//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
 				workflow.Triggers = revisions[0].Triggers
 			}
 		}
@@ -6252,12 +6254,22 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	if user.ActiveOrg.Id != "" {
 		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
 		//log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
+		maxAmount := 100
+		cnt := 0
 		for {
 			it := project.Dbclient.Run(ctx, query)
+			if cnt > maxAmount {
+				log.Printf("[ERROR] Maximum try excided for workflowapp (1)")
+			}
 
 			for {
 				innerApp := WorkflowApp{}
 				_, err := it.Next(&innerApp)
+				cnt += 1
+				if cnt > maxAmount {
+					log.Printf("[ERROR] Maximum try excided for workfloapp (2)")
+				}
+
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 						//log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
@@ -7840,7 +7852,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		}
 	}
 
-	log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
+	//log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8021,7 +8033,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 		}
 	}
 
-	log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
+	//log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8287,8 +8299,11 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
 
 		// For workflow revision backups
-		DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("%s_%s_200", nameKey, workflow.ID))
+		// Actively used keys
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflow.ID))
 	}
 
 	return nil
@@ -11040,16 +11055,28 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		// Create a timeout to prevent the query from taking more than 5 seconds total
 
 		cursorStr := ""
+		maxAmount := 100
+		cnt := 0
 		for {
 			it := project.Dbclient.Run(ctx, query)
+			if cnt > maxAmount {
+				log.Printf("[ERROR] Error getting workflow execution (4): reached maximum retries")
+				break
+			}
 
 			breakOuter := false
 			for {
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
+				if cnt > maxAmount {
+					log.Printf("[ERROR] Error getting workflow execution (3): reached maximum retries")
+					break
+				}
+
 				if err != nil {
 					if strings.Contains(err.Error(), "context deadline exceeded") {
 						log.Printf("[WARNING] Error getting workflow executions (1): %s", err)
+						cnt += 1
 						breakOuter = true
 					} else {
 						if strings.Contains(err.Error(), `cannot load field`) {

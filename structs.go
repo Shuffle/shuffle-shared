@@ -184,8 +184,8 @@ type WorkflowApp struct {
 		SourceFolder      string `json:"source_folder" datastore:"source_folder"`
 		DestinationFolder string `json:"destination_folder" datastore:"destination_folder"`
 	} `json:"folder_mount" datastore:"folder_mount"`
-	Actions                  []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
 	Authentication           Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
+	Actions                  []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
 	Tags                     []string            `json:"tags" yaml:"tags" required:false datastore:"activated"`
 	Categories               []string            `json:"categories" yaml:"categories" required:false datastore:"categories"`
 	Created                  int64               `json:"created" datastore:"created"`
