@@ -6254,12 +6254,22 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	if user.ActiveOrg.Id != "" {
 		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
 		//log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
+		maxAmount := 100
+		cnt := 0
 		for {
 			it := project.Dbclient.Run(ctx, query)
+			if cnt > maxAmount {
+				log.Printf("[ERROR] Maximum try excided for workflowapp (1)")
+			}
 
 			for {
 				innerApp := WorkflowApp{}
 				_, err := it.Next(&innerApp)
+				cnt += 1
+				if cnt > maxAmount {
+					log.Printf("[ERROR] Maximum try excided for workfloapp (2)")
+				}
+
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 						//log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
@@ -11045,13 +11055,25 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		// Create a timeout to prevent the query from taking more than 5 seconds total
 
 		cursorStr := ""
+		maxAmount := 100
+		cnt := 0
 		for {
 			it := project.Dbclient.Run(ctx, query)
+			if cnt > maxAmount {
+				log.Printf("[ERROR] Error getting workflow execution (4): reached maximum retries")
+				break
+			}
 
 			breakOuter := false
 			for {
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
+				cnt += 1
+				if cnt > maxAmount {
+					log.Printf("[ERROR] Error getting workflow execution (3): reached maximum retries")
+					break
+				}
+
 				if err != nil {
 					if strings.Contains(err.Error(), "context deadline exceeded") {
 						log.Printf("[WARNING] Error getting workflow executions (1): %s", err)
