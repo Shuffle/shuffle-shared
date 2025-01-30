@@ -11068,7 +11068,6 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			for {
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
-				cnt += 1
 				if cnt > maxAmount {
 					log.Printf("[ERROR] Error getting workflow execution (3): reached maximum retries")
 					break
@@ -11077,6 +11076,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				if err != nil {
 					if strings.Contains(err.Error(), "context deadline exceeded") {
 						log.Printf("[WARNING] Error getting workflow executions (1): %s", err)
+						cnt += 1
 						breakOuter = true
 					} else {
 						if strings.Contains(err.Error(), `cannot load field`) {
