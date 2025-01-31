@@ -17555,7 +17555,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, user User, fileId string, body []byte, runValidationAction bool) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool) (WorkflowExecution, error) {
 	workflowExecution := WorkflowExecution{}
 
 	var action Action
@@ -17565,8 +17565,8 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		return workflowExecution, err
 	}
 
-	if fileId != action.AppID {
-		log.Printf("[WARNING] Bad appid in single execution of App %s", fileId)
+	if appId != action.AppID {
+		log.Printf("[WARNING] Bad appid in single execution of App %s", appId)
 		return workflowExecution, err
 	}
 
@@ -17574,10 +17574,104 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		action.ID = uuid.NewV4().String()
 	}
 
-	app, err := GetApp(ctx, fileId, user, false)
-	if err != nil {
-		log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", fileId)
-		return workflowExecution, err
+	app := WorkflowApp{}
+	if strings.ToLower(appId) == "http" {
+		// Find the app and the ID for it
+		apps, err := FindWorkflowAppByName(ctx, "http") 
+		if err != nil {
+			log.Printf("[WARNING] Failed to find HTTP app in single action execution: %s", err)
+			return workflowExecution, err
+		} else {
+			if len(apps) > 0 {
+				// Just assuming we can use #1
+
+				// Find the highest version
+				app = apps[0]
+				latestVersion := ""
+				for _, innerApp := range apps {
+					// Semver check
+					if len(innerApp.AppVersion) == 0 {
+						continue
+					}
+
+					if len(latestVersion) == 0 {
+						latestVersion = innerApp.AppVersion
+						app = innerApp 
+						continue
+					}
+
+					v2, err := semver.NewVersion(innerApp.AppVersion)
+					if err != nil {
+						log.Printf("[ERROR] Failed parsing original app version %s: %s", innerApp.AppVersion, err)
+						continue
+					}
+
+					appConstraint := fmt.Sprintf("> %s", latestVersion)
+					c, err := semver.NewConstraint(appConstraint)
+					if err != nil {
+						log.Printf("[ERROR] Failed preparing constraint %s: %s", appConstraint, err)
+						continue
+					}
+
+					if c.Check(v2) {
+						app = innerApp
+						latestVersion = innerApp.AppVersion
+					}
+				}
+
+				appId = app.ID
+			} else {
+				log.Printf("[WARNING] Failed to find HTTP app in single action execution")
+				return workflowExecution, errors.New("Failed to find HTTP app. Is it installed?")
+			}
+		}
+
+		// Check if incoming action is "custom_action" and map it to HTTP
+		if action.Name == "custom_action" || action.Name == "Custom Action" {
+			urlIndex := -1
+			path := ""
+			queries := ""
+			for paramIndex, param := range action.Parameters {
+				if strings.ToLower(param.Name) == "method" {
+					action.Name = strings.ToUpper(param.Value)
+				} else if strings.ToLower(param.Name) == "url" {
+					urlIndex = paramIndex
+				} else if strings.ToLower(param.Name) == "path" {
+					path = param.Value
+				} else if strings.ToLower(param.Name) == "queries" {
+					queries = param.Value
+				}
+			}
+
+			if len(path) > 0 && urlIndex >= 0 {
+				if strings.HasPrefix(path, "/") {
+					path = path[1:]
+				}
+
+				action.Parameters[urlIndex].Value = fmt.Sprintf("%s/%s", action.Parameters[urlIndex].Value, path)
+			}
+
+			if len(queries) > 0 && urlIndex >= 0 {
+				// Split them and add to the URL
+				if strings.Contains(action.Parameters[urlIndex].Value, "?") {
+					action.Parameters[urlIndex].Value = fmt.Sprintf("%s&%s", action.Parameters[urlIndex].Value, queries)
+				} else {
+					action.Parameters[urlIndex].Value = fmt.Sprintf("%s?%s", action.Parameters[urlIndex].Value, queries)
+				}
+			}
+
+			log.Printf("URL: %#v", action.Parameters[urlIndex].Value)
+
+		}
+
+	} else {
+		newApp, err := GetApp(ctx, appId, user, false)
+		if err != nil || len(newApp.ID) == 0 {
+			log.Printf("[WARNING] Error getting app (execute SINGLE app action): %s", appId)
+			return workflowExecution, err
+		}
+
+		app = *newApp
 	}
 
 	// FIXME: We need to inject missing empty auth here in some cases
@@ -17629,7 +17723,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		} else {
 			//latestTimestamp := int64(0)
 			for _, auth := range auths {
-				if auth.App.ID != fileId {
+				if auth.App.ID != appId {
 					continue
 				}
 
@@ -17710,7 +17804,7 @@ func PrepareSingleAction(ctx context.Context, user User, fileId string, body []b
 		}
 	}
 
-	action.AppID = fileId
+	action.AppID = appId 
 	workflow := Workflow{
 		Actions: []Action{
 			action,
