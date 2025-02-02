@@ -4034,24 +4034,25 @@ type WorkflowSearchResult struct {
 
 // Used for the integrations API to work with AI well
 type StructuredCategoryAction struct {
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason"`
+
 	WorkflowId  string        `json:"workflow_id,omitempty"`
 	ExecutionId string        `json:"execution_id,omitempty"`
-	Label       string        `json:"label"`
-	Category    string        `json:"category"`
+	Label       string        `json:"label,omitempty"`
+	Category    string        `json:"category,omitempty"`
 	Apps        []WorkflowApp `json:"apps,omitempty"`
 
 	Result string `json:"result,omitempty"`
 
-	AvailableLabels []string `json:"available_labels"`
+	AvailableLabels []string `json:"available_labels,omitempty"`
 	ThreadId        string   `json:"thread_id,omitempty"`
 	RunId           string   `json:"run_id,omitempty"`
 	MissingFields   []string `json:"missing_fields,omitempty"`
 
 	Translated bool `json:"translated,omitempty"`
 
-	Success bool   `json:"success"`
-	Action  string `json:"action"`
-	Reason  string `json:"reason"`
 }
 
 type ModelLabelParameter struct {

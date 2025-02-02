@@ -24892,14 +24892,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	err := ValidateRequestOverload(resp, request)
-	if err != nil {
-		log.Printf("[ERROR] Request overload for Run Category Action with IP %s", GetRequestIp(request))
-		resp.WriteHeader(429)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests. This is an experimental AI feature and can't handle burst traffic yet."}`)))
-		return
-	}
-
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		// Look for "authorization" and "execution_id" queries
