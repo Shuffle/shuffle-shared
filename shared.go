@@ -25091,6 +25091,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		foundCategory = org.SecurityFramework.IAM
 	} else if foundAppType == "siem" {
 		foundCategory = org.SecurityFramework.SIEM
+	} else if foundAppType == "ai" {
+		foundCategory = org.SecurityFramework.AI
 	} else {
 		if len(foundAppType) > 0 {
 			log.Printf("[ERROR] Unknown app type in category action: %#v", foundAppType)
@@ -25279,7 +25281,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("[DEBUG] Error with getting file '%s' in category action autorun: %s", discoverFile, err)
 		} else {
-			log.Printf("\n\n\n[DEBUG] Found file in category action: %#v. Status: %s. Category: %s\n\n\n", file, file.Status, file.Namespace)
+			log.Printf("[DEBUG] Found tranlsation file in category action: %#v. Status: %s. Category: %s", file, file.Status, file.Namespace)
 
 			if file.Status == "active" {
 				fieldFileFound = true
@@ -25543,7 +25545,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(foundAuthenticationId) == 0 {
-		log.Printf("[WARNING] Couldn't find auth for app %s in org %s (%s)", selectedApp.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//log.Printf("[WARNING] Couldn't find auth for app %s in org %s (%s)", selectedApp.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		requiresAuth := false
 		for _, action := range selectedApp.Actions {
@@ -25560,58 +25562,58 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if !requiresAuth {
-			log.Printf("\n\n[ERROR] App '%s' doesn't require auth, but we are still sending back with auth requires\n\n", selectedApp.Name)
-		}
+			//log.Printf("\n\n[ERROR] App '%s' doesn't require auth\n\n", selectedApp.Name)
+		} else {
+			// Reducing size drastically as it isn't really necessary
+			selectedApp.Actions = []WorkflowAppAction{}
+			//selectedApp.Authentication = Authentication{}
+			selectedApp.ChildIds = []string{}
+			selectedApp.SmallImage = ""
+			structuredFeedback := StructuredCategoryAction{
+				Success:  false,
+				Action:   "app_authentication",
+				Category: discoveredCategory,
+				Reason:   fmt.Sprintf("Authenticate %s first.", selectedApp.Name),
+				Label:    value.Label,
+				Apps: []WorkflowApp{
+					selectedApp,
+				},
 
-		// Reducing size drastically as it isn't really necessary
-		selectedApp.Actions = []WorkflowAppAction{}
-		//selectedApp.Authentication = Authentication{}
-		selectedApp.ChildIds = []string{}
-		selectedApp.SmallImage = ""
-		structuredFeedback := StructuredCategoryAction{
-			Success:  false,
-			Action:   "app_authentication",
-			Category: discoveredCategory,
-			Reason:   fmt.Sprintf("Authenticate %s first.", selectedApp.Name),
-			Label:    value.Label,
-			Apps: []WorkflowApp{
-				selectedApp,
-			},
-
-			AvailableLabels: availableLabels,
-		}
-
-		// Check for user agent including shufflepy
-		useragent := request.Header.Get("User-Agent")
-		if strings.Contains(strings.ToLower(useragent), "shufflepy") {
-			structuredFeedback.Apps = []WorkflowApp{}
-
-			// Find current domain from the url
-			currentUrl := fmt.Sprintf("%s://%s", request.URL.Scheme, request.URL.Host)
-			if project.Environment == "cloud" {
-				currentUrl = "https://shuffler.io"
+				AvailableLabels: availableLabels,
 			}
 
-			// FIXME: Implement this. Uses org's auth
-			orgAuth := org.OrgAuth.Token
+			// Check for user agent including shufflepy
+			useragent := request.Header.Get("User-Agent")
+			if strings.Contains(strings.ToLower(useragent), "shufflepy") {
+				structuredFeedback.Apps = []WorkflowApp{}
 
-			structuredFeedback.Reason = fmt.Sprintf("Authenticate here: %s/appauth?app_id=%s&auth=%s", currentUrl, selectedApp.ID, orgAuth)
-		}
+				// Find current domain from the url
+				currentUrl := fmt.Sprintf("%s://%s", request.URL.Scheme, request.URL.Host)
+				if project.Environment == "cloud" {
+					currentUrl = "https://shuffler.io"
+				}
 
-		jsonFormatted, err := json.MarshalIndent(structuredFeedback, "", "    ")
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling structured feedback: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed formatting your data"}`))
+				// FIXME: Implement this. Uses org's auth
+				orgAuth := org.OrgAuth.Token
+
+				structuredFeedback.Reason = fmt.Sprintf("Authenticate here: %s/appauth?app_id=%s&auth=%s", currentUrl, selectedApp.ID, orgAuth)
+			}
+
+			jsonFormatted, err := json.MarshalIndent(structuredFeedback, "", "    ")
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling structured feedback: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed formatting your data"}`))
+				return
+			}
+
+			// Replace \u0026 with &
+			jsonFormatted = bytes.Replace(jsonFormatted, []byte("\\u0026"), []byte("&"), -1)
+
+			resp.WriteHeader(400)
+			resp.Write(jsonFormatted)
 			return
 		}
-
-		// Replace \u0026 with &
-		jsonFormatted = bytes.Replace(jsonFormatted, []byte("\\u0026"), []byte("&"), -1)
-
-		resp.WriteHeader(400)
-		resp.Write(jsonFormatted)
-		return
 	}
 
 	// Send back with SUCCESS as we already have an authentication
@@ -25909,7 +25911,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// Finds WHERE in the destination to put the input data
 	// Loops through input fields, then takes the data from them
 	if len(fieldFileContentMap) > 0 {
-		log.Printf("\n\n[DEBUG] Found file content map (Reverse Schemaless): %#v\n\n", fieldFileContentMap)
+		//log.Printf("[DEBUG] Found file content map (Reverse Schemaless): %#v", fieldFileContentMap)
 
 		for key, mapValue := range fieldFileContentMap {
 			if _, ok := mapValue.(string); !ok {
@@ -26381,9 +26383,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					// Finds location of some data in another part of the data. This is to have a predefined location in subsequent requests
-					//log.Printf("\n\n\nREVERSE TRANSLATING FROM: %s\n\nTO: %s\n\n\n", parsedParameterMap, inputFieldMap)
+					// Allows us to map text -> field and not just field -> text (2-way)
 					reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
-					//reversed, err := schemaless.ReverseTranslate(inputFieldMap, parsedParameterMap)
 					if err != nil {
 						log.Printf("[ERROR] Problem with reversing: %s", err)
 					} else {

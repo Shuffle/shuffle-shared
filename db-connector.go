@@ -16,8 +16,6 @@ import (
 	"os"
 	"strconv"
 
-	//"strconv"
-	//"encoding/binary"
 	"math"
 	"math/rand"
 	"sort"
@@ -5000,11 +4998,11 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		err := project.Dbclient.Get(ctx, key, api)
 		//if (err != nil || len(api.Body) == 0) && !strings.Contains(fmt.Sprintf("%s", err), "no such") {
 		if err != nil || len(api.Body) == 0 {
-			log.Printf("Some API issue: %s", err)
-
 			if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 				return *api, nil
 			}
+
+			log.Printf("[ERROR] Some OpenAPI  refissue for ID '%s': %s", id, err)
 
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)

@@ -1499,7 +1499,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 	allNames := []string{}
 	for _, action := range workflow.Actions {
 
-		if action.AppID == "integration" {
+		if action.AppID == "integration" || action.AppID == "shuffle_agent" {
 			if action.IsStartNode {
 				startnodeFound = true
 			}
@@ -1773,7 +1773,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 	// Handle app versions & upgrades
 	for _, action := range workflow.Actions {
-		if action.AppID == "integration" {
+		if action.AppID == "integration" || action.AppID == "shuffle_agent" {
 			if action.IsStartNode {
 				startnodeFound = true
 			}
@@ -2173,7 +2173,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				}
 			}
 
-			if curapp.ID == "" && action.AppID != "integration" {
+			if curapp.ID == "" && action.AppID != "integration" && action.AppID != "shuffle_agent" {
 				//log.Printf("[WARNING] Didn't find the App ID for action %s (%s) with appname %s", action.Label, action.AppID, action.AppName)
 				for _, app := range workflowapps {
 					if app.ID == action.AppID {
@@ -2212,7 +2212,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			}
 
 			if curapp.ID != action.AppID && curapp.Name != action.AppName {
-				if action.AppID == "integration" {
+				if action.AppID == "integration" || action.AppID == "shuffle_agent"  {
 					for _, param := range action.Parameters {
 						if param.Name == "action" {
 							if len(param.Value) > 0 {
