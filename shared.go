@@ -28483,6 +28483,104 @@ func HandleWorkflowRunSearch(resp http.ResponseWriter, request *http.Request) {
 		Cursor:  cursor,
 	}
 
+	//Get workflow run for all subgs of current org where the user is a member
+	if search.SuborgRuns == true {
+		suborgs, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting suborgs for org %s: %s", user.ActiveOrg.Id, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// Limit to max 50 suborgs
+		if len(suborgs) > 50 {
+			suborgs = suborgs[:50]
+		}
+
+		type batchResult struct {
+			runs []WorkflowExecution
+			err  error
+		}
+
+		resultChan := make(chan batchResult, len(suborgs))
+		var wg sync.WaitGroup
+
+		// Process each suborg concurrently
+		for _, suborg := range suborgs {
+			wg.Add(1)
+			go func(suborg Org) {
+				defer wg.Done()
+
+				// Check if user is present in this suborg
+				userPresentInSuborg := false
+				for _, orgId := range user.Orgs {
+					if orgId == suborg.Id || user.SupportAccess == true {
+						userPresentInSuborg = true
+						break
+					}
+
+				}
+
+				// Skip this suborg if user is not present
+				if !userPresentInSuborg {
+					resultChan <- batchResult{runs: []WorkflowExecution{}}
+					return
+				}
+
+				runs, _, err := GetWorkflowRunsBySearch(ctx, suborg.Id, search)
+				if err != nil {
+					resultChan <- batchResult{
+						err: fmt.Errorf("failed getting workflow runs for suborg %s: %v", suborg.Id, err),
+					}
+					return
+				}
+
+				// Filter runs and add suborg details
+				parsedRuns := []WorkflowExecution{}
+				for _, run := range runs {
+					// Add suborg details to the execution
+					run.Org = OrgMini{
+						Id:         suborg.Id,
+						Name:       suborg.Name,
+						Image:      suborg.Image,
+						CreatorOrg: suborg.CreatorOrg,
+						RegionUrl:  suborg.RegionUrl,
+					}
+					parsedRuns = append(parsedRuns, run)
+				}
+
+				resultChan <- batchResult{runs: parsedRuns}
+			}(suborg)
+		}
+
+		// Close channel when all goroutines complete
+		go func() {
+			wg.Wait()
+			close(resultChan)
+		}()
+
+		// Collect results from all suborgs
+		suborgRuns := []WorkflowExecution{}
+		for result := range resultChan {
+			if result.err != nil {
+				log.Printf("[WARNING] %v", result.err)
+				continue
+			}
+			suborgRuns = append(suborgRuns, result.runs...)
+		}
+
+		// Combine parent and suborg runs
+		allRuns := append(workflowSearchResult.Runs, suborgRuns...)
+
+		// Sort by start time
+		sort.Slice(allRuns, func(i, j int) bool {
+			return allRuns[i].StartedAt > allRuns[j].StartedAt
+		})
+
+		workflowSearchResult.Runs = allRuns
+	}
+
 	respBody, err := json.Marshal(workflowSearchResult)
 	if err != nil {
 		log.Printf("[WARNING] Failed marshaling workflow runs: %s", err)
