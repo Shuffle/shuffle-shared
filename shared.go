@@ -9327,11 +9327,14 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public IF cloud.", err)
 
+		/*
+		// No need to keep workflow forms to cloud only. Public access available from February 2025.
 		if project.Environment != "cloud" {
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+		*/
 	}
 
 	location := strings.Split(request.URL.String(), "/")

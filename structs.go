@@ -1469,12 +1469,14 @@ type File struct {
 	ContentType        string   `json:"content_type" datastore:"content_type"`
 	UpdatedBy          string   `json:"updated_by" datastore:"updated_by"`
 	CreatedBy          string   `json:"created_by" datastore:"created_by"`
-	Namespace          string   `json:"namespace" datastore:"namespace"`
 	Encrypted          bool     `json:"encrypted" datastore:"encrypted"`
 	IsEdited           bool     `json:"isedited" datastore:"isedited"`
 	LastEditor         string   `json:"lasteditor" datastore:"lasteditor"`
 	OriginalMd5sum     string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+
+	// Category control
+	Namespace          string   `json:"namespace" datastore:"namespace"`
 }
 
 type DisabledRules struct {
