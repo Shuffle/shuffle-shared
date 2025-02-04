@@ -5592,6 +5592,16 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 			return err
 		}
 	} else {
+		if len(user.Regions) == 1 {
+			if user.Regions[0] != "https://shuffler.io" {
+				user.Regions = append(user.Regions, "https://shuffler.io")
+				// get project region
+				if gceProject != "shuffler" {
+					propagateUser(*user, false)
+				}
+			}
+		}
+
 		k := datastore.NameKey(nameKey, parsedKey, nil)
 		if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
 			log.Printf("[WARNING] Error updating user: %s", err)
