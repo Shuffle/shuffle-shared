@@ -6963,6 +6963,7 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 				for {
 					innerApp := WorkflowApp{}
 					_, err = it.Next(&innerApp)
+					alreadyExists := false
 					//log.Printf("Got app: %s (%s)", innerApp.Name, innerApp.ID)
 					cnt += 1
 					if cnt > maxAmount {
@@ -6993,8 +6994,16 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 						continue
 					}
 
-					userApps = append(userApps, innerApp)
-
+					// Not sure can it slow the API down?
+					for _, app := range userApps {
+						if innerApp.ID == app.ID {
+							alreadyExists = true
+						}
+					}
+					
+					if !alreadyExists {
+						userApps = append(userApps, innerApp)
+					}
 				}
 
 				if err != nil {
