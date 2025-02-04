@@ -885,13 +885,11 @@ func fixOpensearch() error {
 	return nil
 }
 
-func FixSubflow(ctx context.Context, workflowId string) error {
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil {
-		log.Printf("[ERROR] Cannot able to get the workflow %s", err)
-		return err
-	}
-	
+func fixSubflow(ctx context.Context, workflow *Workflow) error {
+
+	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
+	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+
 	subflowActionId := ""
 	for _, action := range workflow.Actions {
 		if action.Label == "call_subflow" {
@@ -903,7 +901,7 @@ func FixSubflow(ctx context.Context, workflowId string) error {
 		if trigger.AppName == "Shuffle Workflow" {
 			for _, parameter := range trigger.Parameters {
 				if parameter.Name == "workflow" {
-					parameter.Value = workflowId
+					parameter.Value = workflow.ID
 				}
 				if parameter.Name == "startnode" {
 					parameter.Value = subflowActionId
@@ -912,11 +910,60 @@ func FixSubflow(ctx context.Context, workflowId string) error {
 		}
 	}
 
-	err = SetWorkflow(ctx, *workflow, workflowId)
+	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	if len(baseUrl) == 0 {
+		log.Printf("[DEBUG] Base url not set. Setting to default")
+		baseUrl = "https://shuffler.io"
+	}
+
+	req, err := http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflow.ID+"?skip_save=true", nil)
 	if err != nil {
-		log.Printf("[Eroor] Failed to save the workflow in ops %s", workflowId)
+		log.Println("[ERROR] creating HTTP request:", err)
+		return errors.New("Error creating HTTP request: " + err.Error())
+	}
+
+	// set the headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Org-Id", orgId)
+
+	// convert the body to JSON
+	workflowDataJSON, err := json.Marshal(workflow)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling workflow data: %s", err)
 		return err
 	}
+
+	// set the body
+	req.Body = ioutil.NopCloser(bytes.NewBuffer(workflowDataJSON))
+
+	// send the request
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending HTTP request: %s (2)", err)
+		return err
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed saving ops dashboard workflow: %s. The status code was: %d (2)", err, resp.StatusCode)
+		// print the response body
+		respBodyErr, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s (2)", err)
+		} else {
+			log.Printf("[ERROR] Ops dashboard saving Workflow Response: %s (2)", respBodyErr)
+		}
+		return errors.New("Failed saving ops dashboard workflow (2)")
+	}
+
+	//err = SetWorkflow(ctx, *workflow, workflowId)
+	//if err != nil {
+	//	log.Printf("[Error] Failed to save the workflow in ops %s", workflowId)
+	//	return err
+	//}
 
 	return nil
 }
@@ -970,7 +1017,6 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		log.Printf("[ERROR] Failed creating Health check workflow. Exiting..")
 		return workflowHealth, err
 	}
-	err = FixSubflow(ctx, opsWorkflowID)
 
 	workflowPtr, err := GetWorkflow(ctx, opsWorkflowID)
 	if err != nil {
@@ -981,6 +1027,8 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	workflowHealth.Create = true
 	workflowHealth.WorkflowId = opsWorkflowID
 	updateOpsCache(workflowHealth)
+
+	err = fixSubflow(ctx, workflowPtr)
 
 	workflow := *workflowPtr
 
