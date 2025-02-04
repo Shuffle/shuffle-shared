@@ -5616,14 +5616,10 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		if err != nil {
 			return err
 		}
-	} else {
+	} else {		
 		if len(user.Regions) == 1 {
 			if user.Regions[0] != "https://shuffler.io" {
 				user.Regions = append(user.Regions, "https://shuffler.io")
-				// get project region
-				if gceProject != "shuffler" {
-					propagateUser(*user, false)
-				}
 			}
 		}
 
