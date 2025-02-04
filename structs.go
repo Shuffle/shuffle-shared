@@ -249,6 +249,7 @@ type WorkflowAppActionParameter struct {
 	ValueReplace   []Valuereplace   `json:"value_replace" datastore:"value_replace,noindex" yaml:"value_replace,omitempty"`
 	UniqueToggled  bool             `json:"unique_toggled" datastore:"unique_toggled" yaml:"unique_toggled"`
 	Error          string           `json:"error" datastore:"error" yaml:"error"`
+	Hidden         bool             `json:"hidden" datastore:"hidden" yaml:"hidden"`
 }
 
 type Valuereplace struct {
@@ -1141,11 +1142,6 @@ type Position struct {
 	Y float64 `json:"y" datastore:"y"`
 }
 
-type ParameterLock struct {
-	ParameterName string `json:"parameter_name" datastore:"parameter_name"`
-	ActionName    string `json:"action_name" datastore:"action_name"`
-}
-
 // This is for the nodes in a workflow, NOT the app action itself.
 type Action struct {
 	AppName           string                       `json:"app_name" datastore:"app_name"`
@@ -1185,7 +1181,7 @@ type Action struct {
 
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 
-	ParameterLocks []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
+	// ParameterLocks []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
 }
 
 // Added environment for location to execute
@@ -1381,6 +1377,7 @@ type Categories struct {
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
 	IAM           Category `json:"iam" datastore:"IAM"`
+	AI            Category `json:"iam" datastore:"IAM"`
 
 	Email Category `json:"email" datastore:"email"`
 	Other Category `json:"other" datastore:"other"`
@@ -1528,11 +1525,11 @@ type ValidationProblem struct {
 }
 
 type TypeValidation struct {
-	Valid         bool  `json:"valid" datastore:"valid"`
-	ChangedAt     int64 `json:"changed_at" datastore:"changed_at"`
-	LastValid     int64 `json:"last_valid" datastore:"last_valid"`
-	ValidationRan bool  `json:"validation_ran" datastore:"validation_ran"`
-	NotificationsCreated int64  `json:"notifications_created" datastore:"notifications_created"`
+	Valid                bool  `json:"valid" datastore:"valid"`
+	ChangedAt            int64 `json:"changed_at" datastore:"changed_at"`
+	LastValid            int64 `json:"last_valid" datastore:"last_valid"`
+	ValidationRan        bool  `json:"validation_ran" datastore:"validation_ran"`
+	NotificationsCreated int64 `json:"notifications_created" datastore:"notifications_created"`
 
 	// For the last update, which did it
 	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
@@ -4042,24 +4039,24 @@ type WorkflowSearchResult struct {
 
 // Used for the integrations API to work with AI well
 type StructuredCategoryAction struct {
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason"`
+
 	WorkflowId  string        `json:"workflow_id,omitempty"`
 	ExecutionId string        `json:"execution_id,omitempty"`
-	Label       string        `json:"label"`
-	Category    string        `json:"category"`
+	Label       string        `json:"label,omitempty"`
+	Category    string        `json:"category,omitempty"`
 	Apps        []WorkflowApp `json:"apps,omitempty"`
 
 	Result string `json:"result,omitempty"`
 
-	AvailableLabels []string `json:"available_labels"`
+	AvailableLabels []string `json:"available_labels,omitempty"`
 	ThreadId        string   `json:"thread_id,omitempty"`
 	RunId           string   `json:"run_id,omitempty"`
 	MissingFields   []string `json:"missing_fields,omitempty"`
 
 	Translated bool `json:"translated,omitempty"`
-
-	Success bool   `json:"success"`
-	Action  string `json:"action"`
-	Reason  string `json:"reason"`
 }
 
 type ModelLabelParameter struct {
@@ -4077,15 +4074,17 @@ type UserRequest struct {
 }
 
 type HTTPOutput struct {
-	Success bool              `json:"success"`
-	Status  int               `json:"status"`
-	Url     string            `json:"url"`
-	Body    interface{}       `json:"body"`
-	Headers map[string]string `json:"headers"`
-	Cookies map[string]string `json:"cookies"`
-	Errors  []string          `json:"errors"`
+	Success   bool   `json:"success"`
+	Reason    string `json:"reason,omitempty"`
+	Exception string `json:"exception,omitempty"`
+	Details   string `json:"details,omitempty"`
 
-	Reason string `json:"reason,omitempty"`
+	Status  int               `json:"status,omitempty"`
+	Url     string            `json:"url,omitempty"`
+	Body    interface{}       `json:"body,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Cookies map[string]string `json:"cookies,omitempty"`
+	Errors  []string          `json:"errors,omitempty"`
 }
 
 type SnappStep struct {

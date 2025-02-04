@@ -16,8 +16,6 @@ import (
 	"os"
 	"strconv"
 
-	//"strconv"
-	//"encoding/binary"
 	"math"
 	"math/rand"
 	"sort"
@@ -2082,6 +2080,8 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
+
+
 			if err == nil || len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
 				if strings.Contains(workflowExecution.ExecutionArgument, "Result too large to handle") {
@@ -3282,7 +3282,7 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 								}
 							}
 
-							log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
+							//log.Printf("[INFO] Reverting to revision triggers for workflow %s from 0 triggers to %d triggers", workflow.ID, len(revisions[0].Triggers))
 							workflow.Triggers = revisions[0].Triggers
 						}
 					}
@@ -4998,11 +4998,11 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		err := project.Dbclient.Get(ctx, key, api)
 		//if (err != nil || len(api.Body) == 0) && !strings.Contains(fmt.Sprintf("%s", err), "no such") {
 		if err != nil || len(api.Body) == 0 {
-			log.Printf("Some API issue: %s", err)
-
 			if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 				return *api, nil
 			}
+
+			log.Printf("[ERROR] Some OpenAPI  refissue for ID '%s': %s", id, err)
 
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
@@ -5202,6 +5202,20 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	var apps []WorkflowApp
 
 	nameKey := "workflowapp"
+	cacheKey := fmt.Sprintf("%s_appname_%s", appName)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &apps)
+			if err == nil {
+				return apps, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for user: %s", err)
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -5270,11 +5284,24 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 		}
 	} else {
 		//log.Printf("Looking for name %s in %s", appName, nameKey)
-		q := datastore.NewQuery(nameKey).Filter("name =", appName)
+		q := datastore.NewQuery(nameKey).Filter("Name =", appName).Limit(6)
 		_, err := project.Dbclient.GetAll(ctx, q, &apps)
 		if err != nil && len(apps) == 0 {
 			log.Printf("[WARNING] Failed getting apps for name: %s", appName)
 			return apps, err
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(apps)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling apps for appname %s: %s", appName, err)
+			return apps, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 1440)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache: %s", err)
 		}
 	}
 
@@ -6252,13 +6279,26 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	if user.ActiveOrg.Id != "" {
 		query := datastore.NewQuery(nameKey).Filter("reference_org =", user.ActiveOrg.Id).Limit(queryLimit)
 		//log.Printf("[INFO] Before ref org search. Org: %s\n\n", user.ActiveOrg.Id)
+		maxAmount := 100
+		cnt := 0
 		for {
 			it := project.Dbclient.Run(ctx, query)
+			if cnt > maxAmount {
+				log.Printf("[ERROR] Maximum try exceeded for workflowapp (1)")
+				break
+			}
 
 			for {
 				innerApp := WorkflowApp{}
 				_, err := it.Next(&innerApp)
+				cnt += 1
+				if cnt > maxAmount {
+					log.Printf("[ERROR] Maximum try exceeded for workfloapp (2)")
+					break
+				}
+
 				if err != nil {
+					//log.Printf("[INFO] Failed fetching results: %v", err)
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 						//log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
 					} else {
@@ -7840,7 +7880,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		}
 	}
 
-	log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
+	//log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8021,7 +8061,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 		}
 	}
 
-	log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
+	//log.Printf("[AUDIT] Getting workflow revisions for workflow %s.", originalId)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8287,8 +8327,11 @@ func SetWorkflowRevision(ctx context.Context, workflow Workflow) error {
 		DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflow.ID))
 
 		// For workflow revision backups
-		DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("%s_%s_1", nameKey, workflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("%s_%s_200", nameKey, workflow.ID))
+		// Actively used keys
 		DeleteCache(ctx, fmt.Sprintf("%s_%s_2", nameKey, workflow.ID))
+		DeleteCache(ctx, fmt.Sprintf("%s_%s_50", nameKey, workflow.ID))
 	}
 
 	return nil
@@ -11040,16 +11083,28 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 		// Create a timeout to prevent the query from taking more than 5 seconds total
 
 		cursorStr := ""
+		maxAmount := 100
+		cnt := 0
 		for {
 			it := project.Dbclient.Run(ctx, query)
+			if cnt > maxAmount {
+				log.Printf("[ERROR] Error getting workflow execution (4): reached maximum retries")
+				break
+			}
 
 			breakOuter := false
 			for {
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
+				if cnt > maxAmount {
+					log.Printf("[ERROR] Error getting workflow execution (3): reached maximum retries")
+					break
+				}
+
 				if err != nil {
 					if strings.Contains(err.Error(), "context deadline exceeded") {
 						log.Printf("[WARNING] Error getting workflow executions (1): %s", err)
+						cnt += 1
 						breakOuter = true
 					} else {
 						if strings.Contains(err.Error(), `cannot load field`) {
