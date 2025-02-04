@@ -885,10 +885,7 @@ func fixOpensearch() error {
 	return nil
 }
 
-func fixSubflow(ctx context.Context, workflow *Workflow) error {
-
-	apiKey := os.Getenv("SHUFFLE_OPS_DASHBOARD_APIKEY")
-	orgId := os.Getenv("SHUFFLE_OPS_DASHBOARD_ORG")
+func fixSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string, orgId string) error {
 
 	subflowActionId := ""
 	for _, action := range workflow.Actions {
@@ -910,11 +907,19 @@ func fixSubflow(ctx context.Context, workflow *Workflow) error {
 		}
 	}
 
-	baseUrl := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	if len(baseUrl) == 0 {
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 		log.Printf("[DEBUG] Base url not set. Setting to default")
-		baseUrl = "https://shuffler.io"
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
+
+	if project.Environment == "onprem" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
+		// This will work as the health will be handled in the backend itself.
+		// so localhost just works. (Tested)
+		baseUrl = "http://localhost:5001"
+	}
+
 
 	req, err := http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflow.ID+"?skip_save=true", nil)
 	if err != nil {
@@ -1028,7 +1033,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	workflowHealth.WorkflowId = opsWorkflowID
 	updateOpsCache(workflowHealth)
 
-	err = fixSubflow(ctx, workflowPtr)
+	err = fixSubflowParameters(ctx, workflowPtr, apiKey, orgId)
 
 	workflow := *workflowPtr
 
