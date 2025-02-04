@@ -16,8 +16,6 @@ import (
 	"os"
 	"strconv"
 
-	//"strconv"
-	//"encoding/binary"
 	"math"
 	"math/rand"
 	"sort"
@@ -5000,11 +4998,11 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 		err := project.Dbclient.Get(ctx, key, api)
 		//if (err != nil || len(api.Body) == 0) && !strings.Contains(fmt.Sprintf("%s", err), "no such") {
 		if err != nil || len(api.Body) == 0 {
-			log.Printf("Some API issue: %s", err)
-
 			if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 				return *api, nil
 			}
+
+			log.Printf("[ERROR] Some OpenAPI  refissue for ID '%s': %s", id, err)
 
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
@@ -5204,6 +5202,20 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 	var apps []WorkflowApp
 
 	nameKey := "workflowapp"
+	cacheKey := fmt.Sprintf("%s_appname_%s", appName)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &apps)
+			if err == nil {
+				return apps, nil
+			}
+		} else {
+			//log.Printf("[DEBUG] Failed getting cache for user: %s", err)
+		}
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -5272,11 +5284,24 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 		}
 	} else {
 		//log.Printf("Looking for name %s in %s", appName, nameKey)
-		q := datastore.NewQuery(nameKey).Filter("name =", appName)
+		q := datastore.NewQuery(nameKey).Filter("Name =", appName).Limit(6)
 		_, err := project.Dbclient.GetAll(ctx, q, &apps)
 		if err != nil && len(apps) == 0 {
 			log.Printf("[WARNING] Failed getting apps for name: %s", appName)
 			return apps, err
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(apps)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling apps for appname %s: %s", appName, err)
+			return apps, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 1440)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating cache: %s", err)
 		}
 	}
 
@@ -6283,6 +6308,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				}
 
 				if err != nil {
+					//log.Printf("[INFO] Failed fetching results: %v", err)
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 						//log.Printf("[ERROR] Error in reference_org app load of %s (%s): %s.", innerApp.Name, innerApp.ID, err)
 					} else {
