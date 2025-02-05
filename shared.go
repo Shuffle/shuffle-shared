@@ -3374,7 +3374,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		org, err = GetOrg(ctx, org_id)
 		if err != nil || org.Id != org_id {
 			//return User{}, errors.New("Invalid org id specified")
-			log.Printf("[ERROR] Invalid Org-Id specified: %s", org_id)
+			log.Printf("[ERROR] Invalid Org-Id specified: %s. Request URL: %#v", org_id, request.URL.String())
 			org_id = ""
 		}
 	}
@@ -7066,19 +7066,21 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				// change ID, and replace in branch ID
 				oldID := trigger.ID
 				trigger.ID = uuid.NewV4().String()
-
 				trigger.ReplacementForTrigger = oldID
+				trigger.ParentControlled = true
 
 				if trigger.TriggerType == "WEBHOOK" {
+
 					for paramIndex, param := range trigger.Parameters {
 						if param.Name == "url" {
-							trigger.Parameters[paramIndex].Value = ""
+							trigger.Parameters[paramIndex].Value = strings.Replace(param.Value, fmt.Sprintf("webhook_%s", oldID), fmt.Sprintf("webhook_%s", trigger.ID), -1)
 						}
 
 						if param.Name == "tmp" {
-							trigger.Parameters[paramIndex].Value = ""
+							trigger.Parameters[paramIndex].Value = fmt.Sprintf("webhook_%s", trigger.ID)
 						}
 					}
+
 				} else if trigger.TriggerType == "SUBFLOW" {
 					// params: workflow, argument, user_apikey, startnode,
 					// check_result and auth_override
@@ -7458,7 +7460,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		ctx := context.Background()
 		err := SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
 		if err != nil {
-			log.Printf("[WARNING] Failed updating child workflow %s: %s", childWorkflow.ID, err)
+			log.Printf("[ERROR] Failed updating child workflow %s from parent workflow %s: %s", childWorkflow.ID, oldWorkflow.ID, err)
 		} else {
 			log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
 
@@ -10308,8 +10310,8 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			log.Printf("[WARNING] Wrong user (%s) for app %s (%s) when DELETING app", user.Username, app.Name, app.ID)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "You need to be admin to deactivate apps for an org."}`))
 			return
 		}
 	}
@@ -10948,20 +10950,20 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		if !parentOrg.SyncFeatures.MultiTenant.Active && !parentOrg.LeadInfo.Customer && !parentOrg.LeadInfo.POV && !parentOrg.LeadInfo.Internal {
-			log.Printf("[WARNING] Org %s is not allowed to make a sub-organization: %s", tmpData.OrgId, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription or to be in the POV stage with access to multi-tenancy. Contact support@shuffler.io to try it out."}`))
-			return
-		}
+			// Anyone is allowed to make 5
+			if parentOrg.SyncFeatures.MultiTenant.Limit <= 0 {
+				parentOrg.SyncFeatures.MultiTenant.Limit = 5
+				parentOrg.SyncFeatures.MultiTenant.Active = true
+			}
 
-		/*
-			if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit || len(parentOrg.ChildOrgs) > int(parentOrg.SyncFeatures.MultiTenant.Limit) {
-				log.Printf("[WARNING] Org %s is not allowed to make ANOTHER sub-organization. Limit reached!: %s", tmpData.OrgId, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "Your limit of sub-organizations has been reached. Contact support to increase."}`))
+			if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
+				log.Printf("[WARNING] Org %s is not allowed to make more than %d sub-organizations: %s", parentOrg.Id, parentOrg.SyncFeatures.MultiTenant.Limit)
+				resp.WriteHeader(400)
+				//resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription or to be in the POV stage with access to multi-tenancy. Contact support@shuffler.io to try it out."}`))
+				resp.Write([]byte(`{"success": false, "reason": "You by default can't make more than 5 sub-organizations on our cloud. Contact support@shuffler.io to increase this limit"}`))
 				return
 			}
-		*/
+		}
 
 		parentOrg.SyncUsage.MultiTenant.Counter += 1
 		log.Printf("[DEBUG] Allowing suborg for %s because they have %d vs %d limit", parentOrg.Id, len(parentOrg.ChildOrgs), parentOrg.SyncFeatures.MultiTenant.Limit)
@@ -24173,7 +24175,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 			//DeleteCache(ctx, newExecId)
 			continue
 		} else {
-			//log.Printf("[INFO] %s:%s has no status result yet. Should execute.", action.Name, action.ID)
 		}
 
 		// Checked multiple times due to the cache
@@ -24355,7 +24356,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 				}
 			}
 
-			//log.Printf("[DEBUG] Should execute parent %s (?). Branches: %d. Parents done: %d", action.AppName, branchesFound, parentFinished)
 			if branchesFound == parentFinished {
 
 				if action.ID == workflowExecution.Start {
@@ -24544,7 +24544,6 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 		}
 
 		// Verify if parents are done
-		//log.Printf("[INFO][%s] Should execute %s:%s (%s) with label %s", workflowExecution.ExecutionId, action.AppName, action.AppVersion, action.ID, action.Label)
 
 		relevantActions = append(relevantActions, action)
 	}

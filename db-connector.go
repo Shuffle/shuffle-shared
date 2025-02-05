@@ -4693,7 +4693,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 						log.Printf("[ERROR] Failed propagating org %s for region %#v: %s", data.Id, data.Region, err)
 					}
 				} else {
-					log.Printf("[INFO] Successfully propagated org %s to region %#v", data.Id, data.Region)
+					//log.Printf("[INFO] Successfully propagated org %s to region %#v", data.Id, data.Region)
 				}
 			}()
 		}
@@ -5634,7 +5634,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
 				err = propagateUser(*user, false)
 				if err != nil {
-					log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
+					log.Printf("[ERROR] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
 				}
 			}()
 		}
@@ -5717,16 +5717,6 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 		if err != nil {
 			log.Printf("[Error] deleting from %s from %s: %s", nameKey, user.Id, err)
 		}
-		// if (len(user.Regions)) > 1 {
-		// 	go func() {
-		// 		log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
-		// 		err = propagateUser(*user, true)
-		// 		if err != nil {
-		// 			log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
-		// 		}
-		// 	}()
-		// }
-
 	}
 
 	DeleteCache(ctx, user.ApiKey)
@@ -6195,11 +6185,13 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return allApps, nil
 	}
 
-	log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
-	allApps := []WorkflowApp{}
+	if user.Username != "HealthWorkflowFunction" { 
+		log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
+	}
 
 	// 1. Caching apps locally
 	// Make it based on org and not user :)
+	allApps := []WorkflowApp{}
 	cacheKey := fmt.Sprintf("apps_%s", user.ActiveOrg.Id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -6223,7 +6215,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	queryLimit := 25
 	cursorStr := ""
 
-	allApps = user.PrivateApps
+	//allApps = user.PrivateApps
+	allApps = []WorkflowApp{}
 	org, orgErr := GetOrg(ctx, user.ActiveOrg.Id)
 	if orgErr == nil && len(org.ActiveApps) > 150 {
 		// No reason for it to be this big. Arbitrarily reducing.

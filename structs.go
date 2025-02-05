@@ -223,6 +223,7 @@ type WorkflowApp struct {
 
 	Contributors []string `json:"contributors" datastore:"contributors"`
 	RevisionId   string   `json:"revision_id" datastore:"revision_id"`
+	Collection 	 string `json:"collection" datastore:"collection"`
 }
 
 type AppVersion struct {

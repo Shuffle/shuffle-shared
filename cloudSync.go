@@ -1313,6 +1313,12 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	if activate == false && app.ReferenceOrg == user.ActiveOrg.Id {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Can't remove app from current org as it is the owner org."}`))
+		return
+	}
+
 	org := &Org{}
 	added := false
 	if app.Sharing || app.Public || !activate {
