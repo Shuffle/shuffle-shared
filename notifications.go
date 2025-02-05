@@ -523,7 +523,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	_ = respBody 
 
 	//log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
-	log.Printf("[DEBUG] Finished notification request to %s with status %d", executionUrl, newresp.StatusCode)
+	log.Printf("[DEBUG] Finished notification request to %s with status %d. If status is not 200, an error is created.", executionUrl, newresp.StatusCode)
 	if newresp.StatusCode != 200 {
 		return errors.New(fmt.Sprintf("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId))
 	}
@@ -532,30 +532,41 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 }
 
 func forwardNotificationRequest(ctx context.Context, title, description, referenceUrl, orgId string) error {
-	if !strings.Contains(referenceUrl, "execution_id") {
-		log.Printf("[DEBUG] Notification doesn't contain execution ID. Skipping (1)")
+	if !strings.Contains(referenceUrl, "execution_id") && !strings.Contains(referenceUrl, "detection") {
+		log.Printf("[DEBUG] Notification doesn't contain execution ID and detection. Skipping (1)")
 		return nil
 	}
 
 	// Find execution id
-	executionId := strings.Split(referenceUrl, "execution_id=")[1]
-	if len(executionId) == 0 {
-		log.Printf("[DEBUG] Notification doesn't contain execution ID. Skipping (2)")
-		return nil
+	executionId := ""
+	userApikey := ""
+	if strings.Contains(referenceUrl, "execution_id") {
+		executionId = strings.Split(referenceUrl, "execution_id=")[1]
+		if len(executionId) == 0 {
+			log.Printf("[DEBUG] Notification doesn't contain execution ID. Skipping (2)")
+			return nil
+		}
+
+		if strings.Contains(executionId, "&") {
+			executionId = strings.Split(executionId, "&")[0]
+		}
+
+		// Get the execution
+		exec, err := GetWorkflowExecution(ctx, executionId)
+		if err != nil {
+			log.Printf("[DEBUG] Failed getting execution from notification %s: %s", executionId, err)
+			return err
+		}
+
+		userApikey = exec.Authorization
 	}
 
-	if strings.Contains(executionId, "&") {
-		executionId = strings.Split(executionId, "&")[0]
+	if len(userApikey) == 0 {
+		auth := os.Getenv("AUTH")
+		if len(auth) > 0 {
+			userApikey = auth
+		}
 	}
-
-	// Get the execution
-	exec, err := GetWorkflowExecution(ctx, executionId)
-	if err != nil {
-		log.Printf("[DEBUG] Failed getting execution from notification %s: %s", executionId, err)
-		return err
-	}
-
-	userApikey := exec.Authorization
 
 	notification := Notification{
 		Title: title,
@@ -593,8 +604,14 @@ func forwardNotificationRequest(ctx context.Context, title, description, referen
 		bytes.NewBuffer(b),
 	)
 
+	// Environment auth if possible.
 	req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, userApikey))
+	envName := os.Getenv("ENVIRONMENT_NAME")
 	req.Header.Add("Org-Id", notification.OrgId)
+	if len(envName) > 0 {
+		req.Header.Add("ENVIRONMENT_NAME", envName)
+	}
+
 	newresp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending notification to backend: %s", err)
@@ -620,8 +637,17 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 	}
 
 	if project.Environment == "" {
-		log.Printf("\n\n\n[ERROR] Not generating notification, as no environment has been detected: %#v", project.Environment)
-		return nil
+
+		auth := os.Getenv("AUTH")
+		org := os.Getenv("ORG")
+		environment := os.Getenv("ENVIRONMENT_NAME")
+		if len(auth) == 0 || len(org) == 0 || len(environment) == 0 {
+			log.Printf("[ERROR] Not generating notification, as no environment has been detected: %#v. This should not happen in Orborus.", project.Environment)
+			return nil
+		}
+
+		// Overriding it for Orborus to ensure we have a way to manage
+		project.Environment = "worker" 
 	}
 
 	// Check if the referenceUrl is already in cache or not
@@ -633,14 +659,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		if err == nil {
 			// Avoiding duplicates for the same workflow+execution
 			if project.Environment != "cloud" {
-				log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
+				//log.Printf("[DEBUG] Found cached notification for %s", referenceUrl)
 			}
 
 			return nil
 
 		} else {
 			if project.Environment != "cloud" {
-				log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
+				//log.Printf("[DEBUG] No cached notification for %s. Creating one", referenceUrl)
 			}
 
 			err := SetCache(ctx, cacheKey, []byte("1"), 1)
@@ -925,82 +951,136 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
-		//log.Printf("[AUDIT] INITIAL Api authentication failed in Create notification api: %s", err)
+		log.Printf("[AUDIT] INITIAL Api authentication failed in Create notification api: %s", err)
 
-		// Allows for execution authorization 
-		if len(notification.ExecutionId) == 0 {
-			log.Printf("[INFO] User tried to create notification for execution %s with org id %s, but notification org id is %s", notification.ExecutionId, orgId,notification.OrgId)
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false}`))
-			return
+		// Environmentauth
+		// Why don't we have a function for this?
+		newOrgId := request.Header.Get("Org-Id")
+		environment := request.Header.Get("ENVIRONMENT_NAME")
+		apikey := request.Header.Get("Authorization")
+		if len(newOrgId) > 0 {
+			orgId = newOrgId
 		}
 
-		exec, err := GetWorkflowExecution(ctx, notification.ExecutionId)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting execution %s in create notification api: %s", notification.ExecutionId, err)
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		} 
+		if len(orgId) > 0 && len(environment) > 0 && len(apikey) > 0 {
+			log.Printf("[DEBUG] HANDLING ENVIRONMENT AUTH")
 
-		// Check if user has access. Parse out authorization header with "Bearer X"
-		authHeader := request.Header.Get("Authorization")
-		if len(authHeader) == 0 {
-			log.Printf("[INFO] No authorization header in create notification api")
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
+			authHeaderParts := strings.Split(apikey, " ")
+			if len(authHeaderParts) != 2 {
+				log.Printf("[INFO] Invalid authorization header in create notification api")
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 
-		authHeaderParts := strings.Split(authHeader, " ")
-		if len(authHeaderParts) != 2 {
-			log.Printf("[INFO] Invalid authorization header in create notification api")
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
+			if authHeaderParts[0] != "Bearer" {
+				log.Printf("[INFO] Invalid authorization header in create notification api")
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 
-		if authHeaderParts[0] != "Bearer" {
-			log.Printf("[INFO] Invalid authorization header in create notification api")
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
+			authKey := authHeaderParts[1]
+			environments, err := GetEnvironments(ctx, orgId)
+			if err != nil {
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false, "reason": "Failed getting environments"}`))
+				return
+			}
 
-		// Check if user has access to execution
-		if authHeaderParts[1] != exec.Authorization {
-			log.Printf("[INFO] User tried to create notification for execution %s without authorization", exec.ExecutionId)
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
+			found := false
+			for _, env := range environments {
+				if env.Name == environment && env.Auth == authKey {
+					found = true
+					break
+				}
+			}
 
-		// Check if exec org id is same
-		if exec.OrgId != notification.OrgId {
-			log.Printf("[WARNING] User tried to create notification for execution %s with org id %s, but notification org id is %s", exec.ExecutionId, exec.OrgId, notification.OrgId)
-		}
+			if !found {
+				log.Printf("[AUDIT] Invalid authorization header in create notification api for Orborus request")
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false, "reason": "Invalid authorization config for Environment auth"}`))
+				return 
+			}
 
-		skipUserCheck = true 
-		user.Role = "admin"
-		user.Username = fmt.Sprintf("execution %s", exec.ExecutionId)
+			log.Printf("[AUDIT] Environment auth successful for environment %s", environment)
 
-		if len(exec.ExecutionOrg) > 0 {
-			orgId = exec.ExecutionOrg
-		} 
+		} else {
+			// Allows for execution authorization 
+			if len(notification.ExecutionId) == 0 {
+				log.Printf("[INFO] User tried to create notification without an execution ID present", notification.ExecutionId, orgId, notification.OrgId)
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 
-		if len(orgId) == 0 && len(exec.OrgId) > 0 {
-			orgId = exec.OrgId
-		}
+			exec, err := GetWorkflowExecution(ctx, notification.ExecutionId)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting execution %s in create notification api: %s", notification.ExecutionId, err)
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			} 
 
-		if len(orgId) == 0 && len(exec.Workflow.OrgId) > 0 {
-			orgId = exec.Workflow.OrgId
-		}
+			// Check if user has access. Parse out authorization header with "Bearer X"
+			authHeader := request.Header.Get("Authorization")
+			if len(authHeader) == 0 {
+				log.Printf("[INFO] No authorization header in create notification api")
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 
-		if len(orgId) == 0 {
-			log.Printf("[ERROR] No org id found in create notification api from worker(?)")
-			resp.WriteHeader(400)
-			resp.Write([]byte(`{"success": false}`))
-			return
+			authHeaderParts := strings.Split(authHeader, " ")
+			if len(authHeaderParts) != 2 {
+				log.Printf("[INFO] Invalid authorization header in create notification api")
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			if authHeaderParts[0] != "Bearer" {
+				log.Printf("[INFO] Invalid authorization header in create notification api")
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			// Check if user has access to execution
+			if authHeaderParts[1] != exec.Authorization {
+				log.Printf("[INFO] User tried to create notification for execution %s without authorization", exec.ExecutionId)
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			// Check if exec org id is same
+			if exec.OrgId != notification.OrgId {
+				log.Printf("[WARNING] User tried to create notification for execution %s with org id %s, but notification org id is %s", exec.ExecutionId, exec.OrgId, notification.OrgId)
+			}
+
+			skipUserCheck = true 
+			user.Role = "admin"
+			user.Username = fmt.Sprintf("execution %s", exec.ExecutionId)
+
+			if len(exec.ExecutionOrg) > 0 {
+				orgId = exec.ExecutionOrg
+			} 
+
+			if len(orgId) == 0 && len(exec.OrgId) > 0 {
+				orgId = exec.OrgId
+			}
+
+			if len(orgId) == 0 && len(exec.Workflow.OrgId) > 0 {
+				orgId = exec.Workflow.OrgId
+			}
+
+			if len(orgId) == 0 {
+				log.Printf("[ERROR] No org id found in create notification api from worker(?)")
+				resp.WriteHeader(400)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
 		}
 
 		user.ActiveOrg.Id = orgId

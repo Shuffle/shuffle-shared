@@ -19,54 +19,6 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
-func HandleDetectionHealthUpdate(resp http.ResponseWriter, request *http.Request) {
-	if request.Method != "POST" {
-		request.Method = "POST"
-	}
-
-	type HealthUpdate struct {
-		OrgId         string `json:"org_id"`
-		Status        string `json:"status"`
-		Environment   string `json:"environment"`
-		Authorization string `json:"authorization"`
-	}
-
-	var healthUpdate HealthUpdate
-	err := json.NewDecoder(request.Body).Decode(&healthUpdate)
-	if err != nil {
-		resp.WriteHeader(http.StatusBadRequest)
-		fmt.Fprintf(resp, "Failed to decode JSON: %v", err)
-		return
-	}
-
-	//log.Printf("[DEBUG] Tenzir health update: %#v", healthUpdate)
-
-	//ctx := context.Background()
-	/*
-		status := healthUpdate.Status
-		result, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
-		if (err != nil && err.Error() == "rules doesn't exist") || err == nil {
-			result.IsTenzirActive = status
-			result.LastActive = time.Now().Unix()
-
-			err = StoreDisabledRules(ctx, *result)
-			if err != nil {
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false}`))
-				return
-			}
-
-			resp.WriteHeader(200)
-			resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
-			return
-		}
-	*/
-
-	resp.WriteHeader(500)
-	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
-	return
-}
-
 func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -123,8 +75,11 @@ func HandleGetDetectionRules(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		var fileContent []byte
+		if file.Status != "active" {
+			continue
+		}
 
+		var fileContent []byte
 		if file.Encrypted {
 			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
 				log.Printf("[ERROR] No namespace handler for cloud decryption (detection)!")
@@ -377,19 +332,21 @@ func HandleFolderToggle(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	location := strings.Split(request.URL.String(), "/")
-	if location[1] != "api" || len(location) < 6 {
-		log.Printf("Path too short or incorrect: %s", request.URL.String())
+	if location[1] != "api" || len(location) < 7 {
+		log.Printf("[ERROR] Path too short or incorrect for detection toggle (2): %s", request.URL.String())
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	ctx := GetContext(request)
-	action := location[5]
+
+	detectionType := location[4]
+	_ = detectionType
+	action := location[6]
 
 	rules, err := GetDisabledRules(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Cannot get the rules, reason %s", err)
 		resp.WriteHeader(404)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -515,8 +472,8 @@ func HandleGetSelectedRules(resp http.ResponseWriter, request *http.Request) {
 	var triggerId string
 	location := strings.Split(request.URL.String(), "/")
 	if len(location) < 5 || location[1] != "api" {
-		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
-		resp.WriteHeader(401)
+		log.Printf("[ERROR] Path too short or incorrect: %d", len(location))
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -568,8 +525,8 @@ func HandleSaveSelectedRules(resp http.ResponseWriter, request *http.Request) {
 
 	location := strings.Split(request.URL.String(), "/")
 	if len(location) < 5 || location[1] != "api" {
-		log.Printf("[INFO] Path too short or incorrect: %d", len(location))
-		resp.WriteHeader(http.StatusBadRequest)
+		log.Printf("[INFO] Path too short or incorrect (1): %d", len(location))
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -641,11 +598,19 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 	detectionType := strings.ToLower(location[4])
 	log.Printf("[DEBUG] Validating if the org %s (%s) has a %s sandbox handling workflow/system", user.ActiveOrg.Name, user.ActiveOrg.Id, detectionType)
 
+	log.Printf("[AUDIT] User '%s' (%s) is trying to detection-connect to %s", user.Username, user.Id, strings.ToUpper(detectionType))
+
 	workflow := Workflow{}
 	if detectionType == "siem" {
-		log.Printf("[AUDIT] User '%s' (%s) is trying to connect to SIEM", user.Username, user.Id)
 
 		ctx := GetContext(request)
+		workflow, err = ConfigureDetectionWorkflow(ctx, user.ActiveOrg.Id, "TENZIR-SIGMA")
+		if err != nil {
+			log.Printf("[ERROR] Failed to create Sigma handling workflow: %s", err)
+		}
+
+		log.Printf("[DEBUG] Sending orborus request to start Sigma handling IF an available environment is found.")
+
 		execType := "START_TENZIR"
 		err = SetDetectionOrborusRequest(ctx, user.ActiveOrg.Id, execType, "", "SIGMA", "SHUFFLE_DISCOVER")
 		if err != nil {
@@ -666,6 +631,8 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
+
 	} else if detectionType == "email" {
 
 		// FIXME:
@@ -684,6 +651,8 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 		}
 
 	} else {
+		log.Printf("[ERROR] Detection Type '%s' not implemented", detectionType)
+
 		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Detection Type '%s' not implemented"}`, detectionType)))
 		return
@@ -692,9 +661,9 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 	success := true
 	if len(workflow.ID) == 0 {
 		success = false
+	} else {
+		log.Printf("[INFO] '%s' detection workflow in org '%s' ID: %s", detectionType, workflow.OrgId, workflow.ID)
 	}
-
-	log.Printf("[INFO] '%s' detection workflow in org '%s' ID: %s", detectionType, workflow.OrgId, workflow.ID)
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "workflow_id": "%s", "workflow_valid": %v}`, success, workflow.ID, workflow.Validation.Valid)))
@@ -702,6 +671,7 @@ func HandleDetectionAutoConnect(resp http.ResponseWriter, request *http.Request)
 
 func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, executionSource, environmentName string) error {
 	if len(orgId) == 0 {
+		log.Printf("[ERROR] No org ID provided for Orborus")
 		return fmt.Errorf("No org ID provided")
 	}
 
@@ -711,13 +681,14 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 		return err
 	}
 
+	lakeNodes := 0
 	selectedEnvironments := []Environment{}
 	for _, env := range environments {
 		if env.Archived {
 			continue
 		}
 
-		if env.Name == "cloud" || env.Name == "Cloud" {
+		if env.Type == "cloud" {
 			continue
 		}
 
@@ -725,22 +696,36 @@ func SetDetectionOrborusRequest(ctx context.Context, orgId, execType, fileName, 
 			continue
 		}
 
+		// Validates if the environment already has a lake running
+		/*
+		cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			newEnv := OrborusStats{}
+			err = json.Unmarshal(cache.([]uint8), &newEnv)
+			if err == nil {
+				// No point in adding a job if the lake is already running 
+				if env.DataLake.Enabled && execType == "START_TENZIR" {
+					lakeNodes += 1
+					continue
+				}
+			}
+		}
+		*/
+
 		selectedEnvironments = append(selectedEnvironments, env)
 	}
 
-	log.Printf("[DEBUG] Found %d potentially valid environment(s)", len(selectedEnvironments))
-
-	/*
-		if len(selectedEnvironments) == 0 || environmentName == "SHUFFLE_DISCOVER" {
-			// FIXME: Get based on the Organisation. This is only tested onprem so far, so there's a lot to do to make this stable ROFL
-			log.Printf("[DEBUG] Automatically discovering the right environment from '%s'", environmentName)
-		}
-	*/
-
 	if len(selectedEnvironments) == 0 {
-		log.Printf("[ERROR] No valid environments found")
-		return fmt.Errorf("No valid environments found")
+		if lakeNodes > 0 {
+			log.Printf("[ERROR] No environments needing a lake. Found lake nodes: %d", lakeNodes)
+			return nil
+		} else {
+			return fmt.Errorf("No valid environments found for detection distribution")
+		}
 	}
+
+	log.Printf("[DEBUG] Found %d potentially valid environment for detection distribution (s)", len(selectedEnvironments))
 
 	deployedToActiveEnv := false
 	for _, env := range selectedEnvironments {
@@ -805,8 +790,9 @@ func HandleListDetectionCategories(resp http.ResponseWriter, request *http.Reque
 	resp.Write(data)
 }
 
+// FIXME: This is not ready - just a starting point
 func ConfigureDetectionWorkflow(ctx context.Context, orgId, workflowType string) (Workflow, error) {
-	log.Printf("\n\n[DEBUG] Creating detection workflow for org %s (not implemented)\n\n", orgId)
+	log.Printf("[ERROR] Creating detection workflow for org %s (not implemented for all types). Type: %s", orgId, workflowType)
 	/*
 		// FIXME: Use Org to find the correct tools according to the Usecase
 		// SHOULD map usecase from workflowType -> actual Usecase in blobs
@@ -860,6 +846,12 @@ func ConfigureDetectionWorkflow(ctx context.Context, orgId, workflowType string)
 	cloudWorkflowId := ""
 	usecaseNames := []string{}
 	if workflowType == "TENZIR-SIGMA" {
+		log.Printf("[INFO] Creating SIEM handling workflow for org %s", orgId)
+
+		// FIXME: Fix the detection workflow
+		cloudWorkflowId = "b7b878c8-4302-4ab5-9492-de2539f7dc6b"
+		usecaseNames = []string{"Search SIEM (Sigma)"}
+
 	} else if workflowType == "EMAIL-DETECTION" {
 		// How do we check what email tool they use?
 		//log.Printf("[INFO] Creating email handling workflow for org %s", orgId)

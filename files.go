@@ -39,7 +39,7 @@ func init() {
 		// Using standard bucket
 	}
 
-	log.Printf("[DEBUG] Inside Files Init with org bucket name %#v", orgFileBucket)
+	//log.Printf("[DEBUG] Inside Files Init with org bucket name %#v", orgFileBucket)
 }
 
 func fileAuthentication(request *http.Request) (string, error) {
@@ -515,16 +515,21 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		namespace = strings.Split(namespace, "?")[0]
 	}
 
-	namespace = strings.Replace(namespace, "%20", " ", -1)
+	// URL decode namespace
+	namespace, err := url.QueryUnescape(namespace)
+	if err != nil {
+		log.Printf("[WARNING] Failed to decode namespace value '%s': %s", namespace, err)
+	}
 
 	// 1. Check user directly
 	// 2. Check workflow execution authorization
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		//log.Printf("[AUDIT] INITIAL Api authentication failed in file download: %s", err)
-		orgId, err := fileAuthentication(request)
-		if err != nil {
-			log.Printf("[WARNING] Bad file authentication in get namespace %s: %s", namespace, err)
+
+		orgId, fileerr := fileAuthentication(request)
+		if fileerr != nil {
+			log.Printf("[WARNING] Bad authentication in get namespace AFTER trying normal user auth %s: %s & %s", namespace, err, fileerr)
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false}`))
 			return
@@ -571,14 +576,48 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 			// FIXME: This double control is silly
 			fileResponse.Files = append(fileResponse.Files, file)
 			fileResponse.List = append(fileResponse.List, BaseFile{
-				Name: file.Filename,
-				ID:   file.Id,
-				Type: file.Type,
-				UpdatedAt: file.UpdatedAt,
-				Md5Sum: file.Md5sum,
-				Status: file.Status,
-				FileSize: file.FileSize,
+				Name:               file.Filename,
+				ID:                 file.Id,
+				Type:               file.Type,
+				UpdatedAt:          file.UpdatedAt,
+				Md5Sum:             file.Md5sum,
+				Status:             file.Status,
+				FileSize:           file.FileSize,
+				OrgId:              file.OrgId,
+				SuborgDistribution: file.SuborgDistribution,
 			})
+		}
+	}
+
+	// If current org is sub org and file suborg distributed is true than add file to list
+	foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 {
+		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
+		if err == nil {
+			parentFiles, err := GetAllFiles(ctx, parentOrg.Id, namespace)
+			if err == nil {
+				for _, file := range parentFiles {
+
+					if !ArrayContains(file.SuborgDistribution, user.ActiveOrg.Id) {
+						continue
+					}
+
+					if file.Namespace == namespace {
+						fileResponse.Files = append(fileResponse.Files, file)
+						fileResponse.List = append(fileResponse.List, BaseFile{
+							Name:               file.Filename,
+							ID:                 file.Id,
+							Type:               file.Type,
+							UpdatedAt:          file.UpdatedAt,
+							Md5Sum:             file.Md5sum,
+							Status:             file.Status,
+							FileSize:           file.FileSize,
+							OrgId:              file.OrgId,
+							SuborgDistribution: file.SuborgDistribution,
+						})
+					}
+				}
+			}
 		}
 	}
 
@@ -737,62 +776,23 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//zipfile := fmt.Sprintf("%s.zip", namespace)
 	buf := new(bytes.Buffer)
 	zipWriter := zip.NewWriter(buf)
 
+	// FIXME: Goroutine this + Cache it for future requests
+
 	packed := 0
 	for _, file := range fileResponse.Files {
-		var filedata = []byte{}
-		if file.Encrypted {
-			if project.Environment == "cloud" || file.StorageArea == "google_storage" {
-				log.Printf("[ERROR] No namespace handler for cloud decryption (files)!")
-			} else {
-				Openfile, err := os.Open(file.DownloadPath)
-				defer Openfile.Close() //Close after function return
-
-				allText := []byte{}
-				buf := make([]byte, 1024)
-				for {
-					n, err := Openfile.Read(buf)
-					if err == io.EOF {
-						break
-					}
-
-					if err != nil {
-						continue
-					}
-
-					if n > 0 {
-						//fmt.Println(string(buf[:n]))
-						allText = append(allText, buf[:n]...)
-					}
-				}
-
-				passphrase := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-				if len(file.ReferenceFileId) > 0 {
-					passphrase = fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.ReferenceFileId)
-				}
-
-				data, err := HandleKeyDecryption(allText, passphrase)
-				if err != nil {
-					log.Printf("[ERROR] Failed decrypting file (3): %s", err)
-				} else {
-					//log.Printf("[DEBUG] File size of %s reduced from %d to %d after decryption (1)", file.Id, len(allText), len(data))
-					allText = []byte(data)
-				}
-
-				filedata = allText
-			}
-		} else {
-			filedata, err = ioutil.ReadFile(file.DownloadPath)
-			if err != nil {
-				log.Printf("Filereading failed for %s create zip file : %v", file.Filename, err)
-				continue
-			}
+		// Goroutine this get file section
+		filedata, err := GetFileContent(ctx, &file, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting file content for %s (%s): %s", file.Filename, file.Id, err)
+			continue
 		}
 
-		//log.Printf("DATA: %s", string(filedata))
+		if len(filedata) == 0 {
+			log.Printf("[ERROR] No data found for file %s (%s)", file.Filename, file.Id)
+		}
 
 		zipFile, err := zipWriter.Create(file.Filename)
 		if err != nil {
@@ -800,7 +800,6 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-		// Have to use Fprintln otherwise it tries to parse all strings etc.
 		if _, err := fmt.Fprintln(zipFile, string(filedata)); err != nil {
 			log.Printf("[WARNING] Datapasting failed for %s when creating zip file from bucket: %v", file.Filename, err)
 			continue
@@ -812,19 +811,20 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 	err = zipWriter.Close()
 	if err != nil {
 		log.Printf("[WARNING] Packing failed to close zip file writer: %v", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	if packed == 0 {
 		log.Printf("[WARNING] Couldn't find anything for namespace %s in org %s", namespace, user.ActiveOrg.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	log.Printf("[DEBUG] Packed %d files from namespace %s into the zip for %s (%s)", packed, namespace, user.Username, user.Id)
+
 	FileHeader := make([]byte, 512)
 	FileContentType := http.DetectContentType(FileHeader)
 	resp.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%s.zip", namespace))
@@ -947,6 +947,7 @@ func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) (
 					resp.WriteHeader(500)
 					resp.Write([]byte(`{"success": false, "reason": "Failed setting file to deleted"}`))
 				}
+
 				return []byte{}, err
 			}
 
@@ -1970,4 +1971,207 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+}
+
+func HandleShareNamespace(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in share namespace: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("User (%s) isn't admin during namespace share", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "only admin can share namespace"}`))
+		return
+	}
+
+	var namespace string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		namespace = location[5]
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type shareNamespace struct {
+		SelectedFiles []string `json:"selectedFiles"`
+	}
+
+	var share shareNamespace
+	err = json.Unmarshal(body, &share)
+	if err != nil {
+		log.Printf("Failed unmarshaling (appauth): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(namespace) == 0 {
+		log.Printf("[ERROR] Missing namespace in share namespace")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Missing namespace"}`))
+		return
+	}
+
+	if len(share.SelectedFiles) == 0 {
+		log.Printf("[ERROR] Missing selectedFiles in share namespace")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Missing selectedFiles"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	for _, fileId := range share.SelectedFiles {
+		file, err := GetFile(ctx, fileId)
+		if err != nil {
+			log.Printf("[INFO] File %s not found: %s", fileId, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		file.Namespace = namespace
+		err = SetFile(ctx, *file)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting file back to active")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to active"}`))
+			return
+		}
+	}
+
+	log.Printf("[INFO] Successfully shared namespace %s for %d files", namespace, len(share.SelectedFiles))
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Namespace shared successfully!"}`)))
+}
+
+// destribute files to all sub orgs of parent org
+func HandleSetFileConfig(resp http.ResponseWriter, request *http.Request) {
+
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in load files: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.ActiveOrg.Role != "admin" {
+		log.Printf("User (%s) isn't admin during file edit config", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "only admin can edit file config"}`))
+		return
+	}
+
+	var fileId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("Error with body read: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	type configFile struct {
+		Id             string   `json:"id"`
+		Action         string   `json:"action"`
+		SelectedSuborg []string `json:"selected_suborgs"`
+	}
+
+	var config configFile
+	err = json.Unmarshal(body, &config)
+	if err != nil {
+		log.Printf("Failed unmarshaling (appauth): %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if config.Id != fileId {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Bad ID match"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	file, err := GetFile(ctx, fileId)
+	if err != nil {
+		log.Printf("[INFO] File %s not found: %s", fileId, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if config.Action == "suborg_distribute" {
+
+		if len(config.SelectedSuborg) == 0 {
+			file.SuborgDistribution = []string{}
+		} else {
+			file.SuborgDistribution = config.SelectedSuborg
+		}
+
+		err = SetFile(ctx, *file)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting file back to active")
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting file to active"}`))
+			return
+		}
+
+	}
+
+	//if current org is suborg and file is distributed, get the parent org file
+	foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err == nil {
+		for _, childOrg := range foundOrg.ChildOrgs {
+			cacheKey := fmt.Sprintf("files_%s_%s", childOrg.Id, file.Namespace)
+			DeleteCache(ctx, cacheKey)
+		}
+	}
+
+	log.Printf("[INFO] Successfully updated file: %s for org: %s", file.Id, user.ActiveOrg.Id)
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "File updated successfully!"}`)))
+
 }

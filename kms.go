@@ -1307,7 +1307,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 	// fml, there is no consistency to casing + underscores, so we keep the new
 	//label = strings.ReplaceAll(strings.Title(strings.ToLower(label)), "_", " ")
 
-	log.Printf("[INFO] Running app fix for label '%s' for app %s (%s) with %d actions", label, app.Name, app.ID, len(app.Actions))
+	log.Printf("[INFO][AI] Running app fix for label '%s' for app %s (%s) with %d actions", label, app.Name, app.ID, len(app.Actions))
 
 	// Just a reset, as Other doesn't really achieve anything directly
 	if len(app.Categories) > 0 && app.Categories[0] == "Other" {

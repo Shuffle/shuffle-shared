@@ -806,7 +806,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 		// FIXME: Decrypt here 
 		if workflow.BackupConfig.TokensEncrypted {
-			log.Printf("\n\n[DEBUG] Should realtime decrypt token for org %s (%s)\n\n", org.Name, org.Id) 
+			log.Printf("[DEBUG] Should realtime decrypt token for org %s (%s)", org.Name, org.Id) 
 			org.Defaults.TokensEncrypted = true
 		} else {
 			org.Defaults.TokensEncrypted = false 
@@ -814,7 +814,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	if org.Defaults.TokensEncrypted == true {
-		log.Printf("\n\n[DEBUG] Decrypting token for org %s (%s)\n\n", org.Name, org.Id)
+		log.Printf("[DEBUG] Decrypting token for org %s (%s)", org.Name, org.Id)
 
 		parsedKey := fmt.Sprintf("%s_upload_token", org.Id)
 		newValue, err := HandleKeyDecryption([]byte(org.Defaults.WorkflowUploadToken), parsedKey)
@@ -857,7 +857,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 
 	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
-		log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
+		//log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
 		//return errors.New("Missing repo or token")
 		return nil
 	}
@@ -894,9 +894,11 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	}
 
 	commitMessage := fmt.Sprintf("User '%s' updated workflow '%s' with status '%s'", workflow.UpdatedBy, workflow.Name, workflow.Status)
-	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, org.Defaults.WorkflowUploadToken, org.Defaults.WorkflowUploadRepo)
+	urlEncodedPassword := url.QueryEscape(org.Defaults.WorkflowUploadToken)
+	location := fmt.Sprintf("https://%s:%s@%s.git", org.Defaults.WorkflowUploadUsername, urlEncodedPassword, org.Defaults.WorkflowUploadRepo)
 
-	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, strings.Replace(location, org.Defaults.WorkflowUploadToken, "****", -1))
+	newRepoName := strings.Replace(strings.Replace(location, org.Defaults.WorkflowUploadToken, "****", -1), urlEncodedPassword, "****", -1)
+	log.Printf("[DEBUG] Uploading workflow %s to repo: %s", workflow.ID, newRepoName)
 
 	fs := memfs.New()
 	if len(workflow.Status) == 0 {
@@ -910,25 +912,33 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{
     	URL: location,
 	})
+	if err != nil {
+		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
+		newErr = strings.ReplaceAll(newErr, urlEncodedPassword, "****")
+
+		log.Printf("[ERROR] Error cloning repo '%s' (workflow backup): %s", newRepoName, newErr)
+		return err
+	} 
 
 	// Initialize a new Git repository in memory
 	w := &git.Worktree{}
-	if err != nil {
-		log.Printf("[ERROR] Error cloning repo (workflow backup): %s", err)
-		return err
-	} 
 
 	// Create a new commit with the in-memory file
 	w, err = repo.Worktree()
 	if err != nil {
-		log.Printf("[ERROR] Error getting worktree (2): %s", err)
+		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
+		newErr = strings.ReplaceAll(newErr, urlEncodedPassword, "****")
+
+		log.Printf("[ERROR] Error getting worktree for repo '%s' (2): %s", newRepoName, newErr)
 		return err
 	}
 
 	// Write the byte blob to the in-memory file system
 	file, err := fs.Create(filePath)
 	if err != nil {
-		log.Printf("[ERROR] Creating file: %v", err)
+		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
+
+		log.Printf("[ERROR] Creating git file: %v", newErr)
 		return err
 	}
 
@@ -936,14 +946,14 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	//_, err = io.Copy(file, bytes.NewReader(workflowData))
 	_, err = io.Copy(file, bytes.NewReader(workflowData))
 	if err != nil {
-		log.Printf("[ERROR] Writing data to file: %v", err)
+		log.Printf("[ERROR] Writing data to git file: %v", err)
 		return err
 	}
 
 	// Add the file to the staging area
 	_, err = w.Add(filePath)
 	if err != nil {
-		log.Printf("[ERROR] Error adding file to staging area (2): %s", err)
+		log.Printf("[ERROR] Error adding file to git staging area (2): %s", err)
 		return err
 	}
 
@@ -956,7 +966,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		},
 	})
 	if err != nil {
-		log.Printf("[ERROR] Committing changes: %v (2)", err)
+		log.Printf("[ERROR] Committing git changes: %v (2)", err)
 		return err
 	}
 
@@ -971,11 +981,11 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		RemoteURL:  location,
 	})
 	if err != nil {
-		log.Printf("[ERROR] Change Push issue: %v (2)", err)
+		log.Printf("[ERROR] Change git Push issue: %v (2)", err)
 		return err
 	}
 
-	log.Println("[DEBUG] File uploaded successfully!")
+	log.Printf("[DEBUG] File uploaded successfully to '%s'!", newRepoName)
 
 
 
@@ -1168,4 +1178,241 @@ func loadAppConfigFromMain(fileId string) {
 
 		log.Printf("[INFO] OpenAPI build: %s", string(body))
 	}
+}
+
+// Also deactivates. It's a toggle for off and on.
+func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get active apps: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to activate workflow app (shared): %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	activate := true
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+		if strings.ToLower(location[5]) == "deactivate" {
+			activate = false
+		}
+	}
+
+	app, err := GetApp(ctx, fileId, user, false)
+	if err != nil {
+		appName := request.URL.Query().Get("app_name")
+		appVersion := request.URL.Query().Get("app_version")
+
+		if len(appName) > 0 && len(appVersion) > 0 {
+			apps, err := FindWorkflowAppByName(ctx, appName)
+			//log.Printf("[INFO] Found %d apps for %s", len(apps), appName)
+			if err != nil || len(apps) == 0 {
+				log.Printf("[WARNING] Error getting app from name '%s' (app config): %s", appName, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+				return
+			}
+
+			selectedApp := WorkflowApp{}
+			for _, app := range apps {
+				if !app.Sharing && !app.Public {
+					continue
+				}
+
+				if app.Name == appName {
+					selectedApp = app
+				}
+
+				if app.Name == appName && app.AppVersion == appVersion {
+					selectedApp = app
+				}
+			}
+
+			app = &selectedApp
+		} else {
+			log.Printf("[WARNING] Error getting app with ID %s (app config): %s", fileId, err)
+
+
+			// Automatic propagation to cloud regions
+			if project.Environment == "cloud" && gceProject != "shuffler" {
+				app, err := HandleAlgoliaAppSearch(ctx, fileId)
+				if err == nil {
+					// this means that the app exists. so, let's
+					// ask our propagator to proagate it further.
+					log.Printf("[INFO] Found apps %s - %s in algolia", app.Name, app.ObjectID)
+
+					if app.ObjectID != fileId {
+						log.Printf("[WARNING] App %s doesn't exist in algolia", fileId)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+						return
+					}
+					// i can in theory, run this without using goroutines
+					// and then recursively call the same function. but that
+					// would make this request way too long.
+					go func() {
+						err = propagateApp(fileId, false)
+						if err != nil {
+							log.Printf("[WARNING] Error propagating app %s - %s: %s", app.Name, app.ObjectID, err)
+						} else {
+							log.Printf("[INFO] Propagated app %s - %s. Sending request again!", app.Name, app.ObjectID)
+						}
+					}()
+
+					resp.WriteHeader(202)
+					resp.Write([]byte(`{"success": false, "reason": "Taking care of some magic. Please try activation again in a few seconds!"}`))
+					return
+				} else {
+					log.Printf("[WARNING] Error getting app %s (algolia): %s", appName, err)
+				}
+			} else if project.Environment == "cloud" && gceProject == "shuffler" {
+				// Automatic deletion in the main region if the app doesn't exist
+				if len(app.ID) == 0 {
+					log.Printf("[INFO] Auto-Removing app %s from Algolia as it doesn't exist with the same ID anymore. Request source: %s (%s) in org %s (%s)", fileId, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+					algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+					algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+					if len(algoliaClient) > 0 && len(algoliaSecret) > 0 {
+
+						algClient := search.NewClient(algoliaClient, algoliaSecret)
+						algoliaIndex := algClient.InitIndex("appsearch")
+						_, err = algoliaIndex.DeleteObject(fileId)
+						if err != nil {
+							resp.WriteHeader(500)
+							resp.Write([]byte(`{"success": false, "reason": "Failed removing the app from Algolia"}`))
+							return
+						}
+					}
+				}
+			}
+
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "App doesn't exist"}`))
+			return
+		}
+	}
+
+	org := &Org{}
+	added := false
+	if app.Sharing || app.Public || !activate {
+		org, err = GetOrg(ctx, user.ActiveOrg.Id)
+		if err == nil {
+			if len(org.ActiveApps) > 150 {
+				// No reason for it to be this big. Arbitrarily reducing.
+				same := []string{}
+				samecnt := 0
+				for _, activeApp := range org.ActiveApps {
+					if ArrayContains(same, activeApp) {
+						samecnt += 1
+						continue
+					}
+
+					same = append(same, activeApp)
+				}
+
+				added = true
+				//log.Printf("Same: %d, total uniq: %d", samecnt, len(same))
+				org.ActiveApps = org.ActiveApps[len(org.ActiveApps)-100 : len(org.ActiveApps)-1]
+			}
+
+			if activate {
+				if !ArrayContains(org.ActiveApps, app.ID) {
+					org.ActiveApps = append(org.ActiveApps, app.ID)
+					added = true
+				}
+			} else {
+				// Remove from the array
+				newActiveApps := []string{}
+				for _, activeApp := range org.ActiveApps {
+					if activeApp == app.ID {
+						continue
+					}
+
+					newActiveApps = append(newActiveApps, activeApp)
+				}
+
+				org.ActiveApps = newActiveApps
+				added = true
+			}
+
+			if added {
+				err = SetOrg(ctx, *org, org.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting org when autoadding apps on save: %s", err)
+				} else {
+					addRemove := "Added"
+					if !activate {
+						addRemove = "Removed"
+					}
+
+					log.Printf("[INFO] %s public app %s (%s) to/from org %s (%s). Activated apps: %d", addRemove, app.Name, app.ID, user.ActiveOrg.Name, user.ActiveOrg.Id, len(org.ActiveApps))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+					DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+
+					if project.Environment == "cloud" && gceProject != "shuffler" {
+						// propagate org.ActiveApps to the main region
+						go func() {
+							// wait for a second before propagating again
+							log.Printf("[INFO] Propagating org %s after sleeping for a second!", user.ActiveOrg.Id)
+							time.Sleep(1 * time.Second)
+							err = propagateOrg(*org, true)
+							if err != nil {
+								log.Printf("[WARNING] Error propagating org %s: %s", user.ActiveOrg.Id, err)
+							}
+						}()
+					}
+
+				}
+			}
+		}
+	} else {
+		log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if activate {
+		log.Printf("[DEBUG] App %s (%s) activated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	} else {
+		log.Printf("[DEBUG] App %s (%s) deactivated for org %s by user %s (%s). Active apps: %d. Already existed: %t", app.Name, app.ID, user.ActiveOrg.Id, user.Username, user.Id, len(org.ActiveApps), !added)
+	}
+
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.ActiveOrg.Id))
+	DeleteCache(ctx, fmt.Sprintf("apps_%s", user.Id))
+	DeleteCache(ctx, "all_apps")
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-100"))
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-500"))
+	DeleteCache(ctx, fmt.Sprintf("workflowapps-sorted-1000"))
+
+	// If onprem, it should autobuild the container(s) from here
+	if project.Environment == "cloud" && gceProject != "shuffler" {
+		go loadAppConfigFromMain(fileId)
+
+		RedirectUserRequest(resp, request)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
 }

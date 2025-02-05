@@ -2,6 +2,7 @@ package shuffle
 
 import (
 	"encoding/xml"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,7 @@ type LogRequest struct {
 }
 
 type PipelineRequest struct {
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Command     string `json:"command"`
@@ -38,6 +40,7 @@ type PipelineRequest struct {
 
 type Pipeline struct {
 	Name        string   `json:"name" datastore:"name"`
+	ID          string   `json:"id" datastore:"id"`
 	Type        string   `json:"type" datastore:"type"`
 	Command     string   `json:"command" datastore:"command"`
 	Environment string   `json:"environment" datastore:"environment"`
@@ -181,8 +184,8 @@ type WorkflowApp struct {
 		SourceFolder      string `json:"source_folder" datastore:"source_folder"`
 		DestinationFolder string `json:"destination_folder" datastore:"destination_folder"`
 	} `json:"folder_mount" datastore:"folder_mount"`
-	Actions                  []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
 	Authentication           Authentication      `json:"authentication" yaml:"authentication" required:false datastore:"authentication"`
+	Actions                  []WorkflowAppAction `json:"actions" yaml:"actions" required:true datastore:"actions,noindex"`
 	Tags                     []string            `json:"tags" yaml:"tags" required:false datastore:"activated"`
 	Categories               []string            `json:"categories" yaml:"categories" required:false datastore:"categories"`
 	Created                  int64               `json:"created" datastore:"created"`
@@ -246,6 +249,7 @@ type WorkflowAppActionParameter struct {
 	ValueReplace   []Valuereplace   `json:"value_replace" datastore:"value_replace,noindex" yaml:"value_replace,omitempty"`
 	UniqueToggled  bool             `json:"unique_toggled" datastore:"unique_toggled" yaml:"unique_toggled"`
 	Error          string           `json:"error" datastore:"error" yaml:"error"`
+	Hidden         bool             `json:"hidden" datastore:"hidden" yaml:"hidden"`
 }
 
 type Valuereplace struct {
@@ -349,8 +353,8 @@ type AppUsage struct {
 }
 
 type IncrementInCache struct {
-	Amount uint64 `json:"amount" datastore:"amount"`
-	CreatedAt int64 `json:"created_at" datastore:"created_at"`
+	Amount    uint64 `json:"amount" datastore:"amount"`
+	CreatedAt int64  `json:"created_at" datastore:"created_at"`
 }
 
 // Should be for a particular day
@@ -453,8 +457,8 @@ type AdditionalUseConfig struct {
 	Key   string `json:"key" datastore:"key"`
 	Value int64  `json:"value" datastore:"value"`
 
-	DailyValue int64 `json:"daily_value,omitempty" datastore:"daily_value"`
-	Date time.Time `json:"date,omitempty" datastore:"date"`
+	DailyValue int64     `json:"daily_value,omitempty" datastore:"daily_value"`
+	Date       time.Time `json:"date,omitempty" datastore:"date"`
 }
 
 type ParsedOpenApi struct {
@@ -490,8 +494,16 @@ type Environment struct {
 	Auth       string `json:"auth" datastore:"auth"`
 	Queue      int    `json:"queue" datastore:"queue"`
 
-	Licensed bool   `json:"licensed" datastore:"licensed"`
-	RunType  string `json:"run_type" datastore:"run_type"`
+	Licensed bool       `json:"licensed" datastore:"licensed"`
+	RunType  string     `json:"run_type" datastore:"run_type"`
+	DataLake LakeConfig `json:"data_lake" datastore:"data_lake"`
+
+	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+}
+
+type LakeConfig struct {
+	Enabled   bool               `json:"enabled" datastore:"enabled"`
+	Pipelines []PipelineInfoMini `json:"pipelines" datastore:"pipelines"`
 }
 
 // Saves some data, not sure what to have here lol
@@ -957,7 +969,7 @@ type Defaults struct {
 	WorkflowUploadUsername string `json:"workflow_upload_username" datastore:"workflow_upload_username"`
 	WorkflowUploadToken    string `json:"workflow_upload_token" datastore:"workflow_upload_token"`
 
-	TokensEncrypted 	   bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
+	TokensEncrypted bool `json:"tokens_encrypted" datastore:"tokens_encrypted"`
 
 	NewsletterDisabled            bool `json:"newsletter" datastore:"newsletter_disabled"`
 	WeeklyRecommendationsDisabled bool `json:"weekly_recommendations" datastore:"weekly_recommendations_disabled"`
@@ -977,10 +989,10 @@ type CacheKeyData struct {
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
 
-	FormattedKey        string `json:"formatted_key,omitempty" datastore:"FormattedKey"`
-	PublicAuthorization string `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
+	FormattedKey        string   `json:"formatted_key,omitempty" datastore:"FormattedKey"`
+	PublicAuthorization string   `json:"public_authorization,omitempty" datastore:"PublicAuthorization"` // Used for public authorization
+	SuborgDistribution  []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 }
-
 type SyncConfig struct {
 	Interval int64  `json:"interval" datastore:"interval"`
 	Apikey   string `json:"api_key" datastore:"api_key"`
@@ -1121,8 +1133,9 @@ type WorkflowExecution struct {
 	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"` // Max depth to execute subflows in infinite loops (10 by default)
 	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
 
-	NotificationsCreated int64  `json:"notifications_created" datastore:"notifications_created"`
-	Authgroup            string `json:"authgroup" datastore:"authgroup"`
+	NotificationsCreated int64   `json:"notifications_created" datastore:"notifications_created"`
+	Authgroup            string  `json:"authgroup" datastore:"authgroup"`
+	Org                  OrgMini `json:"org" datastore:"-"`
 }
 
 type Position struct {
@@ -1168,6 +1181,8 @@ type Action struct {
 	Suggestion        bool                         `json:"suggestion" datastore:"suggestion"`         // Whether it was a suggestion in the workflow or not
 
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+
+	// ParameterLocks []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
 }
 
 // Added environment for location to execute
@@ -1193,12 +1208,15 @@ type Trigger struct {
 		X float64 `json:"x" datastore:"x"`
 		Y float64 `json:"y" datastore:"y"`
 	} `json:"position"`
-	Priority       int         `json:"priority" datastore:"priority"`
-	SourceWorkflow string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
-	ExecutionDelay int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
-	AppAssociation WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
+	Priority         int         `json:"priority" datastore:"priority"`
+	SourceWorkflow   string      `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	ExecutionDelay   int64       `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
+	AppAssociation   WorkflowApp `json:"app_association" yaml:"app_association" datastore:"app_association"`
+	ParentControlled bool        `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 
-	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+	// TODO: make this a predictable field
+	// generated from current ID + workflow ID + orgid as seed
+	ReplacementForTrigger string `json:"replacement_for_trigger" datastore:"replacement_for_trigger"` // If this trigger is a replacement for another trigger
 }
 
 type Branch struct {
@@ -1210,8 +1228,8 @@ type Branch struct {
 	Conditions    []Condition `json:"conditions" datastore: "conditions"`
 	Decorator     bool        `json:"decorator" datastore:"decorator"`
 
-	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
-	SourceParent string `json:"source_parent" datastore:"source_parent"` // Parent node of the actual source we use. Mainly added for handling else/if-s in branches. Automatically happens during workflow saves (frontend for now)
+	ParentControlled bool   `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
+	SourceParent     string `json:"source_parent" datastore:"source_parent"`         // Parent node of the actual source we use. Mainly added for handling else/if-s in branches. Automatically happens during workflow saves (frontend for now)
 }
 
 // Same format for a lot of stuff
@@ -1254,7 +1272,15 @@ type InputQuestion struct {
 	Deleted  bool   `json:"deleted" datastore:"deleted"`
 }
 
+type FormControl struct {
+	InputMarkdown string   `json:"input_markdown" datastore:"input_markdown,noindex"`
+	OutputYields  []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+
+	FormWidth int64 `json:"form_width" datastore:"form_width"`
+}
+
 type Workflow struct {
+	WorkflowAsCode bool      `json:"workflow_as_code" datastore:"workflow_as_code"`
 	Actions        []Action  `json:"actions" datastore:"actions,noindex"`
 	Branches       []Branch  `json:"branches" datastore:"branches,noindex"`
 	VisualBranches []Branch  `json:"visual_branches" datastore:"visual_branches,noindex"`
@@ -1300,8 +1326,8 @@ type Workflow struct {
 	UsecaseIds  []string   `json:"usecase_ids" yaml:"usecase_ids" datastore:"usecase_ids"`
 
 	InputQuestions []InputQuestion `json:"input_questions" datastore:"input_questions"`
-	InputMarkdown  string          `json:"input_markdown" datastore:"input_markdown,noindex"`
-	OutputYields []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+
+	FormControl FormControl `json:"form_control" datastore:"form_control"`
 
 	Blogpost     string `json:"blogpost" yaml:"blogpost"`
 	Video        string `json:"video" yaml:"video"`
@@ -1352,6 +1378,7 @@ type Categories struct {
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
 	IAM           Category `json:"iam" datastore:"IAM"`
+	AI            Category `json:"iam" datastore:"IAM"`
 
 	Email Category `json:"email" datastore:"email"`
 	Other Category `json:"other" datastore:"other"`
@@ -1416,38 +1443,41 @@ type NotificationCached struct {
 }
 
 type File struct {
-	Id              string   `json:"id" datastore:"id"`
-	ReferenceFileId string   `json:"reference_file_id" datastore:"reference_file_id"`
-	Type            string   `json:"type" datastore:"type"`
-	CreatedAt       int64    `json:"created_at" datastore:"created_at"`
-	UpdatedAt       int64    `json:"updated_at" datastore:"updated_at"`
-	MetaAccessAt    int64    `json:"meta_access_at" datastore:"meta_access_at"`
-	DownloadAt      int64    `json:"last_downloaded" datastore:"last_downloaded"`
-	Description     string   `json:"description" datastore:"description"`
-	ExpiresAt       string   `json:"expires_at" datastore:"expires_at"`
-	Status          string   `json:"status" datastore:"status"`
-	Filename        string   `json:"filename" datastore:"filename"`
-	URL             string   `json:"url" datastore:"org"`
-	OrgId           string   `json:"org_id" datastore:"org_id"`
-	WorkflowId      string   `json:"workflow_id" datastore:"workflow_id"`
-	Workflows       []string `json:"workflows" datastore:"workflows"`
-	DownloadPath    string   `json:"download_path" datastore:"download_path"`
-	Md5sum          string   `json:"md5_sum" datastore:"md5_sum"`
-	Sha256sum       string   `json:"sha256_sum" datastore:"sha256_sum"`
-	FileSize        int64    `json:"filesize" datastore:"filesize"`
-	Duplicate       bool     `json:"duplicate" datastore:"duplicate"`
-	Subflows        []string `json:"subflows" datastore:"subflows"`
-	Tags            []string `json:"tags" datastore:"tags"`
-	StorageArea     string   `json:"storage_area" datastore:"storage_area"`
-	Etag            int      `json:"etag" datastore:"etag"`
-	ContentType     string   `json:"content_type" datastore:"content_type"`
-	UpdatedBy       string   `json:"updated_by" datastore:"updated_by"`
-	CreatedBy       string   `json:"created_by" datastore:"created_by"`
-	Namespace       string   `json:"namespace" datastore:"namespace"`
-	Encrypted       bool     `json:"encrypted" datastore:"encrypted"`
-	IsEdited        bool     `json:"isedited" datastore:"isedited"`
-	LastEditor      string   `json:"lasteditor" datastore:"lasteditor"`
-	OriginalMd5sum  string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
+	Id                 string   `json:"id" datastore:"id"`
+	ReferenceFileId    string   `json:"reference_file_id" datastore:"reference_file_id"`
+	Type               string   `json:"type" datastore:"type"`
+	CreatedAt          int64    `json:"created_at" datastore:"created_at"`
+	UpdatedAt          int64    `json:"updated_at" datastore:"updated_at"`
+	MetaAccessAt       int64    `json:"meta_access_at" datastore:"meta_access_at"`
+	DownloadAt         int64    `json:"last_downloaded" datastore:"last_downloaded"`
+	Description        string   `json:"description" datastore:"description"`
+	ExpiresAt          string   `json:"expires_at" datastore:"expires_at"`
+	Status             string   `json:"status" datastore:"status"`
+	Filename           string   `json:"filename" datastore:"filename"`
+	URL                string   `json:"url" datastore:"org"`
+	OrgId              string   `json:"org_id" datastore:"org_id"`
+	WorkflowId         string   `json:"workflow_id" datastore:"workflow_id"`
+	Workflows          []string `json:"workflows" datastore:"workflows"`
+	DownloadPath       string   `json:"download_path" datastore:"download_path"`
+	Md5sum             string   `json:"md5_sum" datastore:"md5_sum"`
+	Sha256sum          string   `json:"sha256_sum" datastore:"sha256_sum"`
+	FileSize           int64    `json:"filesize" datastore:"filesize"`
+	Duplicate          bool     `json:"duplicate" datastore:"duplicate"`
+	Subflows           []string `json:"subflows" datastore:"subflows"`
+	Tags               []string `json:"tags" datastore:"tags"`
+	StorageArea        string   `json:"storage_area" datastore:"storage_area"`
+	Etag               int      `json:"etag" datastore:"etag"`
+	ContentType        string   `json:"content_type" datastore:"content_type"`
+	UpdatedBy          string   `json:"updated_by" datastore:"updated_by"`
+	CreatedBy          string   `json:"created_by" datastore:"created_by"`
+	Encrypted          bool     `json:"encrypted" datastore:"encrypted"`
+	IsEdited           bool     `json:"isedited" datastore:"isedited"`
+	LastEditor         string   `json:"lasteditor" datastore:"lasteditor"`
+	OriginalMd5sum     string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
+	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+
+	// Category control
+	Namespace          string   `json:"namespace" datastore:"namespace"`
 }
 
 type DisabledRules struct {
@@ -1498,10 +1528,11 @@ type ValidationProblem struct {
 }
 
 type TypeValidation struct {
-	Valid         bool  `json:"valid" datastore:"valid"`
-	ChangedAt     int64 `json:"changed_at" datastore:"changed_at"`
-	LastValid     int64 `json:"last_valid" datastore:"last_valid"`
-	ValidationRan bool  `json:"validation_ran" datastore:"validation_ran"`
+	Valid                bool  `json:"valid" datastore:"valid"`
+	ChangedAt            int64 `json:"changed_at" datastore:"changed_at"`
+	LastValid            int64 `json:"last_valid" datastore:"last_valid"`
+	ValidationRan        bool  `json:"validation_ran" datastore:"validation_ran"`
+	NotificationsCreated int64 `json:"notifications_created" datastore:"notifications_created"`
 
 	// For the last update, which did it
 	WorkflowId  string `json:"workflow_id" datastore:"workflow_id"`
@@ -2318,9 +2349,9 @@ type SubResponse struct {
 }
 
 type AllTriggersWrapper struct {
-	Pipelines []Pipeline    `json:"pipelines"`
-	WebHooks  []Hook        `json:"webhooks"`
-	Schedules []ScheduleOld `json:"schedules"`
+	Pipelines []PipelineInfoMini `json:"pipelines"`
+	WebHooks  []Hook             `json:"webhooks"`
+	Schedules []ScheduleOld      `json:"schedules"`
 }
 
 type SubWrapper struct {
@@ -2697,13 +2728,15 @@ type DataToSend struct {
 }
 
 type BaseFile struct {
-	Name      string `json:"name"`
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	UpdatedAt int64  `json:"updated_at"`
-	Md5Sum    string `json:"md5_sum"`
-	Status    string `json:"status"`
-	FileSize  int64  `json:"filesize"`
+	Name               string   `json:"name"`
+	ID                 string   `json:"id"`
+	Type               string   `json:"type"`
+	UpdatedAt          int64    `json:"updated_at"`
+	Md5Sum             string   `json:"md5_sum"`
+	Status             string   `json:"status"`
+	FileSize           int64    `json:"filesize"`
+	OrgId              string   `json:"org_id"`
+	SuborgDistribution []string `json:"suborg_distribution"`
 }
 
 type FileResponse struct {
@@ -2721,6 +2754,7 @@ type SSOConfig struct {
 	OpenIdAuthorization string `json:"openid_authorization" datastore:"openid_authorization"`
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
+	AutoProvision       bool   `json:"auto_provision" datastore:"auto_provision"`
 }
 
 type SamlRequest struct {
@@ -3724,8 +3758,8 @@ type CategoryAction struct {
 	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
 	Environment           string `json:"environment"`             // The environment to use for the action (Orborus)
-	App string `jjson:"app"` // The app to use for the action (Orborus)
-	Action string `json:"action"` // The action to use for the action (Orborus)
+	App                   string `jjson:"app"`                    // The app to use for the action (Orborus)
+	Action                string `json:"action"`                  // The action to use for the action (Orborus)
 }
 
 type LabelStruct struct {
@@ -3853,6 +3887,11 @@ type OrborusStats struct {
 	WorkerContainers  int `json:"worker_containers"`
 	StoppedContainers int `json:"stopped_containers"`
 	TotalContainers   int `json:"total_containers"`
+
+	// New cache mechanics to keep better track of running/not running
+	RunningIp string     `json:"running_ip"`
+	Licensed  bool       `json:"licensed"`
+	DataLake  LakeConfig `json:"data_lake" datastore:"data_lake"`
 }
 
 // Create struct
@@ -3927,13 +3966,14 @@ type AppHealth struct {
 }
 
 type WorkflowHealth struct {
-	Create      bool   `json:"create"`
-	Run         bool   `json:"run"`
-	RunFinished bool   `json:"run_finished"`
-	RunStatus   string `json:"run_status"`
-	Delete      bool   `json:"delete"`
-	ExecutionId string `json:"execution_id"`
-	WorkflowId  string `json:"workflow_id"`
+	Create             bool   `json:"create"`
+	Run                bool   `json:"run"`
+	RunFinished        bool   `json:"run_finished"`
+	RunStatus          string `json:"run_status"`
+	Delete             bool   `json:"delete"`
+	ExecutionId        string `json:"execution_id"`
+	WorkflowId         string `json:"workflow_id"`
+	WorkflowValidation bool   `json:"workflow_validation"`
 }
 
 type HealthCheck struct {
@@ -3988,7 +4028,8 @@ type WorkflowSearch struct {
 	SearchFrom  string `json:"start_time"`
 	SearchUntil string `json:"end_time"`
 
-	IgnoreOrg bool `json:"ignore_org"`
+	IgnoreOrg  bool `json:"ignore_org"`
+	SuborgRuns bool `json:"suborg_runs" default:"false"`
 }
 
 type WorkflowSearchResult struct {
@@ -3999,24 +4040,24 @@ type WorkflowSearchResult struct {
 
 // Used for the integrations API to work with AI well
 type StructuredCategoryAction struct {
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Reason  string `json:"reason"`
+
 	WorkflowId  string        `json:"workflow_id,omitempty"`
 	ExecutionId string        `json:"execution_id,omitempty"`
-	Label       string        `json:"label"`
-	Category    string        `json:"category"`
+	Label       string        `json:"label,omitempty"`
+	Category    string        `json:"category,omitempty"`
 	Apps        []WorkflowApp `json:"apps,omitempty"`
 
 	Result string `json:"result,omitempty"`
 
-	AvailableLabels []string `json:"available_labels"`
+	AvailableLabels []string `json:"available_labels,omitempty"`
 	ThreadId        string   `json:"thread_id,omitempty"`
 	RunId           string   `json:"run_id,omitempty"`
 	MissingFields   []string `json:"missing_fields,omitempty"`
 
 	Translated bool `json:"translated,omitempty"`
-
-	Success     bool          `json:"success"`
-	Action      string        `json:"action"`
-	Reason      string        `json:"reason"`
 }
 
 type ModelLabelParameter struct {
@@ -4034,15 +4075,17 @@ type UserRequest struct {
 }
 
 type HTTPOutput struct {
-	Success bool              `json:"success"`
-	Status  int               `json:"status"`
-	Url     string            `json:"url"`
-	Body    interface{}       `json:"body"`
-	Headers map[string]string `json:"headers"`
-	Cookies map[string]string `json:"cookies"`
-	Errors  []string          `json:"errors"`
+	Success   bool   `json:"success"`
+	Reason    string `json:"reason,omitempty"`
+	Exception string `json:"exception,omitempty"`
+	Details   string `json:"details,omitempty"`
 
-	Reason string `json:"reason,omitempty"`
+	Status  int               `json:"status,omitempty"`
+	Url     string            `json:"url,omitempty"`
+	Body    interface{}       `json:"body,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Cookies map[string]string `json:"cookies,omitempty"`
+	Errors  []string          `json:"errors,omitempty"`
 }
 
 type SnappStep struct {
@@ -4095,4 +4138,62 @@ type DetectionResponse struct {
 	IsConnectorActive bool                `json:"is_connector_active"`
 
 	DownloadRepo string `json:"download_repo"`
+}
+
+type PipelineInfoMini struct {
+	Name       string `json:"name"`
+	ID         string `json:"id"`
+	Definition string `json:"definition"`
+	TotalRuns  int    `json:"total_runs"`
+	CreatedAt  int64  `json:"created_at"`
+
+	Environment string `json:"environment"`
+}
+
+// The raw output from pipelines in Tenzir
+type PipelineInfo struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Hidden       bool   `json:"hidden"`
+	Definition   string `json:"definition"`
+	Configured   bool   `json:"configured"`
+	Package      any    `json:"package"`
+	Unstoppable  bool   `json:"unstoppable"`
+	CreatedAt    int64  `json:"created_at"`
+	LastModified int64  `json:"last_modified"`
+	StartTime    string `json:"start_time"`
+	TotalRuns    int    `json:"total_runs"`
+	State        string `json:"state"`
+	Error        string `json:"error"`
+	Diagnostics  []any  `json:"diagnostics"`
+	Labels       []any  `json:"labels"`
+	RetryDelay   string `json:"retry_delay"`
+	Autostart    struct {
+		Created   bool `json:"created"`
+		Completed bool `json:"completed"`
+		Failed    bool `json:"failed"`
+	} `json:"autostart"`
+	Autodelete struct {
+		Completed bool `json:"completed"`
+		Failed    bool `json:"failed"`
+		Stopped   bool `json:"stopped"`
+	} `json:"autodelete"`
+	TTL          any `json:"ttl"`
+	RemainingTTL any `json:"remaining_ttl"`
+}
+
+type PipelineInfoWrapper struct {
+	Pipelines []PipelineInfo `json:"pipelines"`
+}
+
+type RequestResponse struct {
+	Success bool   `json:"success"`
+	Reason  string `json:"reason"`
+	Details string `json:"details"`
+}
+
+type TimeWindow struct {
+	Duration time.Duration
+	Events   []time.Time
+	mu       sync.Mutex
 }

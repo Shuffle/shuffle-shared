@@ -8,8 +8,8 @@ import (
 	"log"
 	"net/http"
 	"strings"
-
-	uuid "github.com/satori/go.uuid"
+	
+	"github.com/google/uuid"
 )
 
 // Pipeline is a sequence of stages that are executed in order.
@@ -55,25 +55,14 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	log.Printf("[AUDIT] User %s in org %s (%s) is creating a new pipeline with command '%s' in environment '%s'", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, pipeline.Type, pipeline.Environment)
 
 	if len(pipeline.Name) < 1 {
+		pipeline.Name = pipeline.Command
+
+		/*
 		log.Printf("[WARNING] Name is required for new pipelines")
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Name is required"}`))
 		return
-	}
-
-	if len(pipeline.Environment) < 1 {
-		log.Printf("[WARNING] Environment is required for new pipelines")
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Environment is required"}`))
-		return
-	}
-
-	pipeline.Environment = strings.TrimSpace(pipeline.Environment)
-	if strings.ToLower(pipeline.Environment) == "cloud" {
-		log.Printf("[WARNING] Cloud is not a valid environment")
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Cloud is not a valid environment. Choose one of your Organizations' environments."}`))
-		return
+		*/
 	}
 
 	ctx := GetContext(request)
@@ -84,6 +73,39 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	if len(pipeline.Environment) < 1 {
+		for _, env := range environments {
+			if env.Archived {
+				continue
+			}
+
+			if strings.ToLower(env.Type) == "cloud" {
+				continue
+			}
+
+			pipeline.Environment = env.Name
+			if env.DataLake.Enabled {
+				break
+			}
+		}
+
+		if len(pipeline.Environment) < 1 {
+			log.Printf("[WARNING] Environment is required for new pipelines")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No environment found"}`))
+			return
+		}
+	}
+
+	pipeline.Environment = strings.TrimSpace(pipeline.Environment)
+	if strings.ToLower(pipeline.Environment) == "cloud" {
+		log.Printf("[WARNING] Cloud is not a valid environment")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Cloud is not a valid environment. Choose one of your Organizations' environments."}`))
+		return
+	}
+
 
 	envFound := false
 	for _, env := range environments {
@@ -154,19 +176,22 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 		}
 	}
 
-	log.Printf("[INFO] Pipeline type: %s", formattedType)
+	if len(pipeline.TriggerId) < 1 {
+		pipeline.TriggerId = uuid.New().String()
+	}
 
 	// 2. Send to environment queue
 	execRequest := ExecutionRequest{
 		Type:              formattedType,
-		ExecutionId:       uuid.NewV4().String(),
-		ExecutionSource:   pipeline.TriggerId,
+		ExecutionId:       uuid.New().String(),
+		ExecutionSource:   pipeline.Name,
 		ExecutionArgument: pipeline.Command,
 		Priority:          11,
 	}
 
-	pipelineData := Pipeline{}
+	//log.Printf("EXECREQUEST: Type: %s, Source: %s, Argument: %s", execRequest.Type, execRequest.ExecutionSource, execRequest.ExecutionArgument)
 
+	pipelineData := Pipeline{}
 	if startCommand == "DELETE" {
 
 		err := deletePipeline(ctx, *pipelineInfo)
@@ -186,7 +211,8 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-		log.Printf("[INFO] Stopped the pipeline %s sucessfully", pipelineInfo.TriggerId)
+
+		log.Printf("[INFO] Stopped the pipeline successfully", pipelineInfo.ID)
 	} else {
 
 		pipelineData.Name = pipeline.Name
@@ -208,7 +234,8 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-		log.Printf("[INFO] Set up pipeline with trigger ID %s and environment %s", pipeline.TriggerId, pipeline.Environment)
+
+		log.Printf("[INFO] Set up pipeline '%s' with trigger ID '%s' and environment '%s'", pipeline.Command, pipeline.TriggerId, pipeline.Environment)
 	}
 
 	err = SetWorkflowQueue(ctx, execRequest, parsedEnv)
@@ -220,7 +247,7 @@ func HandleNewPipelineRegister(resp http.ResponseWriter, request *http.Request) 
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true, "reason": "Pipeline will be created"}`))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Pipeline queued to be deployed in environment '%s'."}`, pipeline.Environment)))
 }
 
 func deletePipeline(ctx context.Context, pipeline Pipeline) error {
