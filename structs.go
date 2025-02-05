@@ -1134,8 +1134,9 @@ type WorkflowExecution struct {
 	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"` // Max depth to execute subflows in infinite loops (10 by default)
 	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
 
-	NotificationsCreated int64  `json:"notifications_created" datastore:"notifications_created"`
-	Authgroup            string `json:"authgroup" datastore:"authgroup"`
+	NotificationsCreated int64   `json:"notifications_created" datastore:"notifications_created"`
+	Authgroup            string  `json:"authgroup" datastore:"authgroup"`
+	Org                  OrgMini `json:"org" datastore:"-"`
 }
 
 type Position struct {
@@ -4028,7 +4029,8 @@ type WorkflowSearch struct {
 	SearchFrom  string `json:"start_time"`
 	SearchUntil string `json:"end_time"`
 
-	IgnoreOrg bool `json:"ignore_org"`
+	IgnoreOrg  bool `json:"ignore_org"`
+	SuborgRuns bool `json:"suborg_runs" default:"false"`
 }
 
 type WorkflowSearchResult struct {
