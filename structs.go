@@ -1379,7 +1379,7 @@ type Categories struct {
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
 	IAM           Category `json:"iam" datastore:"IAM"`
-	AI            Category `json:"iam" datastore:"IAM"`
+	AI            Category `json:"ai" datastore:"ai"`
 
 	Email Category `json:"email" datastore:"email"`
 	Other Category `json:"other" datastore:"other"`

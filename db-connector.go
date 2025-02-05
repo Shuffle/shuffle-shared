@@ -3707,7 +3707,16 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 		cursorStr := ""
 		query := datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
+
+		cnt := 0
+		maxIter := 1000
 		for {
+			cnt += 1
+			if cnt > maxIter {
+				log.Printf("[ERROR] Too many iterations in suborg workflow iterator")
+				break
+			}
+
 			it := project.Dbclient.Run(ctx, query)
 
 			if len(workflows) >= maxAmount {
@@ -3733,7 +3742,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 					}
 				}
 
-				log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
+				//log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
 
 				if innerWorkflow.Public {
 					continue

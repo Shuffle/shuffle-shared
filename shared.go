@@ -6131,46 +6131,61 @@ func hasTriggerChanged(newAction Trigger, oldAction Trigger) (string, bool) {
 
 func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	// Check if there is a difference in parameters, and what they are
+	changes := []string{}
 	if newAction.Name != oldAction.Name {
-		return "name", true
+		changes = append(changes, "name") 
 	}
 
 	if newAction.Label != oldAction.Label {
-		return "label", true
+		changes = append(changes, "label")
 	}
 
 	if newAction.Position.X != oldAction.Position.X || newAction.Position.Y != oldAction.Position.Y {
-		return "position", true
+		changes = append(changes, "position")
 	}
 
 	if newAction.AppVersion != oldAction.AppVersion {
-		return "app_version", true
+		changes = append(changes, "app_version")
 	}
 
 	if newAction.AppID != oldAction.AppID {
-		return "app_id", true
+		changes = append(changes, "app_id")
 	}
 
 	if newAction.IsStartNode != oldAction.IsStartNode {
-		return "startnode", true
+		changes = append(changes, "startnode")
+	}
+
+	if newAction.AuthenticationId != oldAction.AuthenticationId {
+		changes = append(changes, "authentication_id")
+	}
+
+	if newAction.ExecutionDelay != oldAction.ExecutionDelay {
+		changes = append(changes, "delay")
 	}
 
 	for _, param := range newAction.Parameters {
 		found := false
 		for _, oldParam := range oldAction.Parameters {
-			if param.Name == oldParam.Name {
-				if param.Value != oldParam.Value {
-					return "param_value", true
-				}
-
-				found = true
-				break
+			if param.Name != oldParam.Name {
+				continue
 			}
+
+			if param.Value != oldParam.Value {
+				changes = append(changes, "param_value:" + param.Name)
+			}
+
+			found = true
+			break
 		}
 
 		if !found {
-			return "param_not_found", true
+			changes = append(changes, "param_not_found:" + param.Name)
 		}
+	}
+
+	if len(changes) > 0 {
+		return strings.Join(changes, ","), true
 	}
 
 	return "", false
@@ -6535,32 +6550,10 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		parentWorkflowEnvironment = "Shuffle"
 	}
 
-	for actionIndex, action := range parentWorkflow.Actions {
+	for _, action := range parentWorkflow.Actions {
 		if len(action.Environment) > 0 {
-			discoveredEnvironment = action.Environment
-		}
-
-		// i think the following messes everything up with
-		// authenticationIDs. Let's just remove it for now.
-
-		// In case of replication,
-		parentWorkflow.Actions[actionIndex].AuthenticationId = ""
-
-		idFound := false
-		for _, oldWorkflowAction := range oldWorkflow.Actions {
-			if oldWorkflowAction.ID == action.ID {
-				idFound = true
-				parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
-			}
-		}
-
-		if !idFound {
-			for _, oldWorkflowAction := range oldWorkflow.Actions {
-				if oldWorkflowAction.AppID == action.AppID {
-					parentWorkflow.Actions[actionIndex].AuthenticationId = oldWorkflowAction.AuthenticationId
-					break
-				}
-			}
+			parentWorkflowEnvironment = action.Environment
+			break
 		}
 	}
 
@@ -6571,9 +6564,12 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
+	log.Printf("PARENT ENV: %#v, DISCOVERED ENV FOR CHILD: %#v", parentWorkflowEnvironment, discoveredEnvironment)
+
 	if len(discoveredEnvironment) == 0 {
 		discoveredEnvironment = parentWorkflowEnvironment
 	}
+
 
 	for _, newAction := range parentWorkflow.Actions {
 		found := false
@@ -6640,7 +6636,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			}
 
 			changeType, changed := hasActionChanged(newAction, oldAction)
-			if changed {
+			if changed || len(changeType) > 0 {
 				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
 				updatedActions = append(updatedActions, newAction)
 			}
@@ -6813,9 +6809,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify
-	// log.Printf("\n ===== Parent: %#v, Child: %#v =====", parentWorkflow.ID, oldWorkflow.ID)
-	// log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
-
+	log.Printf("\n ===== Parent: %#v, Child: %#v =====", parentWorkflow.ID, oldWorkflow.ID)
+	log.Printf("\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 	if update {
 		// FIXME: This doesn't work does it?
 		childWorkflow := oldWorkflow
@@ -6924,119 +6919,54 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			childActions = childWorkflow.Actions
 		}
 
+		ctx := context.Background()
+		var err error
+		childAuths := []AppAuthenticationStorage{}
+		if len(childAuths) == 0 {
+			childAuths, err = GetAllWorkflowAppAuth(ctx, childWorkflow.OrgId) 
+			if err != nil {
+				log.Printf("[WARNING] Failed getting auths for child org %s: %s", childWorkflow.OrgId, err)
+			} 
+
+		}
+
 		if len(updatedActions) > 0 {
+			log.Printf("\n\n[DEBUG] Updated actions: %d\n\n", len(updatedActions))
+
 			for _, action := range updatedActions {
-				for index, childAction := range childWorkflow.Actions {
+				for childIndex, childAction := range childWorkflow.Actions {
 					if childAction.ID != action.ID {
 						// this means it's a new action
 						continue
 					}
 
 					// FIXME:
-					// Make sure it changes things such as environment & app auth appropriately
+					// Make sure it changes:
+					// auth, env 
+					// name, app_version, app_id, app_name
+					// startnode
+					// execution delay
+					// parameters
+					log.Printf("AUTH %#v vs %#v", action.AuthenticationId, childAction.AuthenticationId)
+					if len(action.AuthenticationId) > 0 && len(childAction.AuthenticationId) == 0 {
+						// Check if the auth is available or not, in case it's distributed.
+						for _, childAuth := range childAuths {
+							if childAuth.Id != action.AuthenticationId {
+								continue
+							}
 
-					// implement by default parameter "unlocking"
-					// ie: unless action itself is changed,
-					// preserve child paramter.
+							log.Printf("[DEBUG] Updating auth in child as it is available")
+							childWorkflow.Actions[childIndex].AuthenticationId = action.AuthenticationId
+							break
+						}
+					}
 
-					// Also, allow a "locking" mechanism that
-					// overwrites to child if enabled.
-					// finalLocks := []ParameterLock{}
-					finalParamters := action.Parameters
+					if action.Environment != childAction.Environment {
+						log.Printf("ENVIRONMENT CHANGED! %#v", action.Environment)
+					}
 
-					// // lock clean up in incoming action
-					// for _, lock := range action.ParameterLocks {
-					// 	if action.Name == lock.ActionName {
-					// 		finalLocks = append(finalLocks, lock)
-					// 	}
-					// }
-
-					// action.ParameterLocks = finalLocks
-					// if len(action.ParameterLocks) == 0 {
-					// 	log.Printf("[DEBUG] No locks found for action %s", action.ID)
-					// 	if childAction.Name == action.Name {
-					// 		log.Printf("[DEBUG] Action %s is the same as child action %s", action.ID, childAction.ID)
-					// 		// so, action itself is not changed
-					// 		// preserve child parameters by default
-					// 		finalParamters = childAction.Parameters
-					// 	} else {
-					// 		log.Printf("[DEBUG] Action %s (Name: %s, AppID: %s) is different from child action %s (Name: %s, AppID: %s)", action.ID, action.Name, action.AppID, childAction.ID, childAction.Name, childAction.AppID)
-					// 	}
-					// } else {
-					// 	for _, lock := range action.ParameterLocks {
-					// 		for paramIndex, param := range finalParamters {
-					// 			if param.Name == lock.ParameterName && action.Name == lock.ActionName {
-					// 				finalParamters[paramIndex].Value = childAction.Parameters[paramIndex].Value
-					// 			}
-					// 		}
-					// 	}
-					// }
-
-					// ctx := context.Background()
-
-					// // check with revisions, if the child workflow has the same last revision,
-					// // where the value of this param is the same.as the parent. if not, it might
-					// // have been changed by the child, and we should not overwrite it and respect it.
-					// childRevisions, err := ListChildWorkflows(ctx, childWorkflow.ID)
-					// if err != nil {
-					// 	log.Printf("[WARNING] Failed getting child revisions (in diff workflows for %s workflow): %s", err, childWorkflow.ID)
-					// 	continue
-					// }
-
-					// parentRevisions, err := ListChildWorkflows(ctx, parentWorkflow.ID)
-					// if err != nil {
-					// 	log.Printf("[WARNING] Failed getting parent revisions (in diff workflows for %s workflow): %s", err, parentWorkflow.ID)
-					// }
-
-					// // if the child workflow has no revisions, it means it's the first one.
-					// // so, we can safely overwrite the parameters.
-					// if len(childRevisions) == 0 {
-					// 	log.Printf("[DEBUG] No revisions found for child workflow %s", childWorkflow.ID)
-					// 	childWorkflow.Actions[index] = action
-					// 	break
-					// }
-
-					// if len(parentRevisions) < 2 {
-					// 	log.Printf("[DEBUG] No/One revision found for parent workflow %s", parentWorkflow.ID)
-					// 	childWorkflow.Actions[index] = action
-					// 	continue
-					// }
-
-					// // last child revision
-					// lastChildRevision := childRevisions[0]
-
-					// // second last parent revision
-					// lastParentRevision := parentRevisions[1]
-
-					// for _, childAction := range lastChildRevision.Actions {
-					// 	if childAction.ID != action.ID {
-					// 		continue
-					// 	}
-
-					// 	for _, parentAction := range lastParentRevision.Actions {
-					// 		if parentAction.ID != action.ID {
-					// 			continue
-					// 		}
-
-					// 		for _, parentParam := range parentAction.Parameters {
-					// 			for _, childParam := range childAction.Parameters {
-					// 				if parentParam.Name == childParam.Name {
-					// 					if parentParam.Value != childParam.Value {
-					// 						// if revision was made in child AFTER the parent
-					// 						// we should respect it.
-					// 						if lastChildRevision.Edited > lastParentRevision.Edited {
-
-					// 						}
-					// 					}
-					// 				}
-					// 			}
-					// 		}
-					// 	}
-					// }
-
-					action.Parameters = finalParamters
-
-					childWorkflow.Actions[index] = action
+					//finalParamters := childAction.Parameters
+					//action.Parameters = finalParamters
 					break
 				}
 			}
@@ -7457,8 +7387,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
 		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
 
-		ctx := context.Background()
-		err := SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
+		err = SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
 		if err != nil {
 			log.Printf("[ERROR] Failed updating child workflow %s from parent workflow %s: %s", childWorkflow.ID, oldWorkflow.ID, err)
 		} else {
