@@ -258,6 +258,11 @@ func GetAppbase() ([]byte, []byte, error) {
 
 	appbaseData, err := ioutil.ReadFile(appbase)
 	if err != nil {
+		// FIXME: Use an older commit of the file
+		githubUrl := "https://raw.githubusercontent.com/Shuffle/app_sdk/refs/heads/main/shuffle_sdk/shuffle_sdk.py"
+		content, err := getGithubFile(githubUrl)
+		return content, []byte{}, err 
+
 		return []byte{}, []byte{}, err
 	}
 
