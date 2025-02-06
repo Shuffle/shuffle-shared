@@ -1423,6 +1423,35 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
+func SetLiveWorkflowExecutionData(ctx context.Context, liveExec LiveExecutionStatus) error {
+    nameKey := "live_execution_status"
+    // Generate random ID if not already set
+    if liveExec.ID == "" {
+        liveExec.ID = uuid.NewV4().String()
+    }
+
+    data, err := json.Marshal(liveExec)
+    if err != nil {
+        log.Printf("[WARNING] Failed marshalling in set live workflow execution data: %s", err)
+        return nil
+    }
+
+    if project.DbType == "opensearch" {
+        err = indexEs(ctx, nameKey, liveExec.ID, data)
+        if err != nil {
+            return err
+        }
+    } else {
+        key := datastore.NameKey(nameKey, liveExec.ID, nil)
+        if _, err := project.Dbclient.Put(ctx, key, &liveExec); err != nil {
+            log.Printf("[WARNING] Error adding live workflow execution data: %s", err)
+            return err
+        }
+    }
+
+    return nil
+}
+
 // Initializes an execution's extra variables
 func SetInitExecutionVariables(ctx context.Context, workflowExecution WorkflowExecution) {
 	environments := []string{}
