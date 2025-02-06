@@ -8436,6 +8436,12 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 }
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
+
+	if len(workflow.Actions) == 0 {
+		log.Printf("[WARNING] No actions in workflow %s. Not saving.", id)
+		return errors.New("At least one action required to save")
+	}
+
 	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
 	// Due to caching, this is kind of fine.
 	foundWorkflow, err := GetWorkflow(ctx, id)
