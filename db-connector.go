@@ -6301,7 +6301,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				cnt += 1
 				if cnt > maxAmount {
-					log.Printf("[ERROR] Maximum try exceeded for workfloapp (2)")
+					log.Printf("[ERROR] Maximum try exceeded for workflowapp (2)")
 					break
 				}
 
