@@ -908,18 +908,22 @@ func fixSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string
 	}
 
 	baseUrl := "https://shuffler.io"
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		log.Printf("[DEBUG] Base url not set. Setting to default")
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
 
 	if project.Environment == "onprem" {
 		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
 		// This will work as the health will be handled in the backend itself.
 		// so localhost just works. (Tested)
 		baseUrl = "http://localhost:5001"
+
+		if len(os.Getenv("BASE_URL")) > 0 {
+			baseUrl = os.Getenv("BASE_URL")
+		}
 	}
 
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		log.Printf("[DEBUG] Base url not set. Setting to default")
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
 
 	req, err := http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflow.ID+"?skip_save=true", nil)
 	if err != nil {
