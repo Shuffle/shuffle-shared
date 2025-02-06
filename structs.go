@@ -223,6 +223,7 @@ type WorkflowApp struct {
 
 	Contributors []string `json:"contributors" datastore:"contributors"`
 	RevisionId   string   `json:"revision_id" datastore:"revision_id"`
+	Collection 	 string `json:"collection" datastore:"collection"`
 }
 
 type AppVersion struct {
@@ -1133,8 +1134,9 @@ type WorkflowExecution struct {
 	SubExecutionCount   int64          `json:"sub_execution_count" yaml:"sub_execution_count"` // Max depth to execute subflows in infinite loops (10 by default)
 	Priority            int64          `json:"priority" datastore:"priority" yaml:"priority"`  // Priority of the execution. Usually manual should be 10, and all other UNDER that.
 
-	NotificationsCreated int64  `json:"notifications_created" datastore:"notifications_created"`
-	Authgroup            string `json:"authgroup" datastore:"authgroup"`
+	NotificationsCreated int64   `json:"notifications_created" datastore:"notifications_created"`
+	Authgroup            string  `json:"authgroup" datastore:"authgroup"`
+	Org                  OrgMini `json:"org" datastore:"-"`
 }
 
 type Position struct {
@@ -1377,7 +1379,7 @@ type Categories struct {
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
 	IAM           Category `json:"iam" datastore:"IAM"`
-	AI            Category `json:"iam" datastore:"IAM"`
+	AI            Category `json:"ai" datastore:"ai"`
 
 	Email Category `json:"email" datastore:"email"`
 	Other Category `json:"other" datastore:"other"`
@@ -1469,12 +1471,14 @@ type File struct {
 	ContentType        string   `json:"content_type" datastore:"content_type"`
 	UpdatedBy          string   `json:"updated_by" datastore:"updated_by"`
 	CreatedBy          string   `json:"created_by" datastore:"created_by"`
-	Namespace          string   `json:"namespace" datastore:"namespace"`
 	Encrypted          bool     `json:"encrypted" datastore:"encrypted"`
 	IsEdited           bool     `json:"isedited" datastore:"isedited"`
 	LastEditor         string   `json:"lasteditor" datastore:"lasteditor"`
 	OriginalMd5sum     string   `json:"Originalmd5_sum" datastore:"Originalmd5_sum"`
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
+
+	// Category control
+	Namespace          string   `json:"namespace" datastore:"namespace"`
 }
 
 type DisabledRules struct {
@@ -4028,7 +4032,8 @@ type WorkflowSearch struct {
 	SearchFrom  string `json:"start_time"`
 	SearchUntil string `json:"end_time"`
 
-	IgnoreOrg bool `json:"ignore_org"`
+	IgnoreOrg  bool `json:"ignore_org"`
+	SuborgRuns bool `json:"suborg_runs" default:"false"`
 }
 
 type WorkflowSearchResult struct {

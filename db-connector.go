@@ -3707,7 +3707,16 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
 		cursorStr := ""
 		query := datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
+
+		cnt := 0
+		maxIter := 1000
 		for {
+			cnt += 1
+			if cnt > maxIter {
+				log.Printf("[ERROR] Too many iterations in suborg workflow iterator")
+				break
+			}
+
 			it := project.Dbclient.Run(ctx, query)
 
 			if len(workflows) >= maxAmount {
@@ -3733,7 +3742,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 					}
 				}
 
-				log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
+				//log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
 
 				if innerWorkflow.Public {
 					continue
@@ -4693,7 +4702,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 						log.Printf("[ERROR] Failed propagating org %s for region %#v: %s", data.Id, data.Region, err)
 					}
 				} else {
-					log.Printf("[INFO] Successfully propagated org %s to region %#v", data.Id, data.Region)
+					//log.Printf("[INFO] Successfully propagated org %s to region %#v", data.Id, data.Region)
 				}
 			}()
 		}
@@ -5616,7 +5625,13 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		if err != nil {
 			return err
 		}
-	} else {
+	} else {		
+		if len(user.Regions) == 1 {
+			if user.Regions[0] != "https://shuffler.io" {
+				user.Regions = append(user.Regions, "https://shuffler.io")
+			}
+		}
+
 		k := datastore.NameKey(nameKey, parsedKey, nil)
 		if _, err := project.Dbclient.Put(ctx, k, user); err != nil {
 			log.Printf("[WARNING] Error updating user: %s", err)
@@ -5628,7 +5643,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
 				err = propagateUser(*user, false)
 				if err != nil {
-					log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
+					log.Printf("[ERROR] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
 				}
 			}()
 		}
@@ -5711,16 +5726,6 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 		if err != nil {
 			log.Printf("[Error] deleting from %s from %s: %s", nameKey, user.Id, err)
 		}
-		// if (len(user.Regions)) > 1 {
-		// 	go func() {
-		// 		log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
-		// 		err = propagateUser(*user, true)
-		// 		if err != nil {
-		// 			log.Printf("[WARNING] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
-		// 		}
-		// 	}()
-		// }
-
 	}
 
 	DeleteCache(ctx, user.ApiKey)
@@ -6189,11 +6194,13 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return allApps, nil
 	}
 
-	log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
-	allApps := []WorkflowApp{}
+	if user.Username != "HealthWorkflowFunction" { 
+		log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
+	}
 
 	// 1. Caching apps locally
 	// Make it based on org and not user :)
+	allApps := []WorkflowApp{}
 	cacheKey := fmt.Sprintf("apps_%s", user.ActiveOrg.Id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -6217,7 +6224,8 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	queryLimit := 25
 	cursorStr := ""
 
-	allApps = user.PrivateApps
+	//allApps = user.PrivateApps
+	allApps = []WorkflowApp{}
 	org, orgErr := GetOrg(ctx, user.ActiveOrg.Id)
 	if orgErr == nil && len(org.ActiveApps) > 150 {
 		// No reason for it to be this big. Arbitrarily reducing.
@@ -6293,7 +6301,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				_, err := it.Next(&innerApp)
 				cnt += 1
 				if cnt > maxAmount {
-					log.Printf("[ERROR] Maximum try exceeded for workfloapp (2)")
+					log.Printf("[ERROR] Maximum try exceeded for workflowapp (2)")
 					break
 				}
 
@@ -6994,13 +7002,13 @@ func GetUserApps(ctx context.Context, userId string) ([]WorkflowApp, error) {
 						continue
 					}
 
-					// Not sure can it slow the API down?
+					// Not sure if it actually make the API slower
 					for _, app := range userApps {
-						if innerApp.ID == app.ID {
+						if app.ID == innerApp.ID {
 							alreadyExists = true
 						}
 					}
-					
+
 					if !alreadyExists {
 						userApps = append(userApps, innerApp)
 					}
