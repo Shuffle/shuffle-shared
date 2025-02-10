@@ -10575,8 +10575,8 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	if (app.Public || app.Sharing) && project.Environment == "cloud" {
 		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed. Public: %t, Sharing: %t", app.Name, app.Public, app.Sharing)
 
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Stop sharing it first, then delete it."}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Unpublish. Contact support@shuffler.io if you encounter any problem."}`))
 		return
 	}
 
@@ -29163,6 +29163,10 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 		return err
 	}
 
+	for appIndex, appname := range appnames {
+		appnames[appIndex] = strings.ReplaceAll(appname, " ", "-")
+	}
+
 	if len(envs) > 10 {
 		envs = envs[:10]
 	}
@@ -29177,7 +29181,7 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 			continue
 		}
 
-		log.Printf("[DEBUG] Distributing app image %s to environment: %s", strings.Join(appnames, ", "), env.Name)
+		log.Printf("[DEBUG] Distributing app image '%s' to environment: %s", strings.Join(appnames, ", "), env.Name)
 
 		// Add to the queue
 		request := ExecutionRequest{

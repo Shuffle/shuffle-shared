@@ -3877,6 +3877,9 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	data := fmt.Sprintf(`{"name": "%s"}`, imageName)
 	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl)
 
+	// Set request timeout to 5 min (max)
+	topClient.Timeout = time.Minute * 5
+
 	arch := runtime.GOARCH
 	dockerImgUrl = fmt.Sprintf("%s?arch=%s", dockerImgUrl, arch)
 
