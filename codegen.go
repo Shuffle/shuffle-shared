@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"time"
 	"context"
+	"runtime"
 	"crypto/md5"
 	"encoding/json"
 	"errors"
@@ -3866,14 +3867,18 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	}
 
 	baseUrl := os.Getenv("BASE_URL")
-	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist. All images: %#v", imageName, baseUrl, downloadedImages)
+	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist", imageName, baseUrl)
 
 	if !ArrayContains(downloadedImages, imageName) {
 		downloadedImages = append(downloadedImages, imageName)
 	}
 
+
 	data := fmt.Sprintf(`{"name": "%s"}`, imageName)
 	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl)
+
+	arch := runtime.GOARCH
+	dockerImgUrl = fmt.Sprintf("%s?arch=%s", dockerImgUrl, arch)
 
 	req, err := http.NewRequest(
 		"POST",

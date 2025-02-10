@@ -15509,16 +15509,17 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("[DEBUG] Ran marshal on silent failure")
 	}
 
+	// Handles notification handling for data coming back from apps
 	for _, param := range actionResult.Action.Parameters {
-		if strings.HasPrefix(param.Name, "shuffle_variable_error") {
-			log.Printf("[WARNING] Variable error found: %s", param.Name)
+		//actionResult.NotificationsCreated += 1
+		if strings.HasPrefix(strings.ToLower(param.Name), "shuffle") && strings.Contains(param.Name, "error") {
 
 			workflowExecution.NotificationsCreated += 1
 			CreateOrgNotification(
 				ctx,
-				fmt.Sprintf("Variable error for node %s in Workflow %s", actionResult.Action.Label, workflowExecution.Workflow.Name),
-				fmt.Sprintf("The node %s (%s) in workflow %s (%s) had a variable error with '%s'. Check the workflow run for more details.", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID, param.Name),
-				fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+				fmt.Sprintf("App error for node %s in Workflow %s: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, param.Name),
+				fmt.Sprintf("The node %s (%s) in workflow %s (%s) had the error: '%s' based on error '%s'", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID, param.Value, param.Name),
+				fmt.Sprintf("/workflows/%s?execution_id=%s&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
 				workflowExecution.ExecutionOrg,
 				true,
 			)
