@@ -15509,6 +15509,22 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("[DEBUG] Ran marshal on silent failure")
 	}
 
+	for _, param := range actionResult.Action.Parameters {
+		if strings.HasPrefix(param.Name, "shuffle_variable_error") {
+			log.Printf("[WARNING] Variable error found: %s", param.Name)
+
+			workflowExecution.NotificationsCreated += 1
+			CreateOrgNotification(
+				ctx,
+				fmt.Sprintf("Variable error for node %s in Workflow %s", actionResult.Action.Label, workflowExecution.Workflow.Name),
+				fmt.Sprintf("The node %s (%s) in workflow %s (%s) had a variable error with '%s'. Check the workflow run for more details.", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID, param.Name),
+				fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+				workflowExecution.ExecutionOrg,
+				true,
+			)
+		}
+	}
+
 	// FIXME rebuild to be like this or something
 	// workflowExecution/ExecutionId/Nodes/NodeId
 	// Find the appropriate action
