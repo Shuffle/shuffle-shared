@@ -6497,10 +6497,14 @@ func deleteScheduleGeneral(ctx context.Context, scheduleId string) error {
 	return nil
 }
 
+// oldWorkflow = childWorkflow
+// used for diffing
 func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// Check if there is a difference in actions, and what they are
 	// Check if there is a difference in triggers, and what they are
 	// Check if there is a difference in branches, and what they are
+
+	log.Printf("[DEBUG] Old Child workflow. Actions: %d, Triggers: %d, Branches: %d", len(oldWorkflow.Actions), len(oldWorkflow.Triggers), len(oldWorkflow.Branches))
 
 	// We create a new ID for each trigger.
 	// Older ID is stored in trigger.ReplacementForTrigger
@@ -6564,7 +6568,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
-	log.Printf("PARENT ENV: %#v, DISCOVERED ENV FOR CHILD: %#v", parentWorkflowEnvironment, discoveredEnvironment)
+	//log.Printf("PARENT ENV: %#v, DISCOVERED ENV FOR CHILD: %#v", parentWorkflowEnvironment, discoveredEnvironment)
 
 	if len(discoveredEnvironment) == 0 {
 		discoveredEnvironment = parentWorkflowEnvironment
@@ -6685,23 +6689,36 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// checks if parentWorkflow removed a trigger
 	// that was distributed to child workflow.
 	for _, oldAction := range oldWorkflow.Triggers {
-		if !oldAction.ParentControlled {
+		if !oldAction.ParentControlled && len(oldAction.ReplacementForTrigger) == 0 {
 			continue
 		}
 
 		found := false
 		for _, newAction := range parentWorkflow.Triggers {
-			if !newAction.ParentControlled {
-				continue
+			if oldAction.ReplacementForTrigger == newAction.ID {
+				found = true
+				break
 			}
 
-			if oldAction.ReplacementForTrigger == newAction.ID {
+			// Static ID, so this may work if ID mapping is wrong somewhere
+			seedString := fmt.Sprintf("%s_%s", newAction.ID, oldWorkflow.ID)
+			hash := sha1.New()
+			hash.Write([]byte(seedString))
+			hashBytes := hash.Sum(nil)
+
+			uuidBytes := make([]byte, 16)
+			copy(uuidBytes, hashBytes)
+
+			comparisonString := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+			log.Printf("[DEBUG] Comparison string: %#v vs %#v. Replace: %#v", oldAction.ID, comparisonString, oldAction.ReplacementForTrigger)
+			if oldAction.ID == comparisonString {
 				found = true
 				break
 			}
 		}
 
 		if !found {
+			log.Printf("[DEBUG] Trigger %s (%s) could not be found anymore? (%#v). Parentcontrolled: %#v", oldAction.Label, oldAction.ID, oldAction.ReplacementForTrigger, oldAction.ParentControlled)
 			removedTriggers = append(removedTriggers, oldAction.ID)
 		}
 	}
@@ -6832,8 +6849,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 		// log.Printf("\n\nSTART")
 		// log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
-		// log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
-		// log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
+		//log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
+		//log.Printf("[DEBUG] CHILD BRANCHES START: %d\n\n", len(childWorkflow.Branches))
 
 		if nameChanged {
 			childWorkflow.Name = parentWorkflow.Name
@@ -7115,17 +7132,31 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 				// change ID, and replace in branch ID
 				oldID := trigger.ID
-				trigger.ID = uuid.NewV4().String()
 				trigger.ReplacementForTrigger = oldID
+
+
+				seedString := fmt.Sprintf("%s_%s", oldID, childWorkflow.ID)
+				hash := sha1.New()
+				hash.Write([]byte(seedString))
+				hashBytes := hash.Sum(nil)
+
+				uuidBytes := make([]byte, 16)
+				copy(uuidBytes, hashBytes)
+				trigger.ID = uuid.Must(uuid.FromBytes(uuidBytes)).String()
 				trigger.ParentControlled = true
 
-				//log.Printf("[DEBUG] ORIGINAL ID: %#v. NEW ID: %#v", oldID, trigger.ID)
+				log.Printf("Adding new node. Old ID: %s, New ID: %s", oldID, trigger.ID)
 
 				if trigger.TriggerType == "SCHEDULE" {
-					// params: frequency, start, end, timezone, user_apikey
-					//log.Printf("[DEBUG] SCHEDULE WITH ID %s ADDED!", trigger.ID)
+					// FIXME: Have their own trigger or nah?
 				} else if trigger.TriggerType == "WEBHOOK" {
 
+					parentHook, err := GetHook(ctx, oldID)
+					if err != nil {
+						log.Printf("[ERROR] Parent hook load error: %#v", err)
+					} else {
+						trigger.Status = parentHook.Status
+					}
 
 					foundUrl := ""
 					auth := ""
@@ -7205,6 +7236,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					// params: workflow, argument, user_apikey, startnode,
 					// check_result and auth_override
 					trigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, trigger)
+				} else if trigger.TriggerType == "USERINPUT" {
+					log.Printf("[DEBUG] User input trigger added: %#v", trigger.ID)
 				}
 
 				for branchIndex, branch := range childWorkflow.Branches {
@@ -7224,13 +7257,30 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			childWorkflow.Triggers = append(childWorkflow.Triggers, triggers...)
 			childTriggers = childWorkflow.Triggers
 
-			//log.Printf("[DEBUG] CHILD TRIGGERS: %#v", len(childTriggers))
 		}
 
 		if len(removedTriggers) > 0 {
+			log.Printf("[DEBUG] Removed triggers: %#v. CHILD: %d", removedTriggers, len(childTriggers))
+
 			newChildTriggers := childTriggers
 			for _, trigger := range childWorkflow.Triggers {
 				if !ArrayContains(removedTriggers, trigger.ID) {
+
+					// Just making sure it exists
+					/*
+					found := false
+					for _, innertrigger := range newChildTriggers {
+						if innertrigger.ID == trigger.ID {
+							found = true
+							break
+						}
+					}
+
+					if !found {
+					}
+					*/
+					newChildTriggers = append(newChildTriggers, trigger)
+
 					continue
 				}
 
@@ -7271,26 +7321,38 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					log.Printf("[ERROR] Failed getting child schedule: %s", err)
 					continue
+				} else if trigger.TriggerType == "SUBFLOW" {
+					log.Printf("[DEBUG] This trigger is a subflow. Will proceed to delete it")
+					continue
+				} else if trigger.TriggerType == "USERINPUT" {
+					log.Printf("[DEBUG] This trigger is a user input. Will proceed to delete it")
+					continue
+				} else if trigger.TriggerType == "PIPELINE" {
+					log.Printf("[DEBUG] This trigger is a pipeline. Will proceed to delete it")
+					continue
 				}
 
 				newChildTriggers = append(newChildTriggers, trigger)
 			}
-
 
 			childWorkflow.Triggers = newChildTriggers
 			childTriggers = childWorkflow.Triggers
 		}
 
 		if len(updatedTriggers) > 0 {
-			log.Printf("[DEBUG] Triggers updated: %d", len(updatedTriggers))
 			for _, parentTrigger := range updatedTriggers {
-				log.Printf("[DEBUG] ID of the parent trigger: %s", parentTrigger.ID)
+				//log.Printf("[DEBUG] ID of the parent trigger (%s): %s", parentTrigger.TriggerType, parentTrigger.ID)
 				for index, childTrigger := range childWorkflow.Triggers {
 					if childTrigger.ReplacementForTrigger != parentTrigger.ID {
 						continue
 					}
 
-					log.Printf("[DEBUG] Updating child trigger %s in the child", childTrigger.ID)
+					//log.Printf("[DEBUG] Updating child trigger %s in the child", childTrigger.ID)
+
+					if parentTrigger.Status == "SUCCESS" {
+						log.Printf("[DEBUG] Remapping parent status SUCCESS to running for child trigger %s", childTrigger.ID)
+						parentTrigger.Status = "running"
+					}
 
 					// FIXME:
 					// Make sure it changes things such as URL & references properly
@@ -7303,10 +7365,19 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						childWorkflow.Triggers[index].Label = parentTrigger.Label
 						childWorkflow.Triggers[index].Position = parentTrigger.Position
 						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
-						childWorkflow.Triggers[index].Status = parentTrigger.Status
 
+						// 1. Get the parent ID
+						// 2. Check it's still running or not
+						parentHook, err := GetHook(ctx, parentTrigger.ID)
+						if err != nil {
+							log.Printf("[ERROR] Parent hook load error: %#v", err)
+						} else { 
+							parentTrigger.Status = parentHook.Status
+						}
+
+						childWorkflow.Triggers[index].Status = parentTrigger.Status
 						if parentTrigger.Status != childWorkflow.Status {
-							log.Printf("[DEBUG] Status change in trigger %#v compared to parent", childWorkflow.Triggers[index].ID)
+							log.Printf("[DEBUG] Webhook: Status change in trigger %#v compared to parent. Parent: %#v, Child: %#v", childWorkflow.Triggers[index].ID, parentTrigger.Status, childWorkflow.Status)
 							if parentTrigger.Status == "running" {
 								// Start the trigger
 								log.Printf("[DEBUG] Starting trigger child %s", childTrigger.ID)
@@ -7327,7 +7398,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 									}
 								}
 							} else {
-								log.Printf("[DEBUG] Stopping trigger child %s", childTrigger.ID)
+								log.Printf("[DEBUG] Stopping webhook trigger child %s", childTrigger.ID)
 								err = DeleteKey(ctx, "hooks", childTrigger.ID)
 								if err != nil {
 									log.Printf("[WARNING] Failed deleting hook: %s", err)
@@ -7367,10 +7438,29 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 						// essentially, now we try to verify:
 						// okay, new workflow? we see it's a subflow that's
-						// what changed? is it the workflow?
-
 						parentTrigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, parentTrigger)
 						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
+						break
+					} else if parentTrigger.TriggerType == "USERINPUT" {
+						// make sure to override: name, label, position,
+						// app_version, startnode and parameters
+						childWorkflow.Triggers[index].Name = parentTrigger.Name
+						childWorkflow.Triggers[index].Label = parentTrigger.Label
+						childWorkflow.Triggers[index].Position = parentTrigger.Position
+						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
+
+						// essentially, now we try to verify:
+						// okay, new workflow? we see it's a subflow that's
+						//parentTrigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, parentTrigger)
+						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
+						break
+					} else if parentTrigger.TriggerType == "PIPELINE" {
+						childWorkflow.Triggers[index].Name = parentTrigger.Name
+						childWorkflow.Triggers[index].Label = parentTrigger.Label
+						childWorkflow.Triggers[index].Position = parentTrigger.Position
+						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
+						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
+						log.Printf("[DEBUG] Updating pipeline trigger %s", childTrigger.ID)
 						break
 					}
 
@@ -7606,6 +7696,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		// 	}
 		// }
 
+		log.Printf("[DEBUG] CHILD workflow (1). Actions: %d, Triggers: %d, Branches: %d", len(childWorkflow.Actions), len(childWorkflow.Triggers), len(childWorkflow.Branches))
+
 		childWorkflow.Actions = newActions
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
@@ -7614,6 +7706,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
 		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
 		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
+
+		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow) 
+		if err != nil {
+			log.Printf("[ERROR] Failed getting static workflow health for %s: %s", childWorkflow.ID, err)
+		}
+
+		log.Printf("[DEBUG] CHILD workflow (2). Actions: %d, Triggers: %d, Branches: %d", len(childWorkflow.Actions), len(childWorkflow.Triggers), len(childWorkflow.Branches))
 
 		err = SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
 		if err != nil {
@@ -9858,7 +9957,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		wg.Wait()
-		SetWorkflow(ctx, *workflow, workflow.ID)
+		//SetWorkflow(ctx, *workflow, workflow.ID)
 	}
 
 	log.Printf("[INFO] Got new version of workflow %s (%s) for org %s and user %s (%s). Actions: %d, Triggers: %d", workflow.Name, workflow.ID, user.ActiveOrg.Id, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))

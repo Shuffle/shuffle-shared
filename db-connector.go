@@ -3806,14 +3806,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 
-						/*
-							log.Printf("[ERROR] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
-							innerWorkflow.Org = []OrgMini{user.ActiveOrg}
-							err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
-							if err != nil {
-								log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
-							}
-						*/
 					} else {
 						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
 							log.Printf("[WARNING] Workflow iterator issue: %s", err)
