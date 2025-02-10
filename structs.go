@@ -223,7 +223,7 @@ type WorkflowApp struct {
 
 	Contributors []string `json:"contributors" datastore:"contributors"`
 	RevisionId   string   `json:"revision_id" datastore:"revision_id"`
-	Collection 	 string `json:"collection" datastore:"collection"`
+	Collection   string   `json:"collection" datastore:"collection"`
 }
 
 type AppVersion struct {
@@ -644,6 +644,7 @@ type Contact struct {
 	Message       string `json:"message"`
 	DealType      string `json:"dealtype"`
 	DealCountry   string `json:"dealcountry"`
+	Category      string `json:"Category"`
 }
 
 type Translator struct {
@@ -1379,7 +1380,7 @@ type Categories struct {
 	Intel         Category `json:"intel" datastore:"intel"`
 	EDR           Category `json:"edr" datastore:"edr"`
 	IAM           Category `json:"iam" datastore:"IAM"`
-	AI            Category `json:"iam" datastore:"IAM"`
+	AI            Category `json:"ai" datastore:"ai"`
 
 	Email Category `json:"email" datastore:"email"`
 	Other Category `json:"other" datastore:"other"`
@@ -1478,7 +1479,7 @@ type File struct {
 	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 
 	// Category control
-	Namespace          string   `json:"namespace" datastore:"namespace"`
+	Namespace string `json:"namespace" datastore:"namespace"`
 }
 
 type DisabledRules struct {
