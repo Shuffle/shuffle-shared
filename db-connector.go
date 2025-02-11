@@ -3806,14 +3806,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				if err != nil {
 					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
 
-						/*
-							log.Printf("[ERROR] Fixing workflow %s to have proper org (0.8.74)", innerWorkflow.ID)
-							innerWorkflow.Org = []OrgMini{user.ActiveOrg}
-							err = SetWorkflow(ctx, innerWorkflow, innerWorkflow.ID)
-							if err != nil {
-								log.Printf("[WARNING] Failed automatic update of workflow %s", innerWorkflow.ID)
-							}
-						*/
 					} else {
 						if !strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
 							log.Printf("[WARNING] Workflow iterator issue: %s", err)
@@ -8445,6 +8437,12 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 }
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
+
+	if len(workflow.Actions) == 0 {
+		log.Printf("[WARNING] No actions in workflow %s. Not saving.", id)
+		return errors.New("At least one action required to save")
+	}
+
 	// FIXME: Due to a possibility of ID reusage on duplication, we re-randomize ID's IF the workflow is new
 	// Due to caching, this is kind of fine.
 	foundWorkflow, err := GetWorkflow(ctx, id)
@@ -10822,6 +10820,103 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 	return users, nil
 }
 
+func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExecution, error) {
+    mappedExecutions := make(map[string][]WorkflowExecution)
+
+	index := "workflowexecution"
+	var executions []WorkflowExecution
+	var err error
+	// FIXME: Sorting doesn't seem to work...
+	//StartedAt          int64          `json:"started_at" datastore:"started_at"`
+	var query *datastore.Query
+	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-3600).Order("-started_at").Limit(100)	
+	
+	max := 100
+	cursorStr := ""
+	for {
+		// it := project.dbclient.Run(ctx, query)
+		it := project.Dbclient.Run(ctx, query)
+
+		for {
+			innerWorkflow := WorkflowExecution{}
+			_, err := it.Next(&innerWorkflow)
+			if err != nil {
+				// log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+				if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+				} else {
+					//log.Printf("[WARNING] Workflow iterator issue: %s", err)
+					break
+				}
+			}
+
+			executions = append(executions, innerWorkflow)
+		}
+
+		if err != iterator.Done {
+			//log.Printf("[INFO] Failed fetching results: %v", err)
+			//break
+		}
+
+		if len(executions) >= max {
+			break
+		}
+
+		// Get the cursor for the next page of results.
+		nextCursor, err := it.Cursor()
+		if err != nil {
+			log.Printf("[WARNING] Cursorerror: %s", err)
+			break
+		} else {
+			nextStr := fmt.Sprintf("%s", nextCursor)
+			if cursorStr == nextStr {
+				break
+			}
+
+			cursorStr = nextStr
+			query = query.Start(nextCursor)
+			//cursorStr = nextCursor
+			//break
+		}
+	}
+
+	slice.Sort(executions[:], func(i, j int) bool {
+		return executions[i].StartedAt > executions[j].StartedAt
+	})
+
+	// Gets the correct one from cache to make it appear to be correct everywhere
+	for execIndex, execution := range executions {
+		if execution.Status != "EXECUTING" {
+			continue
+		}
+
+		// Get the right one from cache
+		newexec, err := GetWorkflowExecution(ctx, execution.ExecutionId)
+		if err == nil {
+			// Set the execution as well in the database
+			// if newexec.Status != execution.Status {
+
+			// 	if project.Environment == "cloud" {
+			// 		go SetWorkflowExecution(ctx, *newexec, true)
+			// 	} else {
+			// 		SetWorkflowExecution(ctx, *newexec, false)
+			// 	}
+			// }
+			if newexec.Status != "EXECUTING" {
+				continue
+			}
+
+			executions[execIndex] = *newexec
+			// mappedExecutions[newexec.Status] = append(mappedExecutions[newexec.Status], *newexec)
+		}
+	}
+
+	for _, execution := range executions {
+		mappedExecutions[execution.Status] = append(mappedExecutions[execution.Status], execution)
+	}
+
+	return mappedExecutions, nil
+}
+
 func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {
 	index := "workflowexecution"
 	var executions []WorkflowExecution
@@ -10915,8 +11010,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 	} else {
 		// FIXME: Sorting doesn't seem to work...
 		//StartedAt          int64          `json:"started_at" datastore:"started_at"`
-		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Order("-started_at").Limit(5)
-		//query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
+		query := datastore.NewQuery(index).Filter("workflow_id =", workflowId).Limit(10)
 		max := 100
 		cursorStr := ""
 		for {
