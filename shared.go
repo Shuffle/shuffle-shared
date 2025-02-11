@@ -7134,7 +7134,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				oldID := trigger.ID
 				trigger.ReplacementForTrigger = oldID
 
-
 				seedString := fmt.Sprintf("%s_%s", oldID, childWorkflow.ID)
 				hash := sha1.New()
 				hash.Write([]byte(seedString))
@@ -7253,7 +7252,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				triggers = append(triggers, trigger)
 			}
 
-
 			childWorkflow.Triggers = append(childWorkflow.Triggers, triggers...)
 			childTriggers = childWorkflow.Triggers
 
@@ -7268,16 +7266,16 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					// Just making sure it exists
 					/*
-					found := false
-					for _, innertrigger := range newChildTriggers {
-						if innertrigger.ID == trigger.ID {
-							found = true
-							break
+						found := false
+						for _, innertrigger := range newChildTriggers {
+							if innertrigger.ID == trigger.ID {
+								found = true
+								break
+							}
 						}
-					}
 
-					if !found {
-					}
+						if !found {
+						}
 					*/
 					newChildTriggers = append(newChildTriggers, trigger)
 
@@ -7294,7 +7292,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				if trigger.TriggerType == "WEBHOOK" {
 					ctx := context.Background()
 					hook, err := GetHook(ctx, trigger.ID)
-					if err == nil && hook.OrgId == childWorkflow.OrgId{
+					if err == nil && hook.OrgId == childWorkflow.OrgId {
 						// this anyhow, means it is a webhook
 						err = DeleteKey(ctx, "hooks", hook.Id)
 						if err != nil {
@@ -7302,8 +7300,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						}
 
 						continue
-					} 
-						
+					}
+
 					log.Printf("[WARNING] Failed getting child hook: %s", err)
 					continue
 				} else if trigger.TriggerType == "SCHEDULE" {
@@ -7371,7 +7369,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						parentHook, err := GetHook(ctx, parentTrigger.ID)
 						if err != nil {
 							log.Printf("[ERROR] Parent hook load error: %#v", err)
-						} else { 
+						} else {
 							parentTrigger.Status = parentHook.Status
 						}
 
@@ -7707,7 +7705,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
 		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
 
-		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow) 
+		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting static workflow health for %s: %s", childWorkflow.ID, err)
 		}
@@ -21687,65 +21685,77 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if len(curAuth.Id) == 0 {
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
-			}
+				log.Printf("[ERROR] App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id)
 
-			if curAuth.Encrypted {
-				setField := true
-				newFields := []AuthenticationStore{}
-				fieldLength := 0
-				for _, field := range curAuth.Fields {
-					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-					if err != nil {
-						if field.Key != "access_token" {
-							log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
-							setField = false
-							//fieldLength = 0
-							break
-						} else {
-							continue
-						}
-					}
+				workflowExecution.NotificationsCreated += 1
+				CreateOrgNotification(
+					ctx,
+					fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
+					fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
+					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+					workflowExecution.ExecutionOrg,
+					true,
+				)
 
-					// Remove / at end of urls
-					// TYPICALLY shouldn't use them.
-					if field.Key == "url" {
-						//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
-						if strings.HasSuffix(string(newValue), "/") {
-							newValue = []byte(string(newValue)[0 : len(newValue)-1])
-						}
-
-						//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
-					}
-
-					fieldLength += len(newValue)
-					field.Value = string(newValue)
-					newFields = append(newFields, field)
-				}
-
-				// There is some Very weird bug that has caused encryption to sometimes be skipped.
-				// This is a way to discover when this happens properly.
-				// The problem happens about every 10.000~ decryption, which is still way too much.
-				// By adding the full total, there should be no problem with this, seeing as lengths are added together
-				fieldNames := ""
-				for _, field := range curAuth.Fields {
-					fieldNames += field.Key + ", "
-				}
-
-				if setField {
-					curAuth.Fields = newFields
-
-					//log.Printf("[DEBUG] Outer decryption (1) debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
-				} else {
-					//log.Printf("[ERROR] Outer decryption (2) debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
-
-				}
+				//return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
 			} else {
-				//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
-				err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
-				if err != nil {
-					log.Printf("[WARNING] Failed running encryption during execution: %s", err)
+				if curAuth.Encrypted {
+					setField := true
+					newFields := []AuthenticationStore{}
+					fieldLength := 0
+					for _, field := range curAuth.Fields {
+						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+						newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+						if err != nil {
+							if field.Key != "access_token" {
+								log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+								setField = false
+								//fieldLength = 0
+								break
+							} else {
+								continue
+							}
+						}
+
+						// Remove / at end of urls
+						// TYPICALLY shouldn't use them.
+						if field.Key == "url" {
+							//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+							if strings.HasSuffix(string(newValue), "/") {
+								newValue = []byte(string(newValue)[0 : len(newValue)-1])
+							}
+
+							//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+						}
+
+						fieldLength += len(newValue)
+						field.Value = string(newValue)
+						newFields = append(newFields, field)
+					}
+
+					// There is some Very weird bug that has caused encryption to sometimes be skipped.
+					// This is a way to discover when this happens properly.
+					// The problem happens about every 10.000~ decryption, which is still way too much.
+					// By adding the full total, there should be no problem with this, seeing as lengths are added together
+					fieldNames := ""
+					for _, field := range curAuth.Fields {
+						fieldNames += field.Key + ", "
+					}
+
+					if setField {
+						curAuth.Fields = newFields
+
+						//log.Printf("[DEBUG] Outer decryption (1) debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+					} else {
+						//log.Printf("[ERROR] Outer decryption (2) debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+
+					}
+				} else {
+					//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
+					err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed running encryption during execution: %s", err)
+					}
 				}
 			}
 
