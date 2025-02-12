@@ -7750,7 +7750,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to save workflow (2): %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
@@ -7773,7 +7773,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if len(fileId) != 36 {
 		log.Printf(`[WARNING] Workflow ID %s is not valid`, fileId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID to save is not valid"}`))
 		return
 	}
@@ -7783,7 +7783,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	tmpworkflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (save workflow): %s", fileId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7792,7 +7792,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed workflow body read: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7801,7 +7801,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		//log.Printf(string(body))
 		log.Printf("[ERROR] Failed workflow unmarshaling (save): %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
@@ -8256,8 +8256,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.ID = uuid.NewV4().String()
 
 		// Get the workflow and check if we own it
-		workflow, err := GetWorkflow(ctx, workflow.ID)
-		if err != nil || len(workflow.Actions) != 1 {
+		newWorkflow, err := GetWorkflow(ctx, workflow.ID)
+		if err != nil || len(newWorkflow.Actions) != 1 {
 			log.Printf("[ERROR] FAILED GETTING WORKFLOW: %s - CREATING NEW ID!", err)
 			workflow.ID = uuid.NewV4().String()
 		}
@@ -8282,6 +8282,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("Setting actions")
 			actionFixing := []Action{}
 			appsAdded := []string{}
+
+			log.Printf("ACTIONS: %d", len(workflow.Actions))
 			for _, action := range workflow.Actions {
 				setAuthentication := false
 				if len(action.AuthenticationId) > 0 {
@@ -8302,8 +8304,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					// 1. Validate if auth for the app exists
 					// var appAuth AppAuthenticationStorage
 					setAuthentication = true
-
-					//App           WorkflowApp           `json:"app" datastore:"app,noindex"`
 				}
 
 				if setAuthentication {
@@ -8365,6 +8365,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				actionFixing = append(actionFixing, action)
 			}
 
+			log.Printf("ACTIONFIXING: %d", len(actionFixing))
+
 			newActions = actionFixing
 		} else {
 			log.Printf("FirstSave error: %s - %s", err, apperr)
@@ -8382,9 +8384,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(newActions) > 0 {
+	if len(newActions) > 1 {
 		workflow.Actions = newActions
 	}
+
 
 	auth, authOk := request.URL.Query()["set_auth"]
 	if authOk && len(auth) > 0 && auth[0] == "true" {
@@ -8537,6 +8540,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
 
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
@@ -13076,7 +13080,7 @@ func GetRequestIp(r *http.Request) string {
 		// The client's IP is usually the first one.
 		stringSplit := strings.Split(forwardedFor, ",")
 		if len(stringSplit) > 1 {
-			log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s", forwardedFor)
+			log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s. Returning first.", forwardedFor)
 			return stringSplit[0]
 		} else {
 			return forwardedFor
@@ -15612,7 +15616,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	updateParentRan := false
 
 	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
-		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
 		finished := true
 		lastResult := ""
 
@@ -19403,14 +19406,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-
-	//log.Printf("Got user body: %s", string(body))
-
-	/*
-
-		BELOW HERE ITS ALL COPY PASTE OF USER INFO THINGS!
-
-	*/
 
 	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
 		log.Printf("[WARNING] No user found in openid login (2)")
