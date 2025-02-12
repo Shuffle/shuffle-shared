@@ -6106,14 +6106,15 @@ func hasTriggerChanged(newAction Trigger, oldAction Trigger) (string, bool) {
 		for _, oldParam := range oldAction.Parameters {
 			if param.Name == oldParam.Name {
 				if param.Value != oldParam.Value {
-					// if the changed param value is in WEBHOOK, we should not consider it as a change
-					// if it is in SUBFLOW, we will distribute subflow and user input,
-					// it needs to be handled a certain way.
 					if newAction.TriggerType == "WEBHOOK" {
-						continue
+						// Shouldn't change much? Unsure.
+					} else if newAction.TriggerType == "SUBFLOW" && param.Name == "workflow" {
+						// To be expected due to replication
+					} else if newAction.TriggerType == "USERINPUT" && param.Name == "subflow" {
+						// To be expected due to replication
+					} else {
+						return "param_value", true
 					}
-
-					return "param_value", true
 				}
 
 				found = true
@@ -6122,6 +6123,7 @@ func hasTriggerChanged(newAction Trigger, oldAction Trigger) (string, bool) {
 		}
 
 		if !found {
+			log.Printf("[DEBUG] Not found: %s", param.Name)
 			return "param_not_found", true
 		}
 	}
@@ -6640,7 +6642,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(newAction, oldAction)
 			if changed || len(changeType) > 0 {
-				//log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
+				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
 				updatedActions = append(updatedActions, newAction)
 			}
 		}
@@ -6710,7 +6712,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			copy(uuidBytes, hashBytes)
 
 			comparisonString := uuid.Must(uuid.FromBytes(uuidBytes)).String()
-			log.Printf("[DEBUG] Comparison string: %#v vs %#v. Replace: %#v", oldAction.ID, comparisonString, oldAction.ReplacementForTrigger)
 			if oldAction.ID == comparisonString {
 				found = true
 				break
@@ -6872,6 +6873,70 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			childWorkflow.InputQuestions = parentWorkflow.InputQuestions
 		}
 
+		// Check variables and directly change them
+		for _, parentVariable := range parentWorkflow.WorkflowVariables {
+			found := false
+			for childIndex, childVariable := range childWorkflow.WorkflowVariables {
+				if parentVariable.Name == childVariable.Name {
+
+					if childVariable.Value != parentVariable.Value {
+
+						relevantRevisionVariable := Variable{}
+						for _, parentRevisionVariable := range lastParentRevision.WorkflowVariables {
+							if parentRevisionVariable.Name == parentVariable.Name {
+								relevantRevisionVariable = parentRevisionVariable
+								break
+							}
+						}
+
+						if relevantRevisionVariable.Value == childVariable.Value {
+							childWorkflow.WorkflowVariables[childIndex].Value = parentVariable.Value
+						}
+					}
+
+
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				childWorkflow.WorkflowVariables = append(childWorkflow.WorkflowVariables, parentVariable)
+			}
+		}
+
+		// Check variables and directly change them
+		for _, parentVariable := range parentWorkflow.ExecutionVariables {
+			found := false
+			for childIndex, childVariable := range childWorkflow.ExecutionVariables {
+				if parentVariable.Name == childVariable.Name {
+
+					if childVariable.Value != parentVariable.Value {
+
+						relevantRevisionVariable := Variable{}
+						for _, parentRevisionVariable := range lastParentRevision.ExecutionVariables {
+							if parentRevisionVariable.Name == parentVariable.Name {
+								relevantRevisionVariable = parentRevisionVariable
+								break
+							}
+						}
+
+						if relevantRevisionVariable.Value == childVariable.Value {
+							childWorkflow.ExecutionVariables[childIndex].Value = parentVariable.Value
+						}
+					}
+
+
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				childWorkflow.ExecutionVariables= append(childWorkflow.ExecutionVariables, parentVariable)
+			}
+		}
+
 		childActions := []Action{}
 		for _, action := range oldWorkflow.Actions {
 			// Check if it SHOULD be parent controlled
@@ -6975,6 +7040,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						continue
 					}
 
+					childWorkflow.Actions[childIndex].Environment = discoveredEnvironment
 					childWorkflow.Actions[childIndex].ParentControlled = true
 
 					// This has the PREVIOUS value of the current workflow, as to diff if the parent itself has changed at all.
@@ -7263,22 +7329,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			newChildTriggers := childTriggers
 			for _, trigger := range childWorkflow.Triggers {
 				if !ArrayContains(removedTriggers, trigger.ID) {
-
 					// Just making sure it exists
-					/*
-						found := false
-						for _, innertrigger := range newChildTriggers {
-							if innertrigger.ID == trigger.ID {
-								found = true
-								break
-							}
-						}
-
-						if !found {
-						}
-					*/
 					newChildTriggers = append(newChildTriggers, trigger)
-
 					continue
 				}
 
@@ -7333,6 +7385,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				newChildTriggers = append(newChildTriggers, trigger)
 			}
 
+			log.Printf("New triggers: %#v", newChildTriggers)
+
 			childWorkflow.Triggers = newChildTriggers
 			childTriggers = childWorkflow.Triggers
 		}
@@ -7350,6 +7404,11 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					if parentTrigger.Status == "SUCCESS" {
 						log.Printf("[DEBUG] Remapping parent status SUCCESS to running for child trigger %s", childTrigger.ID)
 						parentTrigger.Status = "running"
+					}
+
+					// Ensures params are in sync, at least with the size of them
+					if len(childTrigger.Parameters) != len(parentTrigger.Parameters) {
+						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
 					}
 
 					// FIXME:
@@ -7413,6 +7472,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						childWorkflow.Triggers[index].Position = parentTrigger.Position
 						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
 						childWorkflow.Triggers[index].Status = parentTrigger.Status
+
 						for paramIndex, param := range parentTrigger.Parameters {
 							if param.Name == "execution_argument" {
 								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
@@ -8283,7 +8343,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			actionFixing := []Action{}
 			appsAdded := []string{}
 
-			log.Printf("ACTIONS: %d", len(workflow.Actions))
 			for _, action := range workflow.Actions {
 				setAuthentication := false
 				if len(action.AuthenticationId) > 0 {
@@ -8364,8 +8423,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 				actionFixing = append(actionFixing, action)
 			}
-
-			log.Printf("ACTIONFIXING: %d", len(actionFixing))
 
 			newActions = actionFixing
 		} else {
@@ -29599,7 +29656,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	var fileId string
 	if location[1] == "api" {
 		if len(location) <= 4 {
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
@@ -29612,7 +29669,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(fileId) != 36 {
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
 		return
 	}
@@ -29621,7 +29678,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
-		resp.WriteHeader(403)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
 		return
 	}
@@ -29632,7 +29689,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 		workflow, err = GetWorkflow(ctx, workflow.ParentWorkflowId)
 		if err != nil {
 			log.Printf("[WARNING] Parent workflow %s doesn't exist.", workflow.ParentWorkflowId)
-			resp.WriteHeader(403)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "Failed finding parent workflow"}`))
 			return
 		}
