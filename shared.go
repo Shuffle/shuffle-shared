@@ -19432,17 +19432,15 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		redirectUrl = "http://localhost:3001/workflows"
 		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
 			baseUrl := os.Getenv("SSO_REDIRECT_URL")
-
 			// Check if URL contains /api/v1/login_openid and replace with /workflows
 			if strings.Contains(baseUrl, "/api/v1/login_openid") {
 				baseUrl = strings.Replace(baseUrl, "/api/v1/login_openid", "/workflows", 1)
 			} else if !strings.HasSuffix(baseUrl, "/workflows") {
 				// If URL doesn't end with /workflows, append it
 				redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
-				return
+			} else {
+				redirectUrl = baseUrl
 			}
-
-			redirectUrl = baseUrl
 		}
 	}
 
@@ -19597,7 +19595,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	// Normal user. Checking because of backwards compatibility. Shouldn't break anything as we have unique names
 	users, err = FindUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
-	if err == nil && len(users) == 1 {
+	if err == nil && len(users) > 0 {
 		user := users[0]
 		if user.Username == userName {
 
@@ -19726,159 +19724,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 			//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
 			http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 			return
-		}
-	} else if err == nil && len(users) > 1 {
-		for index, user := range users {
-			if strings.TrimSpace(strings.ToLower(user.Username)) == strings.TrimSpace(strings.ToLower(userName)) || strings.TrimSpace(strings.ToLower(user.GeneratedUsername)) == strings.TrimSpace(strings.ToLower(userName)) {
-				// Checking whether the user is in the org
-				foundOrgInUser := false
-				for _, userOrg := range user.Orgs {
-					if userOrg == org.Id {
-						foundOrgInUser = true
-						break
-					}
-				}
-
-				// check whether user is in org or not
-				foundUserInOrg := false
-				var usr User
-				for _, usr = range org.Users {
-					if usr.Id == user.Id {
-						foundUserInOrg = true
-						break
-					}
-				}
-
-				// If user not found in org, this is not last user in the list, then skip current  and check nex user
-				if !foundOrgInUser && !foundUserInOrg && index != len(users)-1 {
-					continue
-				}
-
-				updated := false
-				// if this is last user and user didn't found in org then consider first user in the list
-				if index == len(users)-1 && !org.SSOConfig.AutoProvision && !foundOrgInUser && !foundUserInOrg {
-					user = users[0]
-					user.Orgs = append(user.Orgs, org.Id)
-					org.Users = append(org.Users, user)
-					updated = true
-				}
-
-				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
-					log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s", org.Name, org.Id, userName)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
-					return
-				} else if (!foundOrgInUser || !foundUserInOrg) && !org.SSOConfig.AutoProvision && !updated {
-					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org", user.Username, user.Id, org.Name, org.Id)
-					if !foundOrgInUser {
-						user.Orgs = append(user.Orgs, org.Id)
-					}
-					if !foundUserInOrg {
-						org.Users = append(org.Users, user)
-						updated = true
-					}
-				} else {
-					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
-				}
-
-				//log.Printf("SESSION: %s", user.Session)
-				user.ActiveOrg = OrgMini{
-					Name: org.Name,
-					Id:   org.Id,
-					Role: user.Role,
-				}
-
-				expiration := time.Now().Add(3600 * time.Second)
-				if len(user.Session) == 0 {
-					log.Printf("[INFO] User does NOT have session - creating - (2)")
-					sessionToken := uuid.NewV4().String()
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
-					http.SetCookie(resp, newCookie)
-
-					newCookie.Name = "__session"
-					http.SetCookie(resp, newCookie)
-
-					err = SetSession(ctx, user, sessionToken)
-					if err != nil {
-						log.Printf("[WARNING] Error creating session for user: %s", err)
-						resp.WriteHeader(401)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-						return
-					}
-
-					user.Session = sessionToken
-				} else {
-					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
-					sessionToken := user.Session
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
-					http.SetCookie(resp, newCookie)
-
-					newCookie.Name = "__session"
-					http.SetCookie(resp, newCookie)
-
-					err = SetSession(ctx, user, sessionToken)
-					if err != nil {
-						log.Printf("[WARNING] Error creating session for user: %s", err)
-						resp.WriteHeader(401)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-						return
-					}
-
-				}
-				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        GetRequestIp(request),
-					Timestamp: time.Now().Unix(),
-				})
-
-				//Store users last session as new session so user don't have to go through sso again while changing org.
-				user.UsersLastSession = user.Session
-
-				err = SetUser(ctx, &user, false)
-				if err != nil {
-					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
-					return
-				}
-
-				if updated {
-					err = SetOrg(ctx, *org, org.Id)
-					if err != nil {
-						log.Printf("[WARNING] Failed updating org when setting session: %s", err)
-						resp.WriteHeader(401)
-						resp.Write([]byte(`{"success": false, "reason": "Failed org update during session storage (2)"}`))
-						return
-					}
-				}
-
-				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
-				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
-				return
-			}
 		}
 	}
 
@@ -20014,10 +19859,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 			} else if !strings.HasSuffix(baseUrl, "/workflows") {
 				// If URL doesn't end with /workflows, append it
 				redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
-				return
+			} else {
+				redirectUrl = baseUrl
 			}
-
-			redirectUrl = baseUrl
 		}
 	}
 
@@ -20365,7 +20209,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 
 	// Normal user. Checking because of backwards compatibility. Shouldn't break anything as we have unique names
 	users, err = FindUser(ctx, strings.ToLower(strings.TrimSpace(userName)))
-	if err == nil && len(users) == 1 {
+	if err == nil && len(users) > 0 {
 		user := users[0]
 		if user.Username == userName {
 
@@ -20509,161 +20353,6 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 			http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 			return
 		}
-	} else if err == nil && len(users) > 1 {
-
-		for index, user := range users {
-			if strings.TrimSpace(strings.ToLower(user.Username)) == strings.TrimSpace(strings.ToLower(userName)) || strings.TrimSpace(strings.ToLower(user.GeneratedUsername)) == strings.TrimSpace(strings.ToLower(userName)) {
-				// Checking whether the user is in the org
-				foundOrgInUser := false
-				for _, userOrg := range user.Orgs {
-					if userOrg == foundOrg.Id {
-						foundOrgInUser = true
-						break
-					}
-				}
-
-				// check whether user is in org or not
-				foundUserInOrg := false
-				var usr User
-				for _, usr = range foundOrg.Users {
-					if usr.Id == user.Id {
-						foundUserInOrg = true
-						break
-					}
-				}
-
-				// If user not found in org, this is not last user in the list, then skip current  and check nex user
-				if !foundOrgInUser && !foundUserInOrg && index != len(users)-1 {
-					continue
-				}
-
-				updated := false
-				// if this is last user and user didn't found in org then consider first user in the list
-				if index == len(users)-1 && !foundOrg.SSOConfig.AutoProvision && !foundOrgInUser && !foundUserInOrg {
-					user = users[0]
-					user.Orgs = append(user.Orgs, foundOrg.Id)
-					foundOrg.Users = append(foundOrg.Users, user)
-					updated = true
-				}
-
-				if (!foundOrgInUser || !foundUserInOrg) && foundOrg.SSOConfig.AutoProvision {
-					log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s", foundOrg.Name, foundOrg.Id, userName)
-					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
-					return
-				} else if (!foundOrgInUser || !foundUserInOrg) && !foundOrg.SSOConfig.AutoProvision && !updated {
-					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
-					if !foundOrgInUser {
-						user.Orgs = append(user.Orgs, foundOrg.Id)
-					}
-					if !foundUserInOrg {
-						foundOrg.Users = append(foundOrg.Users, user)
-						updated = true
-					}
-				} else {
-					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
-				}
-
-				//log.Printf("SESSION: %s", user.Session)
-				user.ActiveOrg = OrgMini{
-					Name: foundOrg.Name,
-					Id:   foundOrg.Id,
-					Role: user.Role,
-				}
-
-				expiration := time.Now().Add(3600 * time.Second)
-				if len(user.Session) == 0 {
-					log.Printf("[INFO] User does NOT have session - creating - (2)")
-					sessionToken := uuid.NewV4().String()
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
-					http.SetCookie(resp, newCookie)
-
-					newCookie.Name = "__session"
-					http.SetCookie(resp, newCookie)
-
-					err = SetSession(ctx, user, sessionToken)
-					if err != nil {
-						log.Printf("[WARNING] Error creating session for user: %s", err)
-						resp.WriteHeader(401)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-						return
-					}
-
-					user.Session = sessionToken
-				} else {
-					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
-					sessionToken := user.Session
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
-					http.SetCookie(resp, newCookie)
-
-					newCookie.Name = "__session"
-					http.SetCookie(resp, newCookie)
-
-					err = SetSession(ctx, user, sessionToken)
-					if err != nil {
-						log.Printf("[WARNING] Error creating session for user: %s", err)
-						resp.WriteHeader(401)
-						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed setting session"}`)))
-						return
-					}
-
-				}
-				user.LoginInfo = append(user.LoginInfo, LoginInfo{
-					IP:        GetRequestIp(request),
-					Timestamp: time.Now().Unix(),
-				})
-
-				//Store users last session as new session so user don't have to go through sso again while changing org.
-				user.UsersLastSession = user.Session
-
-				err = SetUser(ctx, &user, false)
-				if err != nil {
-					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
-					resp.WriteHeader(401)
-					resp.Write([]byte(`{"success": false, "reason": "Failed user update during session storage (2)"}`))
-					return
-				}
-
-				if updated {
-					err = SetOrg(ctx, foundOrg, foundOrg.Id)
-					if err != nil {
-						log.Printf("[WARNING] Failed updating org when setting session: %s", err)
-						resp.WriteHeader(401)
-						resp.Write([]byte(`{"success": false, "reason": "Failed org update during session storage (2)"}`))
-						return
-					}
-				}
-
-				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
-				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
-				return
-			}
-		}
-
 	}
 
 	/*
