@@ -667,6 +667,57 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(platformData)
 }
 
+func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
+	ctx := GetContext(request)
+
+	limit := request.URL.Query().Get("limit")
+
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting limit to int: %s", err)
+		limitInt = 0
+	}
+
+	before := request.URL.Query().Get("before")
+	beforeInt, err := strconv.Atoi(before)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting before to int: %s", err)
+		beforeInt = 0
+	}
+
+	after := request.URL.Query().Get("after")
+	afterInt, err := strconv.Atoi(after)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting after to int: %s", err)
+		afterInt = 0
+	}
+
+	data, err := GetLiveWorkflowExecutionData(
+		ctx,
+		beforeInt,
+		afterInt,
+		limitInt,
+	)
+
+	if err != nil {	
+		log.Printf("[ERROR] Failed getting live execution data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting live execution data."}`))
+		return
+	}
+
+	dataJSON, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling live execution data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing live execution data."}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(dataJSON)
+}
+
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
