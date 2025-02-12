@@ -19910,7 +19910,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if org.SSOConfig.AutoProvision {
 		log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s", org.Name, org.Id, userName)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user.}`, userName)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
 		return
 	}
 
@@ -20549,7 +20549,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if (!foundOrgInUser || !foundUserInOrg) && foundOrg.SSOConfig.AutoProvision {
 					log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s", foundOrg.Name, foundOrg.Id, userName)
 					resp.WriteHeader(401)
-					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Auto-provisioning is enabled for org %s (%s) - can not add new user %s"}`, foundOrg.Name, foundOrg.Id, userName)))
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
 					return
 				} else if (!foundOrgInUser || !foundUserInOrg) && !foundOrg.SSOConfig.AutoProvision && !updated {
 					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
@@ -20694,7 +20694,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	if foundOrg.SSOConfig.AutoProvision {
 		log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s", foundOrg.Name, foundOrg.Id, userName)
 		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Auto-provisioning is enabled for org %s (%s) - can not add new user %s"}`, foundOrg.Name, foundOrg.Id, userName)))
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
 		return
 	}
 
