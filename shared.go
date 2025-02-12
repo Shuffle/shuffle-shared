@@ -7134,7 +7134,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				oldID := trigger.ID
 				trigger.ReplacementForTrigger = oldID
 
-
 				seedString := fmt.Sprintf("%s_%s", oldID, childWorkflow.ID)
 				hash := sha1.New()
 				hash.Write([]byte(seedString))
@@ -7253,7 +7252,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				triggers = append(triggers, trigger)
 			}
 
-
 			childWorkflow.Triggers = append(childWorkflow.Triggers, triggers...)
 			childTriggers = childWorkflow.Triggers
 
@@ -7268,16 +7266,16 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					// Just making sure it exists
 					/*
-					found := false
-					for _, innertrigger := range newChildTriggers {
-						if innertrigger.ID == trigger.ID {
-							found = true
-							break
+						found := false
+						for _, innertrigger := range newChildTriggers {
+							if innertrigger.ID == trigger.ID {
+								found = true
+								break
+							}
 						}
-					}
 
-					if !found {
-					}
+						if !found {
+						}
 					*/
 					newChildTriggers = append(newChildTriggers, trigger)
 
@@ -7294,7 +7292,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				if trigger.TriggerType == "WEBHOOK" {
 					ctx := context.Background()
 					hook, err := GetHook(ctx, trigger.ID)
-					if err == nil && hook.OrgId == childWorkflow.OrgId{
+					if err == nil && hook.OrgId == childWorkflow.OrgId {
 						// this anyhow, means it is a webhook
 						err = DeleteKey(ctx, "hooks", hook.Id)
 						if err != nil {
@@ -7302,8 +7300,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						}
 
 						continue
-					} 
-						
+					}
+
 					log.Printf("[WARNING] Failed getting child hook: %s", err)
 					continue
 				} else if trigger.TriggerType == "SCHEDULE" {
@@ -7371,7 +7369,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						parentHook, err := GetHook(ctx, parentTrigger.ID)
 						if err != nil {
 							log.Printf("[ERROR] Parent hook load error: %#v", err)
-						} else { 
+						} else {
 							parentTrigger.Status = parentHook.Status
 						}
 
@@ -7707,7 +7705,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
 		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
 
-		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow) 
+		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting static workflow health for %s: %s", childWorkflow.ID, err)
 		}
@@ -7752,7 +7750,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role == "org-reader" {
 		log.Printf("[WARNING] Org-reader doesn't have access to save workflow (2): %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(401)
+		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
 		return
 	}
@@ -7775,7 +7773,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	if len(fileId) != 36 {
 		log.Printf(`[WARNING] Workflow ID %s is not valid`, fileId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID to save is not valid"}`))
 		return
 	}
@@ -7785,7 +7783,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	tmpworkflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (save workflow): %s", fileId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7794,7 +7792,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed workflow body read: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
@@ -7803,7 +7801,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 		//log.Printf(string(body))
 		log.Printf("[ERROR] Failed workflow unmarshaling (save): %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
@@ -8258,8 +8256,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.ID = uuid.NewV4().String()
 
 		// Get the workflow and check if we own it
-		workflow, err := GetWorkflow(ctx, workflow.ID)
-		if err != nil || len(workflow.Actions) != 1 {
+		newWorkflow, err := GetWorkflow(ctx, workflow.ID)
+		if err != nil || len(newWorkflow.Actions) != 1 {
 			log.Printf("[ERROR] FAILED GETTING WORKFLOW: %s - CREATING NEW ID!", err)
 			workflow.ID = uuid.NewV4().String()
 		}
@@ -8284,6 +8282,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("Setting actions")
 			actionFixing := []Action{}
 			appsAdded := []string{}
+
+			log.Printf("ACTIONS: %d", len(workflow.Actions))
 			for _, action := range workflow.Actions {
 				setAuthentication := false
 				if len(action.AuthenticationId) > 0 {
@@ -8304,8 +8304,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					// 1. Validate if auth for the app exists
 					// var appAuth AppAuthenticationStorage
 					setAuthentication = true
-
-					//App           WorkflowApp           `json:"app" datastore:"app,noindex"`
 				}
 
 				if setAuthentication {
@@ -8367,6 +8365,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				actionFixing = append(actionFixing, action)
 			}
 
+			log.Printf("ACTIONFIXING: %d", len(actionFixing))
+
 			newActions = actionFixing
 		} else {
 			log.Printf("FirstSave error: %s - %s", err, apperr)
@@ -8384,9 +8384,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(newActions) > 0 {
+	if len(newActions) > 1 {
 		workflow.Actions = newActions
 	}
+
 
 	auth, authOk := request.URL.Query()["set_auth"]
 	if authOk && len(auth) > 0 && auth[0] == "true" {
@@ -8539,6 +8540,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
+
 
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
@@ -10575,8 +10577,8 @@ func DeleteWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	if (app.Public || app.Sharing) && project.Environment == "cloud" {
 		log.Printf("[WARNING] App %s being deleted is public. Shouldn't be allowed. Public: %t, Sharing: %t", app.Name, app.Public, app.Sharing)
 
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Stop sharing it first, then delete it."}`))
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Can't delete public apps. Unpublish. Contact support@shuffler.io if you encounter any problem."}`))
 		return
 	}
 
@@ -13078,7 +13080,7 @@ func GetRequestIp(r *http.Request) string {
 		// The client's IP is usually the first one.
 		stringSplit := strings.Split(forwardedFor, ",")
 		if len(stringSplit) > 1 {
-			log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s", forwardedFor)
+			log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s. Returning first.", forwardedFor)
 			return stringSplit[0]
 		} else {
 			return forwardedFor
@@ -15509,6 +15511,23 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("[DEBUG] Ran marshal on silent failure")
 	}
 
+	// Handles notification handling for data coming back from apps
+	for _, param := range actionResult.Action.Parameters {
+		//actionResult.NotificationsCreated += 1
+		if strings.HasPrefix(strings.ToLower(param.Name), "shuffle") && strings.Contains(param.Name, "error") {
+
+			workflowExecution.NotificationsCreated += 1
+			CreateOrgNotification(
+				ctx,
+				fmt.Sprintf("App error for node %s in Workflow %s: %s", actionResult.Action.Label, workflowExecution.Workflow.Name, param.Name),
+				fmt.Sprintf("The node %s (%s) in workflow %s (%s) had the error: '%s' based on error '%s'", actionResult.Action.Label, actionResult.Action.ID, workflowExecution.Workflow.Name, workflowExecution.Workflow.ID, param.Value, param.Name),
+				fmt.Sprintf("/workflows/%s?execution_id=%s&node=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId, actionResult.Action.ID),
+				workflowExecution.ExecutionOrg,
+				true,
+			)
+		}
+	}
+
 	// FIXME rebuild to be like this or something
 	// workflowExecution/ExecutionId/Nodes/NodeId
 	// Find the appropriate action
@@ -15597,7 +15616,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	updateParentRan := false
 
 	if len(workflowExecution.Results) == len(workflowExecution.Workflow.Actions)+extraInputs {
-		//log.Printf("\nIN HERE WITH RESULTS %d vs %d\n", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extraInputs)
 		finished := true
 		lastResult := ""
 
@@ -19389,14 +19407,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	//log.Printf("Got user body: %s", string(body))
-
-	/*
-
-		BELOW HERE ITS ALL COPY PASTE OF USER INFO THINGS!
-
-	*/
-
 	if len(openidUser.Sub) == 0 && len(openidUser.Email) == 0 {
 		log.Printf("[WARNING] No user found in openid login (2)")
 		resp.WriteHeader(401)
@@ -22161,65 +22171,77 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 
 			if len(curAuth.Id) == 0 {
-				return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
-			}
+				log.Printf("[ERROR] App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id)
 
-			if curAuth.Encrypted {
-				setField := true
-				newFields := []AuthenticationStore{}
-				fieldLength := 0
-				for _, field := range curAuth.Fields {
-					parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-					newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-					if err != nil {
-						if field.Key != "access_token" {
-							log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
-							setField = false
-							//fieldLength = 0
-							break
-						} else {
-							continue
-						}
-					}
+				workflowExecution.NotificationsCreated += 1
+				CreateOrgNotification(
+					ctx,
+					fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
+					fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
+					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+					workflowExecution.ExecutionOrg,
+					true,
+				)
 
-					// Remove / at end of urls
-					// TYPICALLY shouldn't use them.
-					if field.Key == "url" {
-						//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
-						if strings.HasSuffix(string(newValue), "/") {
-							newValue = []byte(string(newValue)[0 : len(newValue)-1])
-						}
-
-						//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
-					}
-
-					fieldLength += len(newValue)
-					field.Value = string(newValue)
-					newFields = append(newFields, field)
-				}
-
-				// There is some Very weird bug that has caused encryption to sometimes be skipped.
-				// This is a way to discover when this happens properly.
-				// The problem happens about every 10.000~ decryption, which is still way too much.
-				// By adding the full total, there should be no problem with this, seeing as lengths are added together
-				fieldNames := ""
-				for _, field := range curAuth.Fields {
-					fieldNames += field.Key + ", "
-				}
-
-				if setField {
-					curAuth.Fields = newFields
-
-					//log.Printf("[DEBUG] Outer decryption (1) debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
-				} else {
-					//log.Printf("[ERROR] Outer decryption (2) debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
-
-				}
+				//return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
 			} else {
-				//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
-				err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
-				if err != nil {
-					log.Printf("[WARNING] Failed running encryption during execution: %s", err)
+				if curAuth.Encrypted {
+					setField := true
+					newFields := []AuthenticationStore{}
+					fieldLength := 0
+					for _, field := range curAuth.Fields {
+						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+						newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+						if err != nil {
+							if field.Key != "access_token" {
+								log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+								setField = false
+								//fieldLength = 0
+								break
+							} else {
+								continue
+							}
+						}
+
+						// Remove / at end of urls
+						// TYPICALLY shouldn't use them.
+						if field.Key == "url" {
+							//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+							if strings.HasSuffix(string(newValue), "/") {
+								newValue = []byte(string(newValue)[0 : len(newValue)-1])
+							}
+
+							//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+						}
+
+						fieldLength += len(newValue)
+						field.Value = string(newValue)
+						newFields = append(newFields, field)
+					}
+
+					// There is some Very weird bug that has caused encryption to sometimes be skipped.
+					// This is a way to discover when this happens properly.
+					// The problem happens about every 10.000~ decryption, which is still way too much.
+					// By adding the full total, there should be no problem with this, seeing as lengths are added together
+					fieldNames := ""
+					for _, field := range curAuth.Fields {
+						fieldNames += field.Key + ", "
+					}
+
+					if setField {
+						curAuth.Fields = newFields
+
+						//log.Printf("[DEBUG] Outer decryption (1) debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+					} else {
+						//log.Printf("[ERROR] Outer decryption (2) debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+
+					}
+				} else {
+					//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
+					err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed running encryption during execution: %s", err)
+					}
 				}
 			}
 
@@ -29637,6 +29659,10 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 		return err
 	}
 
+	for appIndex, appname := range appnames {
+		appnames[appIndex] = strings.ReplaceAll(appname, " ", "-")
+	}
+
 	if len(envs) > 10 {
 		envs = envs[:10]
 	}
@@ -29651,7 +29677,7 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 			continue
 		}
 
-		log.Printf("[DEBUG] Distributing app image %s to environment: %s", strings.Join(appnames, ", "), env.Name)
+		log.Printf("[DEBUG] Distributing app image '%s' to environment: %s", strings.Join(appnames, ", "), env.Name)
 
 		// Add to the queue
 		request := ExecutionRequest{
