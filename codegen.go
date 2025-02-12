@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"time"
 	"context"
+	"runtime"
 	"crypto/md5"
 	"encoding/json"
 	"errors"
@@ -3721,7 +3722,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\nshufflepy==0.0.7\nshuffle-sdk==0.0.10\n"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\nshufflepy==0.0.7\nshuffle-sdk==0.0.11\n"
 }
 
 // Removes JSON values from the input
@@ -3866,14 +3867,21 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	}
 
 	baseUrl := os.Getenv("BASE_URL")
-	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist. All images: %#v", imageName, baseUrl, downloadedImages)
+	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist", imageName, baseUrl)
 
 	if !ArrayContains(downloadedImages, imageName) {
 		downloadedImages = append(downloadedImages, imageName)
 	}
 
+
 	data := fmt.Sprintf(`{"name": "%s"}`, imageName)
 	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl)
+
+	// Set request timeout to 5 min (max)
+	topClient.Timeout = time.Minute * 5
+
+	arch := runtime.GOARCH
+	dockerImgUrl = fmt.Sprintf("%s?arch=%s", dockerImgUrl, arch)
 
 	req, err := http.NewRequest(
 		"POST",
