@@ -19431,7 +19431,18 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment != "cloud" {
 		redirectUrl = "http://localhost:3001/workflows"
 		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
-			redirectUrl = fmt.Sprintf("%s/workflows", os.Getenv("SSO_REDIRECT_URL"))
+			baseUrl := os.Getenv("SSO_REDIRECT_URL")
+
+			// Check if URL contains /api/v1/login_openid and replace with /workflows
+			if strings.Contains(baseUrl, "/api/v1/login_openid") {
+				baseUrl = strings.Replace(baseUrl, "/api/v1/login_openid", "/workflows", 1)
+			} else if !strings.HasSuffix(baseUrl, "/workflows") {
+				// If URL doesn't end with /workflows, append it
+				redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
+				return
+			}
+
+			redirectUrl = baseUrl
 		}
 	}
 
@@ -19992,16 +20003,22 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	redirectUrl := "http://localhost:3001/workflows"
 	backendUrl := os.Getenv("SSO_REDIRECT_URL")
 
-	if len(backendUrl) == 0 && project.Environment == "onprem" {
-		backendUrl = "http://localhost:3000"
-	}
+	if project.Environment != "cloud" {
+		redirectUrl = "http://localhost:3001/workflows"
+		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+			baseUrl := os.Getenv("SSO_REDIRECT_URL")
 
-	if len(backendUrl) == 0 && len(os.Getenv("BASE_URL")) > 0 {
-		backendUrl = os.Getenv("BASE_URL")
-	}
+			// Check if URL contains /api/v1/login_sso and replace with /workflows
+			if strings.Contains(baseUrl, "/api/v1/login_sso") {
+				baseUrl = strings.Replace(baseUrl, "/api/v1/login_sso", "/workflows", 1)
+			} else if !strings.HasSuffix(baseUrl, "/workflows") {
+				// If URL doesn't end with /workflows, append it
+				redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
+				return
+			}
 
-	if len(backendUrl) > 0 {
-		redirectUrl = fmt.Sprintf("%s/workflows", backendUrl)
+			redirectUrl = baseUrl
+		}
 	}
 
 	if project.Environment == "cloud" {
