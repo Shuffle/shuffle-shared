@@ -19428,8 +19428,20 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	redirectUrl := "https://shuffler.io/workflows"
 
-	if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
-		redirectUrl = os.Getenv("SSO_REDIRECT_URL")
+	if project.Environment != "cloud" {
+		redirectUrl = "http://localhost:3001/workflows"
+		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+			baseUrl := os.Getenv("SSO_REDIRECT_URL")
+			// Check if URL contains /api/v1/login_openid and replace with /workflows
+			if strings.Contains(baseUrl, "/api/v1/login_openid") {
+				redirectUrl = strings.Replace(baseUrl, "/api/v1/login_openid", "/workflows", 1)
+			} else if !strings.HasSuffix(baseUrl, "/workflows") {
+				// If URL doesn't end with /workflows, append it
+				redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
+			} else {
+				redirectUrl = baseUrl
+			}
+		}
 	}
 
 	if len(userName) == 0 {
@@ -19444,7 +19456,40 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		for _, user := range users {
 			log.Printf("%s - %s", user.GeneratedUsername, userName)
 			if user.GeneratedUsername == userName {
-				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == org.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
+
+				// check whether user is in org or not
+				foundUserInOrg := false
+				var usr User
+				for _, usr = range org.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (1)", user.Username, user.Id, org.Name, org.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, org.Id)
+					}
+					if !foundUserInOrg {
+						org.Users = append(org.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login! - (1)", user.Username, user.Id, userName)
+				}
 
 				//log.Printf("SESSION: %s", user.Session)
 				user.ActiveOrg = OrgMini{
@@ -19531,6 +19576,16 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
+				if !foundUserInOrg {
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during user storage (2)"}`))
+						return
+					}
+				}
+
 				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
 				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 				return
@@ -19543,8 +19598,41 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
 			if user.Username == userName {
-				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
+				// Checking whether the user is in the org
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == org.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
 
+				// check whether user is in org or not
+				foundUserInOrg := false
+				var usr User
+				for _, usr = range org.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				if (!foundOrgInUser || !foundUserInOrg) && org.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Please contact the administrator - (2)", user.Username, user.Id, org.Name, org.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (2)", user.Username, user.Id, org.Name, org.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, org.Id)
+					}
+					if !foundUserInOrg {
+						org.Users = append(org.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!- (2)", user.Username, user.Id, userName)
+				}
 				//log.Printf("SESSION: %s", user.Session)
 				user.ActiveOrg = OrgMini{
 					Name: org.Name,
@@ -19629,6 +19717,16 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
+				if !foundUserInOrg {
+					err = SetOrg(ctx, *org, org.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting session: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during session storage (2)"}`))
+						return
+					}
+				}
+
 				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
 				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 				return
@@ -19658,6 +19756,13 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
+		return
+	}
+
+	if org.SSOConfig.AutoProvision {
+		log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s - (3)", org.Name, org.Id, userName)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
 		return
 	}
 
@@ -19750,17 +19855,20 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	redirectUrl := "http://localhost:3001/workflows"
 	backendUrl := os.Getenv("SSO_REDIRECT_URL")
 
-	if len(backendUrl) == 0 && project.Environment == "onprem" {
-		backendUrl = "http://localhost:3000"
-	}
+	if project.Environment != "cloud" {
+		if len(os.Getenv("SSO_REDIRECT_URL")) > 0 {
+			baseUrl := os.Getenv("SSO_REDIRECT_URL")
 
-	if len(backendUrl) == 0 && len(os.Getenv("BASE_URL")) > 0 {
-		backendUrl = os.Getenv("BASE_URL")
-	}
-
-	if len(backendUrl) > 0 {
-		//we don't need to add /workflow path in backend url as backend url is SSO_REDIRECT_URL and it is already pointing to /workflow by default.
-		redirectUrl = backendUrl
+			// Check if URL contains /api/v1/login_sso and replace with /workflows
+			if strings.Contains(baseUrl, "/api/v1/login_sso") {
+				redirectUrl = strings.Replace(baseUrl, "/api/v1/login_sso", "/workflows", 1)
+			} else if !strings.HasSuffix(baseUrl, "/workflows") {
+				// If URL doesn't end with /workflows, append it
+				redirectUrl = fmt.Sprintf("%s/workflows", baseUrl)
+			} else {
+				redirectUrl = baseUrl
+			}
+		}
 	}
 
 	if project.Environment == "cloud" {
@@ -19953,7 +20061,40 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		for _, user := range users {
 			log.Printf("%s - %s", user.GeneratedUsername, userName)
 			if user.GeneratedUsername == userName {
-				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!", user.Username, user.Id, userName)
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == foundOrg.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
+
+				// check whether user is in org or not
+				foundUserInOrg := false
+				var usr User
+				for _, usr = range foundOrg.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				if (!foundOrgInUser || !foundUserInOrg) && foundOrg.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Autoprovisioning of user is disable. Please contact the administrator - (1)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (1)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, foundOrg.Id)
+					}
+					if !foundUserInOrg {
+						foundOrg.Users = append(foundOrg.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login! - (1)", user.Username, user.Id, userName)
+				}
 
 				if project.Environment == "cloud" {
 					// user.ActiveOrg.Id = matchingOrgs[0].Id
@@ -20054,6 +20195,16 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
+				if !foundUserInOrg {
+					err = SetOrg(ctx, foundOrg, foundOrg.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting user: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during user storage (2)"}`))
+						return
+					}
+				}
+
 				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
 				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 				return
@@ -20066,7 +20217,42 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	if err == nil && len(users) > 0 {
 		for _, user := range users {
 			if user.Username == userName {
-				log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login %s!", user.Username, user.Id, userName, redirectUrl)
+
+				// Checking whether the user is in the org
+				foundOrgInUser := false
+				for _, userOrg := range user.Orgs {
+					if userOrg == foundOrg.Id {
+						foundOrgInUser = true
+						break
+					}
+				}
+
+				// check whether user is in org or not
+				foundUserInOrg := false
+				var usr User
+				for _, usr = range foundOrg.Users {
+					if usr.Id == user.Id {
+						foundUserInOrg = true
+						break
+					}
+				}
+
+				if (!foundOrgInUser || !foundUserInOrg) && foundOrg.SSOConfig.AutoProvision {
+					log.Printf("[WARNING] User %s (%s) is not in org %s (%s). Autoprovisioning user is not allow in org - (2)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
+					resp.WriteHeader(401)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
+					return
+				} else if !foundOrgInUser || !foundUserInOrg {
+					log.Printf("[INFO] User %s (%s) is not in org %s (%s). Auto-provisioning is enabled. Adding user to org - (2)", user.Username, user.Id, foundOrg.Name, foundOrg.Id)
+					if !foundOrgInUser {
+						user.Orgs = append(user.Orgs, foundOrg.Id)
+					}
+					if !foundUserInOrg {
+						foundOrg.Users = append(foundOrg.Users, user)
+					}
+				} else {
+					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login! - (2)", user.Username, user.Id, userName)
+				}
 
 				//log.Printf("SESSION: %s", user.Session)
 				// if project.Environment == "cloud" {
@@ -20158,6 +20344,16 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
+				if !foundUserInOrg {
+					err = SetOrg(ctx, foundOrg, foundOrg.Id)
+					if err != nil {
+						log.Printf("[WARNING] Failed updating org when setting session: %s", err)
+						resp.WriteHeader(401)
+						resp.Write([]byte(`{"success": false, "reason": "Failed org update during session storage (2)"}`))
+						return
+					}
+				}
+
 				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
 				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
 				return
@@ -20187,6 +20383,13 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] Failed finding a valid org (default) without suborgs during SSO setup")
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed finding valid SSO auto org"}`)))
+		return
+	}
+
+	if foundOrg.SSOConfig.AutoProvision {
+		log.Printf("[INFO] Auto-provisioning user is not allow for org %s (%s) - can not add new user %s", foundOrg.Name, foundOrg.Id, userName)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
 		return
 	}
 
