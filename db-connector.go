@@ -11021,7 +11021,7 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 	// FIXME: Sorting doesn't seem to work...
 	//StartedAt          int64          `json:"started_at" datastore:"started_at"`
 	var query *datastore.Query
-	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-3600).Order("-started_at").Limit(100)	
+	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-60).Order("-started_at").Limit(100)	
 	
 	max := 100000
 	cursorStr := ""
