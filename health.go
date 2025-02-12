@@ -668,6 +668,11 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 }
 
 func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
 	ctx := GetContext(request)
 
 	limit := request.URL.Query().Get("limit")
