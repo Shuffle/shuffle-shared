@@ -3,7 +3,9 @@ package shuffle
 import (
 	"archive/zip"
 	"bytes"
+	"time"
 	"context"
+	"runtime"
 	"crypto/md5"
 	"encoding/json"
 	"errors"
@@ -199,6 +201,50 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 	return filename, nil
 }
 
+// used to load SDK
+func getGithubFile(githubUrl string) ([]byte, error) {
+	// md5 the github url and use it as cache key
+	ctx := context.Background()
+	cacheKey := fmt.Sprintf("%x", md5.Sum([]byte(githubUrl)))
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			return cacheData, nil
+		}
+	}
+
+
+	// Load the data from this file and return.
+	resp, err := http.Get(githubUrl)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get app base from github: %s", err)
+		return []byte{}, err
+	}
+
+	if resp.StatusCode >= 300 {
+		log.Printf("[ERROR] Failed to get app base from github: %s", resp.Status)
+		return []byte{}, errors.New(fmt.Sprintf("Failed to get app base from github: %s", resp.Status))
+	}
+
+	defer resp.Body.Close()
+	appbaseData, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read app base from github: %s", err)
+		return []byte{}, err
+	}
+
+	log.Printf("[DEBUG] Loaded App SDK of length %d from github", len(appbaseData))
+	if project.CacheDb {
+		err = SetCache(ctx, cacheKey, appbaseData, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
+		}
+	}
+
+	return appbaseData, nil
+}
+
 func GetAppbase() ([]byte, []byte, error) {
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
@@ -213,6 +259,11 @@ func GetAppbase() ([]byte, []byte, error) {
 
 	appbaseData, err := ioutil.ReadFile(appbase)
 	if err != nil {
+		// FIXME: Use an older commit of the file
+		githubUrl := "https://raw.githubusercontent.com/Shuffle/app_sdk/refs/heads/main/shuffle_sdk/shuffle_sdk.py"
+		content, err := getGithubFile(githubUrl)
+		return content, []byte{}, err 
+
 		return []byte{}, []byte{}, err
 	}
 
@@ -223,14 +274,42 @@ func GetAppbase() ([]byte, []byte, error) {
 func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName string) ([]byte, []byte, error) {
 	// 1. Have baseline in bucket/generated_apps/baseline
 	// 2. Copy the baseline to a new folder with identifier name
+
+	loadFromGithub := true 
+
 	basePath := "generated_apps/baseline"
-	appbase, err := client.Bucket(bucketName).Object(fmt.Sprintf("%s/app_base.py", basePath)).NewReader(ctx)
+	reference := client.Bucket(bucketName).Object(fmt.Sprintf("%s/app_base.py", basePath))
+			
+	// Check if it's more than 1 month old
+	if reference != nil {
+		attrs, err := reference.Attrs(ctx)
+		if err == nil {
+			if attrs.Updated.Before(time.Now().AddDate(0, -1, 0)) {
+				log.Printf("[DEBUG] App base is older than 1 month on github. Offloading to direct github ref")
+			} else {
+				loadFromGithub = false
+			}
+		}
+	}
+
+	if loadFromGithub {
+		// FIXME: Use an older commit of the file
+		githubUrl := "https://raw.githubusercontent.com/Shuffle/app_sdk/refs/heads/main/shuffle_sdk/shuffle_sdk.py"
+		content, err := getGithubFile(githubUrl)
+		return content, []byte{}, err 
+	}
+
+	appbase, err := reference.NewReader(ctx)
 	if err != nil {
-		return []byte{}, []byte{}, err
+		log.Printf("[WARNING] Failed to get app base from GCP BUCKET %#v. Offloading to direct github ref", bucketName)
+
+		// FIXME: Use an older commit of the file
+		githubUrl := "https://raw.githubusercontent.com/Shuffle/app_sdk/refs/heads/main/shuffle_sdk/shuffle_sdk.py"
+		content, err := getGithubFile(githubUrl)
+		return content, []byte{}, err 
 	}
 
 	defer appbase.Close()
-
 	appbaseData, err := ioutil.ReadAll(appbase)
 	if err != nil {
 		return []byte{}, []byte{}, err
@@ -3643,7 +3722,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\n"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\nshufflepy==0.0.7\nshuffle-sdk==0.0.11\n"
 }
 
 // Removes JSON values from the input
@@ -3788,14 +3867,21 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	}
 
 	baseUrl := os.Getenv("BASE_URL")
-	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist. All images: %#v", imageName, baseUrl, downloadedImages)
+	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist", imageName, baseUrl)
 
 	if !ArrayContains(downloadedImages, imageName) {
 		downloadedImages = append(downloadedImages, imageName)
 	}
 
+
 	data := fmt.Sprintf(`{"name": "%s"}`, imageName)
 	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl)
+
+	// Set request timeout to 5 min (max)
+	topClient.Timeout = time.Minute * 5
+
+	arch := runtime.GOARCH
+	dockerImgUrl = fmt.Sprintf("%s?arch=%s", dockerImgUrl, arch)
 
 	req, err := http.NewRequest(
 		"POST",
