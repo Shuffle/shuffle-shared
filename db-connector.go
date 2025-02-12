@@ -1423,6 +1423,169 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
+func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int) ([]LiveExecutionStatus, error) {
+    nameKey := "live_execution_status"
+    liveExecs := []LiveExecutionStatus{}
+
+    // Try cache first
+    cacheKey := fmt.Sprintf("%s-%d-%d-%d", nameKey, beforeTimestamp, afterTimestamp, limit)
+    if project.CacheDb {
+        cache, err := GetCache(ctx, cacheKey)
+        if err == nil {
+            cacheData := []byte(cache.([]uint8))
+            err = json.Unmarshal(cacheData, &liveExecs)
+            if err == nil {
+                return liveExecs, nil
+            }
+        }
+    }
+
+    if project.DbType == "opensearch" {
+        var buf bytes.Buffer
+        query := map[string]interface{}{
+            "sort": map[string]interface{}{
+                "created_at": map[string]interface{}{
+                    "order": "desc",
+                },
+            },
+        }
+
+        if limit != 0 {
+            query["size"] = limit
+        }
+
+        if beforeTimestamp > 0 || afterTimestamp > 0 {
+            query["query"] = map[string]interface{}{
+                "bool": map[string]interface{}{
+                    "must": []map[string]interface{}{},
+                },
+            }
+        }
+
+        if beforeTimestamp > 0 {
+            query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+                query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+                map[string]interface{}{
+                    "range": map[string]interface{}{
+                        "created_at": map[string]interface{}{
+                            "gt": beforeTimestamp,
+                        },
+                    },
+                },
+            )
+        }
+
+        if afterTimestamp > 0 {
+            query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+                query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+                map[string]interface{}{
+                    "range": map[string]interface{}{
+                        "created_at": map[string]interface{}{
+                            "lt": afterTimestamp,
+                        },
+                    },
+                },
+            )
+        }
+
+        if err := json.NewEncoder(&buf).Encode(query); err != nil {
+            log.Printf("[WARNING] Error encoding live execution status query: %s", err)
+            return liveExecs, err
+        }
+
+        res, err := project.Es.Search(
+            project.Es.Search.WithContext(ctx),
+            project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+            project.Es.Search.WithBody(&buf),
+            project.Es.Search.WithTrackTotalHits(true),
+        )
+        if err != nil {
+            log.Printf("[ERROR] Error getting response from Opensearch (get live execution status): %s", err)
+            return liveExecs, err
+        }
+        defer res.Body.Close()
+
+        if res.StatusCode != 200 && res.StatusCode != 201 {
+            return liveExecs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+        }
+
+        if res.IsError() {
+            var e map[string]interface{}
+            if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+                log.Printf("[WARNING] Error parsing the response body: %s", err)
+                return liveExecs, err
+            } else {
+                log.Printf("[%s] %s: %s",
+                    res.Status(),
+                    e["error"].(map[string]interface{})["type"],
+                    e["error"].(map[string]interface{})["reason"],
+                )
+            }
+        }
+
+        respBody, err := ioutil.ReadAll(res.Body)
+        if err != nil {
+            return liveExecs, err
+        }
+
+        wrapped := struct {
+            Hits struct {
+                Hits []struct {
+                    Source LiveExecutionStatus `json:"_source"`
+                } `json:"hits"`
+            } `json:"hits"`
+        }{}
+        
+        err = json.Unmarshal(respBody, &wrapped)
+        if err != nil {
+            return liveExecs, err
+        }
+
+        for _, hit := range wrapped.Hits.Hits {
+            liveExecs = append(liveExecs, hit.Source)
+        }
+
+    } else {
+        q := datastore.NewQuery(nameKey)
+
+        if beforeTimestamp != 0 {
+            q = q.Filter("CreatedAt >", beforeTimestamp)
+        }
+
+        if afterTimestamp != 0 {
+            q = q.Filter("CreatedAt <", afterTimestamp)
+        }
+
+        if limit != 0 {
+            q = q.Limit(limit)
+        }
+
+        q = q.Order("-CreatedAt")
+
+        _, err := project.Dbclient.GetAll(ctx, q, &liveExecs)
+        if err != nil {
+            log.Printf("[WARNING] Error getting live execution status: %s", err)
+            return liveExecs, err
+        }
+    }
+
+    // Cache the results
+    if project.CacheDb {
+        data, err := json.Marshal(liveExecs)
+        if err != nil {
+            log.Printf("[WARNING] Failed marshalling live execution status: %s", err)
+            return liveExecs, nil
+        }
+
+        err = SetCache(ctx, cacheKey, data, 30)
+        if err != nil {
+            log.Printf("[WARNING] Failed updating live execution status cache: %s", err)
+        }
+    }
+
+    return liveExecs, nil
+}
+
 func SetLiveWorkflowExecutionData(ctx context.Context, liveExec LiveExecutionStatus) error {
     nameKey := "live_execution_status"
     // Generate random ID if not already set
@@ -10862,7 +11025,7 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 	var query *datastore.Query
 	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-3600).Order("-started_at").Limit(100)	
 	
-	max := 100
+	max := 100000
 	cursorStr := ""
 	for {
 		// it := project.dbclient.Run(ctx, query)
