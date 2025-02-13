@@ -6213,6 +6213,8 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 	}
 
 	childWorkflows = newChildWorkflows
+
+	newlyAdded := []string{}
 	if len(childWorkflows) < len(parentWorkflow.SuborgDistribution) {
 		for _, suborgId := range parentWorkflow.SuborgDistribution {
 			found := false
@@ -6232,8 +6234,8 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 					log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 				} else {
 					log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
-
 					childWorkflows = append(childWorkflows, *childWorkflow)
+					newlyAdded = append(newlyAdded, childWorkflow.ID)
 				}
 			}
 		}
@@ -6264,6 +6266,18 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 		waitgroup.Add(1)
 		go func(childWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			diffWorkflows(childWorkflow, parentWorkflow, update)
+
+			// Doing a double take to ensure first go-around is correctly set up
+			if ArrayContains(newlyAdded, childWorkflow.ID) {
+				log.Printf("\n\n\n[INFO] Doing a double take on child workflow %s (%s) for %s (%s) during initial setup\n\n\n", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
+				newChildworkflow, err := GetWorkflow(ctx, childWorkflow.ID)
+				if err != nil {
+					log.Printf("[WARNING] Failed to get child workflow %s (%s) for %s (%s) during initial setup: %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+				} else {
+					diffWorkflows(*newChildworkflow, parentWorkflow, update)
+				}
+			}
+
 			waitgroup.Done()
 		}(childWorkflow, parentWorkflow, true)
 	}
@@ -7355,7 +7369,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					log.Printf("[WARNING] Failed getting child hook: %s", err)
 					continue
 				} else if trigger.TriggerType == "SCHEDULE" {
-					log.Printf("[DEBUG] This trigger is a schedule. Will proceed to delete it")
+					//log.Printf("[DEBUG] This trigger is a schedule. Will proceed to delete it")
 
 					ctx := context.Background()
 					schedule, err := GetSchedule(ctx, trigger.ID)
@@ -7370,13 +7384,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					log.Printf("[ERROR] Failed getting child schedule: %s", err)
 					continue
 				} else if trigger.TriggerType == "SUBFLOW" {
-					log.Printf("[DEBUG] This trigger is a subflow. Will proceed to delete it")
+					//log.Printf("[DEBUG] This trigger is a subflow. Will proceed to delete it")
 					continue
 				} else if trigger.TriggerType == "USERINPUT" {
-					log.Printf("[DEBUG] This trigger is a user input. Will proceed to delete it")
+					//log.Printf("[DEBUG] This trigger is a user input. Will proceed to delete it")
 					continue
 				} else if trigger.TriggerType == "PIPELINE" {
-					log.Printf("[DEBUG] This trigger is a pipeline. Will proceed to delete it")
+					//log.Printf("[DEBUG] This trigger is a pipeline. Will proceed to delete it")
 					continue
 				}
 
@@ -9562,6 +9576,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newWf.Created = 0
 	newWf.Edited = 0
 
+	/*
 	defaultEnvironment := "cloud"
 	envs, err := GetEnvironments(ctx, subOrgId)
 	for _, env := range envs {
@@ -9570,16 +9585,17 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 			break
 		}
 	}
+	*/
 
+	// Letting full replication occur
 	for actionIndex, _ := range newWf.Actions {
 		workflow.Actions[actionIndex].ParentControlled = true
-		workflow.Actions[actionIndex].AuthenticationId = ""
-		workflow.Actions[actionIndex].Environment = defaultEnvironment
+		//workflow.Actions[actionIndex].Environment = defaultEnvironment
 	}
 
 	for triggerIndex, _ := range newWf.Triggers {
 		newWf.Triggers[triggerIndex].ParentControlled = true
-		newWf.Triggers[triggerIndex].Environment = defaultEnvironment
+		//newWf.Triggers[triggerIndex].Environment = defaultEnvironment
 
 		// FIXME: How do we manage secondary IDs?
 		// E.g. for webhooks, how do we have a URL correctly, and start/stop properly?
