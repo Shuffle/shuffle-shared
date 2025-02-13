@@ -6520,7 +6520,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// Check if there is a difference in triggers, and what they are
 	// Check if there is a difference in branches, and what they are
 
-	log.Printf("[DEBUG] Old Child workflow. Actions: %d, Triggers: %d, Branches: %d", len(oldWorkflow.Actions), len(oldWorkflow.Triggers), len(oldWorkflow.Branches))
+	log.Printf("[DEBUG] PRE Child workflow %s. Actions: %d, Triggers: %d, Branches: %d", oldWorkflow.ID, len(oldWorkflow.Actions), len(oldWorkflow.Triggers), len(oldWorkflow.Branches))
 
 	// We create a new ID for each trigger.
 	// Older ID is stored in trigger.ReplacementForTrigger
@@ -6656,7 +6656,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(newAction, oldAction)
 			if changed || len(changeType) > 0 {
-				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
+				//log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
 				updatedActions = append(updatedActions, newAction)
 			}
 		}
@@ -6764,7 +6764,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasTriggerChanged(newAction, oldAction)
 			if changed {
-				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
+				_ = changeType
+				//log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
 				// updatedTriggers always has parent workflow's new trigger.
 				updatedTriggers = append(updatedTriggers, newAction)
 			}
@@ -6836,7 +6837,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasBranchChanged(newBranch, oldBranch)
 			if changed {
-				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newBranch.Label, newBranch.ID, changeType)
+				_ = changeType
+				//log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", newBranch.Label, newBranch.ID, changeType)
 				updatedBranches = append(updatedBranches, newBranch)
 			}
 		}
@@ -7735,7 +7737,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			log.Printf("[ERROR] Failed getting static workflow health for %s: %s", childWorkflow.ID, err)
 		}
 
-		log.Printf("[DEBUG] CHILD workflow %s of %s. Actions: %d, Triggers: %d, Branches: %d, Variables: %d, Execution Vars: %d", childWorkflow.ID, parentWorkflow.ID, len(childWorkflow.Actions), len(childWorkflow.Triggers), len(childWorkflow.Branches), len(childWorkflow.WorkflowVariables), len(childWorkflow.ExecutionVariables))
+		//log.Printf("[DEBUG] CHILD workflow %s of %s. Actions: %d, Triggers: %d, Branches: %d, Variables: %d, Execution Vars: %d", childWorkflow.ID, parentWorkflow.ID, len(childWorkflow.Actions), len(childWorkflow.Triggers), len(childWorkflow.Branches), len(childWorkflow.WorkflowVariables), len(childWorkflow.ExecutionVariables))
 
 		err = SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
 		if err != nil {
