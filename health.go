@@ -2389,7 +2389,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
-							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
+							//log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
 							//continue
 						}

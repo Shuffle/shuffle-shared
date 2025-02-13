@@ -7147,10 +7147,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 								break
 							}
 
+							// Checks if the previous value of the parent workflow is the same as the child, as to keep in sync
 							if relevantRevisionActionParam.Value != parentParam.Value {
-								//log.Printf("[DEBUG] Param %s in parent has changed from '%s' to '%s'", parentParam.Name, relevantRevisionActionParam.Value, parentParam.Value)
-
-								// Checks if the previous value of the parent workflow is the same as the child, as to keep in sync
 								if childParam.Value == relevantRevisionActionParam.Value {
 									childWorkflow.Actions[childIndex].Parameters[childParamIndex].Value = parentParam.Value
 								}
@@ -7394,12 +7392,11 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		if len(updatedTriggers) > 0 {
 			for _, parentTrigger := range updatedTriggers {
 				//log.Printf("[DEBUG] ID of the parent trigger (%s): %s", parentTrigger.TriggerType, parentTrigger.ID)
-				for index, childTrigger := range childWorkflow.Triggers {
+				for childIndex, childTrigger := range childWorkflow.Triggers {
 					if childTrigger.ReplacementForTrigger != parentTrigger.ID {
 						continue
 					}
 
-					//log.Printf("[DEBUG] Updating child trigger %s in the child", childTrigger.ID)
 
 					if parentTrigger.Status == "SUCCESS" {
 						log.Printf("[DEBUG] Remapping parent status SUCCESS to running for child trigger %s", childTrigger.ID)
@@ -7408,8 +7405,50 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					// Ensures params are in sync, at least with the size of them
 					if len(childTrigger.Parameters) != len(parentTrigger.Parameters) {
-						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
+						log.Printf("\n\n[WARNING] Re-syncing parameters in child trigger with parent trigger %s\n\n", childTrigger.Name) 
+						childWorkflow.Triggers[childIndex].Parameters = parentTrigger.Parameters
 					}
+
+
+					relevantRevisionTrigger := Trigger{}
+					for _, parentRevisionTrigger := range lastParentRevision.Triggers {
+						if parentRevisionTrigger.ID == parentTrigger.ID {
+							relevantRevisionTrigger = parentRevisionTrigger
+							break
+						}
+					}
+
+					// Check for desynced parameters
+					for _, parentParam := range parentTrigger.Parameters {
+						for childParamIndex, childParam := range childTrigger.Parameters {
+							if parentParam.Name != childParam.Name {
+								continue
+							}
+
+							if parentParam.Value == childParam.Value {
+								// No point in checking stuff then
+								continue
+							}
+
+							relevantRevisionTriggerParam := WorkflowAppActionParameter{}
+							for _, parentRevisionParam := range relevantRevisionTrigger.Parameters {
+								if parentRevisionParam.Name != parentParam.Name {
+									continue
+								}
+
+								relevantRevisionTriggerParam = parentRevisionParam
+								break
+							}
+
+							// Checks if the previous value of the parent workflow is the same as the child, as to keep in sync
+							if relevantRevisionTriggerParam.Value != parentParam.Value {
+								if childParam.Value == relevantRevisionTriggerParam.Value {
+									childWorkflow.Triggers[childIndex].Parameters[childParamIndex].Value = parentParam.Value
+								}
+							}
+						}
+					}
+
 
 					// FIXME:
 					// Make sure it changes things such as URL & references properly
@@ -7418,10 +7457,10 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						// make sure to only override: name, label, position,
 						// app_version, startnode and nothing else
 
-						childWorkflow.Triggers[index].Name = parentTrigger.Name
-						childWorkflow.Triggers[index].Label = parentTrigger.Label
-						childWorkflow.Triggers[index].Position = parentTrigger.Position
-						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
+						childWorkflow.Triggers[childIndex].Name = parentTrigger.Name
+						childWorkflow.Triggers[childIndex].Label = parentTrigger.Label
+						childWorkflow.Triggers[childIndex].Position = parentTrigger.Position
+						childWorkflow.Triggers[childIndex].AppVersion = parentTrigger.AppVersion
 
 						// 1. Get the parent ID
 						// 2. Check it's still running or not
@@ -7432,9 +7471,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							parentTrigger.Status = parentHook.Status
 						}
 
-						childWorkflow.Triggers[index].Status = parentTrigger.Status
+						childWorkflow.Triggers[childIndex].Status = parentTrigger.Status
 						if parentTrigger.Status != childWorkflow.Status {
-							log.Printf("[DEBUG] Webhook: Status change in trigger %#v compared to parent. Parent: %#v, Child: %#v", childWorkflow.Triggers[index].ID, parentTrigger.Status, childWorkflow.Status)
+							log.Printf("[DEBUG] Webhook: Status change in trigger %#v compared to parent. Parent: %#v, Child: %#v", childWorkflow.Triggers[childIndex].ID, parentTrigger.Status, childWorkflow.Status)
 							if parentTrigger.Status == "running" {
 								// Start the trigger
 								log.Printf("[DEBUG] Starting trigger child %s", childTrigger.ID)
@@ -7467,19 +7506,19 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					} else if parentTrigger.TriggerType == "SCHEDULE" {
 
 						// app_version and parameters
-						childWorkflow.Triggers[index].Name = parentTrigger.Name
-						childWorkflow.Triggers[index].Label = parentTrigger.Label
-						childWorkflow.Triggers[index].Position = parentTrigger.Position
-						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
-						childWorkflow.Triggers[index].Status = parentTrigger.Status
+						childWorkflow.Triggers[childIndex].Name = parentTrigger.Name
+						childWorkflow.Triggers[childIndex].Label = parentTrigger.Label
+						childWorkflow.Triggers[childIndex].Position = parentTrigger.Position
+						childWorkflow.Triggers[childIndex].AppVersion = parentTrigger.AppVersion
+						childWorkflow.Triggers[childIndex].Status = parentTrigger.Status
 
 						for paramIndex, param := range parentTrigger.Parameters {
 							if param.Name == "execution_argument" {
-								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								childWorkflow.Triggers[childIndex].Parameters[paramIndex].Value = param.Value
 							}
 
 							if param.Name == "cron" {
-								childWorkflow.Triggers[index].Parameters[paramIndex].Value = param.Value
+								childWorkflow.Triggers[childIndex].Parameters[paramIndex].Value = param.Value
 							}
 						}
 
@@ -7489,40 +7528,40 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					} else if parentTrigger.TriggerType == "SUBFLOW" {
 						// make sure to override: name, label, position,
 						// app_version, startnode and parameters
-						childWorkflow.Triggers[index].Name = parentTrigger.Name
-						childWorkflow.Triggers[index].Label = parentTrigger.Label
-						childWorkflow.Triggers[index].Position = parentTrigger.Position
-						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
+						childWorkflow.Triggers[childIndex].Name = parentTrigger.Name
+						childWorkflow.Triggers[childIndex].Label = parentTrigger.Label
+						childWorkflow.Triggers[childIndex].Position = parentTrigger.Position
+						childWorkflow.Triggers[childIndex].AppVersion = parentTrigger.AppVersion
 
 						// essentially, now we try to verify:
 						// okay, new workflow? we see it's a subflow that's
 						parentTrigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, parentTrigger)
-						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
+						childWorkflow.Triggers[childIndex].Parameters = parentTrigger.Parameters
 						break
 					} else if parentTrigger.TriggerType == "USERINPUT" {
 						// make sure to override: name, label, position,
 						// app_version, startnode and parameters
-						childWorkflow.Triggers[index].Name = parentTrigger.Name
-						childWorkflow.Triggers[index].Label = parentTrigger.Label
-						childWorkflow.Triggers[index].Position = parentTrigger.Position
-						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
+						childWorkflow.Triggers[childIndex].Name = parentTrigger.Name
+						childWorkflow.Triggers[childIndex].Label = parentTrigger.Label
+						childWorkflow.Triggers[childIndex].Position = parentTrigger.Position
+						childWorkflow.Triggers[childIndex].AppVersion = parentTrigger.AppVersion
 
 						// essentially, now we try to verify:
 						// okay, new workflow? we see it's a subflow that's
 						//parentTrigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, parentTrigger)
-						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
+						childWorkflow.Triggers[childIndex].Parameters = parentTrigger.Parameters
 						break
 					} else if parentTrigger.TriggerType == "PIPELINE" {
-						childWorkflow.Triggers[index].Name = parentTrigger.Name
-						childWorkflow.Triggers[index].Label = parentTrigger.Label
-						childWorkflow.Triggers[index].Position = parentTrigger.Position
-						childWorkflow.Triggers[index].AppVersion = parentTrigger.AppVersion
-						childWorkflow.Triggers[index].Parameters = parentTrigger.Parameters
+						childWorkflow.Triggers[childIndex].Name = parentTrigger.Name
+						childWorkflow.Triggers[childIndex].Label = parentTrigger.Label
+						childWorkflow.Triggers[childIndex].Position = parentTrigger.Position
+						childWorkflow.Triggers[childIndex].AppVersion = parentTrigger.AppVersion
+						childWorkflow.Triggers[childIndex].Parameters = parentTrigger.Parameters
 						log.Printf("[DEBUG] Updating pipeline trigger %s", childTrigger.ID)
 						break
 					}
 
-					childWorkflow.Triggers[index] = parentTrigger
+					childWorkflow.Triggers[childIndex] = parentTrigger
 					break
 				}
 			}
@@ -7638,71 +7677,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				}
 			}
 
-			// FIXME: Add specific handlers for each type based on oldWorkflow params that may have been locally configured
-			// FIXME: THIS DOES NOT WORK YET FOR TRIGGER FIELD MAPPING TO OLD SETTING
-			if childTrigger.ParentControlled {
-				// for _, oldTrigger := range oldWorkflow.Triggers {
-				// 	if oldTrigger.ID != childTrigger.ID {
-				// 		continue
-				// 	}
-
-				// 	childTrigger.Status = oldTrigger.Status
-
-				// 	reservedArguments := []string{}
-				// 	if oldTrigger.TriggerType == "SUBFLOW" {
-				// 		reservedArguments = []string{"workflow", "user_apikey", "startnode"}
-				// 	} else if oldTrigger.TriggerType == "USERINPUT" {
-				// 		reservedArguments = []string{"subflow", "sms", "email", "type"}
-				// 	} else if oldTrigger.TriggerType == "SCHEDULE" {
-				// 	} else if oldTrigger.TriggerType == "WEBHOOK" {
-				// 		reservedArguments = []string{"url", "tmp", "auth_headers"}
-				// 	} else if oldTrigger.TriggerType == "PIPELINE" {
-				// 		reservedArguments = []string{"pipeline"}
-				// 	}
-
-				// 	fieldsFound := []string{}
-				// 	for paramIndex, param := range childTrigger.Parameters {
-				// 		if !ArrayContains(reservedArguments, param.Name) {
-				// 			continue
-				// 		}
-
-				// 		fieldsFound = append(fieldsFound, param.Name)
-				// 		for _, oldParam := range oldTrigger.Parameters {
-				// 			if oldParam.Name != param.Name {
-				// 				continue
-				// 			}
-
-				// 			childWorkflow.Triggers[childTriggerIndex].Parameters[paramIndex].Value = oldParam.Value
-				// 			childTrigger.Parameters[paramIndex].Value = oldParam.Value
-				// 			break
-				// 		}
-				// 	}
-
-				// 	if len(fieldsFound) != len(reservedArguments) {
-				// 		for _, field := range reservedArguments {
-				// 			if ArrayContains(fieldsFound, field) {
-				// 				continue
-				// 			}
-
-				// 			oldParamFound := false
-				// 			for _, oldParam := range oldTrigger.Parameters {
-				// 				if oldParam.Name != field {
-				// 					continue
-				// 				}
-
-				// 				oldParamFound = true
-				// 				childTrigger.Parameters = append(childTrigger.Parameters, oldParam)
-				// 				childWorkflow.Triggers[childTriggerIndex].Parameters = append(childWorkflow.Triggers[childTriggerIndex].Parameters, oldParam)
-				// 			}
-
-				// 			if !oldParamFound {
-				// 				//log.Printf("[DEBUG] MISSING IN OLDPARAM TOO: %s", field)
-				// 			}
-				// 		}
-				// 	}
-				// }
-			}
-
 			found := false
 			for _, newTrigger := range newTriggers {
 				if newTrigger.ID == childTrigger.ID {
@@ -7738,39 +7712,16 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			}
 		}
 
-		// // Old childWorkflow triggers:
-		// for _, oldTrigger := range oldWorkflow.Triggers {
-		// 	// params
-		// 	for _, param := range oldTrigger.Parameters {
-		// 		// log.Printf("[DEBUG] Old trigger %s (%s) has param %s and value: %s", oldTrigger.Label, oldTrigger.ID, param.Name, param.Value)
-		// 	}
-		// }
-
-		// // to be updated triggers
-		// for _, trigger := range newTriggers {
-		// 	// params
-		// 	for _, param := range trigger.Parameters {
-		// 		// log.Printf("[DEBUG] New trigger %s (%s) has param %s and value: %s", trigger.Label, trigger.ID, param.Name, param.Value)
-		// 	}
-		// }
-
-		log.Printf("[DEBUG] CHILD workflow (1). Actions: %d, Triggers: %d, Branches: %d", len(childWorkflow.Actions), len(childWorkflow.Triggers), len(childWorkflow.Branches))
-
 		childWorkflow.Actions = newActions
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
-
-		//log.Printf("\n\nEND")
-		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
-		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
-		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
 
 		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting static workflow health for %s: %s", childWorkflow.ID, err)
 		}
 
-		log.Printf("[DEBUG] CHILD workflow (2). Actions: %d, Triggers: %d, Branches: %d", len(childWorkflow.Actions), len(childWorkflow.Triggers), len(childWorkflow.Branches))
+		log.Printf("[DEBUG] CHILD workflow %s of %s. Actions: %d, Triggers: %d, Branches: %d, Variables: %d, Execution Vars: %d", childWorkflow.ID, parentWorkflow.ID, len(childWorkflow.Actions), len(childWorkflow.Triggers), len(childWorkflow.Branches), len(childWorkflow.WorkflowVariables), len(childWorkflow.ExecutionVariables))
 
 		err = SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
 		if err != nil {
@@ -8506,6 +8457,14 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(workflow.SuborgDistribution) > 0 {
+		if len(workflow.ParentWorkflowId) > 0 {
+			// In case they are
+			log.Printf("[ERROR] User %s (%s) tried to save %s with BOTH parent and child workflow distribution. Removing suborg distribution. Most likely frontend desync.", user.Username, user.Id, workflow.ID)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Can't both be a parent and child workflow at the same time. Please remove suborg distribution."}`))
+			return
+		}
+
 		//log.Printf("[DEBUG] Diffing based on parent workflow %s", workflow.ID)
 
 		for actionIndex, _ := range workflow.Actions {
