@@ -9804,7 +9804,10 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	// Getting in here during schemaless is normal
 	if len(workflow.Name) == 0 && len(workflow.ID) == 0 {
 		//log.Printf("[ERROR] Workflow has no name or ID, hence may not exist. Reference ID (maybe from Algolia?: %s)", fileId)
-		resp.WriteHeader(400)
+
+		// FIXME: Cloud + redirects? Can we find copies of workflows to redirect to?
+
+		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found"}`))
 		return
 	}

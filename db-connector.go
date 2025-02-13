@@ -7795,8 +7795,11 @@ func GetPlatformHealth(ctx context.Context, beforeTimestamp int, afterTimestamp 
 
 		_, err := project.Dbclient.GetAll(ctx, q, &health)
 		if err != nil {
-			log.Printf("[WARNING] Error getting latest platform health: %s", err)
-			return health, err
+			if strings.Contains(err.Error(), "cannot load field") {
+			} else {
+				log.Printf("[WARNING] Error getting latest platform health: %s", err)
+				return health, err
+			}
 		}
 	}
 
