@@ -7383,7 +7383,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				newChildTriggers = append(newChildTriggers, trigger)
 			}
 
-			log.Printf("New triggers: %#v", newChildTriggers)
+			//log.Printf("New triggers: %#v", len(newChildTriggers))
 
 			childWorkflow.Triggers = newChildTriggers
 			childTriggers = childWorkflow.Triggers
@@ -8502,7 +8502,9 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		// contains reference objects in the workflow that causes
 		// e.g. authenticationIds to be reset.
 		// This is a temporary fix to avoid it.
-		go diffWorkflowWrapper(newWorkflow)
+		// FIXME: Removed goroutine. Does it matter?
+		// Makes the timing problem go away.
+		diffWorkflowWrapper(newWorkflow)
 	}
 
 	workflow.UpdatedBy = user.Username
