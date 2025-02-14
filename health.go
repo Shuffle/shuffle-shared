@@ -659,6 +659,62 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(platformData)
 }
 
+func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	ctx := GetContext(request)
+
+	limit := request.URL.Query().Get("limit")
+
+	limitInt, err := strconv.Atoi(limit)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting limit to int: %s", err)
+		limitInt = 0
+	}
+
+	before := request.URL.Query().Get("before")
+	beforeInt, err := strconv.Atoi(before)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting before to int: %s", err)
+		beforeInt = 0
+	}
+
+	after := request.URL.Query().Get("after")
+	afterInt, err := strconv.Atoi(after)
+	if err != nil {
+		log.Printf("[ERROR] Failed converting after to int: %s", err)
+		afterInt = 0
+	}
+
+	data, err := GetLiveWorkflowExecutionData(
+		ctx,
+		beforeInt,
+		afterInt,
+		limitInt,
+	)
+
+	if err != nil {	
+		log.Printf("[ERROR] Failed getting live execution data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting live execution data."}`))
+		return
+	}
+
+	dataJSON, err := json.MarshalIndent(data, "", "  ")
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling live execution data: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing live execution data."}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(dataJSON)
+}
+
 func GetOpsDashboardStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -2056,6 +2112,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 			if len(triggerType) == 0 {
 				log.Printf("[WARNING] No TriggerType specified for User Input node %s in %s (%s)", trigger.Label, workflow.Name, workflow.ID)
+				workflow.Errors = append(workflow.Errors, fmt.Sprintf("No TriggerType specified for User Input node '%s'", trigger.Label))
 				if workflow.PreviouslySaved {
 					//resp.WriteHeader(401)
 					//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No contact option specified in user input"}`)))
@@ -2418,7 +2475,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 						foundErr := fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
 
 						if !ArrayContains(workflow.Errors, foundErr) {
-							log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
+							//log.Printf("[DEBUG] Workflow save - adding auth error 2: %s", foundErr)
 							workflow.Errors = append(workflow.Errors, foundErr)
 							//continue
 						}

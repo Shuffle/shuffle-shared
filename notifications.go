@@ -261,7 +261,7 @@ func HandleGetNotifications(resp http.ResponseWriter, request *http.Request) {
 
 // how to make sure that the notification workflow bucket always empties itself:
 // call sendToNotificationWorkflow with the first cached notification 
-func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string, relieveNotifications bool) error {
+func sendToNotificationWorkflow(ctx context.Context, notification Notification, userApikey, workflowId string, relieveNotifications bool, authOrg Org) error {
 	/*
 	// FIXME: Was used for disabling it before due to possible issues with infinite loops.
 	if project.Environment != "onprem" {
@@ -449,7 +449,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 							totalTimeElapsed, 
 							bucketingMinutesInt,
 					)
-					_ = sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true)
+					_ = sendToNotificationWorkflow(ctx, notification, userApikey, workflowId, true, authOrg)
 					err = DeleteCache(ctx, cacheKey)
 					if err != nil {
 						log.Printf("[ERROR] Failed deleting cached notifications %s for notification %s: %s. Assuming everything is okay and moving on",
@@ -497,9 +497,10 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 	executionUrl := fmt.Sprintf("%s/api/v1/workflows/%s/execute", backendUrl, workflowId)
 	//log.Printf("\n\n[DEBUG] Notification workflow: %s. APIKEY: %#v\n\n", executionUrl, userApikey)
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
+	client := GetExternalClient(executionUrl)
+
+	// Set timeout to 30 sec
+	client.Timeout = 30 * time.Second
 
 	req, err := http.NewRequest(
 		"POST",
@@ -508,7 +509,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	)
 
 	req.Header.Add("Authorization", fmt.Sprintf(`Bearer %s`, userApikey))
-	req.Header.Add("Org-Id", notification.OrgId)
+	req.Header.Add("Org-Id", authOrg.Id)
 	newresp, err := client.Do(req)
 	if err != nil {
 		return err
@@ -649,6 +650,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		// Overriding it for Orborus to ensure we have a way to manage
 		project.Environment = "worker" 
 	}
+
+	log.Printf("[DEBUG] Creating org notification! %s. Env: %s", orgId, project.Environment)
 
 	// Check if the referenceUrl is already in cache or not
 	if len(referenceUrl) > 0 {
@@ -805,7 +808,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		if mainNotification.Ignored { 
 			log.Printf("[INFO] Ignored notification %s for %s", mainNotification.Title, mainNotification.UserId)
 		} else {
-			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
+			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
 			if err != nil {
 				if !strings.Contains(err.Error(), "cache stored") && !strings.Contains(err.Error(), "Same workflow") {
 					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
@@ -907,7 +910,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				}
 			}
 
-			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false)
+			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
 			if err != nil {
 				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
 			}

@@ -3981,6 +3981,16 @@ type WorkflowHealth struct {
 	WorkflowValidation bool   `json:"workflow_validation"`
 }
 
+type LiveExecutionStatus struct {
+	ID 	  string `json:"id"`
+	Failed  int `json:"failed"`
+	Executing int `json:"executing"`
+	Finished int `json:"finished"`
+	Aborted int `json:"aborted"`
+	
+	CreatedAt int64 `json:"created_at"`
+}
+
 type HealthCheck struct {
 	Success bool  `json:"success"`
 	Updated int64 `json:"updated"`
