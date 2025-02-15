@@ -8084,7 +8084,12 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		}
 	}
 
-	//log.Printf("[AUDIT] Getting workflow children for workflow %s.", originalId)
+	parentWorkflow, err := GetWorkflow(ctx, originalId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting parent workflow ID %s: %s. This means we SHOULDN'T load child IDs either.", err)
+		return workflows, err
+	}
+
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -8205,16 +8210,28 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		return workflows[i].Edited > workflows[j].Edited
 	})
 
-	// Deduplicate based on edited time
-	filtered := []Workflow{}
-	handled := []string{}
-	for _, workflow := range workflows {
-		if ArrayContains(handled, fmt.Sprintf("%d", workflow.Edited)) {
-			continue
+	// Reduces it in case the distribution changes
+	// Ensures suborg workflows can still exist, but not be shown
+	if len(parentWorkflow.SuborgDistribution) > 0 {
+		newFiltered := []Workflow{}
+
+		for _, childWf := range workflows {
+			found := false
+			for _, subflowOrg := range parentWorkflow.SuborgDistribution {
+				if childWf.OrgId == subflowOrg {
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				//log.Printf("\n\n[ERROR] Failed to find child workflow %s org %s in parent %s. Should we delete them?\n\n", childWf.ID, childWf.OrgId, parentWorkflow.ID)
+			} else {
+				newFiltered = append(newFiltered, childWf)
+			}
 		}
 
-		handled = append(handled, fmt.Sprintf("%d", workflow.Edited))
-		filtered = append(filtered, workflow)
+		workflows = newFiltered
 	}
 
 	// Set cache

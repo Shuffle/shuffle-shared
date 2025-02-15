@@ -6227,13 +6227,13 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 			}
 
 			if !found {
-				log.Printf("\n\n[WARNING] Child workflow of %s (%s) for org %s is not distributed yet. Creating...", parentWorkflow.Name, parentWorkflow.ID, suborgId)
+				log.Printf("[WARNING] Child workflow of '%s' (%s) for parent org %s may not be distributed to %s yet. Creating or re-finding...", parentWorkflow.Name, parentWorkflow.ID, parentWorkflow.OrgId, suborgId)
 
 				childWorkflow, err := GenerateWorkflowFromParent(ctx, parentWorkflow, parentWorkflow.OrgId, suborgId)
 				if err != nil {
-					log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+					log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 				} else {
-					log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
+					//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
 					childWorkflows = append(childWorkflows, *childWorkflow)
 					newlyAdded = append(newlyAdded, childWorkflow.ID)
 				}
@@ -6288,10 +6288,9 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 }
 
 func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, parentTrigger Trigger) Trigger {
-	// remember: when this function is used, the parent trigger is passed to
-	// create the new child trigger.
-	trigger := parentTrigger
+	log.Printf("\n\n Calling subflow propagation wrapper for %s (%s) to %s (%s)\n\n", parentWorkflow.Name, parentWorkflow.ID, childWorkflow.Name, childWorkflow.ID)
 
+	trigger := parentTrigger
 	for paramIndex, param := range trigger.Parameters {
 		// since this is an added subflow, the workflow being referred
 		// is most likely not already distributed. let's do that.
@@ -6863,6 +6862,18 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	if update {
 		// FIXME: This doesn't work does it?
 		childWorkflow := oldWorkflow
+		if parentWorkflow.OrgId == childWorkflow.OrgId {
+			log.Printf("[ERROR] Parent and child orgs are the same for workflow %s (%s). This is not possible during multi tenant distribution and is most likely a bug somewhere.", childWorkflow.Name, childWorkflow.ID)
+			childWorkflow.Errors = append(childWorkflow.Errors, "Parent and child orgs are the same for workflow %s.", childWorkflow.Name)
+			return
+		}
+
+		if len(childWorkflow.SuborgDistribution) > 0 {
+			log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere.", childWorkflow.Name, childWorkflow.ID)
+			childWorkflow.Errors = append(childWorkflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", childWorkflow.Name)
+			childWorkflow.SuborgDistribution = []string{}
+		}
+
 
 		// log.Printf("\n\nSTART")
 		// log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
@@ -9540,6 +9551,8 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
+	// Returns the existing one in case it has been made in the past
+	// This is to ensure old nodes still exist.
 	foundWorkflow, err := GetWorkflow(ctx, newId)
 	if err == nil && foundWorkflow.ID == newId && foundWorkflow.ParentWorkflowId == parentWorkflowId {
 		return foundWorkflow, nil
@@ -9660,7 +9673,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
 		return
 	}
@@ -29869,7 +29882,6 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// FIXME: Check if this workflow has a parent workflow
-	//log.Printf("[DEBUG] Parent workflow: %#v", workflow.ParentWorkflowId)
 	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != fileId {
 		workflow, err = GetWorkflow(ctx, workflow.ParentWorkflowId)
 		if err != nil {
