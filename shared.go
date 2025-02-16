@@ -6287,16 +6287,18 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 	return parentWorkflow
 }
 
+// Propagates a subflow in a multi-tenant workflow so that 
+// changes to the subflow also follow the same rules
 func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, parentTrigger Trigger) Trigger {
-	log.Printf("\n\n Calling subflow propagation wrapper for %s (%s) to %s (%s)\n\n", parentWorkflow.Name, parentWorkflow.ID, childWorkflow.Name, childWorkflow.ID)
+	//log.Printf("\n\n Calling subflow propagation wrapper for %s (%s) to %s (%s)\n\n", parentWorkflow.Name, parentWorkflow.ID, childWorkflow.Name, childWorkflow.ID)
 
 	trigger := parentTrigger
 	for paramIndex, param := range trigger.Parameters {
 		// since this is an added subflow, the workflow being referred
 		// is most likely not already distributed. let's do that.
-		if param.Name == "workflow" {
+		if param.Name == "workflow" || param.Name == "subflow" {
+			log.Printf("[DEBUG] Found subflow reference: %s", param.Value)
 			parentSubflowPointedId := param.Value
-
 			if len(parentSubflowPointedId) == 0 {
 				continue
 			}
@@ -6339,10 +6341,11 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 			}
 
 			if propagatedEarlier {
-				// just make sure that it now points to that workflow
+				log.Printf("[INFO] Subflow %s has already been propagated to %s", parentSubflowPointedId, childWorkflow.OrgId)
+
+				// Just make sure that it now points to that workflow in the Multi-Tenant Workflow
 				trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
 
-				// get workflow
 				workflow, err := GetWorkflow(ctx, alreadyPropagatedSubflow)
 				if err != nil {
 					log.Printf("[WARNING] Failed getting propagated subflow: %s", err)
@@ -6374,6 +6377,7 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 				continue
 			}
 
+			log.Printf("[INFO] Propagating subflow %s to %s", parentSubflowPointedId, childWorkflow.OrgId)
 			parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
@@ -6394,6 +6398,7 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 			} else {
 				log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
 
+				//diffWorkflows(*newChildworkflow, parentWorkflow, update)
 				trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
 			}
 
@@ -7328,6 +7333,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					trigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, trigger)
 				} else if trigger.TriggerType == "USERINPUT" {
 					log.Printf("[DEBUG] User input trigger added: %#v", trigger.ID)
+					trigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, trigger)
 				}
 
 				for branchIndex, branch := range childWorkflow.Branches {
@@ -7573,9 +7579,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						childWorkflow.Triggers[childIndex].Position = parentTrigger.Position
 						childWorkflow.Triggers[childIndex].AppVersion = parentTrigger.AppVersion
 
-						// essentially, now we try to verify:
-						// okay, new workflow? we see it's a subflow that's
-						//parentTrigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, parentTrigger)
+						parentTrigger = subflowPropagationWrapper(parentWorkflow, childWorkflow, parentTrigger)
 						childWorkflow.Triggers[childIndex].Parameters = parentTrigger.Parameters
 						break
 					} else if parentTrigger.TriggerType == "PIPELINE" {
