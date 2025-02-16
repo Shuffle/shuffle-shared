@@ -8086,7 +8086,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 
 	parentWorkflow, err := GetWorkflow(ctx, originalId)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting parent workflow ID %s: %s. This means we SHOULDN'T load child IDs either.", err)
+		//log.Printf("[WARNING] Failed getting parent workflow ID %s: %s. This means we SHOULDN'T load child IDs either.", originalId, err)
 		return workflows, err
 	}
 

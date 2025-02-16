@@ -8288,134 +8288,134 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	newActions := []Action{}
 	allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 	if !workflow.PreviouslySaved {
-		log.Printf("[DEBUG] WORKFLOW INIT: NOT PREVIOUSLY SAVED - SET ACTION AUTH!")
+		log.Printf("[WARNING] WORKFLOW INIT FOR %s: NOT PREVIOUSLY SAVED - SET ACTION AUTH!", workflow.ID)
 		timeNow := int64(time.Now().Unix())
 
 		//workflow.ID = uuid.NewV4().String()
 
 		// Get the workflow and check if we own it
+		skipRebuild := false 
 		newWorkflow, err := GetWorkflow(ctx, workflow.ID)
-		if err != nil || len(newWorkflow.Actions) != 1 {
+		if err == nil && newWorkflow.OrgId == user.ActiveOrg.Id {
+			skipRebuild = true
+			workflow.PreviouslySaved = true
+		} else if err != nil || len(newWorkflow.Actions) != 1 {
 			log.Printf("[ERROR] FAILED GETTING WORKFLOW: %s - CREATING NEW ID!", err)
 			workflow.ID = uuid.NewV4().String()
 		}
 
-		workflow.Public = false
-		workflow.Owner = user.Id
-		workflow.ExecutingOrg = user.ActiveOrg
-		workflow.OrgId = user.ActiveOrg.Id
-		workflow.Created = timeNow
-		workflow.Edited = timeNow
-		workflow.Org = []OrgMini{
-			user.ActiveOrg,
-		}
-
-		for i, trigger := range workflow.Triggers {
-			if trigger.Status == "running" {
-				workflow.Triggers[i].Status = "uninitialized"
+		if !skipRebuild { 
+			workflow.Public = false
+			workflow.Owner = user.Id
+			workflow.ExecutingOrg = user.ActiveOrg
+			workflow.OrgId = user.ActiveOrg.Id
+			workflow.Created = timeNow
+			workflow.Edited = timeNow
+			workflow.Org = []OrgMini{
+				user.ActiveOrg,
 			}
-		}
 
-		if autherr == nil && len(workflowapps) > 0 && apperr == nil {
-			//log.Printf("Setting actions")
-			actionFixing := []Action{}
-			appsAdded := []string{}
+			if autherr == nil && len(workflowapps) > 0 && apperr == nil {
+				//log.Printf("Setting actions")
+				actionFixing := []Action{}
+				appsAdded := []string{}
 
-			for _, action := range workflow.Actions {
-				setAuthentication := false
-				if len(action.AuthenticationId) > 0 {
-					//found := false
-					authenticationFound := false
-					for _, auth := range allAuths {
-						if auth.Id == action.AuthenticationId {
-							authenticationFound = true
-							break
-						}
-					}
-
-					if !authenticationFound {
-						setAuthentication = true
-					}
-				} else {
-					// FIXME: 1. Validate if the app needs auth
-					// 1. Validate if auth for the app exists
-					// var appAuth AppAuthenticationStorage
-					setAuthentication = true
-				}
-
-				if setAuthentication {
-					authSet := false
-					for _, auth := range allAuths {
-						if !auth.Active {
-							continue
-						}
-
-						if !auth.Defined {
-							continue
-						}
-
-						if auth.App.Name == action.AppName {
-							//log.Printf("FOUND AUTH FOR APP %s: %s", auth.App.Name, auth.Id)
-							action.AuthenticationId = auth.Id
-							authSet = true
-							break
-						}
-					}
-
-					// FIXME: Only o this IF there isn't another one for the app already
-					if !authSet {
-						//log.Printf("Validate if the app NEEDS auth or not")
-						outerapp := WorkflowApp{}
-						for _, app := range workflowapps {
-							if app.Name == action.AppName {
-								outerapp = app
+				for _, action := range workflow.Actions {
+					setAuthentication := false
+					if len(action.AuthenticationId) > 0 {
+						//found := false
+						authenticationFound := false
+						for _, auth := range allAuths {
+							if auth.Id == action.AuthenticationId {
+								authenticationFound = true
 								break
 							}
 						}
 
-						if len(outerapp.ID) > 0 && outerapp.Authentication.Required {
-							found := false
-							for _, auth := range allAuths {
-								if auth.App.ID == outerapp.ID {
-									found = true
+						if !authenticationFound {
+							setAuthentication = true
+						}
+					} else {
+						// FIXME: 1. Validate if the app needs auth
+						// 1. Validate if auth for the app exists
+						// var appAuth AppAuthenticationStorage
+						setAuthentication = true
+					}
+
+					if setAuthentication {
+						authSet := false
+						for _, auth := range allAuths {
+							if !auth.Active {
+								continue
+							}
+
+							if !auth.Defined {
+								continue
+							}
+
+							if auth.App.Name == action.AppName {
+								//log.Printf("FOUND AUTH FOR APP %s: %s", auth.App.Name, auth.Id)
+								action.AuthenticationId = auth.Id
+								authSet = true
+								break
+							}
+						}
+
+						// FIXME: Only o this IF there isn't another one for the app already
+						if !authSet {
+							//log.Printf("Validate if the app NEEDS auth or not")
+							outerapp := WorkflowApp{}
+							for _, app := range workflowapps {
+								if app.Name == action.AppName {
+									outerapp = app
 									break
 								}
 							}
 
-							for _, added := range appsAdded {
-								if outerapp.ID == added {
-									found = true
+							if len(outerapp.ID) > 0 && outerapp.Authentication.Required {
+								found := false
+								for _, auth := range allAuths {
+									if auth.App.ID == outerapp.ID {
+										found = true
+										break
+									}
 								}
+
+								for _, added := range appsAdded {
+									if outerapp.ID == added {
+										found = true
+									}
+								}
+
+								_ = found
+
+								log.Printf("[DEBUG] NOT adding authentication for workflow %s (%s) in org %s (%s) automatically as this should be done from within the workflow/during setup.", workflow.Name, workflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+								action.Errors = append(action.Errors, "Requires authentication")
+								action.IsValid = false
+								workflow.IsValid = false
 							}
-
-							_ = found
-
-							log.Printf("[DEBUG] NOT adding authentication for workflow %s (%s) in org %s (%s) automatically as this should be done from within the workflow/during setup.", workflow.Name, workflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
-
-							action.Errors = append(action.Errors, "Requires authentication")
-							action.IsValid = false
-							workflow.IsValid = false
 						}
 					}
+
+					actionFixing = append(actionFixing, action)
 				}
 
-				actionFixing = append(actionFixing, action)
+				newActions = actionFixing
+			} else {
+				log.Printf("FirstSave error: %s - %s", err, apperr)
+				//allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 			}
 
-			newActions = actionFixing
-		} else {
-			log.Printf("FirstSave error: %s - %s", err, apperr)
-			//allAuths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
-		}
-
-		skipSave, skipSaveOk := request.URL.Query()["skip_save"]
-		if skipSaveOk && len(skipSave) > 0 {
-			//log.Printf("INSIDE SKIPSAVE: %s", skipSave[0])
-			if strings.ToLower(skipSave[0]) != "true" {
+			skipSave, skipSaveOk := request.URL.Query()["skip_save"]
+			if skipSaveOk && len(skipSave) > 0 {
+				//log.Printf("INSIDE SKIPSAVE: %s", skipSave[0])
+				if strings.ToLower(skipSave[0]) != "true" {
+					workflow.PreviouslySaved = true
+				}
+			} else {
 				workflow.PreviouslySaved = true
 			}
-		} else {
-			workflow.PreviouslySaved = true
 		}
 	}
 
@@ -22840,13 +22840,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if workflowExecution.Workflow.Sharing == "form" || len(workflowExecution.Workflow.FormControl.InputMarkdown) > 0 {
-		log.Printf("[DEBUG][%s] FORM RUN. Running Org injection AND liquid template removal", workflowExecution.ExecutionId)
+		//log.Printf("[DEBUG][%s] FORM RUN. Running Org injection AND liquid template removal", workflowExecution.ExecutionId)
 
 		// 1. Add Org-Id from the user to the existing workflowExecution.ExecutionArgument
 		validMap := map[string]interface{}{}
 		err := json.Unmarshal([]byte(workflowExecution.ExecutionArgument), &validMap)
 		if err != nil {
-			log.Printf("[ERROR] Failed to unmarshal execution argument: %s", err)
+			log.Printf("[ERROR][%s] Failed to unmarshal execution argument: %s. Instead mapping whole struct into exec", workflowExecution.ExecutionId, err)
+			validMap["exec"] = sanitizeString(workflowExecution.ExecutionArgument)
+
+		}
+
+		for key, value := range validMap {
+			if val, ok := value.(string); ok {
+				validMap[key] = sanitizeString(val)
+			}
 		}
 
 		// Overwriting it either way. Input NEEDS to be valid for map[string]interface{}{}
@@ -22855,7 +22863,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		if err != nil {
 			log.Printf("[ERROR] Failed to find user during form execution: %s", err)
 		} else {
-			validMap["form"] = "Manual form run. Less results returned."
+			validMap["form_type"] = "Manual form run. Less results returned."
 			validMap["org_id"] = discoveredUser.ActiveOrg.Id
 			marshalMap, err := json.Marshal(validMap)
 			if err != nil {
