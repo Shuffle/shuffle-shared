@@ -941,7 +941,7 @@ func fixOpensearch() error {
 	return nil
 }
 
-func fixSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string, orgId string) error {
+func fixHealthSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string, orgId string) error {
 
 	subflowActionId := ""
 	for _, action := range workflow.Actions {
@@ -974,14 +974,17 @@ func fixSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string
 		if len(os.Getenv("BASE_URL")) > 0 {
 			baseUrl = os.Getenv("BASE_URL")
 		}
+
 	}
 
 	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 		log.Printf("[DEBUG] Base url not set. Setting to default")
 		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
+	
+	saveWorkflowUrl := baseUrl+"/api/v1/workflows/"+workflow.ID+"?skip_save=true"
 
-	req, err := http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflow.ID+"?skip_save=true", nil)
+	req, err := http.NewRequest("PUT", saveWorkflowUrl, nil)
 	if err != nil {
 		log.Println("[ERROR] creating HTTP request:", err)
 		return errors.New("Error creating HTTP request: " + err.Error())
@@ -1004,6 +1007,7 @@ func fixSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string
 
 	// send the request
 	client := &http.Client{}
+
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR] Failed sending HTTP request: %s (2)", err)
@@ -1014,6 +1018,7 @@ func fixSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed saving ops dashboard workflow: %s. The status code was: %d (2)", err, resp.StatusCode)
+
 		// print the response body
 		respBodyErr, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
@@ -1021,6 +1026,7 @@ func fixSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string
 		} else {
 			log.Printf("[ERROR] Ops dashboard saving Workflow Response: %s (2)", respBodyErr)
 		}
+
 		return errors.New("Failed saving ops dashboard workflow (2)")
 	}
 
@@ -1093,7 +1099,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	workflowHealth.WorkflowId = opsWorkflowID
 	updateOpsCache(workflowHealth)
 
-	err = fixSubflowParameters(ctx, workflowPtr, apiKey, orgId)
+	err = fixHealthSubflowParameters(ctx, workflowPtr, apiKey, orgId)
 
 	workflow := *workflowPtr
 
