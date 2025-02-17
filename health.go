@@ -941,8 +941,7 @@ func fixOpensearch() error {
 	return nil
 }
 
-func fixHealthSubflowParameters(ctx context.Context, workflow *Workflow, apiKey string, orgId string) error {
-
+func fixHealthSubflowParameters(ctx context.Context, workflow *Workflow) (Workflow, error) {
 	subflowActionId := ""
 	for _, action := range workflow.Actions {
 		if action.Label == "call_subflow" {
@@ -950,93 +949,21 @@ func fixHealthSubflowParameters(ctx context.Context, workflow *Workflow, apiKey 
 		}
 	}
 
-	for _, trigger := range workflow.Triggers {
-		if trigger.AppName == "Shuffle Workflow" {
-			for _, parameter := range trigger.Parameters {
-				if parameter.Name == "workflow" {
-					parameter.Value = workflow.ID
+
+	for i := range workflow.Triggers {
+		if workflow.Triggers[i].AppName == "Shuffle Workflow" {
+			for j := range workflow.Triggers[i].Parameters {
+				if workflow.Triggers[i].Parameters[j].Name == "workflow" {
+					workflow.Triggers[i].Parameters[j].Value = workflow.ID
 				}
-				if parameter.Name == "startnode" {
-					parameter.Value = subflowActionId
+				if workflow.Triggers[i].Parameters[j].Name == "startnode" {
+					workflow.Triggers[i].Parameters[j].Value = subflowActionId
 				}
 			}
 		}
 	}
 
-	baseUrl := "https://shuffler.io"
-
-	if project.Environment == "onprem" {
-		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost")
-		// This will work as the health will be handled in the backend itself.
-		// so localhost just works. (Tested)
-		baseUrl = "http://localhost:5001"
-
-		if len(os.Getenv("BASE_URL")) > 0 {
-			baseUrl = os.Getenv("BASE_URL")
-		}
-
-	}
-
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		log.Printf("[DEBUG] Base url not set. Setting to default")
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
-	
-	saveWorkflowUrl := baseUrl+"/api/v1/workflows/"+workflow.ID+"?skip_save=true"
-
-	req, err := http.NewRequest("PUT", saveWorkflowUrl, nil)
-	if err != nil {
-		log.Println("[ERROR] creating HTTP request:", err)
-		return errors.New("Error creating HTTP request: " + err.Error())
-	}
-
-	// set the headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Org-Id", orgId)
-
-	// convert the body to JSON
-	workflowDataJSON, err := json.Marshal(workflow)
-	if err != nil {
-		log.Printf("[ERROR] Failed marshalling workflow data: %s", err)
-		return err
-	}
-
-	// set the body
-	req.Body = ioutil.NopCloser(bytes.NewBuffer(workflowDataJSON))
-
-	// send the request
-	client := &http.Client{}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Failed sending HTTP request: %s (2)", err)
-		return err
-	}
-
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed saving ops dashboard workflow: %s. The status code was: %d (2)", err, resp.StatusCode)
-
-		// print the response body
-		respBodyErr, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("[ERROR] Failed reading HTTP response body: %s (2)", err)
-		} else {
-			log.Printf("[ERROR] Ops dashboard saving Workflow Response: %s (2)", respBodyErr)
-		}
-
-		return errors.New("Failed saving ops dashboard workflow (2)")
-	}
-
-	//err = SetWorkflow(ctx, *workflow, workflowId)
-	//if err != nil {
-	//	log.Printf("[Error] Failed to save the workflow in ops %s", workflowId)
-	//	return err
-	//}
-
-	return nil
+	return *workflow, nil
 }
 
 func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHealth, error) {
@@ -1098,8 +1025,6 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	workflowHealth.Create = true
 	workflowHealth.WorkflowId = opsWorkflowID
 	updateOpsCache(workflowHealth)
-
-	err = fixHealthSubflowParameters(ctx, workflowPtr, apiKey, orgId)
 
 	workflow := *workflowPtr
 
@@ -1171,17 +1096,19 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	updateOpsCache(workflowHealth)
 	timeout := time.After(5 * time.Minute)
 
-	if workflowHealth.Create == true {
-		log.Printf("[DEBUG] Deleting created ops workflow")
-		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
-		if err != nil {
-			log.Printf("[ERROR] Failed deleting workflow: %s", err)
-		} else {
-			log.Printf("[DEBUG] Deleted ops workflow successfully!")
-			workflowHealth.Delete = true
-			updateOpsCache(workflowHealth)
-		}
-	}
+//	Removed as it was deleting the workflow before execution which
+//	was effecting the subflow
+//	if workflowHealth.Create == true {
+//		log.Printf("[DEBUG] Deleting created ops workflow")
+//		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
+//		if err != nil {
+//			log.Printf("[ERROR] Failed deleting workflow: %s", err)
+//		} else {
+//			log.Printf("[DEBUG] Deleted ops workflow successfully!")
+//			workflowHealth.Delete = true
+//			updateOpsCache(workflowHealth)
+//		}
+//	}
 
 	// 3. Check if workflow ran successfully
 	// ping /api/v1/streams/results/<execution_id> while workflowHealth.RunFinished is false
@@ -1260,6 +1187,7 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		case <-timeout:
 			log.Printf("[ERROR] Timeout reached for workflow health check. Returning")
 			workflowHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
+
 			return workflowHealth, errors.New("Timeout reached for workflow health check")
 		default:
 			// do nothing
@@ -1269,10 +1197,23 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		time.Sleep(2 * time.Second)
 	}
 
-	// Delete junk workflows
+	if workflowHealth.Create == true {
+		log.Printf("[DEBUG] Deleting created ops workflow")
+		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed deleting workflow: %s", err)
+		} else {
+			log.Printf("[DEBUG] Deleted ops workflow successfully!")
+			workflowHealth.Delete = true
+			updateOpsCache(workflowHealth)
+		}
+	}
+
+
+	// Delete junk workflows, this will remove all the healthWorkflow which failed
 	err = deleteJunkOpsWorkflow(ctx, workflowHealth)
 	if err != nil {
-		//log.Printf("[ERROR] Failed deleting junk workflows: %s", err)
+		log.Printf("[WARNING] Failed deleting junk workflows: %s", err)
 	}
 
 	return workflowHealth, nil
@@ -1534,6 +1475,12 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	workflowData.ExecutingOrg = tmpworkflow.ExecutingOrg
 	workflowData.Hidden = true
 	workflowData.Public = false
+
+	workflowData, err = fixHealthSubflowParameters(ctx, &workflowData)
+	if err != nil {
+		log.Printf("[ERROR] Subflow parameter changing failed might create an issue.")
+	}
+
 
 	// Save the workflow: PUT http://localhost:5002/api/v1/workflows/{id}?skip_save=true
 	req, err = http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflowData.ID+"?skip_save=true", nil)
