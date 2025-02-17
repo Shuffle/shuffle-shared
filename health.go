@@ -1357,7 +1357,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		// url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
 		// url := "https://shuffler.io/api/v1/workflows/7b729319-b395-4ba3-b497-d8246da67b1c"
 		//url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
-		url := "http://shuffler.io/api/v1/workflows/ae89a788-a26b-4866-8a0b-ce0b31d354ea"
+		url := "https://shuffler.io/api/v1/workflows/ae89a788-a26b-4866-8a0b-ce0b31d354ea"
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
 			log.Println("[ERROR] creating HTTP request:", err)
