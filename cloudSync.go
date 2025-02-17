@@ -26,6 +26,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 	"github.com/go-git/go-git/v5/storage/memory"
 
+	uuid "github.com/satori/go.uuid"
 )
 
 func executeCloudAction(action CloudSyncJob, apikey string) error {
@@ -1206,6 +1207,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
 	activate := true
+	shouldDistributeToLocation := false 
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			resp.WriteHeader(401)
@@ -1216,6 +1218,10 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		fileId = location[4]
 		if strings.ToLower(location[5]) == "deactivate" {
 			activate = false
+		}
+
+		if strings.ToLower(location[5]) == "distribute" {
+			shouldDistributeToLocation = true
 		}
 	}
 
@@ -1396,6 +1402,67 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[WARNING] User is trying to activate %s which is NOT a public app", app.Name)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if shouldDistributeToLocation {
+		// Distribute to runtime Locations
+		allEnvironments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting environments for org %s: %s", user.ActiveOrg.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed getting environments"}`))
+			return
+		}
+
+		relevantEnvironments := []Environment{}
+		for _, env := range allEnvironments {
+			if strings.ToLower(env.Type) == "cloud" {
+				continue
+			}
+
+			if env.Archived {
+				continue
+			}
+
+			relevantEnvironments = append(relevantEnvironments, env)
+		}
+
+		if len(relevantEnvironments) == 0 {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No relevant environments"}`))
+			return
+		}
+
+
+		appName := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(app.Name, " ", "-")), app.AppVersion)
+		if project.Environment == "cloud" {
+			if app.Public == true { 
+			} else {
+				appName = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(app.Name, " ", "-")), app.ID)
+			}
+		}
+
+		for _, env := range relevantEnvironments {
+			//log.Printf("[INFO] Distributing app %s to environment %s", app.Name, env.Name)
+			request := ExecutionRequest{
+				Type:              "DOCKER_IMAGE_DOWNLOAD",
+				ExecutionId:       uuid.NewV4().String(),
+				ExecutionArgument: fmt.Sprintf("frikky/shuffle:%s", appName),
+				Priority:          11,
+			}
+
+			parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), env.OrgId)
+			err = SetWorkflowQueue(ctx, request, parsedId)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
+				continue
+			}
+		}
+
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true, "reason": "Re-download request sent to all relevant environments"}`))
 		return
 	}
 

@@ -1653,7 +1653,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 		for _, innerApp := range workflowapps {
 			if innerApp.ID == action.AppID {
 				discoveredApp = innerApp
-				//log.Printf("[INFO] ID, Name AND version for %s:%s (%s) was FOUND", action.AppName, action.AppVersion, action.AppID)
+				//log.Printf("[INFO] ID, Name AND version for %s:%s (%s) was FOUND (2)", action.AppName, action.AppVersion, action.AppID)
 				action.Sharing = innerApp.Sharing
 				action.Public = innerApp.Public
 				action.Generated = innerApp.Generated
@@ -1717,7 +1717,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			if nameVersionFound {
 			} else if nameFound {
 			} else {
-				log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
+				//log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
 				handled := false
 
 				if project.Environment == "cloud" {
@@ -1733,7 +1733,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 							workflowapps = append(workflowapps, *tmpApp)
 						}
 					} else {
-						log.Printf("[WARNING] Failed finding name %s in Algolia", action.AppName)
+						//log.Printf("[WARNING] Failed finding name %s in Algolia", action.AppName)
 					}
 				}
 
@@ -1745,7 +1745,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 		}
 
 		if !action.IsValid && len(action.Errors) > 0 {
-			log.Printf("[INFO] Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
+			//log.Printf("[INFO] Node %s is invalid and needs to be remade. Errors: %s", action.Label, strings.Join(action.Errors, "\n"))
 		}
 
 		workflow.Categories = HandleCategoryIncrease(workflow.Categories, action, workflowapps)
@@ -1883,8 +1883,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 	}
 
 	if !startnodeFound {
-		log.Printf("[WARNING] No startnode during cleanup (save) of of workflow %s!!", workflow.ID)
-
+		// log.Printf("[ERROR] No startnode during cleanup (save) of of workflow %s!!", workflow.ID)
 		// Select the first action as startnode
 		if len(newActions) > 0 {
 			workflow.Start = newActions[0].ID
@@ -1982,7 +1981,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				log.Printf("[WARNING] Issue with parameters in webhook %s - missing params", trigger.ID)
 			} else {
 				if !strings.Contains(trigger.Parameters[0].Value, trigger.ID) {
-					log.Printf("[INFO] Fixing webhook URL for %s", trigger.ID)
+					//log.Printf("[INFO] Fixing webhook URL for %s", trigger.ID)
 					baseUrl := "https://shuffler.io"
 					if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
 						baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
@@ -2289,7 +2288,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 					if !ArrayContains(workflow.Errors, errorMsg) {
 						workflow.Errors = append(workflow.Errors, errorMsg)
-						log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
+						//log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
 					}
 
 					action.IsValid = false

@@ -424,11 +424,12 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 		EntryPoint:           "run",
 		EnvironmentVariables: environmentVariables,
 		HttpsTrigger:         &cloudfunctions.HttpsTrigger{},
-		MaxInstances:         0,
 		Name:                 functionName,
 		Runtime:              "python310",
 		SourceArchiveUrl:     applocation,
 		ServiceAccountEmail:  serviceAccountEmail,
+
+		MaxInstances: 25,
 	}
 
 	createCall := projectsLocationsFunctionsService.Create(location, cloudFunction)

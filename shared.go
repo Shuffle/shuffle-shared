@@ -3337,6 +3337,12 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 		if len(env.SuborgDistribution) != 0 {
 			newEnvironments[envIndex].SuborgDistribution = env.SuborgDistribution
 		}
+
+		if newEnvironments[envIndex].Checkin > 0 && timenow-newEnvironments[envIndex].Checkin < 60 {
+			if len(newEnvironments[envIndex].RunningIp) == 0 {
+				newEnvironments[envIndex].RunningIp = "IP not available. Check back later."
+			}
+		}
 	}
 
 	newjson, err := json.Marshal(newEnvironments)
@@ -3416,7 +3422,9 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 				user.SessionLogin = false
 
 				// Increment API usage
-				go IncrementCache(ctx, user.ActiveOrg.Id, "api_usage")
+				if user.Username != "scheduler@shuffler.io" {
+					go IncrementCache(ctx, user.ActiveOrg.Id, "api_usage")
+				}
 
 				return *user, nil
 			}
@@ -3482,7 +3490,11 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 			log.Printf("[WARNING] Failed setting cache for apikey: %s", err)
 		}
 
-		go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+		// Very specific to track schedules in Shuffle
+		if user.Username != "scheduler@shuffler.io" {
+			go IncrementCache(ctx, userdata.ActiveOrg.Id, "api_usage")
+		}
+
 		return userdata, nil
 	}
 
@@ -6297,7 +6309,7 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 		// since this is an added subflow, the workflow being referred
 		// is most likely not already distributed. let's do that.
 		if param.Name == "workflow" || param.Name == "subflow" {
-			log.Printf("[DEBUG] Found subflow reference: %s", param.Value)
+			//log.Printf("[DEBUG] Found subflow reference: %s", param.Value)
 			parentSubflowPointedId := param.Value
 			if len(parentSubflowPointedId) == 0 {
 				continue
@@ -6340,6 +6352,9 @@ func subflowPropagationWrapper(parentWorkflow Workflow, childWorkflow Workflow, 
 				}
 			}
 
+			// FIXME: Couldn't this part easily be handled by just 
+			// re-generating the same key for the same subflow?
+			// Parent workflow ID + Suborg ID = seed 
 			if propagatedEarlier {
 				log.Printf("[INFO] Subflow %s has already been propagated to %s", parentSubflowPointedId, childWorkflow.OrgId)
 

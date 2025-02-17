@@ -3872,24 +3872,49 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		downloadedImages = append(downloadedImages, imageName)
 	}
 
+	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl, strings.Replace(imageName, " ", "-", -1))
 
-	//data := fmt.Sprintf(`{"name": "%s"}`, imageName)
-	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image?image=%s", baseUrl, strings.Replace(imageName, " ", "-", -1))
+	isCloudDownload := false
+	if strings.Contains(baseUrl, "ngrok") || strings.Contains(baseUrl, "shuffler.io") || strings.Contains(baseUrl, ".run.app") {
+		log.Printf("[DEBUG] Downloading as GET request with redirects")
+		dockerImgUrl = fmt.Sprintf("%s/api/v1/get_docker_image?image=%s", baseUrl, strings.Replace(imageName, " ", "-", -1))
+		isCloudDownload = true 
+	} else {
+		log.Printf("[DEBUG] Downloading image as POST request WITHOUT redirects due to not being cloud")
+	}
+
 
 	// Set request timeout to 5 min (max)
 	topClient.Timeout = time.Minute * 5
-
 	arch := runtime.GOARCH
-
 	if strings.Contains(strings.ToLower(arch), "arm") {
-		dockerImgUrl = fmt.Sprintf("%s&arch=%s", dockerImgUrl, arch)
+		if strings.Contains(dockerImgUrl, "?") {
+			dockerImgUrl = fmt.Sprintf("%s&arch=%s", dockerImgUrl, arch)
+		} else {
+			dockerImgUrl = fmt.Sprintf("%s?arch=%s", dockerImgUrl, arch)
+		}
+	}
+
+	relevantBody := map[string]string{
+		"image": strings.Replace(imageName, " ", "-", -1),
+	}
+
+	marshalledBody, err := json.Marshal(relevantBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal body to be sent: %s", err)
+		return err
 	}
 
 	req, err := http.NewRequest(
-		"GET",
+		"POST",
 		dockerImgUrl,
-		nil,
+		bytes.NewBuffer(marshalledBody),
 	)
+
+	if isCloudDownload {
+		req.Method = "GET"
+		req.Body = nil
+	}
 
 	// Specific to the worker
 	authorization := os.Getenv("AUTHORIZATION")
