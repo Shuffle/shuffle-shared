@@ -24,8 +24,8 @@ import (
 )
 
 //var model = "gpt-4-turbo-preview"
-//var model = "gpt-4o"
-var model = "gpt-4o-mini"
+//var model = "gpt-4o-mini"
+var model = "gpt-4o"
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
 	//log.Printf("\n\n[DEBUG] Getting KMS cache for key %s\n\n", key)
@@ -1449,7 +1449,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 	}
 
 	if len(actionStruct.Action) == 0 {
-		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (1)", app.Name, app.ID, label)
+		log.Printf("[ERROR] From LLM auto-label: No action found for app %s (%s) based on label %s (1). Output: %s", app.Name, app.ID, label, string(output))
 		//return app
 	} else {
 		newname := strings.Trim(strings.ToLower(strings.Replace(GetCorrectActionName(actionStruct.Action), " ", "_", -1)), " ")

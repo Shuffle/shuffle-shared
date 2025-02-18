@@ -116,7 +116,7 @@ func GetAppCategories() []AppCategory {
 			Name:         "AI",
 			Color:        "#FFC107",
 			Icon:         "AI",
-			ActionLabels: []string{"Answer Question", "Run Action"},
+			ActionLabels: []string{"Answer Question", "Run Action", "Run LLM"},
 		},
 		AppCategory{
 			Name:         "Other",

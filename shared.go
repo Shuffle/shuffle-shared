@@ -18026,69 +18026,73 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 	// FIXME: We need to inject missing empty auth here in some cases
 	// This is NOT a good solution, but a good bypass
-	if app.Authentication.Required && len(action.AuthenticationId) == 0 {
-		authFields := 0
-		foundFields := []string{}
-		for _, actionParam := range action.Parameters {
-			if actionParam.Configuration {
-				authFields += 1
-				foundFields = append(foundFields, actionParam.Name)
-			}
-		}
-
-		// Usually url
-		if authFields <= 2 {
-			if !ArrayContains(foundFields, "apikey") {
-				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					Name:          "apikey",
-					Configuration: true,
-				})
-			}
-
-			if !ArrayContains(foundFields, "access_token") {
-				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					Name:          "access_token",
-					Configuration: true,
-				})
-			}
-
-			if !ArrayContains(foundFields, "username_basic") {
-				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					Name:          "username_basic",
-					Configuration: true,
-				})
-			}
-
-			if !ArrayContains(foundFields, "password_basic") {
-				action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
-					Name:          "password_basic",
-					Configuration: true,
-				})
-			}
-		}
-
-		auths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting auth for single action: %s", err)
+	if app.Authentication.Required {
+		if len(action.AuthenticationId) > 0 {
+			log.Printf("[INFO] Found auth ID for single action: %s", action.AuthenticationId)
 		} else {
-			//latestTimestamp := int64(0)
-			for _, auth := range auths {
-				if auth.App.ID != appId {
-					continue
+			authFields := 0
+			foundFields := []string{}
+			for _, actionParam := range action.Parameters {
+				if actionParam.Configuration {
+					authFields += 1
+					foundFields = append(foundFields, actionParam.Name)
+				}
+			}
+
+			// Usually url
+			if authFields <= 2 {
+				if !ArrayContains(foundFields, "apikey") {
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:          "apikey",
+						Configuration: true,
+					})
 				}
 
-				// Fallback to latest created
-				/*
-					if latestTimestamp < auth.Created {
-						latestTimestamp = auth.Created
-						action.AuthenticationId = auth.Id
-					}
-				*/
+				if !ArrayContains(foundFields, "access_token") {
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:          "access_token",
+						Configuration: true,
+					})
+				}
 
-				// If valid, just choose it
-				if auth.Validation.Valid {
-					action.AuthenticationId = auth.Id
-					break
+				if !ArrayContains(foundFields, "username_basic") {
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:          "username_basic",
+						Configuration: true,
+					})
+				}
+
+				if !ArrayContains(foundFields, "password_basic") {
+					action.Parameters = append(action.Parameters, WorkflowAppActionParameter{
+						Name:          "password_basic",
+						Configuration: true,
+					})
+				}
+			}
+
+			auths, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting auth for single action: %s", err)
+			} else {
+				//latestTimestamp := int64(0)
+				for _, auth := range auths {
+					if auth.App.ID != appId {
+						continue
+					}
+
+					// Fallback to latest created
+					/*
+						if latestTimestamp < auth.Created {
+							latestTimestamp = auth.Created
+							action.AuthenticationId = auth.Id
+						}
+					*/
+
+					// If valid, just choose it
+					if auth.Validation.Valid {
+						action.AuthenticationId = auth.Id
+						break
+					}
 				}
 			}
 		}
@@ -18126,8 +18130,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 		newParams = append(newParams, param)
 	}
-
-	//log.Printf("URL %#v", originalUrl)
 
 	action.Parameters = newParams
 
@@ -18181,6 +18183,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	badRequest.Method = "GET"
 
 	workflowExecution, _, errString, err := PrepareWorkflowExecution(ctx, workflow, badRequest, 10)
+
 	if err != nil || len(errString) > 0 {
 
 		// FIXME: Handle other error returns as well?
@@ -22254,19 +22257,32 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					newParams = append(newParams, param)
 				}
 			} else {
-				// Rebuild params with the right data. This is to prevent issues on the frontend
+				// This may make the system miss fields. 
+				addedParamIndexes := []string{}
 				for _, param := range action.Parameters {
 
-					for _, authparam := range curAuth.Fields {
-						if param.Name == authparam.Key {
-							param.Value = authparam.Value
-							//log.Printf("Name: %s - value: %s", param.Name, param.Value)
-							//log.Printf("Name: %s - value: %s\n", param.Name, param.Value)
-							break
+					for paramIndex, authparam := range curAuth.Fields {
+						if param.Name != authparam.Key {
+							continue
 						}
+
+						addedParamIndexes = append(addedParamIndexes, string(paramIndex))
+						param.Value = authparam.Value
+						break
 					}
 
 					newParams = append(newParams, param)
+				}
+
+				for paramIndex, authparam := range curAuth.Fields {
+					if ArrayContains(addedParamIndexes, string(paramIndex)) {
+						continue
+					}
+
+					newParams = append(newParams, WorkflowAppActionParameter{
+						Name:  authparam.Key,
+						Value: authparam.Value,
+					})
 				}
 			}
 
@@ -25875,6 +25891,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if len(selectedAction.Name) == 0 && value.Label != "discover_app" {
 		log.Printf("[WARNING] Couldn't find the label '%s' in app '%s'.", value.Label, selectedApp.Name)
+
+		//selectedApp := AutofixAppLabels(selectedApp, value.Label)
 
 		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "discover_app" {
 			resp.WriteHeader(500)
