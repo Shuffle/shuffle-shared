@@ -946,21 +946,27 @@ func fixHealthSubflowParameters(ctx context.Context, workflow *Workflow) (Workfl
 	for _, action := range workflow.Actions {
 		if action.Label == "call_subflow" {
 			subflowActionId = action.ID
+			break
 		}
 	}
 
 
 	for i := range workflow.Triggers {
-		if workflow.Triggers[i].AppName == "Shuffle Workflow" {
-			for j := range workflow.Triggers[i].Parameters {
-				if workflow.Triggers[i].Parameters[j].Name == "workflow" {
-					workflow.Triggers[i].Parameters[j].Value = workflow.ID
-				}
-				if workflow.Triggers[i].Parameters[j].Name == "startnode" {
-					workflow.Triggers[i].Parameters[j].Value = subflowActionId
-				}
+		if workflow.Triggers[i].AppName != "Shuffle Workflow" {
+			continue
+		}
+
+		for j := range workflow.Triggers[i].Parameters {
+			if workflow.Triggers[i].Parameters[j].Name == "workflow" {
+				workflow.Triggers[i].Parameters[j].Value = workflow.ID
+			}
+
+			if workflow.Triggers[i].Parameters[j].Name == "startnode" {
+				workflow.Triggers[i].Parameters[j].Value = subflowActionId
+				break
 			}
 		}
+		break
 	}
 
 	return *workflow, nil
