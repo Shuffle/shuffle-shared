@@ -1545,9 +1545,16 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 		}
 	}
 
-	workflowapps, apperr := GetPrioritizedApps(ctx, user)
-	if apperr != nil {
-		log.Printf("[ERROR] Failed getting apps for org %s", user.ActiveOrg.Id)
+	workflowapps := []WorkflowApp{}
+
+	if len(workflow.ParentWorkflowId) == 0 {
+		var apperr error
+		workflowapps, apperr = GetPrioritizedApps(ctx, user)
+		if apperr != nil {
+			log.Printf("[ERROR] Failed getting apps for org %s", user.ActiveOrg.Id)
+		}
+	} else {
+		// This is to ensure checking in Multi-Tenant workflows is FAST
 	}
 
 	allNodes := []string{}
@@ -1895,7 +1902,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 	workflow.Actions = newActions
 
 	// Automatically adding new apps from imports
-	if len(newOrgApps) > 0 {
+	if len(newOrgApps) > 0 && len(workflow.ParentWorkflowId) == 0 {
 		log.Printf("[WARNING] Adding new apps to org: %s", newOrgApps)
 
 		if org.Id == "" {
@@ -1978,7 +1985,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 			//log.Printf("WEBHOOK: %d", len(trigger.Parameters))
 			if len(trigger.Parameters) < 2 {
-				log.Printf("[WARNING] Issue with parameters in webhook %s - missing params", trigger.ID)
+				log.Printf("[ERROR] Issue with parameters in webhook %s in workflow %s - missing params", trigger.ID, workflow.ID)
 			} else {
 				if !strings.Contains(trigger.Parameters[0].Value, trigger.ID) {
 					//log.Printf("[INFO] Fixing webhook URL for %s", trigger.ID)
@@ -2197,7 +2204,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			}
 
 			if !authFound {
-				log.Printf("[WARNING] App auth %s doesn't exist. Setting error", action.AuthenticationId)
+				log.Printf("[WARNING] App auth %s used in workflow %s doesn't exist. Setting error", action.AuthenticationId, workflow.ID)
 
 				errorMsg := fmt.Sprintf("Authentication for action '%s' in app '%s' doesn't exist!", action.Label, strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
 				if !ArrayContains(workflow.Errors, errorMsg) {
@@ -2284,11 +2291,12 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				} else {
 					errorMsg := fmt.Sprintf("App %s version %s doesn't exist", action.AppName, action.AppVersion)
 
-					action.Errors = append(action.Errors, "This app doesn't exist.")
-
-					if !ArrayContains(workflow.Errors, errorMsg) {
-						workflow.Errors = append(workflow.Errors, errorMsg)
-						//log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
+					if len(workflow.ParentWorkflowId) == 0 {
+						action.Errors = append(action.Errors, "This app doesn't exist.")
+						if !ArrayContains(workflow.Errors, errorMsg) {
+							workflow.Errors = append(workflow.Errors, errorMsg)
+							//log.Printf("[WARNING] App %s:%s doesn't exist. Adding as error.", action.AppName, action.AppVersion)
+						}
 					}
 
 					action.IsValid = false
