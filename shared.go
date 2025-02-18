@@ -11337,7 +11337,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		if !parentOrg.SyncFeatures.MultiTenant.Active && !parentOrg.LeadInfo.Customer && !parentOrg.LeadInfo.POV && !parentOrg.LeadInfo.Internal {
 			// Anyone is allowed to make 5
 			if parentOrg.SyncFeatures.MultiTenant.Limit <= 0 {
-				parentOrg.SyncFeatures.MultiTenant.Limit = 5
+				parentOrg.SyncFeatures.MultiTenant.Limit = 10
 				parentOrg.SyncFeatures.MultiTenant.Active = true
 			}
 
