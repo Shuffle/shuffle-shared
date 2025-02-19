@@ -4122,6 +4122,9 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		workflowExecutions[index].Workflow.Actions = newActions
 		workflowExecutions[index].Workflow.Image = ""
 		workflowExecutions[index].Workflow.Triggers = newTriggers
+
+		// Ensures loading also gives the right, cleaned up data
+		workflowExecutions[index] = cleanupExecutionNodes(ctx, workflowExecutions[index])
 	}
 
 	newjson, err := json.Marshal(workflowExecutions)
@@ -4316,8 +4319,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Would like to omit the whole thing :thinking:
-		//workflowExecutions[index].Workflow = Workflow{}
+		workflowExecutions[index] = cleanupExecutionNodes(ctx, workflowExecutions[index])
 	}
 
 	newReturn := ExecutionReturn{
