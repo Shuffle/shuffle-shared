@@ -679,21 +679,21 @@ func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 
 	limitInt, err := strconv.Atoi(limit)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting limit to int: %s", err)
+		// log.Printf("[ERROR] Failed converting limit to int: %s", err)
 		limitInt = 0
 	}
 
 	before := request.URL.Query().Get("before")
 	beforeInt, err := strconv.Atoi(before)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting before to int: %s", err)
+		// log.Printf("[ERROR] Failed converting before to int: %s", err)
 		beforeInt = 0
 	}
 
 	after := request.URL.Query().Get("after")
 	afterInt, err := strconv.Atoi(after)
 	if err != nil {
-		log.Printf("[ERROR] Failed converting after to int: %s", err)
+		// log.Printf("[ERROR] Failed converting after to int: %s", err)
 		afterInt = 0
 	}
 
