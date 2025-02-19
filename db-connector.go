@@ -1277,9 +1277,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// Fixes missing pieces
 	workflowExecution, newDbSave := Fixexecution(ctx, workflowExecution)
+	workflowExecution = cleanupExecutionNodes(ctx, workflowExecution)
 	if newDbSave {
 		dbSave = true
 	}
+
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
@@ -3970,7 +3972,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -4040,7 +4042,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -6528,7 +6530,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -6628,7 +6630,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				// Get the cursor for the next page of results.
 				nextCursor, err := it.Cursor()
 				if err != nil {
-					log.Printf("Cursorerror: %s", err)
+					log.Printf("[ERROR] Problem with cursor: %s", err)
 					break
 				} else {
 					nextStr := fmt.Sprintf("%s", nextCursor)
@@ -7428,7 +7430,7 @@ func GetAllWorkflowApps(ctx context.Context, maxLen int, depth int) ([]WorkflowA
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -8191,7 +8193,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -8353,10 +8355,13 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 			workflows = append(workflows, hit.Source)
 		}
 	} else {
-		query := datastore.NewQuery(nameKey).Filter("id =", originalId)
-		// if project.Environment == "cloud" {
+		queryAmount := 20
+		if amount < queryAmount {
+			queryAmount = amount
+		}
+
+		query := datastore.NewQuery(nameKey).Filter("id =", originalId).Limit(queryAmount)
 		query = query.Order("-edited")
-		// }
 
 		iterCount := 0
 
@@ -8394,7 +8399,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -11076,7 +11081,7 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 		// Get the cursor for the next page of results.
 		nextCursor, err := it.Cursor()
 		if err != nil {
-			log.Printf("[WARNING] Cursorerror: %s", err)
+			log.Printf("[ERROR] Cursorerror: %s", err)
 			break
 		} else {
 			nextStr := fmt.Sprintf("%s", nextCursor)
@@ -11255,7 +11260,7 @@ func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]Workflow
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("[WARNING] Cursorerror: %s", err)
+				log.Printf("[ERROR] Cursorerror: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -11531,7 +11536,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("[WARNING] Cursorerror: %s", err)
+				log.Printf("[ERROR] Cursorerror: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -11864,7 +11869,7 @@ func GetAllWorkflowExecutions(ctx context.Context, workflowId string, amount int
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("[WARNING] Cursorerror: %s", err)
+				log.Printf("[ERROR] Cursorerror: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -12261,7 +12266,7 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -13078,7 +13083,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 
 				nextCursor, err := it.Cursor()
 				if err != nil {
-					log.Printf("[WARNING] Cursorerror for cache: %s", err)
+					log.Printf("[ERROR] Cursorerror for cache: %s", err)
 				} else {
 					cursor = fmt.Sprintf("%s", nextCursor)
 				}
@@ -13096,7 +13101,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 					continue
 				}
 
-				log.Printf("Cursorerror: %s", err)
+				log.Printf("[ERROR] Problem with cursor: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
@@ -14175,7 +14180,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 				// Get next cursor
 				nextCursor, err := it.Cursor()
 				if err != nil {
-					log.Printf("[WARNING] Cursorerror: %s", err)
+					log.Printf("[ERROR] Cursorerror: %s", err)
 				} else {
 					cursor = fmt.Sprintf("%s", nextCursor)
 				}
@@ -14186,7 +14191,7 @@ func GetWorkflowRunsBySearch(ctx context.Context, orgId string, search WorkflowS
 			// Get the cursor for the next page of results.
 			nextCursor, err := it.Cursor()
 			if err != nil {
-				log.Printf("[WARNING] Cursorerror: %s", err)
+				log.Printf("[ERROR] Cursorerror: %s", err)
 				break
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
