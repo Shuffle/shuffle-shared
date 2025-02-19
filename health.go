@@ -2552,3 +2552,29 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 	return workflow, allNodes, nil
 }
+
+func cleanupExecutionNodes(ctx context.Context, exec WorkflowExecution) WorkflowExecution {
+	if exec.Status != "FINISHED" && exec.Status != "ABORTED" {
+		return exec
+	}
+
+	if len(exec.Workflow.FormControl.CleanupActions) == 0 {
+		return exec
+	}
+
+	for resultIndex, result := range exec.Results { 
+		if !ArrayContains(exec.Workflow.FormControl.CleanupActions, result.Action.ID) {
+			continue
+		}
+
+		if result.Status == "SUCCESS" || result.Status == "ABORTED" {
+
+			exec.Results[resultIndex].Result = `{
+				"success": true,
+				"reason": "CLEANED. Edit the workflow to disable node cleanup."
+			}`
+		}
+	}
+
+	return exec 
+}

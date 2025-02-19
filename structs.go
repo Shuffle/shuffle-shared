@@ -1277,6 +1277,7 @@ type InputQuestion struct {
 type FormControl struct {
 	InputMarkdown string   `json:"input_markdown" datastore:"input_markdown,noindex"`
 	OutputYields  []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+	CleanupActions []string `json:"cleanup_actions" datastore:"cleanup_actions"` // Defines the nodes that will not return any value at the end of a workflow (stored)
 
 	FormWidth int64 `json:"form_width" datastore:"form_width"`
 }
