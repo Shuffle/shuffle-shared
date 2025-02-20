@@ -3814,6 +3814,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 
 	client := GetExternalClient(url)
+	newresp := &http.Response{}
 	respBody := []byte{}
 	if !refresh {
 		req, err := http.NewRequest(
@@ -3829,7 +3830,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Add("Accept", "application/json")
-		newresp, err := client.Do(req)
+		newresp, err = client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Failed running Oauth2 request for %s: %s", url, err)
 			return appAuth, err
@@ -3886,7 +3887,7 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 		req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Add("Accept", "application/json")
-		newresp, err := client.Do(req)
+		newresp, err = client.Do(req)
 		if err != nil {
 			return appAuth, err
 		}
@@ -3920,7 +3921,20 @@ func RunOauth2Request(ctx context.Context, user User, appAuth AppAuthenticationS
 
 	if strings.Contains(string(respBody), "error") {
 		//log.Printf("\n\n[ERROR] Oauth2 RESPONSE: %s\n\nencoded: %#v\n", string(respBody), v.Encode())
-		log.Printf("\n\n[ERROR] Oauth2 RESPONSE from %s: %s", url, string(respBody))
+		log.Printf("\n\n[ERROR] Oauth2 RESPONSE (%d) from %s: %s", newresp.StatusCode, url, string(respBody))
+
+		go CreateOrgNotification(
+			context.Background(),
+			fmt.Sprintf("Oauth2 error during refresh of URL %s at the start of workflow", url),
+			fmt.Sprintf("Error during Oauth2 refresh (%d): %s", newresp.StatusCode, string(respBody)),
+			fmt.Sprintf("/admin?admin_tab=notifications"),
+			appAuth.OrgId,
+			true,
+		)
+
+		if newresp.StatusCode >= 300 {
+			return appAuth, errors.New(fmt.Sprintf("Bad response from Oauth2 request for %s: %s", url, string(respBody)))
+		}
 	}
 
 	// Check if we have an authentication token and pre-set it

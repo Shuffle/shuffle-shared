@@ -2511,10 +2511,12 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 							}
 						}
 
-						// Some internal reserves
-						if ((strings.ToLower(action.AppName) == "http" && param.Name == "body") || (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") {
+						// Some internal reserves that don't need
+						// strict param measuring 
+						if ((strings.ToLower(action.AppName) == "http" && param.Name == "body") || (strings.ToLower(action.Name) == "send_sms_shuffle" || strings.ToLower(action.Name) == "send_email_shuffle") && param.Name == "apikey") || (action.Name == "repeat_back_to_me") || (action.Name == "filter_list" && param.Name == "field") || action.Name == "custom_action" {
 							// Do nothing
 						} else {
+
 							thisError := fmt.Sprintf("Action %s is missing required parameter %s", action.Label, param.Name)
 							if param.Configuration && len(action.AuthenticationId) == 0 {
 								thisError = fmt.Sprintf("Action %s (%s) requires authentication", action.Label, strings.ToLower(strings.Replace(action.AppName, "_", " ", -1)))
