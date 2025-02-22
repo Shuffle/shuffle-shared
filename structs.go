@@ -3988,6 +3988,7 @@ type LiveExecutionStatus struct {
 	Executing int `json:"executing"`
 	Finished int `json:"finished"`
 	Aborted int `json:"aborted"`
+	NotificationCount int `json:"notification_count"`
 	
 	CreatedAt int64 `json:"created_at"`
 }
