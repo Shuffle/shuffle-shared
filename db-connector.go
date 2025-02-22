@@ -1551,11 +1551,12 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
         q := datastore.NewQuery(nameKey)
 
         if beforeTimestamp != 0 {
-            q = q.Filter("CreatedAt >", beforeTimestamp)
+            q = q.Filter("CreatedAt <", beforeTimestamp)
         }
 
         if afterTimestamp != 0 {
-            q = q.Filter("CreatedAt <", afterTimestamp)
+			log.Printf("[DEBUG] created at after timestamp: %s -- not respected", afterTimestamp)
+            q = q.Filter("CreatedAt >", afterTimestamp)
         }
 
         if limit != 0 {
