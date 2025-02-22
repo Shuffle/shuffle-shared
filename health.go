@@ -689,11 +689,14 @@ func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 		afterInt = 0
 	}
 
+	mode := request.URL.Query().Get("mode")
+
 	data, err := GetLiveWorkflowExecutionData(
 		ctx,
 		beforeInt,
 		afterInt,
 		limitInt,
+		mode,
 	)
 
 	if err != nil {	

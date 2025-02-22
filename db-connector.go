@@ -1425,23 +1425,39 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
-func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int) ([]LiveExecutionStatus, error) {
+func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int, mode string) ([]LiveExecutionStatus, error) {
     nameKey := "live_execution_status"
     liveExecs := []LiveExecutionStatus{}
 
-	// no point in caching this right now
-    // // Try cache first
-    // cacheKey := fmt.Sprintf("%s-%d-%d-%d", nameKey, beforeTimestamp, afterTimestamp, limit)
-    // if project.CacheDb {
-    //     cache, err := GetCache(ctx, cacheKey)
-    //     if err == nil {
-    //         cacheData := []byte(cache.([]uint8))
-    //         err = json.Unmarshal(cacheData, &liveExecs)
-    //         if err == nil {
-    //             return liveExecs, nil
-    //         }
-    //     }
-    // }
+	modes := []string{"1h", "7h", "1d", "7d"}
+	if !ArrayContains(modes, mode) {
+		mode = ""
+	} else {
+		beforeTimestamp = 0
+		if mode == "1h" {
+			afterTimestamp = int(time.Now().Unix()) - 3600
+		} else if mode == "1d" {
+			afterTimestamp = int(time.Now().Unix()) - 86400
+		} else if mode == "7h" {
+			afterTimestamp = int(time.Now().Unix()) - 25200
+		} else if mode == "7d" {
+			afterTimestamp = int(time.Now().Unix()) - 604800
+		}
+	}
+
+	if mode != "" {
+		cacheKey := fmt.Sprintf("%s-%s", nameKey, mode)
+		if project.CacheDb {
+			cache, err := GetCache(ctx, cacheKey)
+			if err == nil {
+				cacheData := []byte(cache.([]uint8))
+				err = json.Unmarshal(cacheData, &liveExecs)
+				if err == nil {
+					return liveExecs, nil
+				}
+			}
+		}
+	}
 
     if project.DbType == "opensearch" {
         var buf bytes.Buffer
@@ -1572,19 +1588,31 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
         }
     }
 
-	// no point in caching right now
-    // if project.CacheDb {
-    //     data, err := json.Marshal(liveExecs)
-    //     if err != nil {
-    //         log.Printf("[WARNING] Failed marshalling live execution status: %s", err)
-    //         return liveExecs, nil
-    //     }
+	if mode != "" {
+		cacheKey := fmt.Sprintf("%s-%s", nameKey, mode)
+		if project.CacheDb {
+			data, err := json.Marshal(liveExecs)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling live execution status: %s", err)
+				return liveExecs, nil
+			}
 
-    //     err = SetCache(ctx, cacheKey, data, 30)
-    //     if err != nil {
-    //         log.Printf("[WARNING] Failed updating live execution status cache: %s", err)
-    //     }
-    // }
+			var ttl int32
+			ttl = 5
+			if mode == "7h" {
+				ttl = 60
+			} else if mode == "7d" {
+				ttl = 300
+			} else if mode == "1d" {
+				ttl = 120
+			}
+
+			err = SetCache(ctx, cacheKey, data, ttl)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating live execution status cache: %s", err)
+			}
+		}
+	}
 
     return liveExecs, nil
 }
