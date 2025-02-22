@@ -1555,7 +1555,6 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
         }
 
         if afterTimestamp != 0 {
-			log.Printf("[DEBUG] created at after timestamp: %s -- not respected", afterTimestamp)
             q = q.Filter("CreatedAt >", afterTimestamp)
         }
 
