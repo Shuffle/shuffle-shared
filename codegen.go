@@ -2134,6 +2134,8 @@ func FixParamname(paramname string) string {
 // https://docs.python.org/3.2/reference/lexical_analysis.html#identifiers
 // This is used to build the python functions.
 func FixFunctionName(functionName, actualPath string, lowercase bool) string {
+	// why..are we not whitelisting characters?
+
 	if len(functionName) == 0 {
 		functionName = actualPath
 	}
