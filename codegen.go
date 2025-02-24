@@ -2161,6 +2161,8 @@ func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 	functionName = strings.Replace(functionName, "}", "", -1)
 	functionName = strings.Replace(functionName, `"`, "", -1)
 	functionName = strings.Replace(functionName, `'`, "", -1)
+	functionName = strings.Replace(functionName, `’`, "", -1)
+	functionName = strings.Replace(functionName, `=`, "", -1)
 	functionName = strings.Replace(functionName, `|`, "", -1)
 	functionName = strings.Replace(functionName, `~`, "", -1)
 
