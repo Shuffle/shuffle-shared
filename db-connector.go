@@ -8705,7 +8705,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 
 	// Clean up types in subflows
 	if len(workflow.Validation.SubflowApps) > 0 {
-		for index, subflow := range workflow.Validation.SubflowApps {
+		for index, _ := range workflow.Validation.SubflowApps {
+			// Stops infinite recursion issue for self-contained subflows in export
 			if len(workflow.Validation.SubflowApps[index].Type) > 20 { 
 				workflow.Validation.SubflowApps[index].Type = workflow.Validation.SubflowApps[index].Type[:20]+"_app"
 			}
