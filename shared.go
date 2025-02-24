@@ -8253,7 +8253,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Resetting subflows as they shouldn't be entirely saved. Used just for imports/exports
+	// Resetting subflows as they shouldn't be entirely saved. Used just for imports/exports only
 	if len(workflow.Subflows) > 0 {
 		log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
 
@@ -30477,6 +30477,10 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 					appendedActionIds = append(appendedActionIds, subProblem.ActionId)
 
 					subProblem.Type = fmt.Sprintf("sub_%s", subProblem.Type)
+					if len(subProblem.Type) > 20 {
+						subProblem = subProblem.Type[:20]+"_app"
+					}
+
 					workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, subProblem)
 				}
 			}

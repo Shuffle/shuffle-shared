@@ -8700,6 +8700,18 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 		workflow.Edited += int64(optionalEditedSecondsOffset[0])
 	}
 
+	// Used for exporting. Should NEVER be stored.
+	workflow.Subflows = []Workflow{}
+
+	// Clean up types in subflows
+	if len(workflow.Validation.SubflowApps) > 0 {
+		for index, subflow := range workflow.Validation.SubflowApps {
+			if len(workflow.Validation.SubflowApps[index].Type) > 20 { 
+				workflow.Validation.SubflowApps[index].Type = workflow.Validation.SubflowApps[index].Type[:20]+"_app"
+			}
+		}
+	}
+
 	workflow = FixWorkflowPosition(ctx, workflow)
 
 	// New struct, to not add body, author etc
