@@ -6294,12 +6294,14 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 					diffWorkflows(*newChildworkflow, parentWorkflow, update)
 
 					// Loading it back in
+					/*
 					anotherChildWorkflow, err := GetWorkflow(ctx, newChildworkflow.ID)
 					if err != nil {
 						log.Printf("[WARNING] Failed to get child workflow %s (%s) for %s (%s) during initial setup: %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 					} else {
 						diffWorkflows(*anotherChildWorkflow, parentWorkflow, update)
 					}
+					*/
 				}
 			}
 
@@ -7855,9 +7857,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
 
-		log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
-		log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
-		log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
+		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
+		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
+		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
 
 		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow)
 		if err != nil {

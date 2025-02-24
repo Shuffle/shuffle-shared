@@ -2076,7 +2076,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			_ = subflow
 
 			if len(triggerType) == 0 {
-				log.Printf("[WARNING] No TriggerType specified for User Input node %s in %s (%s)", trigger.Label, workflow.Name, workflow.ID)
+				//log.Printf("[WARNING] No TriggerType specified for User Input node %s in %s (%s)", trigger.Label, workflow.Name, workflow.ID)
 				workflow.Errors = append(workflow.Errors, fmt.Sprintf("No TriggerType specified for User Input node '%s'", trigger.Label))
 				if workflow.PreviouslySaved {
 					//resp.WriteHeader(401)
