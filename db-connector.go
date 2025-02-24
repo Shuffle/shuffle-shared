@@ -1425,22 +1425,39 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 	return nil
 }
 
-func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int) ([]LiveExecutionStatus, error) {
+func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int, mode string) ([]LiveExecutionStatus, error) {
     nameKey := "live_execution_status"
     liveExecs := []LiveExecutionStatus{}
 
-    // Try cache first
-    cacheKey := fmt.Sprintf("%s-%d-%d-%d", nameKey, beforeTimestamp, afterTimestamp, limit)
-    if project.CacheDb {
-        cache, err := GetCache(ctx, cacheKey)
-        if err == nil {
-            cacheData := []byte(cache.([]uint8))
-            err = json.Unmarshal(cacheData, &liveExecs)
-            if err == nil {
-                return liveExecs, nil
-            }
-        }
-    }
+	modes := []string{"1h", "7h", "1d", "7d"}
+	if !ArrayContains(modes, mode) {
+		mode = ""
+	} else {
+		beforeTimestamp = 0
+		if mode == "1h" {
+			afterTimestamp = int(time.Now().Unix()) - 3600
+		} else if mode == "1d" {
+			afterTimestamp = int(time.Now().Unix()) - 86400
+		} else if mode == "7h" {
+			afterTimestamp = int(time.Now().Unix()) - 25200
+		} else if mode == "7d" {
+			afterTimestamp = int(time.Now().Unix()) - 604800
+		}
+	}
+
+	if mode != "" {
+		cacheKey := fmt.Sprintf("%s-%s", nameKey, mode)
+		if project.CacheDb {
+			cache, err := GetCache(ctx, cacheKey)
+			if err == nil {
+				cacheData := []byte(cache.([]uint8))
+				err = json.Unmarshal(cacheData, &liveExecs)
+				if err == nil {
+					return liveExecs, nil
+				}
+			}
+		}
+	}
 
     if project.DbType == "opensearch" {
         var buf bytes.Buffer
@@ -1551,11 +1568,11 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
         q := datastore.NewQuery(nameKey)
 
         if beforeTimestamp != 0 {
-            q = q.Filter("CreatedAt >", beforeTimestamp)
+            q = q.Filter("CreatedAt <", beforeTimestamp)
         }
 
         if afterTimestamp != 0 {
-            q = q.Filter("CreatedAt <", afterTimestamp)
+            q = q.Filter("CreatedAt >", afterTimestamp)
         }
 
         if limit != 0 {
@@ -1571,19 +1588,31 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
         }
     }
 
-    // Cache the results
-    if project.CacheDb {
-        data, err := json.Marshal(liveExecs)
-        if err != nil {
-            log.Printf("[WARNING] Failed marshalling live execution status: %s", err)
-            return liveExecs, nil
-        }
+	if mode != "" {
+		cacheKey := fmt.Sprintf("%s-%s", nameKey, mode)
+		if project.CacheDb {
+			data, err := json.Marshal(liveExecs)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling live execution status: %s", err)
+				return liveExecs, nil
+			}
 
-        err = SetCache(ctx, cacheKey, data, 30)
-        if err != nil {
-            log.Printf("[WARNING] Failed updating live execution status cache: %s", err)
-        }
-    }
+			var ttl int32
+			ttl = 5
+			if mode == "7h" {
+				ttl = 60
+			} else if mode == "7d" {
+				ttl = 300
+			} else if mode == "1d" {
+				ttl = 120
+			}
+
+			err = SetCache(ctx, cacheKey, data, ttl)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating live execution status cache: %s", err)
+			}
+		}
+	}
 
     return liveExecs, nil
 }
@@ -11050,7 +11079,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 	return users, nil
 }
 
-func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExecution, error) {
+func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExecution, int, error) {
     mappedExecutions := make(map[string][]WorkflowExecution)
 
 	index := "workflowexecution"
@@ -11059,7 +11088,7 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 	// FIXME: Sorting doesn't seem to work...
 	//StartedAt          int64          `json:"started_at" datastore:"started_at"`
 	var query *datastore.Query
-	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-60).Order("-started_at").Limit(100)	
+	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-60).Order("-started_at").Limit(100000)	
 	
 	max := 100000
 	cursorStr := ""
@@ -11144,7 +11173,14 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 		mappedExecutions[execution.Status] = append(mappedExecutions[execution.Status], execution)
 	}
 
-	return mappedExecutions, nil
+	// now, make a COUNT query for the number of notifications 
+	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-60)
+	notificationCount, err := project.Dbclient.Count(ctx, query)
+	if err != nil {
+		log.Printf("[ERROR] Failed counting executions: %s", err)
+	}
+
+	return mappedExecutions, notificationCount, nil
 }
 
 func GetUnfinishedExecutions(ctx context.Context, workflowId string) ([]WorkflowExecution, error) {
