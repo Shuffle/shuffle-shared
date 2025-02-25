@@ -6693,7 +6693,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(newAction, oldAction)
 			if changed || len(changeType) > 0 {
-				//log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
+				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
 				updatedActions = append(updatedActions, newAction)
 			}
 		}
@@ -6801,8 +6801,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			changeType, changed := hasTriggerChanged(parentTrigger, childTrigger)
 			if changed {
 				log.Printf("[DEBUG] Trigger %s (%s) has changed in '%s'", parentTrigger.Label, parentTrigger.ID, changeType)
-				// updatedTriggers always has parent workflow's new trigger.
-				updatedTriggers = append(updatedTriggers, childTrigger)
+
+				//updatedTriggers = append(updatedTriggers, childTrigger)
+				updatedTriggers = append(updatedTriggers, parentTrigger)
 			}
 		}
 	}
@@ -7537,13 +7538,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 
 		if len(updatedTriggers) > 0 {
+			// UpdatedTriggers = list of parent triggers
 			for _, parentTrigger := range updatedTriggers {
 				//log.Printf("[DEBUG] ID of the parent trigger (%s): %s", parentTrigger.TriggerType, parentTrigger.ID)
 				for childIndex, childTrigger := range childWorkflow.Triggers {
 					if childTrigger.ReplacementForTrigger != parentTrigger.ID {
 						continue
 					}
-
 
 					if parentTrigger.Status == "SUCCESS" {
 						//log.Printf("[DEBUG] Remapping parent status SUCCESS to running for child trigger %s", childTrigger.ID)
