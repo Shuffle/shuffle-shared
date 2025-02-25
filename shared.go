@@ -7296,6 +7296,11 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 								}
 							}
 
+							if len(childWorkflow.Actions[childIndex].Parameters) <= childParamIndex {
+								log.Printf("[ERROR] Child action %s has more params than parent %s in child workflow '%s'. This should ONLY happen if an app is updated directly", childAction.ID, action.ID, childWorkflow.ID)
+								break
+							}
+
 							if len(parentParam.Value) > 0 && len(childWorkflow.Actions[childIndex].Parameters[childParamIndex].Value) == 0 {
 								log.Printf("[DEBUG] Updating param %s in child action '%s'", parentParam.Name, childAction.ID)
 								childWorkflow.Actions[childIndex].Parameters[childParamIndex].Value = parentParam.Value
@@ -17079,7 +17084,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	maxAmount := 30
+	maxAmount := 50 
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
 		val, err := strconv.Atoi(top[0])
@@ -17094,7 +17099,13 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
-	keys, newCursor, err := GetAllCacheKeys(ctx, org.Id, maxAmount, cursor)
+	category := ""
+	categoryList, categoryOk := request.URL.Query()["category"]
+	if categoryOk && len(categoryList) > 0 {
+		category = categoryList[0]
+	}
+
+	keys, newCursor, err := GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
 	isSuccess := true
 	if err != nil {
 		isSuccess = false
@@ -17169,11 +17180,11 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 	type cacheConfig struct {
 		Key            string   `json:"key"`
 		Action         string   `json:"action"`
+		Category 	   string 	`json:"category"`
 		SelectedSuborg []string `json:"selected_suborgs"`
 	}
 
 	var config cacheConfig
-
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("Error with body read: %s", err)
@@ -17191,9 +17202,12 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	if config.Category == "default" {
+		config.Category = ""
+	}
 
 	cacheId := fmt.Sprintf("%s_%s", orgId, config.Key)
-	cache, err := GetCacheKey(ctx, cacheId)
+	cache, err := GetCacheKey(ctx, cacheId, config.Category)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting cache key '%s' for org %s (config)", config.Key, orgId)
 		resp.WriteHeader(400)
@@ -17278,7 +17292,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheKey = strings.Trim(cacheKey, " ")
 	cacheId := fmt.Sprintf("%s_%s", orgId, cacheKey)
 
-	cacheData, err := GetCacheKey(ctx, cacheId)
+	cacheData, err := GetCacheKey(ctx, cacheId, "")
 	if err != nil || cacheData.Key == "" {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (delete)", cacheId, orgId)
 		resp.WriteHeader(400)
@@ -17436,18 +17450,20 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
-	cacheData, err := GetCacheKey(ctx, cacheId)
-
-	log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
-
-	if err != nil {
+	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
+	log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Key: %#v", tmpData.Key, tmpData.OrgId, err, cacheData)
+	if err != nil || len(cacheData.Key) == 0 {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete). Does it exist?", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(400)
 
 		result := ResultChecker{
 			Success: false,
-			Reason:  "Failed to get key. Does it exist?",
+			Reason:  "Failed to get key. Does it exist? Correct category?",
 			Extra:   fmt.Sprintf("Attempted to delete key '%s'", tmpData.Key),
+		}
+
+		if len(tmpData.Category) > 0 {
+			result.Extra = fmt.Sprintf("Attempted to delete key '%s' in category '%s'", tmpData.Key, tmpData.Category)
 		}
 
 		marshalled, err := json.Marshal(result)
@@ -17460,11 +17476,24 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(tmpData.Category) > 0 {
+		cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
+	}
+
+	log.Printf("[INFO] Deleting ID '%s'", cacheId)
+
 	entity := "org_cache"
-	DeleteKey(ctx, entity, url.QueryEscape(cacheId))
+	err = DeleteKey(ctx, entity, url.QueryEscape(cacheId))
+	if err != nil {
+		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (1)", tmpData.Key, tmpData.OrgId)
+	}
+
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete)", tmpData.Key, tmpData.OrgId)
+		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (2)", tmpData.Key, tmpData.OrgId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to delete key"}`))
+		return
 	}
 
 	if len(cacheData.WorkflowId) > 0 {
@@ -17487,6 +17516,8 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		Success: true,
 		Reason:  fmt.Sprintf("Key '%s' deleted", tmpData.Key),
 	}
+
+	log.Printf("[INFO] Successfully Deleted key '%s' for org %s in category '%s'", tmpData.Key, tmpData.OrgId, tmpData.Category)
 
 	// Marshal
 	resp.WriteHeader(200)
@@ -17681,13 +17712,15 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		executionId = workflowExecution.ExecutionId
 	}
 
+	//log.Printf("\n\n[DEBUG] Getting key '%s' from category '%s'\n\n", tmpData.Key, tmpData.Category)
+
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-	cacheData, err := GetCacheKey(ctx, cacheId)
+	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
 	if err != nil {
 
 		// Doing a last resort search, e.g. to handle spaces and the like
-		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, 30, "")
+		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", 30, "")
 		if err == nil {
 			cacheData = &CacheKeyData{}
 			searchkey := strings.ReplaceAll(strings.Trim(strings.ToLower(tmpData.Key), " "), " ", "_")
@@ -17950,6 +17983,10 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Value can't be empty"}`))
 		return
+	}
+
+	if strings.ToLower(tmpData.Category) == "default" {
+		tmpData.Category = ""
 	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")

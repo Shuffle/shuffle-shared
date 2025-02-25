@@ -12344,6 +12344,10 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 
 	//cacheId := fmt.Sprintf("%s_%s_%s", cacheData.OrgId, cacheData.WorkflowId, cacheData.Key)
 	cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+	}
+
 	if len(cacheId) > 128 {
 		cacheId = cacheId[0:127]
 	}
@@ -12387,7 +12391,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 }
 
 // Used for cache for individual organizations
-func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
+func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData, error) {
 	cacheData := &CacheKeyData{}
 	nameKey := "org_cache"
 
@@ -12396,17 +12400,11 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 	}
 
 	//log.Printf("[WARNING] ID in get cache: %s", id)
+	if len(category) > 0 && category != "default" {
+		id = fmt.Sprintf("%s_%s", id, category)
+	}
+
 	id = url.QueryEscape(id)
-
-	// 2e7b6a08-b63b-4fc2-bd70-718091509db1
-	// b0ef85ff-353c-4dbf-9e47-b9d0474dc14e
-	// 4.6.11.191
-
-	// 2e7b6a08-b63b-4fc2-bd70-718091509db1_b0ef85ff-353c-4dbf-9e47-b9d0474dc14e_4.6.11.191
-	// 2e7b6a08-b63b-4fc2-bd70-718091509db1_4.6.11.191
-
-	//fmt.Println("http://example.com/say?message="+url.QueryEscape(s))
-
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -12448,60 +12446,65 @@ func GetCacheKey(ctx context.Context, id string) (*CacheKeyData, error) {
 		cacheData = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
+		//key := datastore.NameKey(nameKey, id, nil)
+
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
 
 			if strings.Contains(err.Error(), `cannot load field`) {
-				log.Printf("[ERROR] Error in workflow loading. Migrating org cache to new workflow handler (3): %s", err)
+				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
 				err = nil
 			} else {
 				log.Printf("[WARNING] Error in cache key loading for %s: %s", id, err)
 
-				// Search for key by removing first uuid part
-				newId := id
-				orgId := ""
-				newIdSplit := strings.Split(id, "_")
-				if len(newIdSplit) > 1 {
-					orgId = newIdSplit[0]
-					newId = strings.Join(newIdSplit[1:], "_")
+				if len(category) > 0 && category != "default" {
 				} else {
-					log.Printf("[ERROR] Failed splitting cache id %s", id)
-					return cacheData, err
-				}
-
-				// 2e7b6a08-b63b-4fc2-bd70-718091509db1
-				// b0ef85ff-353c-4dbf-9e47-b9d0474dc14e
-				// Skipped+because+of+previous+node+-+1
-
-				newId, err = url.QueryUnescape(newId)
-				if err != nil {
-					log.Printf("[ERROR] Failed unescaping cache id %s", newId)
-				}
-
-				// Search for it in datastore with key =
-				cacheKeys := []CacheKeyData{}
-				cacheData.FormattedKey = newId
-				query := datastore.NewQuery(nameKey).Filter("Key =", newId).Limit(5)
-				_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
-				if err != nil {
-					log.Printf("[WARNING] Failed getting cacheKey %s: %s (1)", newId, err)
-					return cacheData, err
-				}
-
-				if len(cacheKeys) > 0 {
-					for _, cacheKey := range cacheKeys {
-						if cacheKey.OrgId == orgId {
-							cacheData = &cacheKey
-							break
-						}
+					// Search for key by removing first uuid part
+					newId := id
+					orgId := ""
+					newIdSplit := strings.Split(id, "_")
+					if len(newIdSplit) > 1 {
+						orgId = newIdSplit[0]
+						newId = strings.Join(newIdSplit[1:], "_")
+					} else {
+						log.Printf("[ERROR] Failed splitting cache id %s", id)
+						return cacheData, err
 					}
 
-					if cacheData.Key == "" {
+					// 2e7b6a08-b63b-4fc2-bd70-718091509db1
+					// b0ef85ff-353c-4dbf-9e47-b9d0474dc14e
+					// Skipped+because+of+previous+node+-+1
+
+					newId, err = url.QueryUnescape(newId)
+					if err != nil {
+						log.Printf("[ERROR] Failed unescaping cache id %s", newId)
+					}
+
+					// Search for it in datastore with key =
+					cacheKeys := []CacheKeyData{}
+					cacheData.FormattedKey = newId
+					query := datastore.NewQuery(nameKey).Filter("Key =", newId).Limit(5)
+					_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting cacheKey %s: %s (1)", newId, err)
+						return cacheData, err
+					}
+
+					if len(cacheKeys) > 0 {
+						for _, cacheKey := range cacheKeys {
+							if cacheKey.OrgId == orgId {
+								cacheData = &cacheKey
+								break
+							}
+						}
+
+						if cacheData.Key == "" {
+							return cacheData, errors.New("Key doesn't exist")
+						}
+					} else {
+						log.Printf("[WARNING] Failed getting cacheKey %s: %s (2)", newId, err)
+
 						return cacheData, errors.New("Key doesn't exist")
 					}
-				} else {
-					log.Printf("[WARNING] Failed getting cacheKey %s: %s (2)", newId, err)
-
-					return cacheData, errors.New("Key doesn't exist")
 				}
 			}
 		} else {
@@ -13010,9 +13013,13 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 	return nil
 }
 
-func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor string) ([]CacheKeyData, string, error) {
+func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
 	nameKey := "org_cache"
-	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, inputcursor, orgId)
+	if strings.ToLower(category) == "default" {
+		category = ""
+	}
+
+	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
 
 	cursor := ""
 	cacheKeys := []CacheKeyData{}
@@ -13037,6 +13044,22 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 					},
 				},
 			},
+		}
+
+		if len(category) > 0 {
+			// Change out the "must" part entirely to contain the workflow id as well
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+				{
+					"match": map[string]interface{}{
+						"org_id": orgId,
+					},
+				},
+				{
+					"match": map[string]interface{}{
+						"category": category,
+					},
+				},
+			}
 		}
 
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
@@ -13090,10 +13113,12 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 		//log.Printf("[INFO] Got %d cachekeys for org %s (es)", len(newCacheKeys), orgId)
 		cacheKeys = newCacheKeys
 	} else {
-
 		// Query datastore with pages
-
 		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited").Limit(max)
+		if len(category) > 0 {
+			query = query.Filter("category =", category)
+		}
+
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)
 			if err != nil {
@@ -13144,7 +13169,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 			nextCursor, err := it.Cursor()
 			if err != nil {
 				if errcnt == 0 && (strings.Contains(err.Error(), "no matching index") || strings.Contains(err.Error(), "not ready to serve")) {
-					log.Printf("[WARNING] No matching index for cache. Running without edit index.")
+					log.Printf("[WARNING] No matching index for cache. Running without edit index: %s.", err)
 					query = datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Limit(max)
 					errcnt += 1
 					continue
@@ -13193,7 +13218,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, max int, inputcursor str
 	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
 		if err == nil {
-			parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, max, inputcursor)
+			parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor)
 			if err == nil {
 				for _, parentCache := range parentOrgCache {
 					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
