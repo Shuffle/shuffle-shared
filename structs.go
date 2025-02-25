@@ -2613,6 +2613,7 @@ type GithubAuthor struct {
 type GithubResp struct {
 	Name         string         `json:"name"`
 	Contributors []GithubAuthor `json:"contributors"`
+	PublishedDate int64          `json:"published_date"`
 	Edited       string         `json:"edited"`
 	ReadTime     int            `json:"read_time"`
 	Link         string         `json:"link"`

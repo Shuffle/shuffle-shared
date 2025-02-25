@@ -19059,6 +19059,26 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+        commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
+            Path: fmt.Sprintf("%s/%s", path, *item.Name),
+        })
+
+        publishedDate := time.Now().Unix()
+        if err != nil {
+            log.Printf("[WARNING] Failed getting commits for %s: %s", *item.Name, err)
+            if resp != nil {
+                log.Printf("[DEBUG] Response status: %d", resp.StatusCode)
+            }
+        } else {
+            log.Printf("[DEBUG] Found %d commits for %s", len(commits), *item.Name)
+            if len(commits) > 0 {
+                publishedDate = commits[len(commits)-1].Commit.Author.Date.Unix()
+                log.Printf("[DEBUG] Setting published date for %s to %s (%d) from first commit", *item.Name, commits[len(commits)-1].Commit.Author.Date.Format("2006-01-02 15:04:05"), publishedDate)
+            } else {
+                log.Printf("[WARNING] No commits found for %s", *item.Name)
+            }
+        }
+
 		// FIXME: Scuffed readtime calc
 		// Average word length = 5. Space = 1. 5+1 = 6 avg.
 		// Words = *item.Size/6/250
@@ -19067,6 +19087,7 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 		githubResp := GithubResp{
 			Name:         (*item.Name)[0 : len(*item.Name)-3],
 			Contributors: []GithubAuthor{},
+			PublishedDate: publishedDate,
 			Edited:       "",
 			ReadTime:     *item.Size / 6 / 250,
 			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
@@ -19074,6 +19095,11 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 
 		names = append(names, githubResp)
 	}
+
+	// Sort articles by published date (newest first)
+	sort.Slice(names, func(i, j int) bool {
+		return names[i].PublishedDate > names[j].PublishedDate
+	})
 
 	//log.Printf(names)
 	result.Success = true
