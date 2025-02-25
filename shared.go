@@ -6693,7 +6693,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(parentAction, oldAction)
 			if changed || len(changeType) > 0 {
-				log.Printf("\n\n[DEBUG] Action %s (%s) has changed in '%s'\n\n", parentAction.Label, parentAction.ID, changeType)
+				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
 				updatedActions = append(updatedActions, parentAction)
 			}
 		}
