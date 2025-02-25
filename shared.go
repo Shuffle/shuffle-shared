@@ -6673,12 +6673,12 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
-	for _, newAction := range parentWorkflow.Actions {
-		if !newAction.ParentControlled {
+	for _, parentAction := range parentWorkflow.Actions {
+		if !parentAction.ParentControlled {
 			continue
 		}
 
-		if ArrayContains(addedActions, newAction.ID) || ArrayContains(removedActions, newAction.ID) {
+		if ArrayContains(addedActions, parentAction.ID) || ArrayContains(removedActions, parentAction.ID) {
 			continue
 		}
 
@@ -6687,14 +6687,14 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				continue
 			}
 
-			if newAction.ID != oldAction.ID {
+			if parentAction.ID != oldAction.ID {
 				continue
 			}
 
-			changeType, changed := hasActionChanged(newAction, oldAction)
+			changeType, changed := hasActionChanged(parentAction, oldAction)
 			if changed || len(changeType) > 0 {
-				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", newAction.Label, newAction.ID, changeType)
-				updatedActions = append(updatedActions, newAction)
+				log.Printf("\n\n[DEBUG] Action %s (%s) has changed in '%s'\n\n", parentAction.Label, parentAction.ID, changeType)
+				updatedActions = append(updatedActions, parentAction)
 			}
 		}
 	}
@@ -7213,10 +7213,12 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					}
 
 					if childAction.Name != action.Name {
-						log.Printf("[DEBUG] Updating name in child action '%s'", childAction.ID)
+						log.Printf("[DEBUG] Updating action in child action '%s'", childAction.ID)
 						// Override entirely?
 						childWorkflow.Actions[childIndex].Name = action.Name
-						childAction.Parameters = action.Parameters
+						childWorkflow.Actions[childIndex].Parameters = action.Parameters
+						childWorkflow.Actions[childIndex].LargeImage = action.LargeImage
+						childAction.Parameters = childWorkflow.Actions[childIndex].Parameters
 					}
 
 					// FIXME:
