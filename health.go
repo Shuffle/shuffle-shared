@@ -89,11 +89,19 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		ExecutionID: "",
 	}
 
-	// 1. Get App
-	baseURL := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	// if len(baseURL) == 0 {
-	baseURL = "https://shuffler.io"
-	// }
+	baseURL := "https://shuffler.io"
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseURL)
+		baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if project.Environment == "onprem" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		baseURL = "http://localhost:5001"
+		if os.Getenv("BASE_URL") != "" {
+			baseURL = os.Getenv("BASE_URL")
+		}
+	}
 
 	url := baseURL + "/api/v1/apps/edaa73d40238ee60874a853dc3ccaa6f/config"
 	log.Printf("[DEBUG] Getting app with URL: %s", url)
@@ -147,6 +155,21 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		log.Printf("[ERROR] Failed converting openapi base64 to string in app health check: %s", err)
 		return appHealth, err
 	}
+
+	type OpenApiData struct {
+		Body string `json:"body"`
+		Id	string	`json:"id"`
+		Success	bool `json:"success"`
+	}
+	var openApiData OpenApiData
+
+	err = json.Unmarshal([]byte(openapiString), &openApiData)
+	if err != nil {
+		log.Printf("Error in unm %s", err)
+		return appHealth, err
+	}
+
+	openapiString = openApiData.Body
 
 	// 2.2 call /api/v1/validate_openapi
 	// with request body openapiString
@@ -204,8 +227,16 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	// 2.3 call /api/v1/verify_openapi POST
 	// with request body openapiString
-	// replace edaa73d40238ee60874a853dc3ccaa6f with id from above
-	newOpenapiString := strings.Replace(openapiString, "edaa73d40238ee60874a853dc3ccaa6f", id, -1)
+	// replace edaa73d40238ee60874a853dc3ccaa6f
+	// with id from above and bunch of other data to
+	// not get same app id when verified
+	newOpenapiString := strings.Replace(openapiString, `"edaa73d40238ee60874a853dc3ccaa6f"`, `"`+id+`"`, 1)
+	newOpenapiString = strings.Replace(newOpenapiString, `"editing":true`, `"editing":false`, 1)
+	newOpenapiString = strings.Replace(newOpenapiString, `"title":"Shuffle"`, `"title":"Shuffle-Copy"`, 1)
+	newOpenapiString = strings.Replace(newOpenapiString, `"version":"1.0"`, `"version":"2.0"`, 1)
+	newOpenapiString = strings.Replace(newOpenapiString, `"tags":[{"name":"SOAR"},{"name":"Automation"},{"name":"Shuffle"}]`, `"tags":[]`, 1)
+	newOpenapiString = strings.Replace(newOpenapiString, `"/api/v1/apps/search"`, `"/api/v1/different/endpoint"`, 1)
+
 	url = baseURL + "/api/v1/verify_openapi"
 
 	log.Printf("[DEBUG] New openapi string: %s", newOpenapiString)
@@ -251,6 +282,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, err
 	}
 
+	id = validatedResp.ID
 	// Verify that the app was created
 	// Make a request to /api/v1/apps/<id>/config
 	url = baseURL + "/api/v1/apps/" + id + "/config"
@@ -276,9 +308,15 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body) // Read response body
+	if err != nil {
+		log.Printf("[ERROR] Failed reading response body: %s", err)
+		return appHealth, err
+	}
+
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed reading app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		log.Printf("[ERROR] The response body was: %s", respBody)
+		log.Printf("[ERROR] The response body was: %s", body)
 		return appHealth, err
 	}
 
@@ -1301,6 +1339,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error){
 			baseUrl = os.Getenv("BASE_URL")
 		}
 	}
+
 	appUploadUrl := baseUrl + "/api/v1/apps/upload"
 
 	req, err := http.NewRequest("POST", appUploadUrl, pr)
