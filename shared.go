@@ -15141,39 +15141,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	actionResult.Result = string(newResult)
 
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-		setExecVar := true
 
 		// Should just check the first bytes for this, as it should be at the start if it's a failure with the individual action itself
 		// This is finicky, but it's the easiest fix for this
-		checkLength := 1000
-		firstFifty := actionResult.Result
-		if len(actionResult.Result) > checkLength {
-			firstFifty = actionResult.Result[0:checkLength]
-		}
 
-		if strings.Contains(firstFifty, "\"success\":") && !(strings.HasPrefix(actionResult.Result, "[{") && strings.HasSuffix(actionResult.Result, "}]")) {
-			type SubflowMapping struct {
-				Success bool `json:"success"`
-			}
-
-			var subflowData SubflowMapping
-			err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
-			if err != nil {
-				log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
-				setExecVar = false
-			} else {
-				if subflowData.Success == false {
-					setExecVar = false
-				}
-			}
-		}
-
-		if len(actionResult.Result) == 0 {
-			setExecVar = false
-		}
-
-		if setExecVar {
-			log.Printf("[DEBUG][%s] Updating exec variable %s with new value of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+		if setExecutionVariable(actionResult) {
+			log.Printf("[DEBUG][%s] Updating exec variable '%s' with new value from node '%s' of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, actionResult.Action.Label, len(actionResult.Result))
 
 			if len(workflowExecution.Results) > 0 {
 				// Should this be used?
@@ -15767,6 +15740,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						if len(actionResult.Result) > 0 {
 							log.Printf("\n\n[DEBUG] SET EXEC VAR %s\n\n", execvar.Name)
 							workflowExecution.ExecutionVariables[index].Value = actionResult.Result
+							workflowExecution.Workflow.ExecutionVariables[index].Value = actionResult.Result
 						} else {
 							log.Printf("\n\n[DEBUG] SKIPPING EXEC VAR\n\n")
 						}
@@ -16120,6 +16094,41 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// Should this be able to return errors?
 	//return &workflowExecution, dbSave, err
 	return &workflowExecution, dbSave, nil
+}
+
+
+func setExecutionVariable(actionResult ActionResult) bool {
+	if len(actionResult.Action.ExecutionVariable.Name) == 0 {
+		return false
+	}
+
+	if actionResult.Status != "SUCCESS" && actionResult.Status != "FINISHED" {
+		return false
+	}
+
+	setExecVar := true
+	if strings.Contains(actionResult.Result, "\"success\":") && !(strings.HasPrefix(actionResult.Result, "[{") && strings.HasSuffix(actionResult.Result, "}]")) {
+		type SubflowMapping struct {
+			Success bool `json:"success"`
+		}
+
+		var subflowData SubflowMapping
+		err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+		if err != nil {
+			log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
+			setExecVar = false
+		} else {
+			if subflowData.Success == false {
+				setExecVar = false
+			}
+		}
+	}
+
+	if len(actionResult.Result) == 0 {
+		setExecVar = false
+	}
+
+	return setExecVar
 }
 
 // Finds execution results and parameters that are too large to manage and reduces them / saves data partly
@@ -30240,7 +30249,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	go RunCacheCleanup(ctx, *exec)
 	go RunIOCFinder(ctx, *exec)
 
-	log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
+	//log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
 	orgId := exec.ExecutionOrg
 	allAuth, err := GetAllWorkflowAppAuth(ctx, orgId)
 	if err != nil {

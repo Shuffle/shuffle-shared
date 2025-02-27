@@ -279,7 +279,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		return nil
 	}
 
-	log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
+	//log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
 
 
 	cachedNotifications := NotificationCached{}
@@ -651,7 +651,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		project.Environment = "worker" 
 	}
 
-	log.Printf("[DEBUG] Creating org notification! %s. Env: %s", orgId, project.Environment)
+	//log.Printf("[DEBUG] Creating org notification! %s. Env: %s", orgId, project.Environment)
 
 	// Check if the referenceUrl is already in cache or not
 	if len(referenceUrl) > 0 {
@@ -686,7 +686,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return nil
 	}
 
-	log.Printf("[DEBUG] Creating notification for org '%s'", orgId)
+	//log.Printf("[DEBUG] Creating notification for org '%s'", orgId)
 	notifications, err := GetOrgNotifications(ctx, orgId)
 	if err != nil {
 		log.Printf("\n\n\n[ERROR] Failed getting org notifications for %s: %s", orgId, err)
@@ -735,7 +735,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 	authOrg := org
 	if org.Defaults.NotificationWorkflow == "parent" && org.CreatorOrg != "" {
-		log.Printf("[DEBUG] Sending notification to parent org %s' notification workflow", org.CreatorOrg)
+		//log.Printf("[DEBUG] Sending notification to parent org %s' notification workflow", org.CreatorOrg)
 
 		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
@@ -755,7 +755,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			foundUser, err := GetUser(ctx, user.Id)
 			if err == nil {
 				if foundUser.ActiveOrg.Id == orgId {
-					log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
+					//log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
 					selectedApikey = foundUser.ApiKey
 				}
 			}
