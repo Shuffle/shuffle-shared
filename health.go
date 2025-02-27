@@ -616,6 +616,13 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "High number of requests sent to the backend. Try again later."}`))
 			return
 		}
+
+		if err.Error() == "Unauthorized user saving ops workflow" {
+			log.Printf("[DEBUG] Unauthorized user saving ops workflow. Skipping this run.")
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Unauthorized user saving ops workflow."}`))
+			return
+		}
 	}
 
 	if platformHealth.Workflows.Create == true && platformHealth.Workflows.Delete == true && platformHealth.Workflows.Run == true && platformHealth.Workflows.RunFinished == true && platformHealth.Workflows.RunStatus == "FINISHED" {
@@ -1013,6 +1020,11 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		// if error string contains "High number of requests. Try again later", skip this run
 		if strings.Contains(err.Error(), "High number of requests. Try again later") {
 			log.Printf("[DEBUG] High number of requests sent to the backend. Skipping this run.")
+			return workflowHealth, err
+		}
+
+		if strings.Contains(err.Error(), "Unauthorized user saving ops workflow") {
+			log.Printf("[DEBUG] Unauthorized user saving the ops workflow. Skipping this run.")
 			return workflowHealth, err
 		}
 
@@ -1490,7 +1502,6 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 		log.Printf("[ERROR] Subflow parameter changing failed might create an issue.")
 	}
 
-
 	// Save the workflow: PUT http://localhost:5002/api/v1/workflows/{id}?skip_save=true
 	req, err = http.NewRequest("PUT", baseUrl+"/api/v1/workflows/"+workflowData.ID+"?skip_save=true", nil)
 	if err != nil {
@@ -1522,6 +1533,14 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	}
 
 	defer resp.Body.Close()
+
+	// This happend due to deleteJunkOpsWorkflow deleting the workflow before we even save
+	// data. Reason behind is we are making health checks request too fast i.e. less than 
+	// 1s.
+	if resp.StatusCode == 401 {
+		log.Printf("[ERROR] Authentication issue, are we making the health checks request too many health check request? Skipping this run due to authentication problem.")
+		return "", errors.New("Unauthorized user saving ops workflow")
+	}
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed saving ops dashboard workflow: %s. The status code was: %d", err, resp.StatusCode)
@@ -2079,7 +2098,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			_ = subflow
 
 			if len(triggerType) == 0 {
-				log.Printf("[WARNING] No TriggerType specified for User Input node %s in %s (%s)", trigger.Label, workflow.Name, workflow.ID)
+				//log.Printf("[WARNING] No TriggerType specified for User Input node %s in %s (%s)", trigger.Label, workflow.Name, workflow.ID)
 				workflow.Errors = append(workflow.Errors, fmt.Sprintf("No TriggerType specified for User Input node '%s'", trigger.Label))
 				if workflow.PreviouslySaved {
 					//resp.WriteHeader(401)
@@ -2254,7 +2273,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			if !authFound {
 				log.Printf("[WARNING] App auth %s used in workflow %s doesn't exist. Setting error", action.AuthenticationId, workflow.ID)
 
-				errorMsg := fmt.Sprintf("Authentication for action '%s' in app '%s' doesn't exist!", action.Label, strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
+				errorMsg := fmt.Sprintf("Authentication for action %s in app '%s' doesn't exist!", strings.ReplaceAll(action.Label, " ", "_"), strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
 				if !ArrayContains(workflow.Errors, errorMsg) {
 					workflow.Errors = append(workflow.Errors, errorMsg)
 				}

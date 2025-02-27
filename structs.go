@@ -987,6 +987,7 @@ type CacheKeyData struct {
 	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
 	Key           string `json:"key" datastore:"Key"`
 	Value         string `json:"value" datastore:"Value,noindex"`
+	Category	  string `json:"category" datastore:"category"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -2612,6 +2613,7 @@ type GithubAuthor struct {
 type GithubResp struct {
 	Name         string         `json:"name"`
 	Contributors []GithubAuthor `json:"contributors"`
+	PublishedDate int64          `json:"published_date"`
 	Edited       string         `json:"edited"`
 	ReadTime     int            `json:"read_time"`
 	Link         string         `json:"link"`
