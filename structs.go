@@ -3986,7 +3986,7 @@ type WorkflowHealth struct {
 
 type LiveExecutionStatus struct {
 	ID 	  string `json:"id"`
-	Failed  int `json:"failed"`
+	// Failed  int `json:"failed"`
 	Executing int `json:"executing"`
 	Finished int `json:"finished"`
 	Aborted int `json:"aborted"`
