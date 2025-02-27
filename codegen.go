@@ -3911,6 +3911,11 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		bytes.NewBuffer(marshalledBody),
 	)
 
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request for %s: %s", imageName, err)
+		return err
+	}
+
 	if isCloudDownload {
 		req.Method = "GET"
 		req.Body = nil
