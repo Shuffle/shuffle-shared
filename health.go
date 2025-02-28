@@ -672,6 +672,20 @@ func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Api authentication failed!"}`))
+		return 
+	}
+
+	if !user.SupportAccess {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Only users with support access can view live execution stats!"}`))
+		return
+	}
+
 	ctx := GetContext(request)
 
 	limit := request.URL.Query().Get("limit")

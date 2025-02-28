@@ -6693,7 +6693,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(parentAction, oldAction)
 			if changed || len(changeType) > 0 {
-				log.Printf("\n\n[DEBUG] Action %s (%s) has changed in '%s'\n\n", parentAction.Label, parentAction.ID, changeType)
+				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
 				updatedActions = append(updatedActions, parentAction)
 			}
 		}
@@ -15141,39 +15141,12 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	actionResult.Result = string(newResult)
 
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
-		setExecVar := true
 
 		// Should just check the first bytes for this, as it should be at the start if it's a failure with the individual action itself
 		// This is finicky, but it's the easiest fix for this
-		checkLength := 1000
-		firstFifty := actionResult.Result
-		if len(actionResult.Result) > checkLength {
-			firstFifty = actionResult.Result[0:checkLength]
-		}
 
-		if strings.Contains(firstFifty, "\"success\":") && !(strings.HasPrefix(actionResult.Result, "[{") && strings.HasSuffix(actionResult.Result, "}]")) {
-			type SubflowMapping struct {
-				Success bool `json:"success"`
-			}
-
-			var subflowData SubflowMapping
-			err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
-			if err != nil {
-				log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
-				setExecVar = false
-			} else {
-				if subflowData.Success == false {
-					setExecVar = false
-				}
-			}
-		}
-
-		if len(actionResult.Result) == 0 {
-			setExecVar = false
-		}
-
-		if setExecVar {
-			log.Printf("[DEBUG][%s] Updating exec variable %s with new value of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, len(actionResult.Result))
+		if setExecutionVariable(actionResult) {
+			log.Printf("[DEBUG][%s] Updating exec variable '%s' with new value from node '%s' of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, actionResult.Action.Label, len(actionResult.Result))
 
 			if len(workflowExecution.Results) > 0 {
 				// Should this be used?
@@ -15767,6 +15740,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 						if len(actionResult.Result) > 0 {
 							log.Printf("\n\n[DEBUG] SET EXEC VAR %s\n\n", execvar.Name)
 							workflowExecution.ExecutionVariables[index].Value = actionResult.Result
+							workflowExecution.Workflow.ExecutionVariables[index].Value = actionResult.Result
 						} else {
 							log.Printf("\n\n[DEBUG] SKIPPING EXEC VAR\n\n")
 						}
@@ -16120,6 +16094,41 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// Should this be able to return errors?
 	//return &workflowExecution, dbSave, err
 	return &workflowExecution, dbSave, nil
+}
+
+
+func setExecutionVariable(actionResult ActionResult) bool {
+	if len(actionResult.Action.ExecutionVariable.Name) == 0 {
+		return false
+	}
+
+	if actionResult.Status != "SUCCESS" && actionResult.Status != "FINISHED" {
+		return false
+	}
+
+	setExecVar := true
+	if strings.Contains(actionResult.Result, "\"success\":") && !(strings.HasPrefix(actionResult.Result, "[{") && strings.HasSuffix(actionResult.Result, "}]")) {
+		type SubflowMapping struct {
+			Success bool `json:"success"`
+		}
+
+		var subflowData SubflowMapping
+		err := json.Unmarshal([]byte(actionResult.Result), &subflowData)
+		if err != nil {
+			log.Printf("[ERROR] Failed to map in set execvar name with success: %s", err)
+			setExecVar = false
+		} else {
+			if subflowData.Success == false {
+				setExecVar = false
+			}
+		}
+	}
+
+	if len(actionResult.Result) == 0 {
+		setExecVar = false
+	}
+
+	return setExecVar
 }
 
 // Finds execution results and parameters that are too large to manage and reduces them / saves data partly
@@ -19059,6 +19068,26 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
+        commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
+            Path: fmt.Sprintf("%s/%s", path, *item.Name),
+        })
+
+        publishedDate := time.Now().Unix()
+        if err != nil {
+            log.Printf("[WARNING] Failed getting commits for %s: %s", *item.Name, err)
+            if resp != nil {
+                log.Printf("[DEBUG] Response status: %d", resp.StatusCode)
+            }
+        } else {
+            log.Printf("[DEBUG] Found %d commits for %s", len(commits), *item.Name)
+            if len(commits) > 0 {
+                publishedDate = commits[len(commits)-1].Commit.Author.Date.Unix()
+                log.Printf("[DEBUG] Setting published date for %s to %s (%d) from first commit", *item.Name, commits[len(commits)-1].Commit.Author.Date.Format("2006-01-02 15:04:05"), publishedDate)
+            } else {
+                log.Printf("[WARNING] No commits found for %s", *item.Name)
+            }
+        }
+
 		// FIXME: Scuffed readtime calc
 		// Average word length = 5. Space = 1. 5+1 = 6 avg.
 		// Words = *item.Size/6/250
@@ -19067,6 +19096,7 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 		githubResp := GithubResp{
 			Name:         (*item.Name)[0 : len(*item.Name)-3],
 			Contributors: []GithubAuthor{},
+			PublishedDate: publishedDate,
 			Edited:       "",
 			ReadTime:     *item.Size / 6 / 250,
 			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
@@ -19074,6 +19104,11 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 
 		names = append(names, githubResp)
 	}
+
+	// Sort articles by published date (newest first)
+	sort.Slice(names, func(i, j int) bool {
+		return names[i].PublishedDate > names[j].PublishedDate
+	})
 
 	//log.Printf(names)
 	result.Success = true
@@ -30214,7 +30249,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	go RunCacheCleanup(ctx, *exec)
 	go RunIOCFinder(ctx, *exec)
 
-	log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
+	//log.Printf("[DEBUG][%s] Running status fixing for workflow %#v to see if auth + workflow(s) are functional. Results: %d", exec.ExecutionId, exec.Workflow.ID, len(exec.Results))
 	orgId := exec.ExecutionOrg
 	allAuth, err := GetAllWorkflowAppAuth(ctx, orgId)
 	if err != nil {

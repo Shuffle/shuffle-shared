@@ -1965,16 +1965,17 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 		if found {
 			// Handles execution vars
-			if len(action.ExecutionVariable.Name) > 0 {
+
+			if setExecutionVariable(result) {
 
 				// Check if key in lastexecVar
-				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
+				if _, ok := lastexecVar[result.Action.ExecutionVariable.Name]; ok {
 
-					if lastexecVar[action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
-						lastexecVar[action.ExecutionVariable.Name] = result
+					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+						lastexecVar[result.Action.ExecutionVariable.Name] = result
 					}
 				} else {
-					lastexecVar[action.ExecutionVariable.Name] = result
+					lastexecVar[result.Action.ExecutionVariable.Name] = result
 				}
 			}
 
@@ -1994,17 +1995,16 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		err = json.Unmarshal(cacheData, &result)
 		if err == nil {
 			workflowExecution.Results = append(workflowExecution.Results, result)
-
-			if len(action.ExecutionVariable.Name) > 0 {
+			if setExecutionVariable(result) {
 
 				// Check if key in lastexecVar
-				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
+				if _, ok := lastexecVar[result.Action.ExecutionVariable.Name]; ok {
 
-					if lastexecVar[action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
-						lastexecVar[action.ExecutionVariable.Name] = result
+					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+						lastexecVar[result.Action.ExecutionVariable.Name] = result
 					}
 				} else {
-					lastexecVar[action.ExecutionVariable.Name] = result
+					lastexecVar[result.Action.ExecutionVariable.Name] = result
 				}
 			}
 
@@ -2130,12 +2130,20 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 	for varKey, variable := range workflowExecution.Workflow.ExecutionVariables {
 		for key, value := range lastexecVar {
-			if key == variable.Name {
-				workflowExecution.Workflow.ExecutionVariables[varKey].Value = value.Result
-				break
+			if key != variable.Name {
+				continue
 			}
+
+			if workflowExecution.Workflow.ExecutionVariables[varKey].Value != value.Result {
+				log.Printf("\n\n\n[DEBUG][%s] Updating execution variable '%s' from len %d to %d (%s)\n\n", workflowExecution.ExecutionId, variable.Name, len(workflowExecution.Workflow.ExecutionVariables[varKey].Value), len(value.Result), value.Action.Label)
+			}
+
+			workflowExecution.Workflow.ExecutionVariables[varKey].Value = value.Result
+			break
 		}
 	}
+
+	workflowExecution.ExecutionVariables = workflowExecution.Workflow.ExecutionVariables
 
 	// Check for failures before setting to finished
 	// Update execution parent
@@ -12174,6 +12182,53 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 	}
 
 	return orgs, nil
+}
+
+func GetOrgMoveCache(ctx context.Context, orgId string) (RegionChangeHistory, error) {
+	nameKey := "org_move_cache_" + orgId
+	var err error
+	var attempt RegionChangeHistory
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, nameKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &attempt)
+			if err == nil {
+				return attempt, nil
+			}
+		} else {
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+		}
+	}
+
+	return attempt, err
+}
+
+func SetOrgMoveCache(ctx context.Context, orgId string) error {
+	nameKey := "org_move_cache_" + orgId
+	timeNow := int64(time.Now().Unix())
+
+	attempt := RegionChangeHistory{
+		OrgId: orgId,
+		LastAttempt:  timeNow,
+	}
+	
+	if project.CacheDb {
+		attemptByte, err := json.Marshal(attempt)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setorgmovecache: %s", err)
+			return nil
+		}
+
+		err = SetCache(ctx, nameKey, attemptByte, 1440*15)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org move cache for %s: %s", orgId, err)
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Index = Username

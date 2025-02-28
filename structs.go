@@ -2613,6 +2613,7 @@ type GithubAuthor struct {
 type GithubResp struct {
 	Name         string         `json:"name"`
 	Contributors []GithubAuthor `json:"contributors"`
+	PublishedDate int64          `json:"published_date"`
 	Edited       string         `json:"edited"`
 	ReadTime     int            `json:"read_time"`
 	Link         string         `json:"link"`
@@ -3983,9 +3984,14 @@ type WorkflowHealth struct {
 	WorkflowValidation bool   `json:"workflow_validation"`
 }
 
+type RegionChangeHistory struct {
+	OrgId   string `json:"org_id"`
+	LastAttempt int64  `json:"last_attempt"`
+}
+
 type LiveExecutionStatus struct {
 	ID 	  string `json:"id"`
-	Failed  int `json:"failed"`
+	// Failed  int `json:"failed"`
 	Executing int `json:"executing"`
 	Finished int `json:"finished"`
 	Aborted int `json:"aborted"`
