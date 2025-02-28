@@ -239,8 +239,6 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	url = baseURL + "/api/v1/verify_openapi"
 
-	log.Printf("[DEBUG] New openapi string: %s", newOpenapiString)
-
 	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(newOpenapiString)))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating app check HTTP for app verify request: %s", err)
@@ -639,18 +637,31 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		errorChannel <- err
 	}()
 
-	// go func() {
-	// 	appHealth, err := RunOpsAppHealthCheck()
-	// 	if err != nil {
-	// 		log.Printf("[ERROR] Failed running app health check: %s", err)
-	// 		appHealthChannel <- appHealth
-	// 		return
-	// 	}
-	// 	appHealthChannel <- appHealth
-	// }()
+	appHealthChannel := make(chan AppHealth)
+	go func() {
+		appHealth, err := RunOpsAppHealthCheck(apiKey, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running app health check: %s", err)
+		}
+
+		appHealthChannel <- appHealth
+		errorChannel <- err
+	}()
+
+	pythonAppHealthChannel := make(chan AppHealth)
+	go func() {
+		pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running python app health check: %s", err)
+		}
+
+		pythonAppHealthChannel <- pythonAppHealth
+		errorChannel <- err
+	}()
 
 	// Use channel for getting RunOpsWorkflow function results
-	// platformHealth.Apps = <-appHealthChannel
+	platformHealth.Apps = <-appHealthChannel
+	platformHealth.PythonApps = <- pythonAppHealthChannel
 	platformHealth.Workflows = <-workflowHealthChannel
 	err = <-errorChannel
 
@@ -1340,6 +1351,8 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error){
 		}
 	}
 
+	appHealth.Read = true
+
 	appUploadUrl := baseUrl + "/api/v1/apps/upload"
 
 	req, err := http.NewRequest("POST", appUploadUrl, pr)
@@ -1395,7 +1408,7 @@ func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error){
 	executeBody.Parameters = []WorkflowAppActionParameter{
 		{
 			Name: "call",
-			Value: "Test",
+			Value: "run the test app, hello",
 			Configuration: false,
 		},
 	}
