@@ -747,14 +747,55 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
+
+	// Create a map to track used parameters
+	usedParams := make(map[string]bool)
+
+	addParameter := func(param string) string {
+		if param == "" {
+			return ""
+		}
+
+		// Split parameters by comma and process each one
+		parts := strings.Split(param, ",")
+		validParts := []string{}
+
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+
+			paramName := part
+			if strings.Contains(part, "=\"\"") {
+				paramName = strings.Split(part, "=\"\"")[0]
+			} else if strings.Contains(part, "=") {
+				paramName = strings.Split(part, "=")[0]
+			}
+			paramName = strings.TrimSpace(paramName)
+
+			// If parameter hasn't been used before, add it
+			if !usedParams[paramName] {
+				usedParams[paramName] = true
+				validParts = append(validParts, part)
+			}
+		}
+
+		if len(validParts) > 0 {
+			return ", " + strings.Join(validParts, ", ")
+		}
+		return ""
+	}
+
+	// Build the final parameter string avoiding duplicates
 	parsedParameters := fmt.Sprintf("%s%s%s%s%s%s%s",
-		authenticationParameter,
-		urlParameter,
-		fileParameter,
-		parameterData,
-		queryString,
-		bodyParameter,
-		verifyParam,
+		addParameter(strings.TrimPrefix(authenticationParameter, ",")),
+		addParameter(strings.TrimPrefix(urlParameter, ",")),
+		addParameter(strings.TrimPrefix(fileParameter, ",")),
+		addParameter(strings.TrimPrefix(parameterData, ",")),
+		addParameter(strings.TrimPrefix(queryString, ",")),
+		addParameter(strings.TrimPrefix(bodyParameter, ",")),
+		addParameter(strings.TrimPrefix(verifyParam, ",")),
 	)
 
 	// Handles default return value
