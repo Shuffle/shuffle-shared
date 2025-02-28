@@ -12184,6 +12184,53 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 	return orgs, nil
 }
 
+func GetOrgMoveCache(ctx context.Context, orgId string) (RegionChangeHistory, error) {
+	nameKey := "org_move_cache_" + orgId
+	var err error
+	var attempt RegionChangeHistory
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, nameKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &attempt)
+			if err == nil {
+				return attempt, nil
+			}
+		} else {
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+		}
+	}
+
+	return attempt, err
+}
+
+func SetOrgMoveCache(ctx context.Context, orgId string) error {
+	nameKey := "org_move_cache_" + orgId
+	timeNow := int64(time.Now().Unix())
+
+	attempt := RegionChangeHistory{
+		OrgId: orgId,
+		LastAttempt:  timeNow,
+	}
+	
+	if project.CacheDb {
+		attemptByte, err := json.Marshal(attempt)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setorgmovecache: %s", err)
+			return nil
+		}
+
+		err = SetCache(ctx, nameKey, attemptByte, 1440*15)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org move cache for %s: %s", orgId, err)
+			return err
+		}
+	}
+
+	return nil
+}
+
 // Index = Username
 func SetSchedule(ctx context.Context, schedule ScheduleOld) error {
 	nameKey := "schedules"

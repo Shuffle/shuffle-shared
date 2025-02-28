@@ -3984,6 +3984,11 @@ type WorkflowHealth struct {
 	WorkflowValidation bool   `json:"workflow_validation"`
 }
 
+type RegionChangeHistory struct {
+	OrgId   string `json:"org_id"`
+	LastAttempt int64  `json:"last_attempt"`
+}
+
 type LiveExecutionStatus struct {
 	ID 	  string `json:"id"`
 	// Failed  int `json:"failed"`
