@@ -7508,9 +7508,8 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	env = strings.ReplaceAll(env, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
-	if project.Environment == "cloud" {
-		//log.Printf("[DEBUG] Adding execution to queue: %s", nameKey)
-	}
+	// Onprem indexing: workflowqueue-%s -> workflowqueue-environmentname
+	// Cloud: workflowqueue-%s-%s -> workflowqueue-environmentname-orgid
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
@@ -7526,6 +7525,8 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 			return err
 		}
 	} else {
+		//log.Printf("[DEBUG] Adding execution to queue: %s", nameKey)
+
 		key := datastore.NameKey(nameKey, executionRequest.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &executionRequest); err != nil {
 			log.Printf("[WARNING] Error adding workflow queue: %s", err)
@@ -14455,7 +14456,33 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 	}
 
 	if project.Environment != "cloud" {
-		return errors.New("Can only delete indexes from cloud")
+		// Send the Delete By Query request
+		query := `{"query": {"match_all": {}}}`
+		res, err := project.Es.DeleteByQuery(
+			[]string{index},                              // Index name
+			bytes.NewReader([]byte(query)),         // Query body
+			project.Es.DeleteByQuery.WithContext(ctx),
+			project.Es.DeleteByQuery.WithPretty(), // Pretty print response
+		)
+
+		if err != nil {
+			log.Printf("[WARNING] Error in DELETE: %s", err)
+			return err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			responseData, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				log.Printf("[WARNING] Error reading response data: %s", err)
+				return err
+			}
+
+			log.Printf("[WARNING] Couldn't delete index %s:%s. Status: %d", index, query, res.StatusCode)
+			return errors.New(fmt.Sprintf("Couldn't delete index %s:%s. Status: %d. Raw: %s", index, query, res.StatusCode, string(responseData)))
+		}
+
+		return nil
 	}
 
 	log.Printf("[WARNING] Deleting index %s entirely. This is normal behavior for workflowqueues", index)
