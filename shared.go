@@ -4829,6 +4829,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
 	}
+
 	for _, schedule := range schedules {
 		scheduleMap[schedule.Id] = schedule
 	}
@@ -4919,7 +4920,6 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 					schedule := ScheduleOld{}
 					storedschedule, exist := scheduleMap[trigger.ID]
 					if !exist {
-
 						startNode := ""
 
 						schedule.Id = trigger.ID
@@ -4952,6 +4952,10 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 						allSchedules = append(allSchedules, schedule)
 					} else {
+						if project.Environment != "cloud" && storedschedule.Status == "" {
+							storedschedule.Status = "running"
+						}
+
 						scheduleValue := storedschedule
 						scheduleValue.Name = trigger.Label
 						//scheduleValue.Status = "running"
@@ -30229,6 +30233,8 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
+
+	log.Printf("GOT %d child workflows", len(childWorkflows))
 
 	newWfs := []Workflow{}
 	for _, wf := range childWorkflows {
