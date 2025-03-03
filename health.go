@@ -466,23 +466,9 @@ func checkQueueForHealthRun(ctx context.Context) error{
 	json.Unmarshal(body, &executionRequests)
 
 	// Check if it is greater than a threshold why loop?
-	if len(executionRequests.Data) > 30 {
+	if len(executionRequests.Data) > 40 {
 		log.Printf("[INFO] Queue is clogged skipping the health check for now")
-		return errors.New("clogged queue skip run")
-	}
-
-	for _, i := range executionRequests.Data {
-		// I don't like how we can send 30 get workflow request to the database.
-		tmpWorkflow, err := GetWorkflow(ctx, i.WorkflowId)
-		if err != nil {
-			log.Printf("[ERROR] Failed to get a workflow: %s", tmpWorkflow.ID)
-			continue
-		}
-
-		if tmpWorkflow.Name == "Ops Dashboard Workflow" {
-			log.Printf("[INFO] Health Check already exist in the queue. Skipping new request.")
-			return errors.New("health check already exist, skipping the run")
-		}
+		return errors.New("clogged queue, too many executions")
 	}
 
 	return nil
@@ -628,6 +614,37 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("[ERROR] Failed running health check (4): %s", err)
 		}
+
+		var HealthCheck HealthCheckDB
+		HealthCheck.Success = false
+		HealthCheck.Updated = time.Now().Unix()
+		HealthCheck.Workflows = WorkflowHealth{}
+
+		err = SetPlatformHealth(ctx, HealthCheck)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting platform health in database: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed setting platform health in database."}`))
+			return
+		}
+
+		platformData, err := json.Marshal(platformHealth)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health. Contact support@shuffler.io"}`))
+			return
+		}
+
+		if project.CacheDb {
+			err = SetCache(ctx, cacheKey, platformData, 15)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting cache ops health at last: %s", err)
+			}
+		}
+
+		resp.WriteHeader(500)
+		resp.Write(platformData)
 	}
 
 	if project.Environment == "onprem" && userInfo.Role != "admin" {
