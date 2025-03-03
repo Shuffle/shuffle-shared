@@ -514,20 +514,6 @@ func HandleCheckValidURL(url string) string {
 	return strings.Join(parts, "/")
 }
 
-// Function to remove any special characters from python function name
-func HandleValidatePythonFunctionName(name string) string {
-	// Remove invalid characters (anything except letters, numbers, and underscores)
-	re := regexp.MustCompile(`[^A-Za-z0-9_]`)
-	name = re.ReplaceAllString(name, "_")
-
-	// Ensure it starts with a letter (if not, prefix it with an underscore)
-	if len(name) == 0 || (name[0] < 'A' || (name[0] > 'Z' && name[0] < 'a') || name[0] > 'z') {
-		name = "_" + name
-	}
-
-	return name
-}
-
 // This function generates the python code that's being used.
 // This is really meta when you program it. Handling parameters is hard here.
 func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string, api WorkflowApp, handleFile bool) (string, string) {
@@ -739,13 +725,10 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			}
 		}
 	}
-
 	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
 	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
 		functionname = strings.ToLower(name)
 	}
-
-	functionname = HandleValidatePythonFunctionName(functionname)
 
 	bodyParameter := ""
 	bodyAddin := ""
@@ -2249,6 +2232,13 @@ func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 
 	if lowercase == true {
 		functionName = strings.ToLower(functionName)
+	}
+
+	re := regexp.MustCompile(`[^A-Za-z0-9_]`)
+	functionName = re.ReplaceAllString(functionName, "_")
+
+	if len(functionName) == 0 || (functionName[0] < 'A' || (functionName[0] > 'Z' && functionName[0] < 'a') || functionName[0] > 'z') {
+		functionName = "_" + functionName
 	}
 
 	return functionName
