@@ -429,6 +429,65 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	return nil
 }
 
+func checkQueueForHealthRun(ctx context.Context) error{
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseUrl)
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if project.Environment == "onprem" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		baseUrl = "http://localhost:5001"
+		if os.Getenv("BASE_URL") != "" {
+			baseUrl = os.Getenv("BASE_URL")
+		}
+	}
+
+
+	client := GetExternalClient(baseUrl)
+	fullUrl := fmt.Sprintf("%s/api/v1/workflows/queue", baseUrl)
+	req, err := http.NewRequest("GET", fullUrl, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send a request to %s: %s", fullUrl, err)
+		return err
+	}
+
+	req.Header.Add("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+
+	var executionRequests ExecutionRequestWrapper
+	body, err := ioutil.ReadAll(resp.Body)
+
+	json.Unmarshal(body, &executionRequests)
+
+	// Check if it is greater than a threshold why loop?
+	if len(executionRequests.Data) > 30 {
+		log.Printf("[INFO] Queue is clogged skipping the health check for now")
+		return errors.New("clogged queue skip run")
+	}
+
+	for _, i := range executionRequests.Data {
+		// I don't like how we can send 30 get workflow request to the database.
+		tmpWorkflow, err := GetWorkflow(ctx, i.WorkflowId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get a workflow: %s", tmpWorkflow.ID)
+			continue
+		}
+
+		if tmpWorkflow.Name == "Ops Dashboard Workflow" {
+			log.Printf("[INFO] Health Check already exist in the queue. Skipping new request.")
+			return errors.New("health check already exist, skipping the run")
+		}
+	}
+
+	return nil
+}
+
 func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -565,6 +624,10 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		// FIXME: Add a check for if it's been <interval> length at least between runs. This is 15 minutes by default.
+		err := checkQueueForHealthRun(ctx)
+		if err != nil {
+			log.Printf("[ERROR] Failed running health check (4): %s", err)
+		}
 	}
 
 	if project.Environment == "onprem" && userInfo.Role != "admin" {
