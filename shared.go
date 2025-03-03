@@ -30234,8 +30234,6 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	log.Printf("GOT %d child workflows", len(childWorkflows))
-
 	newWfs := []Workflow{}
 	for _, wf := range childWorkflows {
 		if wf.ParentWorkflowId != workflow.ID {
