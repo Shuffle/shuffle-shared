@@ -19071,15 +19071,20 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	cacheKey := "articles_list"
+	resetCache := request.URL.Query().Get("resetCache") == "true" // Check for resetCache parameter
+
+	if !resetCache {
 	cache, err := GetCache(ctx, cacheKey)
-	result := FileList{}
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
 		resp.WriteHeader(200)
 		resp.Write(cacheData)
 		return
+		}
 	}
-
+	result := FileList{}
+	log.Println("[DEBUG] Skipping Cache for Articles List")
+	
 	client := github.NewClient(nil)
 	owner := "shuffle"
 	repo := "shuffle-docs"
