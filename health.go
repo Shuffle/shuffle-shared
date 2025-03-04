@@ -429,41 +429,13 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	return nil
 }
 
-func checkQueueForHealthRun(ctx context.Context) error{
-	baseUrl := "https://shuffler.io"
-	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
-		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseUrl)
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
+func checkQueueForHealthRun(ctx context.Context, orgId string) error{
 
-	if project.Environment == "onprem" {
-		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
-		baseUrl = "http://localhost:5001"
-		if os.Getenv("BASE_URL") != "" {
-			baseUrl = os.Getenv("BASE_URL")
-		}
-	}
-
-
-	client := GetExternalClient(baseUrl)
-	fullUrl := fmt.Sprintf("%s/api/v1/workflows/queue", baseUrl)
-	req, err := http.NewRequest("GET", fullUrl, nil)
+	executionRequests, err := GetWorkflowQueue(ctx, orgId, 50)
 	if err != nil {
-		log.Printf("[ERROR] Failed to send a request to %s: %s", fullUrl, err)
+		log.Printf("[ERROR] Failed to get org (%s) workflow queue: %s", orgId,err)
 		return err
 	}
-
-	req.Header.Add("Content-Type", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-
-	var executionRequests ExecutionRequestWrapper
-	body, err := ioutil.ReadAll(resp.Body)
-
-	json.Unmarshal(body, &executionRequests)
 
 	// Check if it is greater than a threshold why loop?
 	if len(executionRequests.Data) > 40 {
@@ -610,41 +582,41 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		// FIXME: Add a check for if it's been <interval> length at least between runs. This is 15 minutes by default.
-		err := checkQueueForHealthRun(ctx)
+		err := checkQueueForHealthRun(ctx, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed running health check (4): %s", err)
-		}
 
-		var HealthCheck HealthCheckDB
-		HealthCheck.Success = false
-		HealthCheck.Updated = time.Now().Unix()
-		HealthCheck.Workflows = WorkflowHealth{}
+			var HealthCheck HealthCheckDB
+			HealthCheck.Success = false
+			HealthCheck.Updated = time.Now().Unix()
+			HealthCheck.Workflows = WorkflowHealth{}
 
-		err = SetPlatformHealth(ctx, HealthCheck)
-		if err != nil {
-			log.Printf("[ERROR] Failed setting platform health in database: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed setting platform health in database."}`))
-			return
-		}
-
-		platformData, err := json.Marshal(platformHealth)
-		if err != nil {
-			log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health. Contact support@shuffler.io"}`))
-			return
-		}
-
-		if project.CacheDb {
-			err = SetCache(ctx, cacheKey, platformData, 15)
+			err = SetPlatformHealth(ctx, HealthCheck)
 			if err != nil {
-				log.Printf("[WARNING] Failed setting cache ops health at last: %s", err)
+				log.Printf("[ERROR] Failed setting platform health in database: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed setting platform health in database."}`))
+				return
 			}
-		}
 
-		resp.WriteHeader(500)
-		resp.Write(platformData)
+			platformData, err := json.Marshal(platformHealth)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health. Contact support@shuffler.io"}`))
+				return
+			}
+
+			if project.CacheDb {
+				err = SetCache(ctx, cacheKey, platformData, 15)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting cache ops health at last: %s", err)
+				}
+			}
+
+			resp.WriteHeader(500)
+			resp.Write(platformData)
+		}
 	}
 
 	if project.Environment == "onprem" && userInfo.Role != "admin" {
