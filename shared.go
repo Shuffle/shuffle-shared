@@ -2896,6 +2896,11 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 
 			// Delete the index entirely
 			indexName := "workflowqueue-" + queueName
+			if project.Environment == "cloud" {
+				indexName = fmt.Sprintf("workflowqueue-%s-%s", queueName, user.ActiveOrg.Id)
+			}
+
+			indexName = strings.ToLower(indexName)
 			err = DeleteDbIndex(ctx, indexName)
 			if err != nil {
 				log.Printf("[ERROR] Failed deleting index %s: %s", indexName, err)
@@ -4824,6 +4829,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
 	}
+
 	for _, schedule := range schedules {
 		scheduleMap[schedule.Id] = schedule
 	}
@@ -4914,7 +4920,6 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 					schedule := ScheduleOld{}
 					storedschedule, exist := scheduleMap[trigger.ID]
 					if !exist {
-
 						startNode := ""
 
 						schedule.Id = trigger.ID
@@ -4947,6 +4952,10 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 						allSchedules = append(allSchedules, schedule)
 					} else {
+						if project.Environment != "cloud" && storedschedule.Status == "" {
+							storedschedule.Status = "running"
+						}
+
 						scheduleValue := storedschedule
 						scheduleValue.Name = trigger.Label
 						//scheduleValue.Status = "running"
@@ -8790,7 +8799,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Really don't know why this was happening
-	log.Printf("[INFO] Saved new version of workflow %s (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
+	log.Printf("[INFO] Saved new version of workflow '%s' (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
 	resp.WriteHeader(200)
 	newBody, err := json.Marshal(returndata)
 	if err != nil {
@@ -11428,6 +11437,33 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 		parentOrg.SyncUsage.MultiTenant.Counter += 1
 		log.Printf("[DEBUG] Allowing suborg for %s because they have %d vs %d limit", parentOrg.Id, len(parentOrg.ChildOrgs), parentOrg.SyncFeatures.MultiTenant.Limit)
+	} else {
+		//log.Printf("MULTITENANT USAGE: %d / %d. Active: %#v", parentOrg.SyncUsage.MultiTenant.Counter, parentOrg.SyncFeatures.MultiTenant.Limit, parentOrg.SyncFeatures.MultiTenant.Active)
+
+		childOrgs, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id) 
+		if err != nil {
+			log.Printf("[ERROR] Failed getting child orgs for %s: %s", user.ActiveOrg.Id, err)
+		}
+
+		if len(childOrgs) > 0 {
+			parentOrg.SyncUsage.MultiTenant.Counter = int64(len(childOrgs))
+		}
+
+		if len(childOrgs) >= 2 && !parentOrg.SyncFeatures.MultiTenant.Active {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "You can't make more than 1 sub-organizations without cloud sync being active. Check out /docs/organization#hybrid-features or contact support@shuffler.io to learn more."}`))
+			return
+		}
+
+		if parentOrg.SyncFeatures.MultiTenant.Active == true && parentOrg.SyncFeatures.MultiTenant.Limit == 0 {
+			parentOrg.SyncFeatures.MultiTenant.Limit = 5
+		}
+
+		if parentOrg.SyncFeatures.MultiTenant.Active == true && parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "You can only make %d sub-organizations. Contact support@shuffler.io to increase this limit"}`))
+			return
+		}
 	}
 
 	orgId := uuid.NewV4().String()
@@ -19035,15 +19071,20 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	cacheKey := "articles_list"
+	resetCache := request.URL.Query().Get("resetCache") == "true" // Check for resetCache parameter
+
+	if !resetCache {
 	cache, err := GetCache(ctx, cacheKey)
-	result := FileList{}
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
 		resp.WriteHeader(200)
 		resp.Write(cacheData)
 		return
+		}
 	}
-
+	result := FileList{}
+	log.Println("[DEBUG] Skipping Cache for Articles List")
+	
 	client := github.NewClient(nil)
 	owner := "shuffle"
 	repo := "shuffle-docs"
@@ -29693,6 +29734,10 @@ func DistributeAppToEnvironments(ctx context.Context, org Org, appnames []string
 		}
 
 		parsedId := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), org.Id)
+		if project.Environment != "cloud" {
+			parsedId = strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-"))
+		}
+
 		err = SetWorkflowQueue(ctx, request, parsedId)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting workflow queue for env: %s", err)
