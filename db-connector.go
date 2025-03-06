@@ -8140,6 +8140,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 				},
 			},
 		}
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
 			return workflows, err
@@ -8193,7 +8194,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		}
 
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.ID != originalId {
+			if hit.Source.ParentWorkflowId != originalId {
 				continue
 			}
 

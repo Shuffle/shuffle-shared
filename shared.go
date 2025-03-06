@@ -4829,6 +4829,7 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 	for _, hook := range hooks {
 		hookMap[hook.Id] = hook
 	}
+
 	for _, schedule := range schedules {
 		scheduleMap[schedule.Id] = schedule
 	}
@@ -4919,7 +4920,6 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 					schedule := ScheduleOld{}
 					storedschedule, exist := scheduleMap[trigger.ID]
 					if !exist {
-
 						startNode := ""
 
 						schedule.Id = trigger.ID
@@ -4952,6 +4952,10 @@ func HandleGetTriggers(resp http.ResponseWriter, request *http.Request) {
 
 						allSchedules = append(allSchedules, schedule)
 					} else {
+						if project.Environment != "cloud" && storedschedule.Status == "" {
+							storedschedule.Status = "running"
+						}
+
 						scheduleValue := storedschedule
 						scheduleValue.Name = trigger.Label
 						//scheduleValue.Status = "running"
@@ -19067,15 +19071,20 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	cacheKey := "articles_list"
+	resetCache := request.URL.Query().Get("resetCache") == "true" // Check for resetCache parameter
+
+	if !resetCache {
 	cache, err := GetCache(ctx, cacheKey)
-	result := FileList{}
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
 		resp.WriteHeader(200)
 		resp.Write(cacheData)
 		return
+		}
 	}
-
+	result := FileList{}
+	log.Println("[DEBUG] Skipping Cache for Articles List")
+	
 	client := github.NewClient(nil)
 	owner := "shuffle"
 	repo := "shuffle-docs"
