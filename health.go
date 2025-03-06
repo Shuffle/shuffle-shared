@@ -429,6 +429,23 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	return nil
 }
 
+func checkQueueForHealthRun(ctx context.Context, orgId string) error{
+
+	executionRequests, err := GetWorkflowQueue(ctx, orgId, 50)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get org (%s) workflow queue: %s", orgId,err)
+		return err
+	}
+
+	// Check if it is greater than a threshold why loop?
+	if len(executionRequests.Data) > 40 {
+		log.Printf("[INFO] Queue is clogged skipping the health check for now")
+		return errors.New("clogged queue, too many executions")
+	}
+
+	return nil
+}
+
 func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -565,6 +582,41 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		// FIXME: Add a check for if it's been <interval> length at least between runs. This is 15 minutes by default.
+		err := checkQueueForHealthRun(ctx, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running health check (4): %s", err)
+
+			var HealthCheck HealthCheckDB
+			HealthCheck.Success = false
+			HealthCheck.Updated = time.Now().Unix()
+			HealthCheck.Workflows = WorkflowHealth{}
+
+			err = SetPlatformHealth(ctx, HealthCheck)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting platform health in database: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed setting platform health in database."}`))
+				return
+			}
+
+			platformData, err := json.Marshal(platformHealth)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health. Contact support@shuffler.io"}`))
+				return
+			}
+
+			if project.CacheDb {
+				err = SetCache(ctx, cacheKey, platformData, 15)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting cache ops health at last: %s", err)
+				}
+			}
+
+			resp.WriteHeader(500)
+			resp.Write(platformData)
+		}
 	}
 
 	if project.Environment == "onprem" && userInfo.Role != "admin" {
