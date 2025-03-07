@@ -2113,7 +2113,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 			if len(triggerType) == 0 {
 				//log.Printf("[WARNING] No TriggerType specified for User Input node %s in %s (%s)", trigger.Label, workflow.Name, workflow.ID)
-				workflow.Errors = append(workflow.Errors, fmt.Sprintf("No TriggerType specified for User Input node '%s'", trigger.Label))
+				workflow.Errors = append(workflow.Errors, fmt.Sprintf("No TriggerType specified for User Input action %s", strings.ReplaceAll(trigger.Label, " ", "_")))
 				if workflow.PreviouslySaved {
 					//resp.WriteHeader(401)
 					//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No contact option specified in user input"}`)))
