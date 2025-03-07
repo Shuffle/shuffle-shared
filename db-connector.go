@@ -1254,9 +1254,6 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 }
 
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
-	startTime := time.Now()
-	originalStartTime := time.Now()
-
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
 		log.Printf("[ERROR] Workflowexecution executionId can't be empty.")
@@ -1277,22 +1274,13 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return errors.New("Authorization can't be empty.")
 	}
 
-	log.Printf("[INFO](SetWorkflowExecution) Got right before fix execution and took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
-
 	// Fixes missing pieces
 	workflowExecution, newDbSave := Fixexecution(ctx, workflowExecution)
-
-	log.Printf("[INFO](SetWorkflowExecution) Got right after fix execution and took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
 
 	workflowExecution = cleanupExecutionNodes(ctx, workflowExecution)
 	if newDbSave {
 		dbSave = true
 	}
-
-	log.Printf("[INFO](SetWorkflowExecution) Got right after cleanup execution and took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
@@ -1321,22 +1309,14 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		return nil
 	}
 
-	startTime = time.Now()
-
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
-
-	log.Printf("[INFO](SetWorkflowExecution) Took %s to get execution from DB -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
 
 	HandleExecutionCacheIncrement(ctx, *newexec)
 	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
 		log.Printf("[INFO][%s] Already finished (set workflow) with status %s! Stopping the rest of the request for execution.", workflowExecution.ExecutionId, newexec.Status)
 		return nil
 	}
-
-	log.Printf("[INFO] Cache increment took %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
 
 	// Deleting cache so that listing can work well
 	DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, workflowExecution.WorkflowId))
@@ -1356,15 +1336,10 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		}
 	}
 
-	log.Printf("[INFO] Deleting cache took %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
-
 	if newexec.Status == "FINISHED" || newexec.Status == "ABORTED" {
 		// Handles stat updates. Upgrading status to prevent timeouts for first iter of this
 		ctx = context.Background()
 		newexec = checkExecutionStatus(ctx, newexec)
-		log.Printf("[INFO] Execution status check took %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-		startTime = time.Now()
 	}
 
 	// New struct, to not add body, author etc
@@ -1398,13 +1373,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		//log.Printf("[INFO] Successfully saved new execution %s. Timestamp: %d!", workflowExecution.ExecutionId, workflowExecution.StartedAt)
 	} else {
 
-		log.Printf("[INFO](SetWorkflowExecution) Got right before saving to DB and took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-		startTime = time.Now()
-
 		// Compresses and removes unecessary things
 		workflowExecution, _ := compressExecution(ctx, workflowExecution, "db-connector save")
-
-		log.Printf("[INFO](SetWorkflowExecution) Got right after compressing and took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
 
 		// Setting to nothing as this is realtime calculated anyway
 		workflowExecution.Result = ""
@@ -1413,8 +1383,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 		if rand.Intn(20) == 1 {
 			log.Printf("[INFO][%s] Saving execution with status %s and %d/%d results (not including subflows) - 2", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
 		}
-
-		startTime = time.Now()
 
 		key := datastore.NameKey(nameKey, strings.ToLower(workflowExecution.ExecutionId), nil)
 		if _, err := project.Dbclient.Put(ctx, key, &workflowExecution); err != nil {
@@ -1452,8 +1420,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 			}
 			return err
 		}
-
-		log.Printf("[INFO](SetWorkflowExecution) Got right after saving to DB and took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
 	}
 
 	return nil

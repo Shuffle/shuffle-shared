@@ -14998,9 +14998,6 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 
 // Updateparam is a check to see if the execution should be continuously validated
 func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecution, actionResult ActionResult, updateParam bool, retries int64) (*WorkflowExecution, bool, error) {
-	startTime := time.Now()
-	originalStartTime := time.Now()
-
 	var err error
 	if actionResult.Action.ID == "" && actionResult.Action.Name == "" {
 		// Can we find it based on label?
@@ -15013,18 +15010,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// 1. CHECK cache if it happened in another?
 	// 2. Set cache
 	// 3. Find executed without a result
-	// 4. Ensure the result is NOT set when running an action
-
-	log.Printf("\n\n[DEBUG](ParsedExecutionResult) Before fixactionresultoutput took: %s -- %s\n\n", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
+	// 4. Ensure the result is NOT set when running an action)
 
 	actionResult = FixActionResultOutput(actionResult)
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
 	// Done elsewhere
-
-	log.Printf("\n\n[DEBUG](ParsedExecutionResult) FixACtionResultOutput took: %s -- %s\n\n", time.Since(startTime), time.Since(originalStartTime))
-
-	startTime = time.Now()
 
 	// Don't set cache for triggers?
 	//log.Printf("\n\nACTIONRES: %s\n\nRES: %s\n", actionResult, actionResult.Result)
@@ -15172,9 +15162,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	}
 
-	log.Printf("\n\n[DEBUG](ParsedExecutionResult) Before setcache took: %s -- %s\n\n", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
-
 	if setCache {
 		go RunExecutionTranslation(ctx, actionResult)
 
@@ -15191,9 +15178,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		//log.Printf("[WARNING] Skipping cache for %s", actionResult.Action.Name)
 	}
 
-	log.Printf("\n\n[DEBUG](ParsedExecutionResult) setcache took: %s -- %s\n\n", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
-
 	skipExecutionCount := false
 	if workflowExecution.Status == "FINISHED" {
 		skipExecutionCount = true
@@ -15201,13 +15185,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	dbSave := false
 
-
-	startTime = time.Now()
-
 	startAction, extra, children, parents, visited, executed, nextActions, environments := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
-
-	log.Printf("\n\n[DEBUG](ParsedExecutionResult) GetExecutionVariables took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
 
 	// Shitty workaround as it may be missing it at times
 	for _, action := range workflowExecution.Workflow.Actions {
@@ -15220,9 +15198,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	newResult := FixBadJsonBody([]byte(actionResult.Result))
 	actionResult.Result = string(newResult)
-
-	log.Printf("\n\n[DEBUG](ParsedExecutionResult) FixBadJsonBody took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
 
 	if len(actionResult.Action.ExecutionVariable.Name) > 0 && (actionResult.Status == "SUCCESS" || actionResult.Status == "FINISHED") {
 
@@ -15257,9 +15232,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	log.Printf("\n\n[DEBUG](ParsedExecutionResult) SetExecutionVariable took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
-
 	if workflowExecution.Workflow.Configuration.SkipNotifications == false && actionResult.Status == "SUCCESS" && strings.Contains(actionResult.Result, "\"success\":") && strings.Contains(actionResult.Result, "\"status\":") {
 		type resultMapping struct {
 			Success bool `json:"success"`
@@ -15284,9 +15256,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				parsedDescription = fmt.Sprintf("403 forbidden for action %s. Make sure the account you are using has access to the resource.", actionResult.Action.Name)
 			}
 
-			log.Printf("[DEBUG] Getting to create notification took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-			startTime = time.Now()
-
 			// Send notification for it
 			err := CreateOrgNotification(
 				ctx,
@@ -15297,9 +15266,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				true,
 			)
 
-			log.Printf("[DEBUG] Creating notification took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-			startTime = time.Now()
-
 			if err != nil {
 				log.Printf("[WARNING] Failed making org notification: %s", err)
 			} else {
@@ -15307,8 +15273,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 	}
-
-	startTime = time.Now()
 
 	actionResult.Action = Action{
 		AppName:           actionResult.Action.AppName,
@@ -15329,7 +15293,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		if param.Name == "liquid_syntax_error" && !notificationSent {
-			startTime = time.Now()
 
 			// Send notification for it
 			err := CreateOrgNotification(
@@ -15341,9 +15304,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				true,
 			)
 
-			log.Printf("[DEBUG] Creating notification for liquid syntax error took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-			startTime = time.Now()
-
 			if err == nil {
 				notificationSent = true
 				workflowExecution.NotificationsCreated++
@@ -15352,8 +15312,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 		}
 	}
-
-	startTime = time.Now()
 
 	// Used for testing subflow shit
 	//if strings.Contains(actionResult.Action.Label, "Shuffle Workflow_30") {
@@ -15767,8 +15725,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					description = fmt.Sprintf("Node '%s' in Workflow '%s' failed silently. Check the workflow run for more details.", actionResult.Action.Label, workflowExecution.Workflow.Name)
 				}
 
-				startTime = time.Now()
-
 				err = CreateOrgNotification(
 					ctx,
 					fmt.Sprintf("Potential error in Workflow '%s'", workflowExecution.Workflow.Name),
@@ -15777,10 +15733,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					workflowExecution.ExecutionOrg,
 					true,
 				)
-
-				log.Printf("[INFO] Creating notification for silent failure took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-
-				startTime = time.Now()
 
 				if err != nil {
 					log.Printf("[WARNING] Failed making org notification for %s: %s", workflowExecution.ExecutionOrg, err)
@@ -15799,8 +15751,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	for _, param := range actionResult.Action.Parameters {
 		//actionResult.NotificationsCreated += 1
 		if strings.HasPrefix(strings.ToLower(param.Name), "shuffle") && strings.Contains(param.Name, "error") {
-			startTime = time.Now()
-
 			workflowExecution.NotificationsCreated += 1
 			CreateOrgNotification(
 				ctx,
@@ -15810,10 +15760,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				workflowExecution.ExecutionOrg,
 				true,
 			)
-
-			log.Printf("[INFO] Creating notification for app error took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-
-			startTime = time.Now()
 		}
 	}
 
@@ -16188,16 +16134,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 	}
 
-	log.Printf("[INFO](ParsedExecutionResult) -- coming before compressExecution took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-
-	startTime = time.Now()
 	workflowExecution, newDbSave := compressExecution(ctx, workflowExecution, "mid-cleanup")
 	if !dbSave {
 		dbSave = newDbSave
 	}
-
-	log.Printf("[INFO](compressExecution) -- took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
-	startTime = time.Now()
 
 	// Does it work to cache it here?
 	err = SetWorkflowExecution(ctx, workflowExecution, dbSave)
@@ -16209,8 +16149,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if !skipExecutionCount && workflowExecution.Status == "FINISHED" {
 		//IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_finished")
 	}
-
-	log.Printf("[INFO](ParsedExecutionResult) -- took: %s -- %s", time.Since(startTime), time.Since(originalStartTime))
 
 	// Should this be able to return errors?
 	//return &workflowExecution, dbSave, err
