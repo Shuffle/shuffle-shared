@@ -5233,7 +5233,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading body in update user: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Required field: user_id"}`)))
 		return
 	}
@@ -5265,7 +5265,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	err = json.Unmarshal(body, &t)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshaling userId: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unmarshaling. Required field: user_id"}`)))
 		return
 	}
@@ -5274,7 +5274,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	// When you change org -> change user role
 	if userInfo.Role != "admin" && userInfo.Id != t.UserId {
 		log.Printf("[WARNING] User %s tried to update user %s. Role: %s", userInfo.Username, t.UserId, userInfo.Role)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You need to be admin to change other users"}`)))
 		return
 	}
@@ -5282,7 +5282,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	foundUser, err := GetUser(ctx, t.UserId)
 	if err != nil {
 		log.Printf("[WARNING] Can't find user %s (update user): %s", t.UserId, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
 		return
 	}
@@ -5312,20 +5312,20 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 	orgUpdater := true
 	if len(t.Role) > 0 && (t.Role != "admin" && t.Role != "user" && t.Role != "org-reader") {
+
 		log.Printf("[WARNING] %s tried and failed to update user %s", userInfo.Username, t.UserId)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can only change to roles user, admin and org-reader"}`)))
 		return
 	} else {
 		// Same user - can't edit yourself?
 		if len(t.Role) > 0 && (userInfo.Id == t.UserId || userInfo.Username == t.UserId) {
-			resp.WriteHeader(401)
+			resp.WriteHeader(403)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't update the role of your own user"}`)))
 			return
 		}
 
 		if len(t.Role) > 0 {
-			log.Printf("[INFO] Updated user %s from %s to %s in org %s. If role is empty, not updating", foundUser.Username, foundUser.Role, t.Role, userInfo.ActiveOrg.Id)
 			orgUpdater = false
 
 			// Realtime update if the user is in the same org
@@ -5333,6 +5333,11 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 				foundUser.Role = t.Role
 				foundUser.Roles = []string{t.Role}
 				foundUser.ActiveOrg.Role = t.Role
+
+				err = SetUser(ctx, foundUser, false)
+				if err != nil {
+					log.Printf("[ERROR] Failed setting user when changing role to %s for %s (%s): %s", t.Role, foundUser.Username, foundUser.Id, err)
+				}
 			}
 
 			// Getting the specific org and just updating the user in that one
@@ -5345,7 +5350,12 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 					if user.Id == foundUser.Id {
 						user.Role = t.Role
 						user.Roles = []string{t.Role}
-						user.ActiveOrg.Role = t.Role
+
+						// Avoids role bypassing by setting the role in the active org
+						if user.ActiveOrg.Id == foundOrg.Id {
+							user.ActiveOrg.Role = t.Role
+						}
+					
 					}
 
 					users = append(users, user)
@@ -5354,17 +5364,22 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 				foundOrg.Users = users
 				err = SetOrg(ctx, *foundOrg, foundOrg.Id)
 				if err != nil {
-					log.Printf("[WARNING] Failed setting org when changing role to %s for %s (%s): %s", t.Role, foundUser.Username, foundUser.Id, err)
+					log.Printf("[ERROR] Failed setting org when changing role to %s for %s (%s): %s", t.Role, foundUser.Username, foundUser.Id, err)
 				}
 			}
 		}
+
+		log.Printf("[INFO] Updated user '%s' from '%s' to '%s' in org %s.", foundUser.Username, foundUser.Role, t.Role, userInfo.ActiveOrg.Id)
+		resp.WriteHeader(200)
+		resp.Write([]byte(`{"success": true}`))
+		return
 	}
 
 	if len(t.Username) > 0 && project.Environment != "cloud" {
 		users, err := FindUser(ctx, strings.ToLower(strings.TrimSpace(t.Username)))
 		if err != nil && len(users) == 0 {
 			log.Printf("[WARNING] Failed getting user %s: %s", t.Username, err)
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 			return
 		}
@@ -5378,7 +5393,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if found {
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User with username %s already exists"}`, t.Username)))
 			return
 		}
@@ -5429,7 +5444,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 		*/
 
-		log.Printf("[DEBUG] Found github username %s. ID to look for: %s", foundUser.PublicProfile.GithubUsername, t.UserId)
+		log.Printf("[DEBUG] Found github username '%s'. User ID to look for: %s", foundUser.PublicProfile.GithubUsername, t.UserId)
 
 		username := foundUser.PublicProfile.GithubUsername
 		creator, err := HandleAlgoliaCreatorSearch(ctx, username)
@@ -9098,7 +9113,7 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org in get users: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed getting org when listing users"}`))
 		return
 	}
@@ -9114,10 +9129,17 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 		if err != nil {
 			log.Printf("[WARNING] Failed getting user in get users: %s", err)
 		} else {
-			item = *foundUser
+			// Overrides to ensure the user we are returning
+			// is accurate and not an org copy. Keeping roles from
+			// org, as that controls the actual roles.
+			newItem := *foundUser
+			newItem.Role = item.Role
+			newItem.Roles = []string{item.Role}
+
+			newItem.ActiveOrg = item.ActiveOrg
+			item = newItem
 		}
 
-		//&& (len(item.Orgs) > 1 || item.Role == "admin") {
 		if item.Id != user.Id {
 			item.ApiKey = ""
 		}
