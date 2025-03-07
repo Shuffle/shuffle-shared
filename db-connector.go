@@ -1254,7 +1254,6 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 }
 
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
-
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
 		log.Printf("[ERROR] Workflowexecution executionId can't be empty.")
@@ -1277,11 +1276,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// Fixes missing pieces
 	workflowExecution, newDbSave := Fixexecution(ctx, workflowExecution)
+
 	workflowExecution = cleanupExecutionNodes(ctx, workflowExecution)
 	if newDbSave {
 		dbSave = true
 	}
-
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
@@ -1312,6 +1311,7 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+
 	HandleExecutionCacheIncrement(ctx, *newexec)
 	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
 		log.Printf("[INFO][%s] Already finished (set workflow) with status %s! Stopping the rest of the request for execution.", workflowExecution.ExecutionId, newexec.Status)

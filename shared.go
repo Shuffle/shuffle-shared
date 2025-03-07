@@ -15015,7 +15015,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	// 1. CHECK cache if it happened in another?
 	// 2. Set cache
 	// 3. Find executed without a result
-	// 4. Ensure the result is NOT set when running an action
+	// 4. Ensure the result is NOT set when running an action)
 
 	actionResult = FixActionResultOutput(actionResult)
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
@@ -15189,6 +15189,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	dbSave := false
+
 	startAction, extra, children, parents, visited, executed, nextActions, environments := GetExecutionVariables(ctx, workflowExecution.ExecutionId)
 
 	// Shitty workaround as it may be missing it at times
@@ -15297,6 +15298,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		if param.Name == "liquid_syntax_error" && !notificationSent {
+
 			// Send notification for it
 			err := CreateOrgNotification(
 				ctx,
@@ -15754,7 +15756,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	for _, param := range actionResult.Action.Parameters {
 		//actionResult.NotificationsCreated += 1
 		if strings.HasPrefix(strings.ToLower(param.Name), "shuffle") && strings.Contains(param.Name, "error") {
-
 			workflowExecution.NotificationsCreated += 1
 			CreateOrgNotification(
 				ctx,
