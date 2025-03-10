@@ -6180,7 +6180,7 @@ func hasTriggerChanged(newAction Trigger, oldAction Trigger) (string, bool) {
 		}
 
 		if !found {
-			log.Printf("[DEBUG] Not found: %s", param.Name)
+			log.Printf("[DEBUG] Param not found: %s", param.Name)
 			return "param_not_found", true
 		}
 	}
