@@ -808,12 +808,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		if mainNotification.Ignored { 
 			log.Printf("[INFO] Ignored notification %s for %s", mainNotification.Title, mainNotification.UserId)
 		} else {
-			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
-			if err != nil {
-				if !strings.Contains(err.Error(), "cache stored") && !strings.Contains(err.Error(), "Same workflow") {
-					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+			go func() {
+				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
+				if err != nil {
+					if !strings.Contains(err.Error(), "cache stored") && !strings.Contains(err.Error(), "Same workflow") {
+						log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+					}
 				}
-			}
+			}()
 		}
 
 		return nil
@@ -910,10 +912,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				}
 			}
 
-			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
-			if err != nil {
-				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
-			}
+			go func() {
+				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
+				if err != nil {
+					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+				}
+			}()
 		}
 	}
 
