@@ -6377,8 +6377,14 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 			if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
 				//log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID")
+
+				// Point to same
+				trigger.Parameters[paramIndex].Value = childWorkflow.ID
+
 				continue
 			}
+
+			// Check if it's the same as previous revision?
 
 			ctx := context.Background()
 			alreadyPropagatedSubflow := ""
@@ -6389,14 +6395,14 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			}
 
 			if childSubflow.OrgId != childWorkflow.OrgId {
-				//log.Printf("[ERROR] Subflow %s is not in the same org as %s. This means re-propagation is required.", parentSubflowPointedId, parentWorkflow.ID)
+				log.Printf("[WARNING] Subflow %s is not in the same org as parent workflow %s. This means re-propagation is required (?).", parentSubflowPointedId, parentWorkflow.ID)
 			} else {
 				alreadyPropagatedSubflow = childSubflow.ID
 			}
 
 			// Parent workflow ID + Suborg ID = seed 
 			if len(alreadyPropagatedSubflow) > 0 {
-				//log.Printf("[INFO] Subflow %s has already been propagated to %s", parentSubflowPointedId, childWorkflow.OrgId)
+				//log.Printf("[INFO] Subflow %s (%s) has already been propagated to org %s", childWorkflow.Name, parentSubflowPointedId, childWorkflow.OrgId)
 
 				// Just make sure that it now points to that workflow in the Multi-Tenant Workflow
 				trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
@@ -6436,6 +6442,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 				}
 			}
 
+			// Getting the PARENT workflow 
 			parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
@@ -6456,6 +6463,8 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 				log.Printf("[WARNING] Failed setting parent subflow: %s", err)
 				continue
 			}
+
+			log.Printf("[DEBUG] Re-propagating subflow %s (%s) to %s (%s)", parentSubflowPointed.Name, parentSubflowPointed.ID, childWorkflow.Name, childWorkflow.ID)
 
 			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
 			if err != nil {
@@ -7219,7 +7228,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					}
 
 					if childAction.Label != action.Label {
-						log.Printf("[DEBUG] Updating label in child action '%s'", childAction.ID)
+						//log.Printf("[DEBUG] Updating label in child action '%s'", childAction.ID)
 						childWorkflow.Actions[childIndex].Label = action.Label
 					}
 
@@ -7236,7 +7245,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					}
 
 					if childAction.Name != action.Name {
-						log.Printf("[DEBUG] Updating action in child action '%s'", childAction.ID)
+						//log.Printf("[DEBUG] Updating action in child action '%s'", childAction.ID)
 						// Override entirely?
 						childWorkflow.Actions[childIndex].Name = action.Name
 						childWorkflow.Actions[childIndex].Parameters = action.Parameters
@@ -7253,12 +7262,12 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					// parameters
 					// position
 					if action.Position.X != childAction.Position.X || action.Position.Y != childAction.Position.Y {
-						log.Printf("[DEBUG] Position has changed. Updating in child action '%s'", childAction.ID)
+						//log.Printf("[DEBUG] Position has changed. Updating in child action '%s'", childAction.ID)
 						childWorkflow.Actions[childIndex].Position = action.Position
 					}
 
 					if action.IsStartNode && !childAction.IsStartNode {
-						log.Printf("[DEBUG] Updating start node in child action '%s'", childAction.ID)
+						//log.Printf("[DEBUG] Updating start node in child action '%s'", childAction.ID)
 						// Check if the startnode is any of the parent nodes. If it is, then we change. If it is not in the parent nodes, we don't change.
 						foundInParentWorkflow := false
 						for _, parentActionInner := range parentWorkflow.Actions {
@@ -7276,6 +7285,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 							childWorkflow.Start = action.ID
 							childWorkflow.Actions[childIndex].IsStartNode = true
+							childAction.IsStartNode = true
 						}
 					}
 
@@ -7291,7 +7301,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 								continue
 							}
 
-							log.Printf("[DEBUG] Updating auth in child as it is available")
+							//log.Printf("[DEBUG] Updating auth in child as it is available")
 							childWorkflow.Actions[childIndex].AuthenticationId = action.AuthenticationId
 							break
 						}
@@ -7497,7 +7507,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		if len(removedTriggers) > 0 {
 			log.Printf("[DEBUG] Removed triggers: %#v. CHILD: %d", removedTriggers, len(childTriggers))
 
-			newChildTriggers := childTriggers
+			//newChildTriggers := childTriggers
+			newChildTriggers := []Trigger{} 
 			for _, trigger := range childWorkflow.Triggers {
 				if !ArrayContains(removedTriggers, trigger.ID) {
 					// Just making sure it exists
@@ -7553,10 +7564,10 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					continue
 				}
 
-				newChildTriggers = append(newChildTriggers, trigger)
+				//newChildTriggers = append(newChildTriggers, trigger)
 			}
 
-			//log.Printf("New triggers: %#v", len(newChildTriggers))
+			//log.Printf("New triggers in child: %#v", len(newChildTriggers))
 
 			childWorkflow.Triggers = newChildTriggers
 			childTriggers = childWorkflow.Triggers
@@ -7617,6 +7628,28 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							if relevantRevisionTriggerParam.Value != parentParam.Value {
 								if childParam.Value == relevantRevisionTriggerParam.Value {
 									childWorkflow.Triggers[childIndex].Parameters[childParamIndex].Value = parentParam.Value
+								} else {
+									//log.Printf("[DEBUG] NOT SAME: %s != %s", childParam.Value, relevantRevisionTriggerParam.Value)
+
+									// Parent workflow ID changed to not match.. Need to check if the ID is a seeded version of the same ID 
+									if childParam.Name == "workflow" || childParam.Name == "subflow" {
+										// Check if seed(relevantRevisionTriggerParam.Value) == childParam.Value as to see if parent has changed, but child is in sync
+										seedString := fmt.Sprintf("%s_%s", relevantRevisionTriggerParam.Value, childWorkflow.OrgId)
+
+										hash := sha1.New()
+										hash.Write([]byte(seedString))
+										hashBytes := hash.Sum(nil)
+
+										uuidBytes := make([]byte, 16)
+										copy(uuidBytes, hashBytes)
+
+										newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+										// Means the seed is the same, and we should change as parent is changing
+										if newId == childParam.Value {
+											childWorkflow.Triggers[childIndex].Parameters[childParamIndex].Value = parentParam.Value
+										}
+									}
 								}
 							}
 						}
@@ -9707,10 +9740,12 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	// This is to ensure old nodes still exist.
 	foundWorkflow, err := GetWorkflow(ctx, newId)
 	if err == nil && foundWorkflow.ID == newId && foundWorkflow.ParentWorkflowId == parentWorkflowId {
+		log.Printf("[INFO] Found existing child workflow %s for %s", newId, parentWorkflowId)
 		return foundWorkflow, nil
 	}
 
 	if !ArrayContains(workflow.ChildWorkflowIds, newId) {
+		log.Printf("[INFO] Adding new child workflow %s to %s", newId, parentWorkflowId)
 		workflow.ChildWorkflowIds = append(workflow.ChildWorkflowIds, newId)
 
 		DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))

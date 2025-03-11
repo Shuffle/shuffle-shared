@@ -2616,6 +2616,12 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 	for _, trigger := range workflow.Triggers {
 		if trigger.Status != "running" && trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+
+			// Schedules = parent controlled 
+			if trigger.TriggerType == "SCHEDULE" && workflow.ParentWorkflowId != "" {
+				continue
+			}
+
 			errorInfo := fmt.Sprintf("Trigger %s needs to be started", trigger.Name)
 			if !ArrayContains(workflow.Errors, errorInfo) {
 				workflow.Errors = append(workflow.Errors, errorInfo)
