@@ -7505,7 +7505,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 
 		if len(removedTriggers) > 0 {
-			log.Printf("[DEBUG] Removed triggers: %#v. CHILD: %d", removedTriggers, len(childTriggers))
+			//log.Printf("[DEBUG] Removed triggers: %#v. CHILD: %d", removedTriggers, len(childTriggers))
 
 			//newChildTriggers := childTriggers
 			newChildTriggers := []Trigger{} 
@@ -7564,10 +7564,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 					continue
 				}
 
+				// This breaks the whole thing about removing triggers
 				//newChildTriggers = append(newChildTriggers, trigger)
 			}
-
-			//log.Printf("New triggers in child: %#v", len(newChildTriggers))
 
 			childWorkflow.Triggers = newChildTriggers
 			childTriggers = childWorkflow.Triggers
@@ -9800,36 +9799,8 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 		workflow.Actions[actionIndex].Environment = defaultEnvironment
 	}
 
-	for triggerIndex, trigger := range newWf.Triggers {
-		oldID := trigger.ID
-		trigger.ReplacementForTrigger = oldID
-
-		// Seeding a new ID for the triggers as to not override parent
-		seedString := fmt.Sprintf("%s_%s", oldID, newWf.ID)
-		hash := sha1.New()
-		hash.Write([]byte(seedString))
-		hashBytes := hash.Sum(nil)
-
-		uuidBytes := make([]byte, 16)
-		copy(uuidBytes, hashBytes)
-		trigger.ID = uuid.Must(uuid.FromBytes(uuidBytes)).String()
-
-		newWf.Triggers[triggerIndex] = trigger
-		newWf.Triggers[triggerIndex].ParentControlled = true
-		newWf.Triggers[triggerIndex].Status = "uninitialized"
-
-		// Updating just in case 
-		for branchIndex, branch := range newWf.Branches {
-			newWf.Branches[branchIndex].ParentControlled = true
-			if branch.SourceID == oldID {
-				newWf.Branches[branchIndex].SourceID = trigger.ID
-			}
-
-			if branch.DestinationID == oldID {
-				newWf.Branches[branchIndex].DestinationID = trigger.ID
-			}
-		}
-	}
+	// Triggers are handled in the diff instead.
+	newWf.Triggers = []Trigger{}
 
 	//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
 
