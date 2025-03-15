@@ -12813,11 +12813,11 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 
 		log.Printf("[INFO] Added certificate %s elastic client.", certificateLocation)
 	}
-	config.Transport = transport
 
+	config.Transport = transport
 	es, err := opensearch.NewClient(config)
 	if err != nil {
-		log.Fatalf("[DEBUG] Database client for ELASTICSEARCH error during init (fatal): %s", err)
+		log.Fatalf("[ERROR] Database client for ELASTICSEARCH error during init (fatal): %s", err)
 	}
 
 	return es
