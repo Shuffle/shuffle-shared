@@ -18697,6 +18697,17 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	owner := "shuffle"
 	repo := "shuffle-docs"
 	path := "docs"
+
+	// Look for 'folder' query
+	folder, folderOk := request.URL.Query()["folder"]
+	if folderOk && len(folder) > 0 {
+		if strings.Contains(folder[0], "..") || strings.Contains(folder[0], "/") {
+			// Disallow traversal even if it's github 
+		} else {
+			path = folder[0]
+		}
+	}
+
 	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
 
 	// FIXME: User controlled and dangerous (possibly). Uses Markdown on the frontend to render it
@@ -18846,7 +18857,18 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	cacheKey := "docs_list"
+	path := "docs"
+	// Look for 'folder' query
+	folder, folderOk := request.URL.Query()["folder"]
+	if folderOk && len(folder) > 0 {
+		if strings.Contains(folder[0], "..") || strings.Contains(folder[0], "/") {
+			// Disallow traversal even if it's github 
+		} else {
+			path = folder[0]
+		}
+	}
+
+	cacheKey := fmt.Sprintf("docs_list_%s", path)
 	cache, err := GetCache(ctx, cacheKey)
 	result := FileList{}
 	if err == nil {
@@ -18859,7 +18881,9 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	client := github.NewClient(nil)
 	owner := "shuffle"
 	repo := "shuffle-docs"
-	path := "docs"
+
+	log.Printf("LOADING FROM PATH %s", path)
+
 	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting docs list: %s", err)

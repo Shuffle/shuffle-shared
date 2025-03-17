@@ -3885,7 +3885,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 
 	// Set request timeout to 5 min (max)
-	topClient.Timeout = time.Minute * 5
+	topClient.Timeout = time.Minute * 10
 	arch := runtime.GOARCH
 	if strings.Contains(strings.ToLower(arch), "arm") {
 		if strings.Contains(dockerImgUrl, "?") {
@@ -3980,8 +3980,8 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		return err
 	}
 
+	log.Printf("[DEBUG] Starting to load zip file for image %s", imageName)
 	defer dockercli.Close()
-
 	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
 	if err != nil {
 		log.Printf("[ERROR] Failed loading docker images: %s", err)
