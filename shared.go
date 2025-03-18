@@ -14081,7 +14081,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 	// Gets a struct of Username, password
 	data, err := ParseLoginParameters(resp, request)
 	if err != nil {
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
@@ -14092,7 +14092,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 	err = CheckUsername(data.Username)
 	if err != nil {
 		log.Printf("[INFO] Username is too short or bad for %s: %s", data.Username, err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
@@ -14101,7 +14101,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 	users, err := FindUser(ctx, data.Username)
 	if err != nil && len(users) == 0 {
 		log.Printf("[WARNING] Failed getting user %s during login", data.Username)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 		return
 	}
@@ -14138,7 +14138,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 		if strings.HasSuffix(strings.ToLower(userdata.Username), "@shuffler.io") {
 			if !userdata.Active {
 				log.Printf("[INFO] User %s with @shuffler suffix is not active.", userdata.Username)
-				resp.WriteHeader(401)
+				resp.WriteHeader(400)
 				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "error: You need to activate your account before logging in"}`)))
 				return
 			}
@@ -14212,7 +14212,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 	loginData := `{"success": false, "reason": "No SSO or OpenID login found. Please use the normal Shuffle login."}`
 	log.Printf("[AUDIT] Failed to find a sso login for %s (%s)", data.Username, userdata.Id)
 
-	resp.WriteHeader(401)
+	resp.WriteHeader(400)
 	resp.Write([]byte(loginData))
 }
 
@@ -18880,8 +18880,6 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	client := github.NewClient(nil)
 	owner := "shuffle"
 	repo := "shuffle-docs"
-
-	log.Printf("LOADING FROM PATH %s", path)
 
 	_, item1, _, err := client.Repositories.GetContents(ctx, owner, repo, path, nil)
 	if err != nil {
