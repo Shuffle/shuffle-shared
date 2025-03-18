@@ -2695,8 +2695,9 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub   string `json:"sub"`
-	Email string `json:"email"`
+	Sub   string   `json:"sub"`
+	Email string   `json:"email"`
+	Roles []string `json:"roles"`
 }
 
 type OpenidResp struct {
@@ -3584,20 +3585,21 @@ type UsecaseLinks []struct {
 }
 
 type IdTokenCheck struct {
-	Aud   string `json:"aud"`
-	Iss   string `json:"iss"`
-	Iat   int    `json:"iat"`
-	Nbf   int    `json:"nbf"`
-	Exp   int    `json:"exp"`
-	Aio   string `json:"aio"`
-	Nonce string `json:"nonce"`
-	Rh    string `json:"rh"`
-	Sub   string `json:"sub"`
-	Tid   string `json:"tid"`
-	Uti   string `json:"uti"`
-	Ver   string `json:"ver"`
-	Email string `json:"email"`
-	Org   Org    `json:"org"`
+	Aud   string   `json:"aud"`
+	Iss   string   `json:"iss"`
+	Iat   int      `json:"iat"`
+	Nbf   int      `json:"nbf"`
+	Exp   int      `json:"exp"`
+	Aio   string   `json:"aio"`
+	Nonce string   `json:"nonce"`
+	Rh    string   `json:"rh"`
+	Sub   string   `json:"sub"`
+	Tid   string   `json:"tid"`
+	Uti   string   `json:"uti"`
+	Ver   string   `json:"ver"`
+	Email string   `json:"email"`
+	Org   Org      `json:"org"`
+	Roles []string `json:"roles"`
 }
 
 type WidgetMeta struct {
