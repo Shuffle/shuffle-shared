@@ -23589,13 +23589,19 @@ func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
 			repo := urlsplit[4]
 			branch := urlsplit[6]
 			path := strings.Join(urlsplit[7:len(urlsplit)], "/")
+
 			newbody = fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/%s", ghuser, repo, branch, path)
 		}
 	}
 
 	log.Printf("[DEBUG] Downloading content from %s", newbody)
 
-	req, err := http.NewRequest("GET", newbody, nil)
+	req, err := http.NewRequest(
+		"GET", 
+		newbody, 
+		nil,
+	)
+
 	if err != nil {
 		log.Printf("[ERROR] Requestbuilder err: %s", err)
 		resp.WriteHeader(500)
