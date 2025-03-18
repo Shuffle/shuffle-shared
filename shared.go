@@ -18744,6 +18744,19 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 		cacheKey = fmt.Sprintf("%s_%s", cacheKey, version[0])
 	}
 
+	// Look for 'folder' query
+	path := "docs"
+	folder, folderOk := request.URL.Query()["folder"]
+	if folderOk && len(folder) > 0 {
+		if strings.Contains(folder[0], "..") || strings.Contains(folder[0], "/") {
+			// Disallow traversal even if it's github 
+		} else {
+			path = folder[0]
+		}
+	}
+
+	cacheKey = fmt.Sprintf("%s_%s", cacheKey, path)
+
 	cache, err := GetCache(ctx, cacheKey)
 	if err == nil {
 		cacheData := []byte(cache.([]uint8))
@@ -18754,17 +18767,6 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 
 	owner := "shuffle"
 	repo := "shuffle-docs"
-	path := "docs"
-
-	// Look for 'folder' query
-	folder, folderOk := request.URL.Query()["folder"]
-	if folderOk && len(folder) > 0 {
-		if strings.Contains(folder[0], "..") || strings.Contains(folder[0], "/") {
-			// Disallow traversal even if it's github 
-		} else {
-			path = folder[0]
-		}
-	}
 
 	docPath := fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/master/%s/%s.md", owner, repo, path, location[4])
 
