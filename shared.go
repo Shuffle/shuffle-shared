@@ -12072,10 +12072,9 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[ERROR] Failed request to signup webhook FOR ORG (2): %s", err)
 				} else {
+					defer res.Body.Close()
 					log.Printf("[INFO] Successfully ran org priority webhook")
 				}
-
-				defer res.Body.Close()
 			}
 		}
 	}

@@ -3872,7 +3872,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		downloadedImages = append(downloadedImages, imageName)
 	}
 
-	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl, strings.Replace(imageName, " ", "-", -1))
+	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image?image=%s", baseUrl, strings.Replace(imageName, " ", "-", -1))
 
 	isCloudDownload := false
 	if strings.Contains(baseUrl, "ngrok") || strings.Contains(baseUrl, "shuffler.io") || strings.Contains(baseUrl, ".run.app") {
