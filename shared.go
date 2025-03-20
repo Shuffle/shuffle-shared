@@ -4376,6 +4376,12 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
+	skipTruncate := false
+	truncate, truncateOk := request.URL.Query()["truncate"]
+	if truncateOk && len(truncate) > 0 && truncate[0] == "false" {
+		skipTruncate = true
+	}
+
 	workflows, err = GetAllWorkflowsByQuery(ctx, user, maxAmount, cursor)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
@@ -4388,6 +4394,20 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
 		resp.WriteHeader(200)
 		resp.Write([]byte("[]"))
+		return
+	}
+
+	if skipTruncate == true {
+		newjson, err := json.Marshal(workflows)
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling workflows: %s", err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking untruncated workflows"}`)))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write(newjson)
 		return
 	}
 
@@ -4547,15 +4567,6 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking workflows"}`)))
 		return
 	}
-
-	/*
-		if project.CacheDb {
-			err = SetCache(ctx, cacheKey, newjson, 30)
-			if err != nil {
-				log.Printf("[ERROR] Failed updating workflow cache for org %s: %s", user.ActiveOrg.Id, err)
-			}
-		}
-	*/
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
