@@ -1965,7 +1965,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 		if found {
 			// Handles execution vars
-
+			result.Action = action
 			if setExecutionVariable(result) {
 
 				// Check if key in lastexecVar
@@ -1995,6 +1995,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		err = json.Unmarshal(cacheData, &result)
 		if err == nil {
 			workflowExecution.Results = append(workflowExecution.Results, result)
+			result.Action = action
 			if setExecutionVariable(result) {
 
 				// Check if key in lastexecVar
@@ -2135,7 +2136,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 			}
 
 			if workflowExecution.Workflow.ExecutionVariables[varKey].Value != value.Result {
-				log.Printf("\n\n\n[DEBUG][%s] Updating execution variable '%s' from len %d to %d (%s)\n\n", workflowExecution.ExecutionId, variable.Name, len(workflowExecution.Workflow.ExecutionVariables[varKey].Value), len(value.Result), value.Action.Label)
+				//log.Printf("\n\n\n[DEBUG][%s] Updating execution variable '%s' from len %d to %d (%s)\n\n", workflowExecution.ExecutionId, variable.Name, len(workflowExecution.Workflow.ExecutionVariables[varKey].Value), len(value.Result), value.Action.Label)
 			}
 
 			workflowExecution.Workflow.ExecutionVariables[varKey].Value = value.Result
@@ -11611,6 +11612,8 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			}
 		}
 	}
+
+	//log.Printf("[DEBUG] FOund %d executions for search %s", len(executions), workflowId)
 
 	// Find difference between what's in the list and what is in cache
 	//log.Printf("\n\n[DEBUG] Checking local cache for executions. Got %d executions\n\n", len(executions))
