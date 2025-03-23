@@ -23479,7 +23479,10 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		//log.Printf("[DEBUG] Got source exec %s", sourceExecution)
 		newExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
 		if err != nil {
-			//log.Printf("[INFO] Failed getting source_execution in test validation based on '%s'", sourceExecution[0])
+			if debug {
+				log.Printf("[DEBUG] Failed getting source_execution in test validation based on '%s'", sourceExecution[0])
+			}
+
 			return false, ""
 		} else {
 			workflowExecution = newExec
@@ -23487,7 +23490,10 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	}
 
 	if workflowExecution.ExecutionId == "" {
-		log.Printf("[WARNING] No execution ID found. Bad auth.")
+		if debug { 
+			log.Printf("[DEBUG] No execution ID found. Bad auth. Source Exec: %s", sourceExecution[0])
+		}
+
 		return false, ""
 	}
 
