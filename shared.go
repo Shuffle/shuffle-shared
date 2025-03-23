@@ -13058,6 +13058,66 @@ func ParseVersions(versions []string) []string {
 	return versions
 }
 
+func updateOrgAppCache(app WorkflowApp, user User) {
+	if len(app.ID) == 0 {
+		return
+	}
+
+	if len(user.ActiveOrg.Id) == 0 {
+		return
+	}
+
+	// Random delay from 0-2 seconds
+	time.Sleep(time.Duration(mathrand.Intn(1)) * time.Second)
+
+	ctx := context.Background()
+
+	cacheKey := fmt.Sprintf("apps_%s", user.ActiveOrg.Id)
+	cache, err := GetCache(ctx, cacheKey)
+	if err != nil {
+		//log.Printf("[WARNING] Failed getting apps for %s from cache: %s", cacheKey, err)
+		return
+	} else {
+		allApps := []WorkflowApp{}
+
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &allApps)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshaling cache data for apps: %s", err)
+		} else {
+			updated := false
+			for appIndex, thisApp := range allApps {
+				if thisApp.ID == app.ID {
+					// Skipping update for those with actions
+					if len(thisApp.Actions) > 1 {
+						return
+					}
+
+					updated = true 
+					allApps[appIndex] = app
+					break
+				}
+			}
+
+			if !updated {
+				allApps = append(allApps, app)
+			}
+
+			cacheData, err = json.Marshal(allApps)
+			if err != nil {
+				log.Printf("[WARNING] Failed marshalling updated apps for cache: %s", err)
+			} else {
+				err = SetCache(ctx, cacheKey, cacheData, 1440)
+				if err != nil {
+					log.Printf("[WARNING] Failed updating org cache for apps: %s", err)
+					//log.Printf("[INFO] Updated cache for apps in org %s", user.ActiveOrg.Id)
+				}
+			}
+		}
+	}
+
+}
+
 func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -13153,6 +13213,8 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("CAN SHARE APP!")
 			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
 			if err != nil {
+				go updateOrgAppCache(*app, user)	
+
 				log.Printf("[WARNING] OpenApi doesn't exist for (0): %s - err: %s. Returning basic app", fileId, err)
 				resp.WriteHeader(200)
 				resp.Write(appdata)
@@ -13187,6 +13249,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		go updateOrgAppCache(*app, user)	
 		resp.WriteHeader(200)
 		resp.Write(appdata)
 		return
@@ -13270,6 +13333,9 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 		appReturn.OpenAPI = openapidata
 	}
+
+	// Should add it to their cache in the background
+	go updateOrgAppCache(*app, user)	
 
 	appdata, err = json.Marshal(appReturn)
 	if err != nil {
@@ -21030,7 +21096,11 @@ func DownloadFromUrl(ctx context.Context, url string) ([]byte, error) {
 }
 
 // New execution with firestore
+// The slow parts of it on FIRST request without cache:
+// - Env loading (450ms)
+// - Org Auth loading (500ms)
 func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *http.Request, maxExecutionDepth int64) (WorkflowExecution, ExecInfo, string, error) {
+
 	// Check the URL for the workflow ID itself
 	if request != nil { // && len(workflow.Actions) == 0 {
 
@@ -21045,7 +21115,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					workflow.ID = foundId
 				}
 
-				parentWorkflow, err := GetWorkflow(ctx, workflow.ID)
+				parentWorkflow, err := GetWorkflow(ctx, workflow.ID, true)
 				if err == nil && len(parentWorkflow.ID) == 36 && len(parentWorkflow.Actions) > 0 {
 					workflow = *parentWorkflow
 				}
@@ -21055,7 +21125,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	// Try again if there is no request available? These are backups if we don't have the data
 	if len(workflow.ID) == 36 && len(workflow.Actions) == 0 {
-		parentWorkflow, err := GetWorkflow(ctx, workflow.ID)
+		parentWorkflow, err := GetWorkflow(ctx, workflow.ID, true)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting workflow for execution: %s", err)
 		} else {
@@ -21064,6 +21134,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 	}
+
 
 	var workflowExecution WorkflowExecution
 	workflowBytes, err := json.Marshal(workflow)
@@ -21725,6 +21796,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Don't override workflow defaults
 	}
 
+
 	//log.Printf("[DEBUG][%s] STARTING IF/ELSE NODE REMAPPING", workflowExecution.ExecutionId)
 	for branchIndex, branch := range workflowExecution.Workflow.Branches {
 		if len(branch.SourceParent) == 0 {
@@ -21849,6 +21921,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		return workflowExecution, ExecInfo{}, "Invalid uuid", err
 	}
 
+
 	// FIXME - find owner of workflow
 	// FIXME - get the actual workflow itself and build the request
 	// MAYBE: Don't send the workflow within the pubsub, as this requires more data to be sent
@@ -21942,6 +22015,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 	}
+
 
 	workflowExecution.ExecutionVariables = workflow.ExecutionVariables
 	if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
@@ -22734,6 +22808,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+
 	// Added fixes for e.g. URL's ending in /
 	fixes := []string{"url"}
 	for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -22809,6 +22884,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+
 	if !startFound {
 		if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
 			workflowExecution.Start = workflow.Start
@@ -22857,6 +22933,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+
 	// Verification for execution environments
 	workflowExecution.Results = defaultResults
 	workflowExecution.Workflow.Actions = newActions
@@ -22888,6 +22965,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("[ERROR] No org identified for execution of %s. Returning", workflowExecution.Workflow.ID)
 		return workflowExecution, ExecInfo{}, "No org identified for execution", errors.New("No org identified for execution")
 	}
+
 
 	if len(allEnvs) == 0 {
 		log.Printf("[ERROR] No active environments found for org: %s", workflowExecution.ExecutionOrg)
@@ -22944,11 +23022,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-	//b, err := json.Marshal(workflowExecution)
-	//if err == nil {
-	//	log.Printf("LEN: %d", len(string(b)))
-	//	//workflowExecution.ExecutionOrg.SyncFeatures = Org{}
-	//}
 
 	if len(workflowExecution.Workflow.ExecutingOrg.Id) == 0 || workflowExecution.ExecutionOrg != workflowExecution.Workflow.ExecutingOrg.Id {
 		workflowExecution.Workflow.ExecutingOrg = OrgMini{
@@ -22960,7 +23033,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	// Means executing a subflow is happening
 	if len(workflowExecution.ExecutionParent) > 0 {
-		IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
+		go IncrementCache(ctx, workflowExecution.ExecutionOrg, "subflow_executions")
 	}
 
 	// NEW check for subflow
@@ -23077,6 +23150,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	workflowExecution.Workflow.Triggers = newTriggers
 
+
 	// Checking authentication fields as they should now be filled in no matter where
 
 	if len(workflowExecution.ExecutionOrg) == 0 {
@@ -23089,6 +23163,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			log.Printf("[ERROR] Failed to get org: %s", err)
 		}
 	}
+
 
 	// Clear out example & description fields
 	for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -23114,6 +23189,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 	}
+
 
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
@@ -23248,6 +23324,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
+
 	// Handles org setting for subflows
 	if len(workflowExecution.Workflow.ExecutingOrg.Name) == 0 {
 		// Maybe should be set from the parentorg?
@@ -23306,13 +23383,10 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
 	}
 
-	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
-	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
-	DeleteCache(ctx, fmt.Sprintf("workflowexecution_%s_100", workflowExecution.WorkflowId))
 
-	//for _, branch := range workflowExecution.Workflow.Branches {
-	//	log.Printf("\n\n[INFO] Branch (%d condition(s)): %s -> %s\n\n", len(branch.Conditions), branch.SourceID, branch.DestinationID)
-	//}
+	go DeleteCache(context.Background(), fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
+	go DeleteCache(context.Background(), fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
+	go DeleteCache(context.Background(), fmt.Sprintf("workflowexecution_%s_100", workflowExecution.WorkflowId))
 
 	// Force it into the database
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil

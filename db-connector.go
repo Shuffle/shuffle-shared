@@ -6479,7 +6479,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	if len(user.PrivateApps) > 0 && orgErr == nil {
-		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
+		if debug {
+			log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
+		}
+
 		orgChanged := false
 		for _, app := range user.PrivateApps {
 			if !ArrayContains(org.ActiveApps, app.ID) {
@@ -6709,10 +6712,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	//log.Printf("All apps: %d", len(allApps))
-	//allApps = append(allApps, publicApps...)
-	//log.Printf("All apps: %d", len(allApps))
-
 	if orgErr == nil {
 		for _, publicApp := range publicApps {
 			if ArrayContains(org.ActiveApps, publicApp.ID) {
@@ -6747,38 +6746,36 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		}
 
-		var newApps = make([]WorkflowApp, len(allKeys))
-		err = project.Dbclient.GetMulti(ctx, allKeys, newApps)
-		if err != nil {
-			//log.Printf("[ERROR] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
+		keyLists := [][]*datastore.Key{}
+		// Split into 10 each
+		for i := 0; i < len(allKeys); i += 5 {
+			end := i + 5 
+			if end > len(allKeys) {
+				end = len(allKeys)
+			}
+
+			keyLists = append(keyLists, allKeys[i:end])
 		}
 
-		//log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
+		// Goroutine each list, then put them back together
+		newApps := []WorkflowApp{}
+		allChannels := []chan []WorkflowApp{}
+		for _, keyList := range keyLists {
+			appChannel := make(chan []WorkflowApp)
 
-		// IF the app doesn't have actions, check OpenAPI
-		// 1. Get the app directly
-		// 2. Parse OpenAPI for it to get the actions
-		for appIndex, app := range newApps {
-			if len(app.Actions) == 0 && len(app.Name) > 0 {
-				//log.Printf("[WARNING] %s has %d actions (%s). Getting directly.", app.Name, len(app.Actions), app.ID)
-
-				newApp, err := GetApp(ctx, app.ID, user, true)
+			go func(keyList []*datastore.Key) {
+				newAppsList := make([]WorkflowApp, len(keyList))
+				err = project.Dbclient.GetMulti(ctx, keyList, newAppsList)
 				if err != nil {
-					log.Printf("[WARNING] Failed to find app while parsing app %s: %s", app.Name, err)
-					continue
-				} else {
-					// Check if they should have access?
-					newApps[appIndex] = *newApp
+					log.Printf("[ERROR] Problem getting org apps for %s: %s. Apps: %d. NOT FATAL", org.Id, err, len(newAppsList))
 				}
 
-			}
+				//log.Printf("[DEBUG] Returning %d apps", len(newAppsList))
+				appChannel <- newAppsList
+			}(keyList)
+
+			allChannels = append(allChannels, appChannel)
 		}
-
-		// Authentication system to ensure the user actually has access to all the apps it says it wants
-
-		// FIXME: Enable this and fix suborg <-> parentorg access
-		// Problem: If you're in a suborg, you can't access parentorg apps and vice versa
-		// This stage doesn't have org information either, so it needs to be grabbed first.
 
 		parentOrg := &Org{}
 		if len(org.ManagerOrgs) > 0 {
@@ -6790,6 +6787,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 		if len(parentOrg.Id) == 0 && len(org.ChildOrgs) > 0 {
 			parentOrg = org
+		}
+
+		// Waiting until here, as org loading could take a bit too
+		for _, appChannel := range allChannels {
+			newApps = append(newApps, <-appChannel...)
 		}
 
 		notAppendedApps := []string{}
