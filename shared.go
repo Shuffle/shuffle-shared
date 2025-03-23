@@ -65,6 +65,8 @@ var baseDockerName = "frikky/shuffle"
 var SSOUrl = ""
 var kmsDebug = false
 
+var debug = os.Getenv("DEBUG") == "true"
+
 func RequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -23449,7 +23451,9 @@ func HealthCheckHandler(resp http.ResponseWriter, request *http.Request) {
 // 2. Parent workflow's owner is same org?
 // 3. Parent execution auth is correct
 func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool, string) {
-	//log.Printf("[DEBUG] Inside execute validation for workflow %s (%s)! Request method: %s", workflow.Name, workflow.ID, request.Method)
+	if debug == true {
+		log.Printf("[DEBUG] Inside execute validation for workflow %s (%s)! Request method: %s. Queries: %#v", workflow.Name, workflow.ID, request.Method, request.URL.Query())
+	}
 
 	//if request.Method == "POST" {
 	ctx := GetContext(request)
@@ -23458,9 +23462,17 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	if !sourceExecutionOk {
 		sourceExecution, sourceExecutionOk = request.URL.Query()["reference_execution"]
 		if !sourceExecutionOk {
-			//log.Printf("[AUDIT] No source_execution or reference_execution in access validation")
-			return false, ""
+			sourceExecution, sourceExecutionOk = request.URL.Query()["execution_id"]
+			if !sourceExecutionOk {
+				log.Printf("[AUDIT] No source execution found. Bad auth.")
+
+				return false, ""
+			}
 		}
+	}
+
+	if debug == true {
+		log.Printf("[DEBUG] Source execution in exec auth: %s", sourceExecution[0])
 	}
 
 	if sourceExecutionOk && len(sourceExecution) > 0 {
@@ -23479,19 +23491,20 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		return false, ""
 	}
 
+
 	sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
 	if !sourceAuthOk {
 		sourceAuth, sourceAuthOk = request.URL.Query()["authorization"]
 		if !sourceAuthOk {
-			log.Printf("[AUDIT] No source auth found. Bad auth.")
+			if debug {
+				log.Printf("[DEBUG] No source auth found during execution of %s. Bad auth.", workflowExecution.ExecutionId)
+			}
+
 			return false, ""
 		}
 	}
 
 	if sourceAuthOk {
-		//log.Printf("[DEBUG] Got source auth %s", sourceAuth)
-		// Must origin from a parent workflow")
-
 		if sourceAuth[0] != workflowExecution.Authorization {
 			log.Printf("[AUDIT] Bad authorization for workflowexecution defined.")
 			return false, ""
@@ -23502,23 +23515,18 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		if workflowExecution.Status == "WAITING" {
 			return true, ""
 		}
+	}
 
+	if debug {
+		log.Printf("[DEBUG] Source auth: %s", sourceAuth[0])
 	}
 
 	// When reaching here, authentication is done, but not authorization.
 	// Need to verify the workflow, and whether it SHOULD have access to execute it.
 	sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
 	if sourceWorkflowOk {
-		//log.Printf("[DEBUG] Got source workflow %s", sourceWorkflow)
 		_ = sourceWorkflow
-
-		// Source workflow = parent
-		// This workflow = child
-
-		//if sourceWorkflow[0] != workflow.ID {
-		//	log.Printf("[DEBUG] Bad workflow in execution.")
-		//	return false, ""
-		//}
+		// Do more checks here? Does it matter?
 
 	} else {
 		if len(workflowExecution.Workflow.ID) > 0 {
@@ -23535,49 +23543,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		return false, ""
 	}
 
-	// 1. Parent workflow contains this workflow ID in the source trigger?
-	// 2. Parent workflow's owner is same org?
-	// 3. Parent execution auth is correct
-
-	sourceNode, sourceNodeOk := request.URL.Query()["source_node"]
-	if !sourceNodeOk {
-		// Use default startnode instead
-
-		/*
-			// This is finding the startnode of the parent workflow, not the actual startnode of the execution
-			sourceNode = []string{workflowExecution.Workflow.Start}
-			startFound := false
-			for _, action := range workflowExecution.Workflow.Actions {
-				if action.Id == workflowExecution.Workflow.Start {
-					startFound = true
-					break
-				}
-			}
-
-			if !startFound {
-		*/
-
-		log.Printf("[AUDIT] Couldn't find source node that started the execution")
-		return false, ""
-	}
-
-	// SHOULD be executed by a trigger in the parent.
-	for _, trigger := range workflowExecution.Workflow.Triggers {
-		if sourceNode[0] == trigger.ID {
-			return true, workflowExecution.ExecutionOrg
-		}
-	}
-
-	for _, action := range workflowExecution.Workflow.Actions {
-		if sourceNode[0] == action.ID {
-			return true, workflowExecution.ExecutionOrg
-		}
-	}
-	//}
-
-	log.Printf("[AUDIT] Bad auth for workflowexecution (bottom).")
-
-	return false, ""
+	return true, workflowExecution.ExecutionOrg
 }
 
 // Significantly slowed down everything. Just returning for now.
@@ -25874,7 +25840,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		authorization := request.URL.Query().Get("authorization")
 		executionId := request.URL.Query().Get("execution_id")
 		if len(authorization) == 0 || len(executionId) == 0 {
-			log.Printf("[AUDIT] Api authentication failed in run category action: %s", err)
+			log.Printf("[AUDIT] Api authentication failed in run category action: %s. Normal auth and Execution Auth not found. %#v & %#v", err, authorization, executionId)
+
+			log.Printf("QUERIES: %#v", request.URL.Query())
+			log.Printf("HEADERS: %#v", request.Header)
+
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Authentication failed. Sign up first."}`))
 			return
