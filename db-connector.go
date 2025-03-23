@@ -1305,7 +1305,10 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// FIXME: This right here has caused more problems during dev than anything
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
-		//log.Printf("[INFO] Not saving execution to DB (just cache), since we are running in swarm mode.")
+		if debug {
+			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in swarm mode.")
+		}
+
 		return nil
 	}
 
@@ -3476,9 +3479,11 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 	return orgs, nil
 }
 
-func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
+func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow, error) {
 	workflow := &Workflow{}
 	nameKey := "workflow"
+
+	startTime := time.Now()
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
@@ -3586,6 +3591,8 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 				return &Workflow{}, err
 			}
 		}
+
+		log.Printf("REQUEST DONE: %s", time.Since(startTime))
 	}
 
 	validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
@@ -3621,17 +3628,28 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 		}
 	}
 
+	log.Printf("Actions done: %s", time.Since(startTime))
+
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
 
-	healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
-	if err != nil {
-		if !strings.Contains(err.Error(), "Org ID not set") {
-			log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+	log.Printf("POS done: %s", time.Since(startTime))
+
+	if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
+
+		healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+		if err != nil {
+			if !strings.Contains(err.Error(), "Org ID not set") {
+				log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+			}
+		} else {
+			workflow = &healthWorkflow 
 		}
 	} else {
-		workflow = &healthWorkflow 
+		log.Printf("[DEBUG] Skipping healthcheck during exec.")
 	}
+
+	log.Printf("Health done: %s", time.Since(startTime))
 
 	if project.CacheDb && workflow.ID != "" {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
