@@ -3483,8 +3483,6 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 	workflow := &Workflow{}
 	nameKey := "workflow"
 
-	startTime := time.Now()
-
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -3525,14 +3523,16 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 					}
 				}
 
-				healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
-				if err != nil {
-					if !strings.Contains(err.Error(), "Org ID not set") {
-						log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
-					}
+				if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
+					healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+					if err != nil {
+						if !strings.Contains(err.Error(), "Org ID not set") {
+							log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+						}
 
-				} else {
-					workflow = &healthWorkflow
+					} else {
+						workflow = &healthWorkflow
+					}
 				}
 
 				return workflow, nil
@@ -3591,8 +3591,6 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				return &Workflow{}, err
 			}
 		}
-
-		log.Printf("REQUEST DONE: %s", time.Since(startTime))
 	}
 
 	validationData, err := GetCache(ctx, fmt.Sprintf("validation_workflow_%s", workflow.ID))
@@ -3628,12 +3626,8 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 		}
 	}
 
-	log.Printf("Actions done: %s", time.Since(startTime))
-
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
-
-	log.Printf("POS done: %s", time.Since(startTime))
 
 	if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
 
@@ -3646,10 +3640,8 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 			workflow = &healthWorkflow 
 		}
 	} else {
-		log.Printf("[DEBUG] Skipping healthcheck during exec.")
+		//log.Printf("[DEBUG] Skipping healthcheck during exec.")
 	}
-
-	log.Printf("Health done: %s", time.Since(startTime))
 
 	if project.CacheDb && workflow.ID != "" {
 		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)

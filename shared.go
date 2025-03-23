@@ -3894,7 +3894,7 @@ func HandleGetWorkflowRunCount(resp http.ResponseWriter, request *http.Request) 
 
 	// get workflow and verify that it belongs to user
 	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, fileId)
+	workflow, err := GetWorkflow(ctx, fileId, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflow %s while getting runcount: %s", fileId, err)
 		resp.WriteHeader(401)
@@ -4029,7 +4029,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 
-	workflow, err := GetWorkflow(ctx, fileId)
+	workflow, err := GetWorkflow(ctx, fileId, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions): %s", fileId, err)
 		resp.WriteHeader(401)
@@ -4180,7 +4180,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	checkExecOrg := false
-	workflow, err := GetWorkflow(ctx, fileId)
+	workflow, err := GetWorkflow(ctx, fileId, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting the workflow %s locally (get executions v2): %s", fileId, err)
 		checkExecOrg = true
