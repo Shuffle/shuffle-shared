@@ -18300,6 +18300,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		action.ID = uuid.NewV4().String()
 	}
 
+	if len(action.Name) == 0 {
+		return workflowExecution, errors.New("Action name can't be empty")
+	}
+
 	app := WorkflowApp{}
 	if strings.ToLower(appId) == "http" {
 		// Find the app and the ID for it
@@ -18397,6 +18401,26 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return workflowExecution, err
 		}
 
+		if len(action.AppName) == 0 {
+			action.AppName = newApp.Name
+		}
+
+		if len(action.AppVersion) == 0 {
+			action.AppVersion = newApp.AppVersion
+		}
+
+		if len(action.AppID) == 0 {
+			action.AppID = newApp.ID
+		}
+
+		if len(action.Label) == 0 {
+			action.Label = "Single action"
+		}
+
+		if len(action.Parameters) == 0 {
+			//action.Parameters = newApp.Parameters
+			log.Printf("[INFO] No parameters in single action. Does it matter?")
+		}
 		app = *newApp
 	}
 
@@ -25922,9 +25946,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if len(authorization) == 0 || len(executionId) == 0 {
 			log.Printf("[AUDIT] Api authentication failed in run category action: %s. Normal auth and Execution Auth not found. %#v & %#v", err, authorization, executionId)
 
-			log.Printf("QUERIES: %#v", request.URL.Query())
-			log.Printf("HEADERS: %#v", request.Header)
-
 			resp.WriteHeader(401)
 			resp.Write([]byte(`{"success": false, "reason": "Authentication failed. Sign up first."}`))
 			return
@@ -25937,16 +25958,20 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		exec, err := GetWorkflowExecution(ctx, executionId)
 		if err != nil {
 			log.Printf("[WARNING] Error with getting execution in run category action: %s", err)
-			resp.WriteHeader(401)
+			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "Failed to get execution"}`))
 			return
 		}
 
-		if exec.Status != "EXECUTING" {
-			log.Printf("[WARNING] Execution is not executing in run category action: %s", exec.Status)
-			resp.WriteHeader(403)
-			resp.Write([]byte(`{"success": false, "reason": "Execution is not executing. Can't modify."}`))
-			return
+		if !debug {
+			if exec.Status != "EXECUTING" {
+				log.Printf("[WARNING] Execution is not executing in run category action: %s", exec.Status)
+				resp.WriteHeader(403)
+				resp.Write([]byte(`{"success": false, "reason": "Execution is not executing. Can't modify."}`))
+				return
+			}
+		} else {
+			log.Printf("[DEBUG] Debug mode is on. Skipping status check in run category action")
 		}
 
 		// 4. Check if the user is the owner of the execution
@@ -25972,7 +25997,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Error with body read for category action: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed reading body of the request"}`))
 		return
 	}
@@ -25980,10 +26005,37 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	var value CategoryAction
 	err = json.Unmarshal(body, &value)
 	if err != nil {
-		log.Printf("[WARNING] Error with unmarshal tmpBody in category action: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshaling body of the request"}`))
-		return
+		log.Printf("[WARNING] Error with unmarshal input body in category action: %s", err)
+
+		if strings.Contains(fmt.Sprintf("%s", err), "CategoryAction.fields") {
+			var tmpValue CategoryActionFieldOverride
+			newerr := json.Unmarshal(body, &tmpValue)
+			if newerr != nil {
+				log.Printf("[WARNING] Error with unmarshal input body in category action (tmpValue): %s", newerr)
+			} else {
+				for key, val := range tmpValue.Fields {
+					if val != nil {
+						value.Fields = append(value.Fields, Valuereplace{
+							Key:   key,
+							Value: fmt.Sprintf("%v", val),
+						})
+					}
+				}
+			}
+
+			if len(value.Fields) > 0 {
+				err = nil
+			}
+		} 
+
+		if err != nil {
+			if debug {
+				log.Printf("[DEBUG] FAILING INPUT BODY:\n%s", string(body))
+			}
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed unmarshaling body of the request"}`))
+			return
+		}
 	}
 
 	if len(value.AppName) == 0 && len(value.App) > 0 {

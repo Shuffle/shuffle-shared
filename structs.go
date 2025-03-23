@@ -3743,6 +3743,10 @@ type SchemalessOutput struct {
 	RawResponse interface{} `json:"raw_response,omitempty"`
 }
 
+type CategoryActionFieldOverride struct {
+	Fields map[string]interface{} `json:"fields"`
+}
+
 type CategoryAction struct {
 	AppName string         `json:"app_name"`
 	Label   string         `json:"label"`
