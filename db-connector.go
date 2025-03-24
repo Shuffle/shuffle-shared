@@ -49,11 +49,9 @@ var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
-// var dbInterval = 0x19
+var dbInterval = 0x20
 // var dbInterval = 0x1
-var dbInterval = 500
-
-// var dbInterval = 0xA
+//var dbInterval = 500
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
 
@@ -6767,10 +6765,9 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 				newAppsList := make([]WorkflowApp, len(keyList))
 				err = project.Dbclient.GetMulti(ctx, keyList, newAppsList)
 				if err != nil {
-					log.Printf("[ERROR] Problem getting org apps for %s: %s. Apps: %d. NOT FATAL", org.Id, err, len(newAppsList))
+					//log.Printf("[ERROR] Problem getting org apps for %s: %s. Apps: %d. NOT FATAL", org.Id, err, len(newAppsList))
 				}
 
-				//log.Printf("[DEBUG] Returning %d apps", len(newAppsList))
 				appChannel <- newAppsList
 			}(keyList)
 
@@ -13687,6 +13684,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
 	log.Printf("[INFO][%s] Workflow Finished Check. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
 		invalidResults := 0

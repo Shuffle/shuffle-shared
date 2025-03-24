@@ -18282,6 +18282,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 
 // Body = The action body received from the user to test.
 func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool) (WorkflowExecution, error) {
+
 	workflowExecution := WorkflowExecution{}
 
 	var action Action
@@ -18424,6 +18425,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		app = *newApp
 	}
 
+
 	// FIXME: We need to inject missing empty auth here in some cases
 	// This is NOT a good solution, but a good bypass
 	if app.Authentication.Required {
@@ -18497,6 +18499,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 		}
 	}
+
 
 	if runValidationAction {
 		log.Printf("[INFO] Running validation action for %s for org %s (%s)", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
@@ -18612,11 +18615,15 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
-	err = SetWorkflowExecution(ctx, workflowExecution, true)
+	go SetWorkflowExecution(context.Background(), workflowExecution, true)
+
+	/*
+	err = SetWorkflowExecution(context.Background, workflowExecution, true)
 	if err != nil {
 		log.Printf("[WARNING] Failed handling single execution setup: %s", err)
 		return workflowExecution, err
 	}
+	*/
 
 	return workflowExecution, nil
 }
