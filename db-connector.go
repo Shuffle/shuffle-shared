@@ -1823,7 +1823,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	obj := bucket.Object(fullParsedPath)
 	fileReader, err := obj.NewReader(ctx)
 	if err != nil {
-		log.Printf("[ERROR] Failed reading file from bucket %s: %s. Will try with alternative solution.", bucketName, err)
+		log.Printf("[ERROR] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
 
 		if projectName != "shuffler" {
 			bucketName = fmt.Sprintf("%s.appspot.com", projectName)
@@ -1831,7 +1831,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 			obj = bucket.Object(fullParsedPath)
 			fileReader, err = obj.NewReader(ctx)
 			if err != nil {
-				log.Printf("[ERROR] Failed reading file again from bucket %s: %s", bucketName, err)
+				log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
 				return "", err
 			}
 		} else {

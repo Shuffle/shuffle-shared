@@ -18634,6 +18634,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		// Fill in missing actions and dedup
+		newResults := []ActionResult{}
 		for _, result := range oldExec.Results {
 			if result.Action.ID == action.ID {
 				continue
@@ -18643,18 +18644,22 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			for foundResultIndex, foundResult := range workflowExecution.Results {
 				if foundResult.Action.ID == result.Action.ID {
 					foundIndex = foundResultIndex 
+					newResults = append(newResults, foundResult)
 					break
 				}
 			}
 
-			if foundIndex < 0 {
-				workflowExecution.Results = append(workflowExecution.Results, result)
-			} else {
-				workflowExecution.Results[foundIndex] = result
+			if foundIndex == -1 {
+				newResults = append(newResults, result)
 			}
 		}
 
+		//log.Printf("\n\nRESULTS OLD: %d\n\n", len(workflowExecution.Results))
+		workflowExecution.Results = newResults
+		//log.Printf("\n\nRESULTS NEW: %d\n\n", len(newResults))
+
 		workflowExecution.WorkflowId = action.SourceWorkflow
+		workflowExecution.Workflow.ID = action.SourceWorkflow
 		workflow.ID = action.SourceWorkflow
 	}
 
