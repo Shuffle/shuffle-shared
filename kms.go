@@ -1487,6 +1487,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) WorkflowApp 
 			app.Actions[actionIndex].CategoryLabel = newLabels
 			if foundLabel {
 				log.Printf("[INFO] %s already has label '%s' in app %s (%s)", action.Name, label, app.Name, app.ID)
+				updatedIndex = actionIndex
 				break
 			}
 
