@@ -25652,6 +25652,9 @@ func GetExternalClient(baseUrl string) *http.Client {
 		noProxy = os.Getenv("NOPROXY")
 
 		os.Setenv("NO_PROXY", noProxy)
+	}
+
+	if len(noProxy) > 0 {
 		os.Setenv("no_proxy", noProxy)
 	}
 
