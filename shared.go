@@ -13151,7 +13151,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 				// Must be here to not override apps
 				go loadAppConfigFromMain(fileId)
-				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
+				log.Printf("[DEBUG] Redirecting App load request '%s' to main site handler (shuffler.io)", fileId)
 				RedirectUserRequest(resp, request)
 				return
 			}
@@ -13169,7 +13169,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			// go through shuffler.io and not subdomains
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-				log.Printf("[DEBUG] Redirecting App request to main site handler (shuffler.io)")
+				log.Printf("[DEBUG] Redirecting App load request '%s' to main site handler (shuffler.io) (2)", fileId)
 				RedirectUserRequest(resp, request)
 				return
 			}
@@ -18516,6 +18516,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		//}
 	}
 
+	
+
 	newParams := []WorkflowAppActionParameter{}
 
 	// Auth is handled in PrepareWorkflowExec, so this may not be needed
@@ -18597,6 +18599,50 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		log.Printf("[ERROR] Failed preparing single execution (%s): %s", workflowExecution.ExecutionId, err)
+	}
+
+	if len(action.SourceWorkflow) > 0 {
+		log.Printf("[DEBUG] Validating workflow existence: %s", action.SourceWorkflow)
+
+		if len(action.ID) == 0 {
+			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
+		}
+
+
+		if len(action.SourceExecution) == 0 {
+			return workflowExecution, errors.New("No source_execution provided")
+		}
+
+		workflow, err := GetWorkflow(ctx, action.SourceWorkflow, true)
+		if err != nil {
+			return workflowExecution, err
+		}
+
+		if workflow.OrgId != user.ActiveOrg.Id {
+			return workflowExecution, errors.New("Workflow doesn't belong to the same organization")
+		}
+
+		// Check if the execution exists
+		workflowExecution.WorkflowId = workflow.ID
+		oldExec, err := GetWorkflowExecution(ctx, action.SourceExecution)
+		if err != nil {
+			return workflowExecution, err
+		}
+
+		if oldExec.Workflow.ID != action.SourceWorkflow {
+			return workflowExecution, errors.New("Previous execution (source_execution) doesn't belong to the workflow. Please try again.")
+		}
+
+		for _, result := range oldExec.Results {
+			if result.Action.ID == action.ID {
+				continue
+			}
+
+			workflowExecution.Results = append(workflowExecution.Results, result)
+		}
+
+		workflowExecution.WorkflowId = action.SourceWorkflow
+		workflow.ID = action.SourceWorkflow
 	}
 
 	// Overwriting as auth may also do
