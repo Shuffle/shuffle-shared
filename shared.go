@@ -22113,9 +22113,31 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 		// Fix names of parameters
 		for paramIndex, param := range item.Parameters {
+			if param.Name == "headers" {
+				// Check if it's a JSON object
+				param.Value = strings.TrimSpace(param.Value)
+				if strings.HasPrefix(param.Value, "{") && strings.HasSuffix(param.Value, "}") {
+					// Try to map it with key:value
+					newheaders := ""
+					var headers map[string]string
+					err := json.Unmarshal([]byte(param.Value), &headers)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling headers: %s", err)
+					} else {
+						for key, value := range headers {
+							newheaders += fmt.Sprintf("%s: %s\n", key, value)
+						}
+					
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newheaders
+						continue
+					}
+
+				}
+			}
 
 			// Added after problem with api-secret -> apisecret
 			if strings.Contains(param.Description, "header") {
+
 				if strings.Contains(param.Value, "=undefined") {
 					newheaders := []string{}
 					for _, line := range strings.Split(param.Value, "\n") {
@@ -22127,6 +22149,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 					item.Parameters[paramIndex].Value = strings.Join(newheaders, "\n")
 				}
+
 				continue
 			}
 
