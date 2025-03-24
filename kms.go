@@ -1421,7 +1421,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	//systemMessage := fmt.Sprintf(`Find which action is most likely to be used based on the label '%s'. If any match, return their exact name and if none match, write "none" as the name. Return in the JSON format {"action": "action name"}`, label)
 	//userMessage := "The available actions are as follows:\n"
 
-	systemMessage := `Your goal is to find the correct action for a specific label if it exists. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, return {"success": false, "action": ""}. Output as only JSON."`
+	systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
 	userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 	for _, action := range app.Actions {
