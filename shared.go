@@ -26343,7 +26343,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp = app
 				log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 				//selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields, 0)
 				partialMatch = false
 
 				break
@@ -26353,7 +26353,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp = app
 
 				log.Printf("[WARNING] Set selected app to PARTIAL match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields, 0)
 
 				partialMatch = true
 			}
@@ -26379,7 +26379,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					failed = false
 
 					//log.Printf("[DEBUG] Got app %s with %d actions", selectedApp.Name, len(selectedApp.Actions))
-					selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true, value.Fields)
+					selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true, value.Fields, 0)
 				}
 			} else {
 				log.Printf("[DEBUG] Found app with ID or name '%s' in Algolia: %#v", value.AppName, foundApp)
@@ -26460,7 +26460,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		if value.Label != "app_authentication" && value.Label != "authenticate_app" && value.Label != "discover_app" {
 			resp.WriteHeader(500)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "app_id": "%s", "reason": "Failed finding action '%s' labeled in app '%s'. If this is wrong, please suggest a label by finding the app in Shuffle, OR contact support@shuffler.io and we can help with labeling."}`, selectedApp.ID, value.Label, strings.ReplaceAll(selectedApp.Name, "_", " "))))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "app_id": "%s", "reason": "Failed finding action '%s' labeled in app '%s'. If this is wrong, please suggest a label by finding the app in Shuffle (%s), OR contact support@shuffler.io and we can help with labeling."}`, selectedApp.ID, value.Label, strings.ReplaceAll(selectedApp.Name, "_", " "), fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
 			return
 		} else {
 			//log.Printf("[DEBUG] NOT sending back due to label %s", value.Label)
@@ -27169,6 +27169,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Parameters: selectedAction.Parameters,
 		}
 
+
+		log.Printf("[DEBUG] Our selectedAction name: %s", selectedAction.Name)
+
 		// JSON marshal and send it back in to /api/conversation with type "action"
 		marshalledBody, err := json.Marshal(newQueryInput)
 		if err != nil {
@@ -27279,11 +27282,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if value.SkipWorkflow {
 		//log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
-
 		if len(missingFields) > 0 {
-			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
+			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)	
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name)))
 			return
 		}
 
@@ -27436,13 +27438,41 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				URL:    httpOutput.Url,
 			}
 
-			for _, param := range secondAction.Parameters {
+			for paramIndex, param := range secondAction.Parameters {
 				if param.Name == "body" && len(param.Value) > 0 {
 					translatedBodyString := "x-translated-body-url"
 					if _, ok := resp.Header()[translatedBodyString]; ok {
 						resp.Header().Set(translatedBodyString, param.Value)
 					} else {
 						resp.Header().Add(translatedBodyString, param.Value)
+					}
+				}
+
+				if param.Name == "headers" {
+					log.Printf("[DEBUG] Found headers: %s", param.Value)
+					
+					headerStr := param.Value
+					if strings.HasPrefix(headerStr, "{") && strings.HasSuffix(headerStr, "}") {
+						headerStr = strings.TrimPrefix(headerStr, "{")
+						headerStr = strings.TrimSuffix(headerStr, "}")
+						pairs := strings.Split(headerStr, ",")
+						
+						var headerLines []string
+						for _, pair := range pairs {
+							kv := strings.SplitN(pair, ":", 2)
+							if len(kv) == 2 {
+								key := strings.TrimSpace(kv[0])
+								value := strings.TrimSpace(kv[1])
+							
+								key = strings.Trim(key, "\"'")
+								value = strings.Trim(value, "\"'")
+								
+								headerLines = append(headerLines, fmt.Sprintf("%s: %s", key, value))
+							}
+						}
+						secondAction.Parameters[paramIndex].Value = strings.Join(headerLines, "\n")
+					} else {
+						log.Printf("[DEBUG] Headers not in dict format, keeping as is")
 					}
 				}
 
@@ -27983,7 +28013,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(jsonParsed)
 }
 
-func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixLabels bool, fields []Valuereplace) (WorkflowAppAction, AppCategory, []string) {
+func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixLabels bool, fields []Valuereplace, count int) (WorkflowAppAction, AppCategory, []string) {
 	availableLabels := []string{}
 	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
@@ -28056,9 +28086,23 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 				keys = append(keys, field.Key)
 			}
 
+			log.Printf("[DEBUG] Calling AutofixAppLabels")
+
 			// Make it FORCE look for a specific label if it exists, otherwise
-			newApp := AutofixAppLabels(app, label, keys)
-			return GetActionFromLabel(ctx, newApp, label, false, fields)
+			newApp, guessedAction := AutofixAppLabels(app, label, keys)
+
+			log.Printf("[DEBUG] GuessedAction: %+v", guessedAction)
+
+			if guessedAction.Name != "" {
+				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
+				selectedAction = guessedAction
+			} else {
+				if (count > 5) {
+					log.Printf("[WARNING] Too many attempts to find action for label '%s' in app %s (%s)", label, newApp.Name, newApp.ID)
+				} else {
+					return GetActionFromLabel(ctx, newApp, label, false, fields, count+1)
+				}
+			}
 		}
 	}
 
