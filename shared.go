@@ -27123,6 +27123,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			Parameters: selectedAction.Parameters,
 		}
 
+
+		log.Printf("[DEBUG] Our selectedAction name: %s", selectedAction.Name)
+
 		// JSON marshal and send it back in to /api/conversation with type "action"
 		marshalledBody, err := json.Marshal(newQueryInput)
 		if err != nil {
@@ -27234,7 +27237,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if value.SkipWorkflow {
 		//log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
 		if len(missingFields) > 0 {
-			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
+			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)	
 			resp.WriteHeader(400)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name)))
 			return
@@ -28009,9 +28012,19 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 				keys = append(keys, field.Key)
 			}
 
+			log.Printf("[DEBUG] Calling AutofixAppLabels")
+
 			// Make it FORCE look for a specific label if it exists, otherwise
-			newApp := AutofixAppLabels(app, label, keys)
-			return GetActionFromLabel(ctx, newApp, label, false, fields)
+			newApp, guessedAction := AutofixAppLabels(app, label, keys)
+
+			log.Printf("[DEBUG] GuessedAction: %+v", guessedAction)
+
+			if guessedAction.Name != "" {
+				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
+				selectedAction = guessedAction
+			} else {
+				return GetActionFromLabel(ctx, newApp, label, false, fields)
+			}
 		}
 	}
 
