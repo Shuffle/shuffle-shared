@@ -987,6 +987,7 @@ type CacheKeyData struct {
 	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
 	Key           string `json:"key" datastore:"Key"`
 	Value         string `json:"value" datastore:"Value,noindex"`
+	Category	  string `json:"category" datastore:"category"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -2612,6 +2613,7 @@ type GithubAuthor struct {
 type GithubResp struct {
 	Name         string         `json:"name"`
 	Contributors []GithubAuthor `json:"contributors"`
+	PublishedDate int64          `json:"published_date"`
 	Edited       string         `json:"edited"`
 	ReadTime     int            `json:"read_time"`
 	Link         string         `json:"link"`
@@ -2693,8 +2695,9 @@ type Oauth2Resp struct {
 }
 
 type OpenidUserinfo struct {
-	Sub   string `json:"sub"`
-	Email string `json:"email"`
+	Sub   string   `json:"sub"`
+	Email string   `json:"email"`
+	Roles []string `json:"roles"`
 }
 
 type OpenidResp struct {
@@ -3582,20 +3585,21 @@ type UsecaseLinks []struct {
 }
 
 type IdTokenCheck struct {
-	Aud   string `json:"aud"`
-	Iss   string `json:"iss"`
-	Iat   int    `json:"iat"`
-	Nbf   int    `json:"nbf"`
-	Exp   int    `json:"exp"`
-	Aio   string `json:"aio"`
-	Nonce string `json:"nonce"`
-	Rh    string `json:"rh"`
-	Sub   string `json:"sub"`
-	Tid   string `json:"tid"`
-	Uti   string `json:"uti"`
-	Ver   string `json:"ver"`
-	Email string `json:"email"`
-	Org   Org    `json:"org"`
+	Aud   string   `json:"aud"`
+	Iss   string   `json:"iss"`
+	Iat   int      `json:"iat"`
+	Nbf   int      `json:"nbf"`
+	Exp   int      `json:"exp"`
+	Aio   string   `json:"aio"`
+	Nonce string   `json:"nonce"`
+	Rh    string   `json:"rh"`
+	Sub   string   `json:"sub"`
+	Tid   string   `json:"tid"`
+	Uti   string   `json:"uti"`
+	Ver   string   `json:"ver"`
+	Email string   `json:"email"`
+	Org   Org      `json:"org"`
+	Roles []string `json:"roles"`
 }
 
 type WidgetMeta struct {
@@ -3737,6 +3741,10 @@ type SchemalessOutput struct {
 
 	// Optional
 	RawResponse interface{} `json:"raw_response,omitempty"`
+}
+
+type CategoryActionFieldOverride struct {
+	Fields map[string]interface{} `json:"fields"`
 }
 
 type CategoryAction struct {
@@ -3971,12 +3979,20 @@ type AppHealth struct {
 type WorkflowHealth struct {
 	Create             bool   `json:"create"`
 	Run                bool   `json:"run"`
+	BackendVersion	   string `json:"backend_version"`
 	RunFinished        bool   `json:"run_finished"`
+	// NOTE: This does not represent the actual time execution took, it includes the time took to send an API request for the exeution + get back the results for every action.
+	ExecutionTook      float64 `json:"execution_took"`
 	RunStatus          string `json:"run_status"`
 	Delete             bool   `json:"delete"`
 	ExecutionId        string `json:"execution_id"`
 	WorkflowId         string `json:"workflow_id"`
 	WorkflowValidation bool   `json:"workflow_validation"`
+}
+
+type RegionChangeHistory struct {
+	OrgId   string `json:"org_id"`
+	LastAttempt int64  `json:"last_attempt"`
 }
 
 type LiveExecutionStatus struct {
@@ -3985,6 +4001,7 @@ type LiveExecutionStatus struct {
 	Executing int `json:"executing"`
 	Finished int `json:"finished"`
 	Aborted int `json:"aborted"`
+	NotificationCount int `json:"notification_count"`
 	
 	CreatedAt int64 `json:"created_at"`
 }

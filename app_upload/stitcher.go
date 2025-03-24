@@ -437,6 +437,32 @@ func deployFunction(appname, localization, applocation string, environmentVariab
 	if err != nil {
 		log.Println("[WARNING] Failed creating new function. Attempting patch, as it might exist already")
 
+		// Get the function
+		// Then replicate environment variables, maxinstance & memory 
+		getcall := projectsLocationsFunctionsService.Get(fmt.Sprintf("%s/functions/%s", location, appname))
+		existingFunction, err := getcall.Do()
+		if err != nil {
+			log.Printf("[WARNING] Failed getting existing function: %s", err)
+		} else {
+			// Timeout
+			if len(existingFunction.Timeout) > 0 {
+				cloudFunction.Timeout = existingFunction.Timeout
+			}
+
+			if len(existingFunction.EnvironmentVariables) > 1 {
+				cloudFunction.EnvironmentVariables = existingFunction.EnvironmentVariables
+			}
+
+			if existingFunction.MaxInstances > 0 {
+				cloudFunction.MaxInstances = existingFunction.MaxInstances
+			}
+
+			if existingFunction.AvailableMemoryMb > 0 {
+				cloudFunction.AvailableMemoryMb = existingFunction.AvailableMemoryMb
+			}
+		}
+
+
 		patchCall := projectsLocationsFunctionsService.Patch(fmt.Sprintf("%s/functions/%s", location, appname), cloudFunction)
 		_, err = patchCall.Do()
 		if err != nil {
@@ -866,8 +892,8 @@ func main() {
 		bucketName = os.Args[5]
 	}
 
-	appname := "email"
-	appversion := "1.3.0"
+	appname := "shuffle-tools"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)
