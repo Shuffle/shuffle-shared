@@ -25606,11 +25606,18 @@ func isNoProxyHost(noProxy, host string) bool {
 	// Normalize the host by removing the port if present
 	host, _, err := net.SplitHostPort(host)
 	if err != nil {
-		host = strings.TrimSpace(host) // Fallback to trimming
+		log.Printf("[ERROR] Failed to split host and port: %s", err)
 	}
 
+	host = strings.TrimSpace(host) // Fallback to trimming
+
 	for _, noProxyEntry := range strings.Split(noProxy, ",") {
-		noProxyEntry = strings.TrimSpace(noProxyEntry)
+		noProxyEntry , _, err := net.SplitHostPort(noProxyEntry)
+		if err != nil {
+			log.Printf("[ERROR] Failed to split host and port for NOPROXY: %s", err)
+		}
+
+		noProxyEntry= strings.TrimSpace(noProxyEntry)
 
 		// Handle wildcards or suffix matching
 		if strings.HasPrefix(noProxyEntry, ".") {
@@ -25643,6 +25650,12 @@ func GetExternalClient(baseUrl string) *http.Client {
 	noProxy := os.Getenv("NO_PROXY")
 	if len(os.Getenv("NOPROXY")) > 0 {
 		noProxy = os.Getenv("NOPROXY")
+
+		os.Setenv("NO_PROXY", noProxy)
+	}
+
+	if len(noProxy) > 0 {
+		os.Setenv("no_proxy", noProxy)
 	}
 
 	// Check if the IP in the baseUrl is a local one
@@ -25665,7 +25678,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 			}
 		}
 
-		// Manage noproxy
+		// Manage noproxy manually
 		if len(noProxy) > 0 {
 			isNoProxy := isNoProxyHost(noProxy, parsedUrl.Host)
 			if isNoProxy {
@@ -25733,7 +25746,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 	if (len(httpProxy) > 0 || len(httpsProxy) > 0) && (strings.ToLower(httpProxy) != "noproxy" || strings.ToLower(httpsProxy) != "noproxy") {
 
 		if len(httpProxy) > 0 && strings.ToLower(httpProxy) != "noproxy" {
-			log.Printf("[INFO] Running with HTTP proxy %s (env: HTTP_PROXY)", httpProxy)
+			log.Printf("[DEBUG] Running with HTTP proxy %s (env: HTTP_PROXY). URL: %s", httpProxy, baseUrl)
 
 			url_i := url.URL{}
 			url_proxy, err := url_i.Parse(httpProxy)
@@ -25743,7 +25756,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 		}
 
 		if len(httpsProxy) > 0 && strings.ToLower(httpsProxy) != "noproxy" {
-			log.Printf("[INFO] Running with HTTPS proxy %s (env: HTTPS_PROXY)", httpsProxy)
+			log.Printf("[DEBUG] Running with HTTPS proxy %s (env: HTTPS_PROXY). URL: %s", httpsProxy, baseUrl)
 
 			url_i := url.URL{}
 			url_proxy, err := url_i.Parse(httpsProxy)
