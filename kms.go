@@ -1284,7 +1284,7 @@ func FixContentOutput(contentOutput string) string {
 	return contentOutput
 }
 
-func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
+func AutofixAppLabels(app WorkflowApp, label string, keys []string) WorkflowApp {
 	if len(app.ID) == 0 || len(app.Name) == 0 {
 		log.Printf("[ERROR] No app ID or name found in AutofixAppLabels")
 		return app
@@ -1426,6 +1426,10 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 
 	for _, action := range app.Actions {
 		userMessage += fmt.Sprintf("%s\n", action.Name)	
+	}
+
+	if len(keys) > 0 {
+		userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
 	}
 
 	output, err := RunAiQuery(systemMessage, userMessage) 
