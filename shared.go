@@ -18633,12 +18633,25 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return workflowExecution, errors.New("Previous execution (source_execution) doesn't belong to the workflow. Please try again.")
 		}
 
+		// Fill in missing actions and dedup
 		for _, result := range oldExec.Results {
 			if result.Action.ID == action.ID {
 				continue
 			}
 
-			workflowExecution.Results = append(workflowExecution.Results, result)
+			foundIndex := -1
+			for foundResultIndex, foundResult := range workflowExecution.Results {
+				if foundResult.Action.ID == result.Action.ID {
+					foundIndex = foundResultIndex 
+					break
+				}
+			}
+
+			if foundIndex < 0 {
+				workflowExecution.Results = append(workflowExecution.Results, result)
+			} else {
+				workflowExecution.Results[foundIndex] = result
+			}
 		}
 
 		workflowExecution.WorkflowId = action.SourceWorkflow
@@ -21407,7 +21420,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 
 		if len(string(body)) < 75 && len(string(body)) > 1 {
-			log.Printf("[DEBUG][%s] Body: %s", workflowExecution.ExecutionId, string(body))
+			if debug {
+				log.Printf("[DEBUG][%s] Body: %s", workflowExecution.ExecutionId, string(body))
+			}
 		} else {
 			// Here for debug purposes
 			//log.Printf("[DEBUG][%s] Body len: %d", workflowExecution.ExecutionId, len(string(body)))
@@ -25015,6 +25030,14 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 
 	workflowExecution.Results = newResults
 	relevantActions := []Action{}
+
+	// For single action reruns
+	if len(workflowExecution.Workflow.Actions) == 1 && len(workflowExecution.Results) > 0 {
+		finished := ValidateFinished(ctx, extra, workflowExecution) 
+		if finished {
+			return workflowExecution, relevantActions
+		}
+	}
 
 	log.Printf("[INFO][%s] Inside Decide execution with %d / %d results (extra: %d). Status: %s", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions)+extra, extra, workflowExecution.Status)
 
