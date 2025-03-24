@@ -26297,7 +26297,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp = app
 				log.Printf("[DEBUG] Found app - checking label: %s vs %s (%s)", app.Name, value.AppName, app.ID)
 				//selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields, 0)
 				partialMatch = false
 
 				break
@@ -26307,7 +26307,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp = app
 
 				log.Printf("[WARNING] Set selected app to PARTIAL match %s (%s) for input %s", selectedApp.Name, selectedApp.ID, value.AppName)
-				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields)
+				selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, app, value.Label, true, value.Fields, 0)
 
 				partialMatch = true
 			}
@@ -26333,7 +26333,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					failed = false
 
 					//log.Printf("[DEBUG] Got app %s with %d actions", selectedApp.Name, len(selectedApp.Actions))
-					selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true, value.Fields)
+					selectedAction, selectedCategory, availableLabels = GetActionFromLabel(ctx, selectedApp, value.Label, true, value.Fields, 0)
 				}
 			} else {
 				log.Printf("[DEBUG] Found app with ID or name '%s' in Algolia: %#v", value.AppName, foundApp)
@@ -27939,7 +27939,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(jsonParsed)
 }
 
-func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixLabels bool, fields []Valuereplace) (WorkflowAppAction, AppCategory, []string) {
+func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixLabels bool, fields []Valuereplace, count int) (WorkflowAppAction, AppCategory, []string) {
 	availableLabels := []string{}
 	selectedCategory := AppCategory{}
 	selectedAction := WorkflowAppAction{}
@@ -28023,7 +28023,11 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
 				selectedAction = guessedAction
 			} else {
-				return GetActionFromLabel(ctx, newApp, label, false, fields)
+				if (count > 5) {
+					log.Printf("[WARNING] Too many attempts to find action for label '%s' in app %s (%s)", label, newApp.Name, newApp.ID)
+				} else {
+					return GetActionFromLabel(ctx, newApp, label, false, fields, count+1)
+				}
 			}
 		}
 	}
