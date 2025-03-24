@@ -27220,11 +27220,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if value.SkipWorkflow {
 		//log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
-
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v", missingFields)
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s"}`, value.Label, strings.Join(missingFields, ","))))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name)))
 			return
 		}
 
