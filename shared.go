@@ -180,6 +180,40 @@ func isLoop(arg string) bool {
 	return false
 }
 
+func constructSessionCookie(value string, expires time.Time) *http.Cookie {
+	c := http.Cookie{
+		Name:     "session_token",
+		Value:    value,
+		Expires:  expires,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   false,
+		Domain:   "",
+	}
+
+	if os.Getenv("SHUFFLE_COOKIE_SECURE") == "true" {
+		c.Secure = true
+	}
+
+	d := os.Getenv("SHUFFLE_COOKIE_DOMAIN")
+	if len(d) > 0 {
+		c.Domain = d
+	}
+
+	if project.Environment == "cloud" {
+		c.Domain = ".shuffler.io"
+		c.Secure = true
+	}
+
+	return &c
+}
+
+func constructSessionDeleteCookie() *http.Cookie {
+	c := constructSessionCookie("", time.Time{})
+	c.MaxAge = -1
+	return c
+}
+
 func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -421,18 +455,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] User session exists - resetting session")
 			expiration := time.Now().Add(3600 * time.Second)
 
-			newCookie := &http.Cookie{
-				Name:    "session_token",
-				Value:   user.Session,
-				Expires: expiration,
-				Path:    "/",
-			}
-
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-				newCookie.Secure = true
-				newCookie.HttpOnly = true
-			}
+			newCookie := constructSessionCookie(user.Session, expiration)
 
 			http.SetCookie(resp, newCookie)
 
@@ -483,18 +506,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
 			sessionToken := uuid.NewV4().String()
 			expiration := time.Now().Add(3600 * time.Second)
-			newCookie := &http.Cookie{
-				Name:    "session_token",
-				Value:   sessionToken,
-				Expires: expiration,
-				Path:    "/",
-			}
-
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-				newCookie.Secure = true
-				newCookie.HttpOnly = true
-			}
+			newCookie := constructSessionCookie(sessionToken, expiration)
 
 			// Does it not set both?
 			http.SetCookie(resp, newCookie)
@@ -1387,50 +1399,11 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	c, err := request.Cookie("session_token")
-	if err != nil {
-		c, err = request.Cookie("__session")
-	}
+	newCookie := constructSessionDeleteCookie()
+	http.SetCookie(resp, newCookie)
 
-	if err == nil {
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   c.Value,
-			Expires: time.Now().Add(-100 * time.Hour),
-			MaxAge:  -1,
-			Path:    "/",
-		}
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
-
-		http.SetCookie(resp, newCookie)
-
-		newCookie.Name = "__session"
-		http.SetCookie(resp, newCookie)
-
-	} else {
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   "",
-			Expires: time.Now().Add(-100 * time.Hour),
-			MaxAge:  -1,
-			Path:    "/",
-		}
-
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
-
-		http.SetCookie(resp, newCookie)
-
-		newCookie.Name = "__session"
-		http.SetCookie(resp, newCookie)
-	}
+	newCookie.Name = "__session"
+	http.SetCookie(resp, newCookie)
 
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.ActiveOrg.Id))
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", userInfo.Id))
@@ -1447,7 +1420,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if usererr != nil {
-		log.Printf("[WARNING] Api authentication failed in handleLogout: %s", err)
+		log.Printf("[WARNING] Api authentication failed in handleLogout: %s", usererr)
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": true, "reason": "Not logged in"}`))
 		return
@@ -1462,7 +1435,7 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 
 	userInfo.Session = ""
 	userInfo.ValidatedSessionOrgs = []string{}
-	err = SetUser(ctx, &userInfo, false)
+	err := SetUser(ctx, &userInfo, false)
 	if err != nil {
 		log.Printf("Failed updating user: %s", err)
 		resp.WriteHeader(401)
@@ -3525,19 +3498,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 	if err == nil {
 		sessionToken := c.Value
 
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   sessionToken,
-			Expires: time.Now().Add(-100 * time.Hour),
-			MaxAge:  -1,
-			Path:    "/",
-		}
-
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
+		newCookie := constructSessionDeleteCookie()
 
 		user, err := GetSessionNew(ctx, sessionToken)
 		if err != nil {
@@ -3578,20 +3539,7 @@ func HandleApiAuthentication(resp http.ResponseWriter, request *http.Request) (U
 		}
 
 		if len(user.Id) == 0 && len(user.Username) == 0 {
-
-			newCookie := &http.Cookie{
-				Name:    "session_token",
-				Value:   sessionToken,
-				Expires: time.Now().Add(-100 * time.Hour),
-				MaxAge:  -1,
-				Path:    "/",
-			}
-
-			if project.Environment == "cloud" {
-				newCookie.Domain = ".shuffler.io"
-				newCookie.Secure = true
-				newCookie.HttpOnly = true
-			}
+			newCookie := constructSessionDeleteCookie()
 
 			if resp != nil {
 				http.SetCookie(resp, newCookie)
@@ -6369,7 +6317,7 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 	return parentWorkflow
 }
 
-// Propagates a subflow in a multi-tenant workflow so that 
+// Propagates a subflow in a multi-tenant workflow so that
 // changes to the subflow also follow the same rules
 func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow, childTrigger Trigger) Trigger {
 	//log.Printf("\n\n Calling subflow propagation wrapper for %s (%s) to %s (%s)\n\n", parentWorkflow.Name, parentWorkflow.ID, childWorkflow.Name, childWorkflow.ID)
@@ -7033,7 +6981,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			childWorkflow.SuborgDistribution = []string{}
 		}
 
-
 		// log.Printf("\n\nSTART")
 		//log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
 		//log.Printf("[DEBUG] CHILD TRIGGERS START: %d", len(childWorkflow.Triggers))
@@ -7080,7 +7027,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						}
 					}
 
-
 					found = true
 					break
 				}
@@ -7112,14 +7058,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						}
 					}
 
-
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				childWorkflow.ExecutionVariables= append(childWorkflow.ExecutionVariables, parentVariable)
+				childWorkflow.ExecutionVariables = append(childWorkflow.ExecutionVariables, parentVariable)
 			}
 		}
 
@@ -7601,10 +7546,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					// Ensures params are in sync, at least with the size of them
 					if len(childTrigger.Parameters) != len(parentTrigger.Parameters) {
-						//log.Printf("[WARNING] Re-syncing parameters in child trigger with parent trigger %s", childTrigger.Name) 
+						//log.Printf("[WARNING] Re-syncing parameters in child trigger with parent trigger %s", childTrigger.Name)
 						childWorkflow.Triggers[childIndex].Parameters = parentTrigger.Parameters
 					}
-
 
 					relevantRevisionTrigger := Trigger{}
 					for _, parentRevisionTrigger := range lastParentRevision.Triggers {
@@ -7666,7 +7610,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							}
 						}
 					}
-
 
 					// FIXME:
 					// Make sure it changes things such as URL & references properly
@@ -8484,7 +8427,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.ID = uuid.NewV4().String()
 
 		// Get the workflow and check if we own it
-		skipRebuild := false 
+		skipRebuild := false
 		newWorkflow, err := GetWorkflow(ctx, workflow.ID)
 		if err == nil && newWorkflow.OrgId == user.ActiveOrg.Id {
 			skipRebuild = true
@@ -8494,7 +8437,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			workflow.ID = uuid.NewV4().String()
 		}
 
-		if !skipRebuild { 
+		if !skipRebuild {
 			workflow.Public = false
 			workflow.Owner = user.Id
 			workflow.ExecutingOrg = user.ActiveOrg
@@ -8612,7 +8555,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if len(newActions) > 1 {
 		workflow.Actions = newActions
 	}
-
 
 	auth, authOk := request.URL.Query()["set_auth"]
 	if authOk && len(auth) > 0 && auth[0] == "true" {
@@ -8775,7 +8717,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 	}
-
 
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
@@ -11311,19 +11252,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	expiration := time.Now().Add(3600 * time.Second)
 
-	newCookie := &http.Cookie{
-		Name:    "session_token",
-		Value:   user.Session,
-		Expires: expiration,
-		Path:    "/",
-	}
-
-	if project.Environment == "cloud" {
-		newCookie.Domain = ".shuffler.io"
-		newCookie.Secure = true
-		newCookie.HttpOnly = true
-	}
-
+	newCookie := constructSessionCookie(user.Session, expiration)
 	http.SetCookie(resp, newCookie)
 
 	newCookie.Name = "__session"
@@ -14012,19 +13941,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
 
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   userdata.Session,
-			Expires: expiration,
-			Path:    "/",
-		}
-
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
-
+		newCookie := constructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -14072,18 +13989,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		sessionToken := uuid.NewV4().String()
 		expiration := time.Now().Add(3600 * time.Second)
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   sessionToken,
-			Expires: expiration,
-			Path:    "/",
-		}
-
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
+		newCookie := constructSessionCookie(sessionToken, expiration)
 
 		// Does it not set both?
 		http.SetCookie(resp, newCookie)
@@ -20105,23 +20011,11 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
 
-					newCookie := http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
-					http.SetCookie(resp, &newCookie)
+					newCookie := constructSessionCookie(sessionToken, expiration)
+					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
-					http.SetCookie(resp, &newCookie)
+					http.SetCookie(resp, newCookie)
 
 					err = SetSession(ctx, user, sessionToken)
 					if err != nil {
@@ -20135,19 +20029,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
 					sessionToken := user.Session
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
+					newCookie := constructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20246,19 +20128,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
+					newCookie := constructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20276,19 +20146,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
 					sessionToken := user.Session
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
+					newCookie := constructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20422,19 +20280,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
 
-	newCookie := &http.Cookie{
-		Name:    "session_token",
-		Value:   sessionToken,
-		Expires: expiration,
-		Path:    "/",
-	}
-
-	if project.Environment == "cloud" {
-		newCookie.Domain = ".shuffler.io"
-		newCookie.Secure = true
-		newCookie.HttpOnly = true
-	}
-
+	newCookie := constructSessionCookie(sessionToken, expiration)
 	http.SetCookie(resp, newCookie)
 
 	newCookie.Name = "__session"
@@ -20744,19 +20590,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating (1)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
+					newCookie := constructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20779,19 +20613,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
 					sessionToken := user.Session
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
+					newCookie := constructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20896,19 +20718,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
+					newCookie := constructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20930,19 +20740,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
 					sessionToken := user.Session
-					newCookie := &http.Cookie{
-						Name:    "session_token",
-						Value:   sessionToken,
-						Expires: expiration,
-						Path:    "/",
-					}
-
-					if project.Environment == "cloud" {
-						newCookie.Domain = ".shuffler.io"
-						newCookie.Secure = true
-						newCookie.HttpOnly = true
-					}
-
+					newCookie := constructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21051,19 +20849,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	if len(newUser.Session) == 0 {
 		log.Printf("[INFO] User does NOT have session - creating - (3)")
 		sessionToken := uuid.NewV4().String()
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   sessionToken,
-			Expires: expiration,
-			Path:    "/",
-		}
-
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
-
+		newCookie := constructSessionCookie(sessionToken, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -21089,19 +20875,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		log.Printf("[INFO] user have session resetting session and cookies for user: %v - (3)", userName)
 		sessionToken := newUser.Session
-		newCookie := &http.Cookie{
-			Name:    "session_token",
-			Value:   sessionToken,
-			Expires: expiration,
-			Path:    "/",
-		}
-
-		if project.Environment == "cloud" {
-			newCookie.Domain = ".shuffler.io"
-			newCookie.Secure = true
-			newCookie.HttpOnly = true
-		}
-
+		newCookie := constructSessionCookie(sessionToken, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -22843,7 +22617,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					newParams = append(newParams, param)
 				}
 			} else {
-				// This may make the system miss fields. 
+				// This may make the system miss fields.
 				addedParamIndexes := []string{}
 				for _, param := range action.Parameters {
 
