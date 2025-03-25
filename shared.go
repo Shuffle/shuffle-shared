@@ -849,7 +849,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Checking if it's a special region. All user-specific requests should
-	/*
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
@@ -858,7 +857,6 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	*/
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
@@ -1075,10 +1073,9 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 
-	// Make sure to add all orgs that are childs if you have access
+	// Make sure to add all orgs that are childs IF you have access
 	org.ChildOrgs = []OrgMini{}
 
-	// FIXME: This goroutine doesn't work yet and gets stuck
 	wg := sync.WaitGroup{}
 	ch := make(chan OrgMini, len(user.Orgs))
 	for _, orgloop := range user.Orgs {
@@ -1087,7 +1084,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 		// Goroutine this
 		go func(orgId string) {
-			suborg, err := GetOrg(ctx, orgloop)
+			suborg, err := GetOrg(ctx, orgId)
 			if err != nil {
 				ch <- OrgMini{}
 				wg.Done()
@@ -11145,7 +11142,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[AUDIT] Api authentication failed in change org (local): %s", userErr)
 	}
 
-	/*
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
 		// Clean up the users' cache for different parts
@@ -11172,7 +11168,6 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	*/
 
 	if userErr != nil {
 		resp.WriteHeader(401)
@@ -11772,7 +11767,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
 
-	/*
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
@@ -11782,7 +11776,6 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	*/
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
