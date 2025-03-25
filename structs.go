@@ -837,16 +837,24 @@ type RegionBody struct {
 	OrgId     string `json:"org_id"`
 }
 
+type OrgBranding struct {
+	EnableChat  bool  `json:"enable_chat" datastore:"enable_chat"`
+	HomeUrl		string `json:"home_url" datastore:"home_url"`
+}
+
 // Used within a user
 type OrgMini struct {
 	Name       string     `json:"name" datastore:"name"`
 	Id         string     `json:"id" datastore:"id"`
 	Users      []UserMini `json:"users" datastore:"users"`
 	Role       string     `json:"role" datastore:"role"`
-	CreatorOrg string     `json:"creator_org" datastore:"creator_org"`
-	Image      string     `json:"image" datastore:"image,noindex"`
 	ChildOrgs  []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
 	RegionUrl  string     `json:"region_url" datastore:"region_url"`
+
+	// Branding related
+	Image      string     `json:"image" datastore:"image,noindex"`
+	CreatorOrg string     `json:"creator_org" datastore:"creator_org"`
+	Branding   OrgBranding   `json:"branding" datastore:"branding"`
 }
 
 type Priority struct {
@@ -874,7 +882,12 @@ type LeadInfo struct {
 
 	OldCustomer bool `json:"old_customer,omitempty" datastore:"old_customer"`
 	OldLead     bool `json:"old_lead,omitempty" datastore:"old_lead"`
+
 	TechPartner bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
+	IntegrationPartner bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
+	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
+	ServicePartner bool `json:"service_partner,omitempty" datastore:"service_partner"`
+
 	Creator     bool `json:"creator,omitempty" datastore:"creator"`
 }
 
@@ -905,7 +918,6 @@ type Org struct {
 	Invites           []string    `json:"invites" datastore:"invites"`
 	ChildOrgs         []OrgMini   `json:"child_orgs" datastore:"child_orgs"`
 	ManagerOrgs       []OrgMini   `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
-	CreatorOrg        string      `json:"creator_org" datastore:"creator_org"`
 	PartnerInfo       PartnerInfo `json:"partner_info" datastore:"partner_info"`
 	SSOConfig         SSOConfig   `json:"sso_config" datastore:"sso_config"`
 	SecurityFramework Categories  `json:"security_framework" datastore:"security_framework,noindex"`
@@ -926,6 +938,8 @@ type Org struct {
 	EulaSigned   bool    `json:"eula_signed" datastore:"eula_signed"`
 	EulaSignedBy string  `json:"eula_signed_by" datastore:"eula_signed_by"`
 	Billing      Billing `json:"Billing" datastore:"Billing"`
+	CreatorOrg        string      `json:"creator_org" datastore:"creator_org"`
+	Branding   OrgBranding   `json:"branding" datastore:"branding"`
 }
 
 type Billing struct {

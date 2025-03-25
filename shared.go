@@ -849,8 +849,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Checking if it's a special region. All user-specific requests should
-	// go through shuffler.io and not subdomains
-	// Commented out because of org distribution working?
+	/*
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
@@ -859,6 +858,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+	*/
 
 	var fileId string
 	location := strings.Split(request.URL.String(), "/")
@@ -1074,34 +1074,62 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+
 	// Make sure to add all orgs that are childs if you have access
 	org.ChildOrgs = []OrgMini{}
+
+	// FIXME: This goroutine doesn't work yet and gets stuck
+	wg := sync.WaitGroup{}
+	ch := make(chan OrgMini, len(user.Orgs))
 	for _, orgloop := range user.Orgs {
-		suborg, err := GetOrg(ctx, orgloop)
-		if err != nil {
-			continue
-		}
+		wg.Add(1)
+		channelItem := make(chan OrgMini)
 
-		// Check if current user is in that org
-		found := false
-		for _, userloop := range suborg.Users {
-			if userloop.Id == user.Id {
-				found = true
+		// Goroutine this
+		go func(orgId string) {
+			suborg, err := GetOrg(ctx, orgloop)
+			if err != nil {
+				ch <- OrgMini{}
+				wg.Done()
+
+				return 
 			}
-		}
 
-		if !found {
-			continue
-		}
+			// Check if current user is in that org
+			found := false
+			for _, userloop := range suborg.Users {
+				if userloop.Id == user.Id {
+					found = true
+				}
+			}
 
+			if !found {
+				ch <- OrgMini{}
+				wg.Done()
+
+				return 
+			}
+
+			if suborg.CreatorOrg == org.Id {
+				channelItem <- OrgMini{
+					Id:         suborg.Id,
+					Name:       suborg.Name,
+					CreatorOrg: suborg.CreatorOrg,
+					Image:      suborg.Image,
+					RegionUrl:  suborg.RegionUrl,
+				}
+			}
+
+			wg.Done()
+		}(orgloop)
+	}
+
+	wg.Wait()
+	close(ch)
+
+	for suborg := range ch {
 		if suborg.CreatorOrg == org.Id {
-			org.ChildOrgs = append(org.ChildOrgs, OrgMini{
-				Id:         suborg.Id,
-				Name:       suborg.Name,
-				CreatorOrg: suborg.CreatorOrg,
-				Image:      suborg.Image,
-				RegionUrl:  suborg.RegionUrl,
-			})
+			org.ChildOrgs = append(org.ChildOrgs, suborg)
 		}
 	}
 
@@ -1155,7 +1183,7 @@ func HandleGetSubOrgs(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting GET SUBORG request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
@@ -1355,7 +1383,6 @@ func HandleLogout(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[AUDIT] Logging out user %s (%s)", userInfo.Username, userInfo.Id)
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting LOGOUT request to main site handler (shuffler.io)")
@@ -8973,7 +9000,6 @@ func HandleApiGeneration(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting API GEN request to main site handler (shuffler.io)")
@@ -9082,7 +9108,6 @@ func HandleSettings(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Handle Settings request to main site handler (shuffler.io)")
@@ -9127,7 +9152,6 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Get Users request to main site handler (shuffler.io)")
@@ -9281,7 +9305,6 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting Password Change request to main site handler (shuffler.io)")
@@ -10242,7 +10265,6 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
-		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
@@ -11123,6 +11145,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[AUDIT] Api authentication failed in change org (local): %s", userErr)
 	}
 
+	/*
 	if project.Environment == "cloud" {
 		// Checking if it's a special region. All user-specific requests should
 		// Clean up the users' cache for different parts
@@ -11149,6 +11172,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+	*/
 
 	if userErr != nil {
 		resp.WriteHeader(401)
@@ -11747,6 +11771,8 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
+
+	/*
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
@@ -11756,6 +11782,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+	*/
 
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
@@ -12041,6 +12068,18 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 			if lead == "tech partner" {
 				newLeadinfo.TechPartner = true
+			}
+
+			if lead == "integration partner" {
+				newLeadinfo.IntegrationPartner = true
+			}
+
+			if lead == "distribution partner" {
+				newLeadinfo.DistributionPartner = true
+			}
+
+			if lead == "service partner" {
+				newLeadinfo.ServicePartner = true
 			}
 		}
 
@@ -29394,10 +29433,11 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
+
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting GET ORG request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting DELETE ORG request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
