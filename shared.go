@@ -22187,6 +22187,32 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
+			if param.Name == "queries" {
+				// Check if it's a JSON object
+				param.Value = strings.TrimSpace(param.Value)
+				if strings.HasPrefix(param.Value, "{") && strings.HasSuffix(param.Value, "}") {
+					// Try to map it with key:value
+					newqueries := ""
+					var queries map[string]string
+					err := json.Unmarshal([]byte(param.Value), &queries)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling queries: %s", err)
+					} else {
+						for key, value := range queries {
+							newqueries += fmt.Sprintf("%s=%s&", key, value)
+						}
+						
+						// Remove trailing & if exists
+						if len(newqueries) > 0 {
+							newqueries = newqueries[:len(newqueries)-1]
+						}
+						
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newqueries
+						continue
+					}
+				}
+			}
+
 			// Added after problem with api-secret -> apisecret
 			if strings.Contains(param.Description, "header") {
 
@@ -27325,7 +27351,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		newSecondAction := Action{}
 		err = json.Unmarshal(responseBody, &newSecondAction)
 		if err != nil {
-			log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
+			log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s %+v", err, string(responseBody))
 			resp.WriteHeader(500)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed parsing app response. Contact support if this persists."}`)))
 			return
@@ -28013,7 +28039,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	workflowExecution := WorkflowExecution{}
 	err = json.Unmarshal(executionBody, &workflowExecution)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
+		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s %+v", err, string(executionBody))
 	}
 
 	if len(workflowExecution.ExecutionId) == 0 {
@@ -28146,8 +28172,6 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 
 			// Make it FORCE look for a specific label if it exists, otherwise
 			newApp, guessedAction := AutofixAppLabels(app, label, keys)
-
-			log.Printf("[DEBUG] GuessedAction: %+v", guessedAction)
 
 			if guessedAction.Name != "" {
 				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
