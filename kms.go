@@ -677,7 +677,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	}
 
 	//systemMessage := fmt.Sprintf("Return all fields from the last paragraph in the same JSON format they came in. Must be valid JSON as an output.")
-	systemMessage := fmt.Sprintf("Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output.")
+	systemMessage := fmt.Sprintf("Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments.")
 
 	//inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same with modified values.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 

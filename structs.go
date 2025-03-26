@@ -4083,6 +4083,8 @@ type StructuredCategoryAction struct {
 
 	Result string `json:"result,omitempty"`
 
+	ApiDebuggerUrl string `json:"api_debugger_url,omitempty"`
+
 	AvailableLabels []string `json:"available_labels,omitempty"`
 	ThreadId        string   `json:"thread_id,omitempty"`
 	RunId           string   `json:"run_id,omitempty"`

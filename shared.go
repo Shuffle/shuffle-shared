@@ -26775,7 +26775,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				Apps: []WorkflowApp{
 					selectedApp,
 				},
-
+				ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 				AvailableLabels: availableLabels,
 			}
 
@@ -26840,6 +26840,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp,
 			},
 			AvailableLabels: availableLabels,
+			ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 		}
 
 		// marshalled
@@ -27336,7 +27337,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)	
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s", "api_debugger_url": "%s}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name, fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
 			return
 		}
 
@@ -27489,41 +27490,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				URL:    httpOutput.Url,
 			}
 
-			for paramIndex, param := range secondAction.Parameters {
+			for _, param := range secondAction.Parameters {
 				if param.Name == "body" && len(param.Value) > 0 {
 					translatedBodyString := "x-translated-body-url"
 					if _, ok := resp.Header()[translatedBodyString]; ok {
 						resp.Header().Set(translatedBodyString, param.Value)
 					} else {
 						resp.Header().Add(translatedBodyString, param.Value)
-					}
-				}
-
-				if param.Name == "headers" {
-					log.Printf("[DEBUG] Found headers: %s", param.Value)
-					
-					headerStr := param.Value
-					if strings.HasPrefix(headerStr, "{") && strings.HasSuffix(headerStr, "}") {
-						headerStr = strings.TrimPrefix(headerStr, "{")
-						headerStr = strings.TrimSuffix(headerStr, "}")
-						pairs := strings.Split(headerStr, ",")
-						
-						var headerLines []string
-						for _, pair := range pairs {
-							kv := strings.SplitN(pair, ":", 2)
-							if len(kv) == 2 {
-								key := strings.TrimSpace(kv[0])
-								value := strings.TrimSpace(kv[1])
-							
-								key = strings.Trim(key, "\"'")
-								value = strings.Trim(value, "\"'")
-								
-								headerLines = append(headerLines, fmt.Sprintf("%s: %s", key, value))
-							}
-						}
-						secondAction.Parameters[paramIndex].Value = strings.Join(headerLines, "\n")
-					} else {
-						log.Printf("[DEBUG] Headers not in dict format, keeping as is")
 					}
 				}
 
@@ -28028,7 +28001,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		Action:      "done",
 		Category:    discoveredCategory,
 		Reason:      "Analyze Result for details",
-
+		ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 		Result: returnBody.Result,
 	}
 
