@@ -279,7 +279,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		return nil
 	}
 
-	log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
+	//log.Printf("[DEBUG] Sending notification to workflow with id: %#v", workflowId)
 
 
 	cachedNotifications := NotificationCached{}
@@ -311,8 +311,6 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 		cacheData = []byte(cache.([]uint8))
 	}
 
-	//log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s", len(cacheData), notification.Id, workflowId)
-	//log.Printf("[DEBUG] Using cacheKey: %s for notification bucketing for notification id: %s", cacheKey, notification.Id)
 
 	bucketingMinutes := os.Getenv("SHUFFLE_NOTIFICATION_BUCKETING_MINUTES")
 	if len(bucketingMinutes) == 0 {
@@ -375,11 +373,11 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 			}
 
 			// check cachedNotifications.cachedNotifications 
-			log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
-				cachedNotifications.Amount,
-				cachedNotifications.NotificationId,
-				workflowId,
-			)
+			//log.Printf("[DEBUG] Found %d cached notifications for %s workflow %s",
+			//	cachedNotifications.Amount,
+			//	cachedNotifications.NotificationId,
+			//	workflowId,
+			//)
 
 			cachedNotifications.Amount += 1
 			cachedNotifications.LastUpdated = int64(time.Now().Unix())
@@ -408,8 +406,7 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 
 			// Literally only starts on the 2nd, not otherwise
 			if cachedNotifications.Amount == 2 {
-				log.Printf("[DEBUG] Starting timer for %d minutes for relieving notificaions through %s notification", bucketingTime, notification.Id)
-					
+				//log.Printf("[DEBUG] Starting timer for %d minutes for relieving notificaions through %s notification", bucketingTime, notification.Id)
 				timeAfter := time.Duration(bucketingTime) * time.Minute
 				time.AfterFunc(timeAfter, func() {
 					// Read from cache again
@@ -651,7 +648,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		project.Environment = "worker" 
 	}
 
-	log.Printf("[DEBUG] Creating org notification! %s. Env: %s", orgId, project.Environment)
+	//log.Printf("[DEBUG] Creating org notification! %s. Env: %s", orgId, project.Environment)
 
 	// Check if the referenceUrl is already in cache or not
 	if len(referenceUrl) > 0 {
@@ -686,7 +683,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return nil
 	}
 
-	log.Printf("[DEBUG] Creating notification for org '%s'", orgId)
+	//log.Printf("[DEBUG] Creating notification for org '%s'", orgId)
 	notifications, err := GetOrgNotifications(ctx, orgId)
 	if err != nil {
 		log.Printf("\n\n\n[ERROR] Failed getting org notifications for %s: %s", orgId, err)
@@ -735,7 +732,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 	authOrg := org
 	if org.Defaults.NotificationWorkflow == "parent" && org.CreatorOrg != "" {
-		log.Printf("[DEBUG] Sending notification to parent org %s' notification workflow", org.CreatorOrg)
+		//log.Printf("[DEBUG] Sending notification to parent org %s' notification workflow", org.CreatorOrg)
 
 		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
@@ -755,7 +752,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			foundUser, err := GetUser(ctx, user.Id)
 			if err == nil {
 				if foundUser.ActiveOrg.Id == orgId {
-					log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
+					//log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
 					selectedApikey = foundUser.ApiKey
 				}
 			}
@@ -808,12 +805,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		if mainNotification.Ignored { 
 			log.Printf("[INFO] Ignored notification %s for %s", mainNotification.Title, mainNotification.UserId)
 		} else {
-			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
-			if err != nil {
-				if !strings.Contains(err.Error(), "cache stored") && !strings.Contains(err.Error(), "Same workflow") {
-					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+			go func() {
+				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
+				if err != nil {
+					if !strings.Contains(err.Error(), "cache stored") && !strings.Contains(err.Error(), "Same workflow") {
+						log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s (2): %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+					}
 				}
-			}
+			}()
 		}
 
 		return nil
@@ -910,10 +909,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 				}
 			}
 
-			err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
-			if err != nil {
-				log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
-			}
+			go func() {
+				err = sendToNotificationWorkflow(ctx, mainNotification, selectedApikey, org.Defaults.NotificationWorkflow, false, *authOrg)
+				if err != nil {
+					log.Printf("[ERROR] Failed sending notification to workflowId %s for reference %s: %s", org.Defaults.NotificationWorkflow, mainNotification.Id, err)
+				}
+			}()
 		}
 	}
 

@@ -3721,7 +3721,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\nshufflepy==0.0.7\nshuffle-sdk==0.0.13\n"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\nshufflepy==0.0.91\nshuffle-sdk==0.0.24\n"
 }
 
 // Removes JSON values from the input
@@ -3872,7 +3872,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		downloadedImages = append(downloadedImages, imageName)
 	}
 
-	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image", baseUrl, strings.Replace(imageName, " ", "-", -1))
+	dockerImgUrl := fmt.Sprintf("%s/api/v1/get_docker_image?image=%s", baseUrl, strings.Replace(imageName, " ", "-", -1))
 
 	isCloudDownload := false
 	if strings.Contains(baseUrl, "ngrok") || strings.Contains(baseUrl, "shuffler.io") || strings.Contains(baseUrl, ".run.app") {
@@ -3885,7 +3885,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 
 	// Set request timeout to 5 min (max)
-	topClient.Timeout = time.Minute * 5
+	topClient.Timeout = time.Minute * 10
 	arch := runtime.GOARCH
 	if strings.Contains(strings.ToLower(arch), "arm") {
 		if strings.Contains(dockerImgUrl, "?") {
@@ -3911,7 +3911,13 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		bytes.NewBuffer(marshalledBody),
 	)
 
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request for %s: %s", imageName, err)
+		return err
+	}
+
 	if isCloudDownload {
+		log.Printf("[DEBUG] Running GET request for cloud download for URL %s", dockerImgUrl)
 		req.Method = "GET"
 		req.Body = nil
 	}
@@ -3943,6 +3949,8 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		return err
 	}
 
+	log.Printf("[DEBUG] Redirected download URL: %s", newresp.Request.URL.String())
+
 	defer newresp.Body.Close()
 	if newresp.StatusCode != 200 {
 		log.Printf("[ERROR] Docker download for image %s (backend) StatusCode (1): %d", imageName, newresp.StatusCode)
@@ -3964,26 +3972,26 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		log.Printf("[WARNING] Failed response body copying: %s", err)
 		return err
 	}
-	tar.Seek(0, 0)
 
+	tar.Seek(0, 0)
 	dockercli, err := docker.NewEnvClient()
 	if err != nil {
 		log.Printf("[ERROR] Unable to create docker client (3): %s", err)
 		return err
 	}
 
+	log.Printf("[DEBUG] Starting to load zip file for image %s", imageName)
 	defer dockercli.Close()
-
 	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
 	if err != nil {
-		log.Printf("[ERROR] Error loading images: %s", err)
+		log.Printf("[ERROR] Failed loading docker images: %s", err)
 		return err
 	}
 
 	defer imageLoadResponse.Body.Close()
 	body, err := ioutil.ReadAll(imageLoadResponse.Body)
 	if err != nil {
-		log.Printf("[ERROR] Error reading: %s", err)
+		log.Printf("[ERROR] Failed reading docker image: %s", err)
 		return err
 	}
 

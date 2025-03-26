@@ -501,6 +501,23 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	return nil
 }
 
+func checkQueueForHealthRun(ctx context.Context, orgId string) error{
+
+	executionRequests, err := GetWorkflowQueue(ctx, orgId, 50)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get org (%s) workflow queue: %s", orgId,err)
+		return err
+	}
+
+	// Check if it is greater than a threshold why loop?
+	if len(executionRequests.Data) > 40 {
+		log.Printf("[INFO] Queue is clogged skipping the health check for now")
+		return errors.New("clogged queue, too many executions")
+	}
+
+	return nil
+}
+
 func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -637,6 +654,41 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		}
 	} else {
 		// FIXME: Add a check for if it's been <interval> length at least between runs. This is 15 minutes by default.
+		err := checkQueueForHealthRun(ctx, orgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed running health check (4): %s", err)
+
+			var HealthCheck HealthCheckDB
+			HealthCheck.Success = false
+			HealthCheck.Updated = time.Now().Unix()
+			HealthCheck.Workflows = WorkflowHealth{}
+
+			err = SetPlatformHealth(ctx, HealthCheck)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting platform health in database: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed setting platform health in database."}`))
+				return
+			}
+
+			platformData, err := json.Marshal(platformHealth)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling platform health data: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed JSON parsing platform health. Contact support@shuffler.io"}`))
+				return
+			}
+
+			if project.CacheDb {
+				err = SetCache(ctx, cacheKey, platformData, 15)
+				if err != nil {
+					log.Printf("[WARNING] Failed setting cache ops health at last: %s", err)
+				}
+			}
+
+			resp.WriteHeader(500)
+			resp.Write(platformData)
+		}
 	}
 
 	if project.Environment == "onprem" && userInfo.Role != "admin" {
@@ -758,6 +810,20 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 func GetLiveExecutionStats(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in handleInfo: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Api authentication failed!"}`))
+		return 
+	}
+
+	if !user.SupportAccess {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Only users with support access can view live execution stats!"}`))
 		return
 	}
 
@@ -2461,7 +2527,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 			if len(triggerType) == 0 {
 				//log.Printf("[WARNING] No TriggerType specified for User Input node %s in %s (%s)", trigger.Label, workflow.Name, workflow.ID)
-				workflow.Errors = append(workflow.Errors, fmt.Sprintf("No TriggerType specified for User Input node '%s'", trigger.Label))
+				workflow.Errors = append(workflow.Errors, fmt.Sprintf("No TriggerType specified for User Input action %s", strings.ReplaceAll(trigger.Label, " ", "_")))
 				if workflow.PreviouslySaved {
 					//resp.WriteHeader(401)
 					//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No contact option specified in user input"}`)))
@@ -2633,7 +2699,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			}
 
 			if !authFound {
-				log.Printf("[WARNING] App auth %s used in workflow %s doesn't exist. Setting error", action.AuthenticationId, workflow.ID)
+				//log.Printf("[WARNING] App auth %s used in workflow %s doesn't exist. Setting error", action.AuthenticationId, workflow.ID)
 
 				errorMsg := fmt.Sprintf("Authentication for action %s in app '%s' doesn't exist!", strings.ReplaceAll(action.Label, " ", "_"), strings.ToLower(strings.ReplaceAll(action.AppName, "_", " ")))
 				if !ArrayContains(workflow.Errors, errorMsg) {
@@ -2964,6 +3030,12 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 	for _, trigger := range workflow.Triggers {
 		if trigger.Status != "running" && trigger.TriggerType != "SUBFLOW" && trigger.TriggerType != "USERINPUT" {
+
+			// Schedules = parent controlled 
+			if trigger.TriggerType == "SCHEDULE" && workflow.ParentWorkflowId != "" {
+				continue
+			}
+
 			errorInfo := fmt.Sprintf("Trigger %s needs to be started", trigger.Name)
 			if !ArrayContains(workflow.Errors, errorInfo) {
 				workflow.Errors = append(workflow.Errors, errorInfo)

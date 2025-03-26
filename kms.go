@@ -677,7 +677,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	}
 
 	//systemMessage := fmt.Sprintf("Return all fields from the last paragraph in the same JSON format they came in. Must be valid JSON as an output.")
-	systemMessage := fmt.Sprintf("Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output.")
+	systemMessage := fmt.Sprintf("Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments.")
 
 	//inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same with modified values.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 
@@ -1284,15 +1284,15 @@ func FixContentOutput(contentOutput string) string {
 	return contentOutput
 }
 
-func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
+func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
 	if len(app.ID) == 0 || len(app.Name) == 0 {
 		log.Printf("[ERROR] No app ID or name found in AutofixAppLabels")
-		return app
+		return app, WorkflowAppAction{}
 	}
 
 	if len(app.Actions) == 0 {
 		log.Printf("[ERROR] No actions found in AutofixAppLabels for app %s (%s)", app.Name, app.ID)
-		return app
+		return app, WorkflowAppAction{}
 	}
 
 	// FIXME: This should NOT be necessary. 
@@ -1300,7 +1300,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 	// Maybe if category is not defined as well
 	if len(label) == 0 {
 		log.Printf("[ERROR] No label found in AutofixAppLabels for app %s (%s)", app.Name, app.ID)
-		return app
+		return app, WorkflowAppAction{}
 	}
 
 	// Fix the label to be as it is in category (uppercase + spaces)
@@ -1372,7 +1372,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 			log.Printf("[DEBUG] Autocomplete output for category '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
 			if err != nil {
 				log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for category with app %s (%s): %s", app.Name, app.ID, err)
-				return app
+				return app, WorkflowAppAction{}
 			} 
 
 			type ActionStruct struct {
@@ -1388,7 +1388,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 
 			if len(actionStruct.Category) == 0 {
 				log.Printf("[ERROR] No category found for app %s (%s) based on label %s (1)", app.Name, app.ID, label)
-				return app
+				return app, WorkflowAppAction{}
 			}
 
 			app.Categories = append(app.Categories, actionStruct.Category)
@@ -1412,7 +1412,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 	if len(foundCategory.ActionLabels) == 0 { 
 
 		log.Printf("[ERROR] No category found for app %s (%s) based on label %s", app.Name, app.ID, label)
-		return app
+		return app, WorkflowAppAction{}
 	}
 
 	// FIXME: Run AI here to check based on the label which action may be matching
@@ -1421,17 +1421,21 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 	//systemMessage := fmt.Sprintf(`Find which action is most likely to be used based on the label '%s'. If any match, return their exact name and if none match, write "none" as the name. Return in the JSON format {"action": "action name"}`, label)
 	//userMessage := "The available actions are as follows:\n"
 
-	systemMessage := `Your goal is to find the correct action for a specific label if it exists. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, return {"success": false, "action": ""}. Output as only JSON."`
+	systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
 	userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 	for _, action := range app.Actions {
 		userMessage += fmt.Sprintf("%s\n", action.Name)	
 	}
 
+	if len(keys) > 0 {
+		userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
+	}
+
 	output, err := RunAiQuery(systemMessage, userMessage) 
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
-		return app
+		return app, WorkflowAppAction{}
 	} 
 
 	type ActionStruct struct {
@@ -1448,6 +1452,8 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 		log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
 	}
 
+	var guessedAction WorkflowAppAction
+
 	if len(actionStruct.Action) == 0 {
 		log.Printf("[ERROR] From LLM auto-label: No action found for app %s (%s) based on label %s (1). Output: %s", app.Name, app.ID, label, string(output))
 		//return app
@@ -1463,6 +1469,8 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 			if searchName != newname {
 				continue
 			}
+
+			guessedAction = action
 
 			log.Printf("[INFO] Found action %s in app %s based on label %s", action.Name, app.Name, label)
 
@@ -1507,7 +1515,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 		openapiApp, err := GetOpenApiDatastore(context.Background(), app.ID)
 		if err != nil {
 			log.Printf("[ERROR] Failed to get openapi datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
-			return app 
+			return app, WorkflowAppAction{}
 		} 
 
 		swaggerLoader := openapi3.NewSwaggerLoader()
@@ -1515,7 +1523,7 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 		openapi, err := swaggerLoader.LoadSwaggerFromData([]byte(openapiApp.Body))
 		if err != nil {
 			log.Printf("[ERROR] Failed to unmarshal openapi in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
-			return app
+			return app, WorkflowAppAction{}
 		}
 
 
@@ -1581,5 +1589,5 @@ func AutofixAppLabels(app WorkflowApp, label string) WorkflowApp {
 		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (2). GPT error most likely. Output: %s", app.Name, app.ID, label, output)
 	}
 
-	return app
+	return app, guessedAction
 }

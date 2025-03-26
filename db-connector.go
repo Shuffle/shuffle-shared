@@ -49,11 +49,9 @@ var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
-// var dbInterval = 0x19
+var dbInterval = 0x20
 // var dbInterval = 0x1
-var dbInterval = 500
-
-// var dbInterval = 0xA
+//var dbInterval = 500
 
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
 
@@ -1254,7 +1252,6 @@ func SetWorkflowAppDatastore(ctx context.Context, workflowapp WorkflowApp, id st
 }
 
 func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecution, dbSave bool) error {
-
 	nameKey := "workflowexecution"
 	if len(workflowExecution.ExecutionId) == 0 {
 		log.Printf("[ERROR] Workflowexecution executionId can't be empty.")
@@ -1277,11 +1274,11 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// Fixes missing pieces
 	workflowExecution, newDbSave := Fixexecution(ctx, workflowExecution)
+
 	workflowExecution = cleanupExecutionNodes(ctx, workflowExecution)
 	if newDbSave {
 		dbSave = true
 	}
-
 
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, workflowExecution.ExecutionId)
 	executionData, err := json.Marshal(workflowExecution)
@@ -1306,12 +1303,16 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// FIXME: This right here has caused more problems during dev than anything
 	if (os.Getenv("SHUFFLE_SWARM_CONFIG") == "run" || project.Environment == "worker") && !strings.Contains(strings.ToLower(hostname), "backend") {
-		//log.Printf("[INFO] Not saving execution to DB (just cache), since we are running in swarm mode.")
+		if debug {
+			log.Printf("[DEBUG] Not saving execution to DB (just cache), since we are running in swarm mode.")
+		}
+
 		return nil
 	}
 
 	// This may get data from cache, hence we need to continuously set things in the database. Mainly as a precaution.
 	newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
+
 	HandleExecutionCacheIncrement(ctx, *newexec)
 	if !dbSave && err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
 		log.Printf("[INFO][%s] Already finished (set workflow) with status %s! Stopping the rest of the request for execution.", workflowExecution.ExecutionId, newexec.Status)
@@ -1822,7 +1823,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 	obj := bucket.Object(fullParsedPath)
 	fileReader, err := obj.NewReader(ctx)
 	if err != nil {
-		log.Printf("[ERROR] Failed reading file from bucket %s: %s. Will try with alternative solution.", bucketName, err)
+		log.Printf("[ERROR] Failed reading file '%s' from bucket %s: %s. Will try with alternative solution.", fullParsedPath, bucketName, err)
 
 		if projectName != "shuffler" {
 			bucketName = fmt.Sprintf("%s.appspot.com", projectName)
@@ -1830,7 +1831,7 @@ func getExecutionFileValue(ctx context.Context, workflowExecution WorkflowExecut
 			obj = bucket.Object(fullParsedPath)
 			fileReader, err = obj.NewReader(ctx)
 			if err != nil {
-				log.Printf("[ERROR] Failed reading file again from bucket %s: %s", bucketName, err)
+				log.Printf("[ERROR] Failed reading file '%s' again from bucket %s: %s", fullParsedPath, bucketName, err)
 				return "", err
 			}
 		} else {
@@ -1965,16 +1966,17 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 		if found {
 			// Handles execution vars
-			if len(action.ExecutionVariable.Name) > 0 {
+			result.Action = action
+			if setExecutionVariable(result) {
 
 				// Check if key in lastexecVar
-				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
+				if _, ok := lastexecVar[result.Action.ExecutionVariable.Name]; ok {
 
-					if lastexecVar[action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
-						lastexecVar[action.ExecutionVariable.Name] = result
+					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+						lastexecVar[result.Action.ExecutionVariable.Name] = result
 					}
 				} else {
-					lastexecVar[action.ExecutionVariable.Name] = result
+					lastexecVar[result.Action.ExecutionVariable.Name] = result
 				}
 			}
 
@@ -1994,17 +1996,17 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		err = json.Unmarshal(cacheData, &result)
 		if err == nil {
 			workflowExecution.Results = append(workflowExecution.Results, result)
-
-			if len(action.ExecutionVariable.Name) > 0 {
+			result.Action = action
+			if setExecutionVariable(result) {
 
 				// Check if key in lastexecVar
-				if _, ok := lastexecVar[action.ExecutionVariable.Name]; ok {
+				if _, ok := lastexecVar[result.Action.ExecutionVariable.Name]; ok {
 
-					if lastexecVar[action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
-						lastexecVar[action.ExecutionVariable.Name] = result
+					if lastexecVar[result.Action.ExecutionVariable.Name].CompletedAt > result.CompletedAt {
+						lastexecVar[result.Action.ExecutionVariable.Name] = result
 					}
 				} else {
-					lastexecVar[action.ExecutionVariable.Name] = result
+					lastexecVar[result.Action.ExecutionVariable.Name] = result
 				}
 			}
 
@@ -2130,12 +2132,20 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 	for varKey, variable := range workflowExecution.Workflow.ExecutionVariables {
 		for key, value := range lastexecVar {
-			if key == variable.Name {
-				workflowExecution.Workflow.ExecutionVariables[varKey].Value = value.Result
-				break
+			if key != variable.Name {
+				continue
 			}
+
+			if workflowExecution.Workflow.ExecutionVariables[varKey].Value != value.Result {
+				//log.Printf("\n\n\n[DEBUG][%s] Updating execution variable '%s' from len %d to %d (%s)\n\n", workflowExecution.ExecutionId, variable.Name, len(workflowExecution.Workflow.ExecutionVariables[varKey].Value), len(value.Result), value.Action.Label)
+			}
+
+			workflowExecution.Workflow.ExecutionVariables[varKey].Value = value.Result
+			break
 		}
 	}
+
+	workflowExecution.ExecutionVariables = workflowExecution.Workflow.ExecutionVariables
 
 	// Check for failures before setting to finished
 	// Update execution parent
@@ -3467,7 +3477,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 	return orgs, nil
 }
 
-func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
+func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow, error) {
 	workflow := &Workflow{}
 	nameKey := "workflow"
 
@@ -3511,14 +3521,16 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 					}
 				}
 
-				healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
-				if err != nil {
-					if !strings.Contains(err.Error(), "Org ID not set") {
-						log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
-					}
+				if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
+					healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+					if err != nil {
+						if !strings.Contains(err.Error(), "Org ID not set") {
+							log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+						}
 
-				} else {
-					workflow = &healthWorkflow
+					} else {
+						workflow = &healthWorkflow
+					}
 				}
 
 				return workflow, nil
@@ -3615,13 +3627,18 @@ func GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
 	newWorkflow := FixWorkflowPosition(ctx, *workflow)
 	workflow = &newWorkflow
 
-	healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
-	if err != nil {
-		if !strings.Contains(err.Error(), "Org ID not set") {
-			log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+	if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
+
+		healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+		if err != nil {
+			if !strings.Contains(err.Error(), "Org ID not set") {
+				log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
+			}
+		} else {
+			workflow = &healthWorkflow 
 		}
 	} else {
-		workflow = &healthWorkflow 
+		//log.Printf("[DEBUG] Skipping healthcheck during exec.")
 	}
 
 	if project.CacheDb && workflow.ID != "" {
@@ -4331,7 +4348,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
-				log.Printf("[ERROR] Error in org loading (2) for %s: %s", key, err)
+				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
 				return &Org{}, err
 			}
 		}
@@ -6460,7 +6477,10 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	if len(user.PrivateApps) > 0 && orgErr == nil {
-		//log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
+		if debug {
+			log.Printf("[INFO] Migrating %d apps for user %s to org %s if they don't exist", len(user.PrivateApps), user.Username, user.ActiveOrg.Id)
+		}
+
 		orgChanged := false
 		for _, app := range user.PrivateApps {
 			if !ArrayContains(org.ActiveApps, app.ID) {
@@ -6690,10 +6710,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 	}
 
-	//log.Printf("All apps: %d", len(allApps))
-	//allApps = append(allApps, publicApps...)
-	//log.Printf("All apps: %d", len(allApps))
-
 	if orgErr == nil {
 		for _, publicApp := range publicApps {
 			if ArrayContains(org.ActiveApps, publicApp.ID) {
@@ -6728,38 +6744,35 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 			}
 		}
 
-		var newApps = make([]WorkflowApp, len(allKeys))
-		err = project.Dbclient.GetMulti(ctx, allKeys, newApps)
-		if err != nil {
-			//log.Printf("[ERROR] Failed getting org apps: %s. Apps: %d. NOT FATAL", err, len(newApps))
+		keyLists := [][]*datastore.Key{}
+		// Split into 10 each
+		for i := 0; i < len(allKeys); i += 5 {
+			end := i + 5 
+			if end > len(allKeys) {
+				end = len(allKeys)
+			}
+
+			keyLists = append(keyLists, allKeys[i:end])
 		}
 
-		//log.Printf("[DEBUG] Got %d apps from dbclient multi", len(newApps))
+		// Goroutine each list, then put them back together
+		newApps := []WorkflowApp{}
+		allChannels := []chan []WorkflowApp{}
+		for _, keyList := range keyLists {
+			appChannel := make(chan []WorkflowApp)
 
-		// IF the app doesn't have actions, check OpenAPI
-		// 1. Get the app directly
-		// 2. Parse OpenAPI for it to get the actions
-		for appIndex, app := range newApps {
-			if len(app.Actions) == 0 && len(app.Name) > 0 {
-				//log.Printf("[WARNING] %s has %d actions (%s). Getting directly.", app.Name, len(app.Actions), app.ID)
-
-				newApp, err := GetApp(ctx, app.ID, user, true)
+			go func(keyList []*datastore.Key) {
+				newAppsList := make([]WorkflowApp, len(keyList))
+				err = project.Dbclient.GetMulti(ctx, keyList, newAppsList)
 				if err != nil {
-					log.Printf("[WARNING] Failed to find app while parsing app %s: %s", app.Name, err)
-					continue
-				} else {
-					// Check if they should have access?
-					newApps[appIndex] = *newApp
+					//log.Printf("[ERROR] Problem getting org apps for %s: %s. Apps: %d. NOT FATAL", org.Id, err, len(newAppsList))
 				}
 
-			}
+				appChannel <- newAppsList
+			}(keyList)
+
+			allChannels = append(allChannels, appChannel)
 		}
-
-		// Authentication system to ensure the user actually has access to all the apps it says it wants
-
-		// FIXME: Enable this and fix suborg <-> parentorg access
-		// Problem: If you're in a suborg, you can't access parentorg apps and vice versa
-		// This stage doesn't have org information either, so it needs to be grabbed first.
 
 		parentOrg := &Org{}
 		if len(org.ManagerOrgs) > 0 {
@@ -6771,6 +6784,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 
 		if len(parentOrg.Id) == 0 && len(org.ChildOrgs) > 0 {
 			parentOrg = org
+		}
+
+		// Waiting until here, as org loading could take a bit too
+		for _, appChannel := range allChannels {
+			newApps = append(newApps, <-appChannel...)
 		}
 
 		notAppendedApps := []string{}
@@ -7500,9 +7518,8 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 	env = strings.ReplaceAll(env, " ", "-")
 	nameKey := fmt.Sprintf("workflowqueue-%s", env)
 
-	if project.Environment == "cloud" {
-		//log.Printf("[DEBUG] Adding execution to queue: %s", nameKey)
-	}
+	// Onprem indexing: workflowqueue-%s -> workflowqueue-environmentname
+	// Cloud: workflowqueue-%s-%s -> workflowqueue-environmentname-orgid
 
 	// New struct, to not add body, author etc
 	if project.DbType == "opensearch" {
@@ -7518,6 +7535,8 @@ func SetWorkflowQueue(ctx context.Context, executionRequest ExecutionRequest, en
 			return err
 		}
 	} else {
+		//log.Printf("[DEBUG] Adding execution to queue: %s", nameKey)
+
 		key := datastore.NameKey(nameKey, executionRequest.ExecutionId, nil)
 		if _, err := project.Dbclient.Put(ctx, key, &executionRequest); err != nil {
 			log.Printf("[WARNING] Error adding workflow queue: %s", err)
@@ -8131,6 +8150,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 				},
 			},
 		}
+
 		if err := json.NewEncoder(&buf).Encode(query); err != nil {
 			log.Printf("[WARNING] Error encoding find user query: %s", err)
 			return workflows, err
@@ -8184,7 +8204,7 @@ func ListChildWorkflows(ctx context.Context, originalId string) ([]Workflow, err
 		}
 
 		for _, hit := range wrapped.Hits.Hits {
-			if hit.Source.ID != originalId {
+			if hit.Source.ParentWorkflowId != originalId {
 				continue
 			}
 
@@ -11474,7 +11494,7 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 				innerWorkflow := WorkflowExecution{}
 				_, err := it.Next(&innerWorkflow)
 				if cnt > maxAmount {
-					log.Printf("[ERROR] Error getting workflow execution (3): reached maximum retries")
+					log.Printf("[ERROR] Error getting workflow executions (3): reached maximum retries")
 					break
 				}
 
@@ -11483,6 +11503,8 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 						log.Printf("[WARNING] Error getting workflow executions (1): %s", err)
 						cnt += 1
 						breakOuter = true
+						break
+
 					} else {
 						if strings.Contains(err.Error(), `cannot load field`) {
 							// Bug with moving types
@@ -11601,6 +11623,8 @@ func GetAllWorkflowExecutionsV2(ctx context.Context, workflowId string, amount i
 			}
 		}
 	}
+
+	//log.Printf("[DEBUG] FOund %d executions for search %s", len(executions), workflowId)
 
 	// Find difference between what's in the list and what is in cache
 	//log.Printf("\n\n[DEBUG] Checking local cache for executions. Got %d executions\n\n", len(executions))
@@ -12174,6 +12198,53 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 	}
 
 	return orgs, nil
+}
+
+func GetOrgMoveCache(ctx context.Context, orgId string) (RegionChangeHistory, error) {
+	nameKey := "org_move_cache_" + orgId
+	var err error
+	var attempt RegionChangeHistory
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, nameKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &attempt)
+			if err == nil {
+				return attempt, nil
+			}
+		} else {
+			log.Printf("[DEBUG] Failed getting cache for org: %s", err)
+		}
+	}
+
+	return attempt, err
+}
+
+func SetOrgMoveCache(ctx context.Context, orgId string) error {
+	nameKey := "org_move_cache_" + orgId
+	timeNow := int64(time.Now().Unix())
+
+	attempt := RegionChangeHistory{
+		OrgId: orgId,
+		LastAttempt:  timeNow,
+	}
+	
+	if project.CacheDb {
+		attemptByte, err := json.Marshal(attempt)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in setorgmovecache: %s", err)
+			return nil
+		}
+
+		err = SetCache(ctx, nameKey, attemptByte, 1440*15)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting org move cache for %s: %s", orgId, err)
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Index = Username
@@ -12756,11 +12827,11 @@ func GetEsConfig(defaultCreds bool) *opensearch.Client {
 
 		log.Printf("[INFO] Added certificate %s elastic client.", certificateLocation)
 	}
-	config.Transport = transport
 
+	config.Transport = transport
 	es, err := opensearch.NewClient(config)
 	if err != nil {
-		log.Fatalf("[DEBUG] Database client for ELASTICSEARCH error during init (fatal): %s", err)
+		log.Fatalf("[ERROR] Database client for ELASTICSEARCH error during init (fatal): %s", err)
 	}
 
 	return es
@@ -13615,6 +13686,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
 	log.Printf("[INFO][%s] Workflow Finished Check. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
 		invalidResults := 0
@@ -14447,7 +14519,33 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 	}
 
 	if project.Environment != "cloud" {
-		return errors.New("Can only delete indexes from cloud")
+		// Send the Delete By Query request
+		query := `{"query": {"match_all": {}}}`
+		res, err := project.Es.DeleteByQuery(
+			[]string{index},                              // Index name
+			bytes.NewReader([]byte(query)),         // Query body
+			project.Es.DeleteByQuery.WithContext(ctx),
+			project.Es.DeleteByQuery.WithPretty(), // Pretty print response
+		)
+
+		if err != nil {
+			log.Printf("[WARNING] Error in DELETE: %s", err)
+			return err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			responseData, err := ioutil.ReadAll(res.Body)
+			if err != nil {
+				log.Printf("[WARNING] Error reading response data: %s", err)
+				return err
+			}
+
+			log.Printf("[WARNING] Couldn't delete index %s:%s. Status: %d", index, query, res.StatusCode)
+			return errors.New(fmt.Sprintf("Couldn't delete index %s:%s. Status: %d. Raw: %s", index, query, res.StatusCode, string(responseData)))
+		}
+
+		return nil
 	}
 
 	log.Printf("[WARNING] Deleting index %s entirely. This is normal behavior for workflowqueues", index)

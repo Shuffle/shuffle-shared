@@ -482,7 +482,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	successful := totalValue != 0
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "key": "%s", "total": %d, "available_keys": %s, "entries": %s}`, successful, statsKey, totalValue, string(availableStats), string(marshalledEntries))))
+	resp.Write([]byte(fmt.Sprintf(`{"success": %v, "key": "%s", "total": %d, "available_keys": %s, "entries": %s}`, successful, strings.ReplaceAll(statsKey, "\"", ""), totalValue, string(availableStats), string(marshalledEntries))))
 }
 
 func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
