@@ -22189,6 +22189,32 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
+			if param.Name == "queries" {
+				// Check if it's a JSON object
+				param.Value = strings.TrimSpace(param.Value)
+				if strings.HasPrefix(param.Value, "{") && strings.HasSuffix(param.Value, "}") {
+					// Try to map it with key:value
+					newqueries := ""
+					var queries map[string]string
+					err := json.Unmarshal([]byte(param.Value), &queries)
+					if err != nil {
+						log.Printf("[ERROR] Failed unmarshalling queries: %s", err)
+					} else {
+						for key, value := range queries {
+							newqueries += fmt.Sprintf("%s=%s&", key, value)
+						}
+						
+						// Remove trailing & if exists
+						if len(newqueries) > 0 {
+							newqueries = newqueries[:len(newqueries)-1]
+						}
+						
+						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newqueries
+						continue
+					}
+				}
+			}
+
 			// Added after problem with api-secret -> apisecret
 			if strings.Contains(param.Description, "header") {
 
@@ -26809,7 +26835,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				Apps: []WorkflowApp{
 					selectedApp,
 				},
-
+				ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 				AvailableLabels: availableLabels,
 			}
 
@@ -26874,6 +26900,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp,
 			},
 			AvailableLabels: availableLabels,
+			ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 		}
 
 		// marshalled
@@ -27326,7 +27353,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		newSecondAction := Action{}
 		err = json.Unmarshal(responseBody, &newSecondAction)
 		if err != nil {
-			log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
+			log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s %+v", err, string(responseBody))
 			resp.WriteHeader(500)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed parsing app response. Contact support if this persists."}`)))
 			return
@@ -27370,7 +27397,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)	
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name)))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s", "api_debugger_url": "%s}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name, fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
 			return
 		}
 
@@ -27523,41 +27550,13 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				URL:    httpOutput.Url,
 			}
 
-			for paramIndex, param := range secondAction.Parameters {
+			for _, param := range secondAction.Parameters {
 				if param.Name == "body" && len(param.Value) > 0 {
 					translatedBodyString := "x-translated-body-url"
 					if _, ok := resp.Header()[translatedBodyString]; ok {
 						resp.Header().Set(translatedBodyString, param.Value)
 					} else {
 						resp.Header().Add(translatedBodyString, param.Value)
-					}
-				}
-
-				if param.Name == "headers" {
-					log.Printf("[DEBUG] Found headers: %s", param.Value)
-					
-					headerStr := param.Value
-					if strings.HasPrefix(headerStr, "{") && strings.HasSuffix(headerStr, "}") {
-						headerStr = strings.TrimPrefix(headerStr, "{")
-						headerStr = strings.TrimSuffix(headerStr, "}")
-						pairs := strings.Split(headerStr, ",")
-						
-						var headerLines []string
-						for _, pair := range pairs {
-							kv := strings.SplitN(pair, ":", 2)
-							if len(kv) == 2 {
-								key := strings.TrimSpace(kv[0])
-								value := strings.TrimSpace(kv[1])
-							
-								key = strings.Trim(key, "\"'")
-								value = strings.Trim(value, "\"'")
-								
-								headerLines = append(headerLines, fmt.Sprintf("%s: %s", key, value))
-							}
-						}
-						secondAction.Parameters[paramIndex].Value = strings.Join(headerLines, "\n")
-					} else {
-						log.Printf("[DEBUG] Headers not in dict format, keeping as is")
 					}
 				}
 
@@ -28042,7 +28041,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	workflowExecution := WorkflowExecution{}
 	err = json.Unmarshal(executionBody, &workflowExecution)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s", err)
+		log.Printf("[WARNING] Failed unmarshalling body for execute generated workflow: %s %+v", err, string(executionBody))
 	}
 
 	if len(workflowExecution.ExecutionId) == 0 {
@@ -28062,7 +28061,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		Action:      "done",
 		Category:    discoveredCategory,
 		Reason:      "Analyze Result for details",
-
+		ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 		Result: returnBody.Result,
 	}
 
@@ -28175,8 +28174,6 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 
 			// Make it FORCE look for a specific label if it exists, otherwise
 			newApp, guessedAction := AutofixAppLabels(app, label, keys)
-
-			log.Printf("[DEBUG] GuessedAction: %+v", guessedAction)
 
 			if guessedAction.Name != "" {
 				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
