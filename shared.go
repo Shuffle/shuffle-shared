@@ -15466,10 +15466,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				true,
 			)
 
+			workflowExecution.NotificationsCreated++
 			if err != nil {
-				log.Printf("[WARNING] Failed making org notification: %s", err)
-			} else {
-				workflowExecution.NotificationsCreated++
+				log.Printf("[ERROR] Failed making org notification (1): %s", err)
 			}
 		}
 	}
@@ -15504,11 +15503,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				true,
 			)
 
+			workflowExecution.NotificationsCreated++
 			if err == nil {
 				notificationSent = true
-				workflowExecution.NotificationsCreated++
 			} else {
-				log.Printf("[WARNING] Failed making org notification: %s", err)
+				log.Printf("[ERROR] Failed making org notification (2): %s", err)
 			}
 		}
 	}
@@ -15546,10 +15545,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					true,
 				)
 
+				workflowExecution.NotificationsCreated++
 				if err != nil {
-					log.Printf("[WARNING] Failed making org notification: %s", err)
-				} else {
-					workflowExecution.NotificationsCreated++
+					log.Printf("[ERROR] Failed making org notification (3): %s", err)
 				}
 			}
 		}
@@ -15934,10 +15932,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					true,
 				)
 
+				workflowExecution.NotificationsCreated++
 				if err != nil {
-					log.Printf("[WARNING] Failed making org notification for %s: %s", workflowExecution.ExecutionOrg, err)
-				} else {
-					workflowExecution.NotificationsCreated++
+					log.Printf("[ERROR] Failed making org notification for %s (4): %s", workflowExecution.ExecutionOrg, err)
 				}
 			}
 		} else {
