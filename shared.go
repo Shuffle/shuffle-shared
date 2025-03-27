@@ -5364,6 +5364,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		oldRole := foundUser.Role
 		if len(t.Role) > 0 {
 			orgUpdater = false
 
@@ -5408,10 +5409,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		log.Printf("[INFO] Updated user '%s' from '%s' to '%s' in org %s.", foundUser.Username, foundUser.Role, t.Role, userInfo.ActiveOrg.Id)
-		resp.WriteHeader(200)
-		resp.Write([]byte(`{"success": true}`))
-		return
+		if len(t.Role) > 0 {
+			log.Printf("[INFO] Updated user '%s' from '%s' to '%s' in org %s.", foundUser.Username, oldRole, t.Role, userInfo.ActiveOrg.Id)
+
+			resp.WriteHeader(200)
+			resp.Write([]byte(`{"success": true}`))
+			return
+		}
 	}
 
 	if len(t.Username) > 0 && project.Environment != "cloud" {
@@ -5629,7 +5633,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		// After done, check if ANY of the users' orgs are suborgs of active parent org. If they are, remove.
 		// Update: This piece runs anyway, in case the job is to REMOVE any suborg
 		//if len(addedOrgs) > 0 {
-		log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
+		//log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
 
 		// Removed for now due to multi-org chain deleting you from other org chains
 		newUserOrgs := []string{}
@@ -5670,7 +5674,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			//if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
 			if !ArrayContains(parsedOrgs, suborg) {
 				if ArrayContains(t.Suborgs, suborg) {
-					log.Printf("[DEBUG] Reappending org %s", suborg)
+					//log.Printf("[DEBUG] Reappending org %s", suborg)
 					newUserOrgs = append(newUserOrgs, suborg)
 				} else {
 					log.Printf("[DEBUG] Skipping org %s", suborg)
@@ -5699,7 +5703,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 		foundUser.Orgs = append(newUserOrgs, addedOrgs...)
 
-		log.Printf("[DEBUG] New orgs for %s (%s) is %s", foundUser.Username, foundUser.Id, foundUser.Orgs)
+		log.Printf("[DEBUG] New orgs for %s (%s) is len(%d)", foundUser.Username, foundUser.Id, len(foundUser.Orgs))
 	}
 
 	err = SetUser(ctx, foundUser, orgUpdater)
