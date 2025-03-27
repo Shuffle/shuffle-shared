@@ -8348,7 +8348,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if fileId != workflow.ID {
 		log.Printf("[WARNING] Path and request ID are not matching in workflow save: %s != %s.", fileId, workflow.ID)
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
+		//resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
+		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching. Export and re-import this workflow for use in your region."}`))
 		return
 	}
 
@@ -9662,7 +9663,7 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if len(fileId) != 36 {
 		log.Printf("\n\n[WARNING] Workflow ID when duplicating workflow is not valid: %s. URL: %s", fileId, request.URL.String())
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when duplicating workflow is not valid"}`))
 		return
 	}
 
@@ -9891,7 +9892,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(fileId) != 36 {
-		log.Printf("\n\n[WARNING] Workflow ID when getting workflow is not valid: %s. URL: %s", fileId, request.URL.String())
+		log.Printf("[WARNING] Workflow ID when getting workflow is not valid: %s. URL: %s", fileId, request.URL.String())
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
 		return
@@ -9900,6 +9901,15 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
+		if project.Environment == "cloud" {
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting NOT FOUND workflow request for %s to main site handler (shuffler.io)", fileId)
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
+
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
@@ -9971,7 +9981,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s (get workflow)", user.Username, workflow.ID)
 
 			isOwner = true
 
@@ -10047,6 +10057,14 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[ERROR] Workflow has no name or ID, hence may not exist. Reference ID (maybe from Algolia?: %s)", fileId)
 
 		// FIXME: Cloud + redirects? Can we find copies of workflows to redirect to?
+		if project.Environment == "cloud" {
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting NOT FOUND workflow request for %s to main site handler (shuffler.io) (2)", fileId)
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
 
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found"}`))
