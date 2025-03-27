@@ -1076,11 +1076,11 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 	// Make sure to add all orgs that are childs IF you have access
 	org.ChildOrgs = []OrgMini{}
 
+
 	wg := sync.WaitGroup{}
 	ch := make(chan OrgMini, len(user.Orgs))
 	for _, orgloop := range user.Orgs {
 		wg.Add(1)
-		channelItem := make(chan OrgMini)
 
 		// Goroutine this
 		go func(orgId string) {
@@ -1108,13 +1108,15 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			if suborg.CreatorOrg == org.Id {
-				channelItem <- OrgMini{
+				ch <- OrgMini{
 					Id:         suborg.Id,
 					Name:       suborg.Name,
 					CreatorOrg: suborg.CreatorOrg,
 					Image:      suborg.Image,
 					RegionUrl:  suborg.RegionUrl,
 				}
+			} else {
+				ch <- OrgMini{}
 			}
 
 			wg.Done()
