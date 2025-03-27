@@ -591,7 +591,6 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 }
 
 func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputBody, appname, inputdata string) (Action, string, error) {
-
 	// FIX: Make it find shuffle internal docs as well for how an app works
 	// Make it work with Shuffle tools, as now it's explicitly trying to fix fields for HTTP apps
 
@@ -647,6 +646,8 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		inputBody += fmt.Sprintf("\"%s\": \"%s\",\n", param.Name, param.Value)
 	}
 
+	// log.Printf("[Critical] InputBody generated here: %s", inputBody)
+
 	// Remove comma at the end
 	invalidFields := map[string]string{}
 	invalidFieldsString := "The following are previous attempts at changing the field which failed. They are invalid fields that need to be fixed.\n"
@@ -677,7 +678,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	}
 
 	//systemMessage := fmt.Sprintf("Return all fields from the last paragraph in the same JSON format they came in. Must be valid JSON as an output.")
-	systemMessage := fmt.Sprintf("Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments.")
+	systemMessage := fmt.Sprintf("Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments. Anything starting with $ is a variable and should be replaced with the correct value (Example if $helpful_function.parameter.value is present ANYWHERE in YOUR output -> This HAS to be replaced with the correct value provided by the user IF it exists at all, then make sure that you replace all values starting with $ with the correct output, else don't do anything about this).")
 
 	//inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same with modified values.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 
@@ -727,7 +728,6 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	contentOutput = FixContentOutput(contentOutput)
 
 	log.Printf("[INFO] Autocorrect output: %s", contentOutput)
-
 
 	// Fix the params based on the contentOuput JSON
 	// Parse output into JSOn
@@ -1164,6 +1164,8 @@ func GetOrgspecificParameters(ctx context.Context, org Org, action WorkflowAppAc
 			continue
 		}
 
+		// log.Printf("[DEBUG] content it got and is putting into example: %s - %d", string(content), paramIndex)
+
 		log.Printf("\n\n\n[INFO] Found content for file %s for action %s in app %s. Should set param.\n\n\n", fileId, action.Name, action.AppName)
 		action.Parameters[paramIndex].Example = string(content)
 	}
@@ -1425,6 +1427,10 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 	for _, action := range app.Actions {
+		if action.Name == "custom_action" {
+			continue
+		}
+
 		userMessage += fmt.Sprintf("%s\n", action.Name)	
 	}
 
