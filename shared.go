@@ -26544,7 +26544,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					fieldFileFound = false
 				}
 
-				//log.Printf("Output content: %#v", string(fileContent))
+				// log.Printf("Output content: %#v", string(fileContent))
 				err = json.Unmarshal(fileContent, &fieldFileContentMap)
 				if err != nil {
 					log.Printf("[ERROR] Failed unmarshaling file content in category action: %s", err)
@@ -27100,6 +27100,15 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if len(handledRequiredFields) < len(value.Fields) {
 		// Compare which ones are not handled from value.Fields
+
+		// for _, field := range value.Fields {
+		// 	log.Printf("[DEBUG] fields provided: %s - %s", field.Key, field.Value)
+		// }
+
+		// for _, field := range handledRequiredFields {
+		// 	log.Printf("[DEBUG] fields required: %s", field)
+		// }
+
 		for _, field := range value.Fields {
 			if !ArrayContains(handledRequiredFields, field.Key) {
 				missingFields = append(missingFields, field.Key)
@@ -27278,9 +27287,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			ActionName: selectedAction.Name,
 			Parameters: selectedAction.Parameters,
 		}
-
-
-		log.Printf("[DEBUG] Our selectedAction name: %s", selectedAction.Name)
 
 		// JSON marshal and send it back in to /api/conversation with type "action"
 		marshalledBody, err := json.Marshal(newQueryInput)
@@ -27466,6 +27472,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			} else {
 				resp.Header().Add(attemptString, fmt.Sprintf("%d", i+1))
 			}
+
+			// log.Printf("[DEBUG] Attempt preparedAction: %s", string(preparedAction))
 
 			// The request that goes to the CORRECT app
 			req, err := http.NewRequest(
