@@ -9841,6 +9841,28 @@ func GetNotification(ctx context.Context, id string) (*Notification, error) {
 	return curFile, nil
 }
 
+func GetAutofixAppLabelsCache(ctx context.Context, app WorkflowApp, label string, keys []string) (WorkflowAppAction, error) {
+	nameKey := "auto_fix_app_labels_cache_"
+	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, app.Name, label, strings.Join(keys, "_"))
+
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			curAppAction := WorkflowAppAction{}
+			err = json.Unmarshal(cacheData, &curAppAction)
+			if err == nil {
+				return curAppAction, nil
+			}
+
+			log.Printf("[WARNING] Failed unmarshalling in get autofix app labels cache: %s", err)
+			return WorkflowAppAction{}, err
+		}
+	}
+
+	return WorkflowAppAction{}, errors.New("No cache found")
+}
+
 func GetFile(ctx context.Context, id string) (*File, error) {
 	nameKey := "Files"
 
@@ -9904,6 +9926,27 @@ func GetFile(ctx context.Context, id string) (*File, error) {
 	}
 
 	return curFile, nil
+}
+
+func SetAutofixAppLabelsCache(ctx context.Context, app WorkflowApp, appAction WorkflowAppAction, label string, keys []string) error {
+	nameKey := "auto_fix_app_labels_cache_"
+	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, app.Name, label, strings.Join(keys, "_"))
+
+	if project.CacheDb {
+		data, err := json.Marshal(appAction)
+		if err != nil {
+			log.Printf("[DEBUG] Failed marshalling in set autofix app labels cache: %s", err)
+			return err
+		}
+
+		err = SetCache(ctx, cacheKey, data, 120)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting cache for autofix app labels cache key '%s': %s", cacheKey, err)
+			return err
+		}
+	}
+
+	return errors.New("No cache found") 
 }
 
 func SetNotification(ctx context.Context, notification Notification) error {

@@ -26540,13 +26540,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 			if file.Status == "active" {
 				fieldFileFound = true
+
+				log.Printf("[DEBUG File found: %s", file.Filename)
+
 				fileContent, err := GetFileContent(ctx, file, nil)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting file content in category action: %s", err)
 					fieldFileFound = false
 				}
 
-				// log.Printf("Output content: %#v", string(fileContent))
+				log.Printf("Output content: %#v", string(fileContent))
 				err = json.Unmarshal(fileContent, &fieldFileContentMap)
 				if err != nil {
 					log.Printf("[ERROR] Failed unmarshaling file content in category action: %s", err)
@@ -27051,7 +27054,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	handledRequiredFields := []string{}
 	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
-
 		// Optional > Required
 		fieldChanged := false
 		for _, field := range value.OptionalFields {
@@ -27103,13 +27105,17 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if len(handledRequiredFields) < len(value.Fields) {
 		// Compare which ones are not handled from value.Fields
 
-		// for _, field := range value.Fields {
-		// 	log.Printf("[DEBUG] fields provided: %s - %s", field.Key, field.Value)
-		// }
+		for _, field := range value.Fields {
+			log.Printf("[DEBUG] fields provided: %s - %s", field.Key, field.Value)
+		}
 
-		// for _, field := range handledRequiredFields {
-		// 	log.Printf("[DEBUG] fields required: %s", field)
-		// }
+		for _, field := range handledRequiredFields {
+			log.Printf("[DEBUG] fields required: %s", field)
+		}
+
+		for missingIndex, missingField := range missingFields {
+			log.Printf("[DEBUG] missingField %d. %s", missingIndex, missingField)
+		}
 
 		for _, field := range value.Fields {
 			if !ArrayContains(handledRequiredFields, field.Key) {
@@ -27244,6 +27250,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					}
 				} else {
 					log.Printf("\n\n\n[DEBUG] Found map with actionParameter %s with value %s\n\n\n", param.Name, mapValue)
+
+					// YOLO
+					selectedAction.Parameters[paramIndex].Value = mapValue.(string)
+
+					log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
+					missingFields = RemoveFromArray(missingFields, key)
+					missingFields = RemoveFromArray(missingFields, selectedAction.Parameters[paramIndex].Name)
+					log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
 				}
 
 				break
@@ -27257,7 +27271,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	authorization := ""
 	optionalExecutionId := ""
 	if len(missingFields) > 0 {
-		//log.Printf("\n\n\n[DEBUG] Missing fields for action: %#v\n\n\n", missingFields)
+		log.Printf("\n\n\n[DEBUG] Missing fields for action: %#v\n\n\n", missingFields)
 
 		formattedQueryFields := []string{}
 		for _, missing := range missingFields {
