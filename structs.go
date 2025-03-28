@@ -4024,8 +4024,9 @@ type LiveExecutionStatus struct {
 type HealthCheck struct {
 	Success bool  `json:"success"`
 	Updated int64 `json:"updated"`
-	// Apps AppHealth `json:"apps"`
+	Apps AppHealth `json:"apps"`
 	Workflows WorkflowHealth `json:"workflows"`
+	PythonApps AppHealth `json:"python_apps"`
 }
 
 type HealthCheckDB struct {
