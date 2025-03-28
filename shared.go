@@ -27123,6 +27123,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if len(handledRequiredFields) < len(value.Fields) {
 		// Compare which ones are not handled from value.Fields
+		log.Printf("[DEBUG] handledRequiredFields: %+v", handledRequiredFields)
 
 		for _, field := range value.Fields {
 			log.Printf("[DEBUG] fields provided: %s - %s", field.Key, field.Value)
@@ -27227,8 +27228,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 
+			log.Printf("[DEBUG] Found value for key %s: %s", key, mapValue)
+
 			// Check if the key exists in the parameters
 			for paramIndex, param := range selectedAction.Parameters {
+				log.Printf("[DEBUG] Checking param %s with value %+v", param.Name, mappedFieldSplit)
+
 				if param.Name != mappedFieldSplit[0] {
 					continue
 				}
@@ -27264,8 +27269,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					if err != nil {
 						log.Printf("[WARNING] Failed marshalling body for file content: %s", err)
 					} else {
+						log.Printf("[DEBUG] setting parameter value to %s", string(marshalledMap))
 						selectedAction.Parameters[paramIndex].Value = string(marshalledMap)
+						log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
 						missingFields = RemoveFromArray(missingFields, key)
+						log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
 					}
 				} else {
 					log.Printf("\n\n\n[DEBUG] Found map with actionParameter %s with value %s\n\n\n", param.Name, mapValue)
@@ -27441,12 +27449,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// FIXME: Make a check for IF we have filled in all fields or not
-		for paramIndex, _ := range secondAction.Parameters {
+		for paramIndex, param := range secondAction.Parameters {
 			//if param.Configuration {
 			//	continue
 			//}
 			//log.Printf("[DEBUG] Param: %s, Value: %s", param.Name, param.Value)
 			secondAction.Parameters[paramIndex].Example = ""
+			if param.Name == "headers" {
+				// for now
+				secondAction.Parameters[paramIndex].Value = "Content-Type: application/json"
+			}
 		}
 
 		//log.Printf("[DEBUG] App authentication: %#v", secondAction.AuthenticationId)
