@@ -5364,6 +5364,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
+		oldRole := foundUser.Role
 		if len(t.Role) > 0 {
 			orgUpdater = false
 
@@ -5408,10 +5409,13 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		log.Printf("[INFO] Updated user '%s' from '%s' to '%s' in org %s.", foundUser.Username, foundUser.Role, t.Role, userInfo.ActiveOrg.Id)
-		resp.WriteHeader(200)
-		resp.Write([]byte(`{"success": true}`))
-		return
+		if len(t.Role) > 0 {
+			log.Printf("[INFO] Updated user '%s' from '%s' to '%s' in org %s.", foundUser.Username, oldRole, t.Role, userInfo.ActiveOrg.Id)
+
+			resp.WriteHeader(200)
+			resp.Write([]byte(`{"success": true}`))
+			return
+		}
 	}
 
 	if len(t.Username) > 0 && project.Environment != "cloud" {
@@ -5629,7 +5633,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		// After done, check if ANY of the users' orgs are suborgs of active parent org. If they are, remove.
 		// Update: This piece runs anyway, in case the job is to REMOVE any suborg
 		//if len(addedOrgs) > 0 {
-		log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
+		//log.Printf("[DEBUG] Orgs to be added: %s. Existing: %s.", addedOrgs, foundUser.Orgs)
 
 		// Removed for now due to multi-org chain deleting you from other org chains
 		newUserOrgs := []string{}
@@ -5670,7 +5674,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 			//if !ArrayContains(parsedOrgs, userInfo.ActiveOrg.Id) {
 			if !ArrayContains(parsedOrgs, suborg) {
 				if ArrayContains(t.Suborgs, suborg) {
-					log.Printf("[DEBUG] Reappending org %s", suborg)
+					//log.Printf("[DEBUG] Reappending org %s", suborg)
 					newUserOrgs = append(newUserOrgs, suborg)
 				} else {
 					log.Printf("[DEBUG] Skipping org %s", suborg)
@@ -5699,7 +5703,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 
 		foundUser.Orgs = append(newUserOrgs, addedOrgs...)
 
-		log.Printf("[DEBUG] New orgs for %s (%s) is %s", foundUser.Username, foundUser.Id, foundUser.Orgs)
+		log.Printf("[DEBUG] New orgs for %s (%s) is len(%d)", foundUser.Username, foundUser.Id, len(foundUser.Orgs))
 	}
 
 	err = SetUser(ctx, foundUser, orgUpdater)
@@ -8348,7 +8352,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if fileId != workflow.ID {
 		log.Printf("[WARNING] Path and request ID are not matching in workflow save: %s != %s.", fileId, workflow.ID)
 		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
+		//resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
+		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching. Export and re-import this workflow for use in your region."}`))
 		return
 	}
 
@@ -9662,7 +9667,7 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if len(fileId) != 36 {
 		log.Printf("\n\n[WARNING] Workflow ID when duplicating workflow is not valid: %s. URL: %s", fileId, request.URL.String())
 		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when duplicating workflow is not valid"}`))
 		return
 	}
 
@@ -9891,7 +9896,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if len(fileId) != 36 {
-		log.Printf("\n\n[WARNING] Workflow ID when getting workflow is not valid: %s. URL: %s", fileId, request.URL.String())
+		log.Printf("[WARNING] Workflow ID when getting workflow is not valid: %s. URL: %s", fileId, request.URL.String())
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
 		return
@@ -9900,6 +9905,15 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
 	if err != nil {
+		if project.Environment == "cloud" {
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting NOT FOUND workflow request for %s to main site handler (shuffler.io)", fileId)
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
+
 		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
@@ -9971,7 +9985,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow %s (get workflow)", user.Username, workflow.ID)
 
 			isOwner = true
 
@@ -10047,6 +10061,14 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//log.Printf("[ERROR] Workflow has no name or ID, hence may not exist. Reference ID (maybe from Algolia?: %s)", fileId)
 
 		// FIXME: Cloud + redirects? Can we find copies of workflows to redirect to?
+		if project.Environment == "cloud" {
+			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+				log.Printf("[DEBUG] Redirecting NOT FOUND workflow request for %s to main site handler (shuffler.io) (2)", fileId)
+				RedirectUserRequest(resp, request)
+				return
+			}
+		}
 
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "No workflow found"}`))
@@ -15448,10 +15470,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				true,
 			)
 
+			workflowExecution.NotificationsCreated++
 			if err != nil {
-				log.Printf("[WARNING] Failed making org notification: %s", err)
-			} else {
-				workflowExecution.NotificationsCreated++
+				log.Printf("[ERROR] Failed making org notification (1): %s", err)
 			}
 		}
 	}
@@ -15486,11 +15507,11 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 				true,
 			)
 
+			workflowExecution.NotificationsCreated++
 			if err == nil {
 				notificationSent = true
-				workflowExecution.NotificationsCreated++
 			} else {
-				log.Printf("[WARNING] Failed making org notification: %s", err)
+				log.Printf("[ERROR] Failed making org notification (2): %s", err)
 			}
 		}
 	}
@@ -15528,10 +15549,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					true,
 				)
 
+				workflowExecution.NotificationsCreated++
 				if err != nil {
-					log.Printf("[WARNING] Failed making org notification: %s", err)
-				} else {
-					workflowExecution.NotificationsCreated++
+					log.Printf("[ERROR] Failed making org notification (3): %s", err)
 				}
 			}
 		}
@@ -15916,10 +15936,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 					true,
 				)
 
+				workflowExecution.NotificationsCreated++
 				if err != nil {
-					log.Printf("[WARNING] Failed making org notification for %s: %s", workflowExecution.ExecutionOrg, err)
-				} else {
-					workflowExecution.NotificationsCreated++
+					log.Printf("[ERROR] Failed making org notification for %s (4): %s", workflowExecution.ExecutionOrg, err)
 				}
 			}
 		} else {

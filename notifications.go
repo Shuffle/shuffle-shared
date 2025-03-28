@@ -736,8 +736,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
-			log.Printf("[WARNING] Error getting parent org %s in createOrgNotification: %s", orgId, err)
-			return err
+			log.Printf("[WARNING] Error getting parent org %s in createOrgNotification: %s. This is usually a region problem, and may cause issues with notification workflows..", orgId, err)
+			//return err
 		}
 
 		// Overwriting to make sure access rights are correct
@@ -824,7 +824,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		// All the other personal ones are kind of irrelevant
 		err = SetNotification(ctx, mainNotification)
 		if err != nil {
-			log.Printf("[WARNING] Failed making org notification with title %#v for org %s", title, orgId)
+			log.Printf("[ERROR] Failed making org notification with title %#v for org %s", title, orgId)
 			return err
 		}
 
