@@ -355,7 +355,7 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 		return *httpOutput, []byte{}, err
 	}
 
-	if httpOutput.Status >= 300 {
+	if httpOutput.Status >= 300 && httpOutput.Status != 404 {
 		log.Printf("[ERROR] Schemaless action failed with status: %d. Trying Autocorrecting feature", httpOutput.Status)
 
 		return *httpOutput, []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
@@ -604,6 +604,10 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	}
 	*/
 
+	log.Printf("[DEBUG] additionalInfo: %s", additionalInfo)
+	log.Printf("[DEBUG] outputBody: %s", outputBody)
+	log.Printf("[DEBUG] inputdata: %s", inputdata)
+
 	additionalInfo = ""
 	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
 	cnt := 0
@@ -646,8 +650,6 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		inputBody += fmt.Sprintf("\"%s\": \"%s\",\n", param.Name, param.Value)
 	}
 
-	// log.Printf("[Critical] InputBody generated here: %s", inputBody)
-
 	// Remove comma at the end
 	invalidFields := map[string]string{}
 	invalidFieldsString := "The following are previous attempts at changing the field which failed. They are invalid fields that need to be fixed.\n"
@@ -672,6 +674,9 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	// Append previous problems too
 	outputBodies := outputBody
 
+	log.Printf("[Critical] InputBody generated here: %s", inputBody)
+	log.Printf("[Critical] OutputBodies generated here: %s", outputBodies)
+
 	//appendpoint := "/gmail/v1/users/{userId}/messages/send"
 	if !strings.Contains(additionalInfo, "How the API works") && len(additionalInfo) > 0 {
 		additionalInfo = fmt.Sprintf("How the API works: %s\n", additionalInfo)
@@ -682,7 +687,34 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 	//inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same with modified values.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 
-	inputData := fmt.Sprintf("Change the fields sent to the HTTP API for %s to be correct according to the HTTP error. \n\nHTTP Status: %d\nHTTP error: %s\n\n%s\nUpdate the following field(s) to have modified values to fix the error:\n%s", appname, status, outputBodies, invalidFieldsString, inputBody)
+	// inputData := fmt.Sprintf("Change the fields sent to the HTTP API for %s to be correct according to the HTTP error. \n\nHTTP Status: %d\nHTTP error: %s\n\n%s\nUpdate the following field(s) to have modified values to fix the error (change ALL values that yo can. These values are MERELY examples. You are strictly advised to change the JSON values. Make sure to NOT invent values on your own or use older values provided in the example and instead use the user provided keys to generate a result):\n%s", appname, status, outputBodies, invalidFieldsString, inputBody)
+	inputData := fmt.Sprintf(`Precise JSON Field Correction Instructions:
+
+	1. Given the HTTP API context for %s:
+	   - HTTP Status: %d
+	   - Detailed Error: %s
+	
+	2. Input JSON Payload:
+	%s
+	
+	3. Validation Requirements:
+	   - Modify ONLY the fields directly related to the HTTP error
+	   - Use ONLY values derived from:
+		 a) Error message context
+		 b) Existing JSON structure
+		 c) Minimal necessary changes to resolve the error
+	
+	4. Strict Constraints:
+	   - NO invented values
+	   - NO external data generation
+	   - MUST use keys present in original JSON
+	   - MUST maintain original JSON structure
+	   - DON'T use older values or examples
+	
+	5. Output Format:
+	   - Provide corrected JSON
+	   - No comments. Must be valid JSON.
+	`, appname, status, outputBodies, inputBody)
 
 	log.Printf("[INFO] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
 
@@ -1417,50 +1449,62 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		return app, WorkflowAppAction{}
 	}
 
+	var guessedAction WorkflowAppAction
+	type ActionStruct struct {
+		Action string `json:"action"`
+	}
+
+	actionStruct := ActionStruct{}
+	var output string
+	ctx := context.Background()
+
+	tmpApp, cacheGeterr := GetAutofixAppLabelsCache(ctx, app, label, keys)
+	if cacheGeterr == nil {
+		guessedAction = tmpApp
+	} else {
+		log.Printf("[ERROR] Failed to get app from cache in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, cacheGeterr)
+	}
+
 	// FIXME: Run AI here to check based on the label which action may be matching
 	
 	// Old attempts 
 	//systemMessage := fmt.Sprintf(`Find which action is most likely to be used based on the label '%s'. If any match, return their exact name and if none match, write "none" as the name. Return in the JSON format {"action": "action name"}`, label)
 	//userMessage := "The available actions are as follows:\n"
 
-	systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
-	userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
+	if cacheGeterr != nil {
+		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
+		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
-	for _, action := range app.Actions {
-		if action.Name == "custom_action" {
-			continue
+		for _, action := range app.Actions {
+			if action.Name == "custom_action" {
+				continue
+			}
+
+			userMessage += fmt.Sprintf("%s\n", action.Name)	
 		}
 
-		userMessage += fmt.Sprintf("%s\n", action.Name)	
+		if len(keys) > 0 {
+			userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
+		}
+
+		output, err := RunAiQuery(systemMessage, userMessage) 
+		if err != nil {
+			log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+			return app, WorkflowAppAction{}
+		} 
+
+		output = FixContentOutput(output)
+
+		log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
+
+		err = json.Unmarshal([]byte(output), &actionStruct)
+		if err != nil {
+			log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
+		}
+
 	}
 
-	if len(keys) > 0 {
-		userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
-	}
-
-	output, err := RunAiQuery(systemMessage, userMessage) 
-	if err != nil {
-		log.Printf("[ERROR] Failed to run AI query in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
-		return app, WorkflowAppAction{}
-	} 
-
-	type ActionStruct struct {
-		Action string `json:"action"`
-	}
-
-	output = FixContentOutput(output) 
-
-	log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
-
-	actionStruct := ActionStruct{}
-	err = json.Unmarshal([]byte(output), &actionStruct)
-	if err != nil {
-		log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
-	}
-
-	var guessedAction WorkflowAppAction
-
-	if len(actionStruct.Action) == 0 {
+	if len(actionStruct.Action) == 0 && cacheGeterr == nil {
 		log.Printf("[ERROR] From LLM auto-label: No action found for app %s (%s) based on label %s (1). Output: %s", app.Name, app.ID, label, string(output))
 		//return app
 	} else {
@@ -1510,7 +1554,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 	// FIXME: Add the label to the OpenAPI action as well?
 	if updatedIndex >= 0 {
-		err = SetWorkflowAppDatastore(context.Background(), app, app.ID)
+		err := SetWorkflowAppDatastore(context.Background(), app, app.ID)
 		if err != nil {
 			log.Printf("[ERROR] Failed to set app datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 		}
@@ -1595,5 +1639,6 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (2). GPT error most likely. Output: %s", app.Name, app.ID, label, output)
 	}
 
+	SetAutofixAppLabelsCache(ctx, app, guessedAction, label, keys)
 	return app, guessedAction
 }

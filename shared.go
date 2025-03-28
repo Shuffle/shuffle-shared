@@ -26559,13 +26559,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 			if file.Status == "active" {
 				fieldFileFound = true
+
+				log.Printf("[DEBUG File found: %s", file.Filename)
+
 				fileContent, err := GetFileContent(ctx, file, nil)
 				if err != nil {
 					log.Printf("[ERROR] Failed getting file content in category action: %s", err)
 					fieldFileFound = false
 				}
 
-				// log.Printf("Output content: %#v", string(fileContent))
+				log.Printf("Output content: %#v", string(fileContent))
 				err = json.Unmarshal(fileContent, &fieldFileContentMap)
 				if err != nil {
 					log.Printf("[ERROR] Failed unmarshaling file content in category action: %s", err)
@@ -27070,7 +27073,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	handledRequiredFields := []string{}
 	missingFields = []string{}
 	for _, param := range selectedAction.Parameters {
-
 		// Optional > Required
 		fieldChanged := false
 		for _, field := range value.OptionalFields {
@@ -27121,14 +27123,19 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 	if len(handledRequiredFields) < len(value.Fields) {
 		// Compare which ones are not handled from value.Fields
+		log.Printf("[DEBUG] handledRequiredFields: %+v", handledRequiredFields)
 
-		// for _, field := range value.Fields {
-		// 	log.Printf("[DEBUG] fields provided: %s - %s", field.Key, field.Value)
-		// }
+		for _, field := range value.Fields {
+			log.Printf("[DEBUG] fields provided: %s - %s", field.Key, field.Value)
+		}
 
-		// for _, field := range handledRequiredFields {
-		// 	log.Printf("[DEBUG] fields required: %s", field)
-		// }
+		for _, field := range handledRequiredFields {
+			log.Printf("[DEBUG] fields required: %s", field)
+		}
+
+		for missingIndex, missingField := range missingFields {
+			log.Printf("[DEBUG] missingField %d. %s", missingIndex, missingField)
+		}
 
 		for _, field := range value.Fields {
 			if !ArrayContains(handledRequiredFields, field.Key) {
@@ -27197,7 +27204,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// Finds WHERE in the destination to put the input data
 	// Loops through input fields, then takes the data from them
 	if len(fieldFileContentMap) > 0 {
-		//log.Printf("[DEBUG] Found file content map (Reverse Schemaless): %#v", fieldFileContentMap)
+		log.Printf("[DEBUG] Found file content map (Reverse Schemaless): %#v", fieldFileContentMap)
 
 		for key, mapValue := range fieldFileContentMap {
 			if _, ok := mapValue.(string); !ok {
@@ -27221,8 +27228,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 
+			log.Printf("[DEBUG] Found value for key %s: %s", key, mapValue)
+
 			// Check if the key exists in the parameters
 			for paramIndex, param := range selectedAction.Parameters {
+				log.Printf("[DEBUG] Checking param %s with value %+v", param.Name, mappedFieldSplit)
+
 				if param.Name != mappedFieldSplit[0] {
 					continue
 				}
@@ -27237,6 +27248,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 					missingFields = RemoveFromArray(missingFields, key)
 				} else if param.Name == "body" {
+					
 
 					log.Printf("\n\n\n[DEBUG] Found body field for file content: %s. Location: %#v, Value: %#v\n\n\n", key, strings.Join(mappedFieldSplit, "."), mapValue)
 
@@ -27258,11 +27270,24 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					if err != nil {
 						log.Printf("[WARNING] Failed marshalling body for file content: %s", err)
 					} else {
+						log.Printf("[DEBUG] setting parameter value to %s", string(marshalledMap))
 						selectedAction.Parameters[paramIndex].Value = string(marshalledMap)
+						log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
 						missingFields = RemoveFromArray(missingFields, key)
+						log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
 					}
 				} else {
 					log.Printf("\n\n\n[DEBUG] Found map with actionParameter %s with value %s\n\n\n", param.Name, mapValue)
+
+					// YOLO
+					selectedAction.Parameters[paramIndex].Value = mapValue.(string)
+
+					log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
+					missingFields = RemoveFromArray(missingFields, key)
+					missingFields = RemoveFromArray(missingFields, selectedAction.Parameters[paramIndex].Name)
+					log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
+
+					secondAction.Parameters = selectedAction.Parameters
 				}
 
 				break
@@ -27276,7 +27301,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	authorization := ""
 	optionalExecutionId := ""
 	if len(missingFields) > 0 {
-		//log.Printf("\n\n\n[DEBUG] Missing fields for action: %#v\n\n\n", missingFields)
+		log.Printf("\n\n\n[DEBUG] Missing fields for action: %#v\n\n\n", missingFields)
 
 		formattedQueryFields := []string{}
 		for _, missing := range missingFields {
@@ -27427,12 +27452,16 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		// FIXME: Make a check for IF we have filled in all fields or not
-		for paramIndex, _ := range secondAction.Parameters {
+		for paramIndex, param := range secondAction.Parameters {
 			//if param.Configuration {
 			//	continue
 			//}
 			//log.Printf("[DEBUG] Param: %s, Value: %s", param.Name, param.Value)
 			secondAction.Parameters[paramIndex].Example = ""
+			if param.Name == "headers" {
+				// for now
+				secondAction.Parameters[paramIndex].Value = "Content-Type: application/json"
+			}
 		}
 
 		//log.Printf("[DEBUG] App authentication: %#v", secondAction.AuthenticationId)
