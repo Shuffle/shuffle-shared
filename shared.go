@@ -27422,7 +27422,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)	
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s", "api_debugger_url": "%s}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name, fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s", "api_debugger_url": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name, fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
 			return
 		}
 
