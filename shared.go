@@ -27204,7 +27204,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	// Finds WHERE in the destination to put the input data
 	// Loops through input fields, then takes the data from them
 	if len(fieldFileContentMap) > 0 {
-		//log.Printf("[DEBUG] Found file content map (Reverse Schemaless): %#v", fieldFileContentMap)
+		log.Printf("[DEBUG] Found file content map (Reverse Schemaless): %#v", fieldFileContentMap)
 
 		for key, mapValue := range fieldFileContentMap {
 			if _, ok := mapValue.(string); !ok {
@@ -27248,6 +27248,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 					missingFields = RemoveFromArray(missingFields, key)
 				} else if param.Name == "body" {
+					
 
 					log.Printf("\n\n\n[DEBUG] Found body field for file content: %s. Location: %#v, Value: %#v\n\n\n", key, strings.Join(mappedFieldSplit, "."), mapValue)
 
@@ -27285,6 +27286,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 					missingFields = RemoveFromArray(missingFields, key)
 					missingFields = RemoveFromArray(missingFields, selectedAction.Parameters[paramIndex].Name)
 					log.Printf("[DEBUG] Found value for key %s: %s -- %+v", key, mapValue, missingFields)
+
+					secondAction.Parameters = selectedAction.Parameters
 				}
 
 				break
