@@ -645,6 +645,7 @@ type Contact struct {
 	DealType      string `json:"dealtype"`
 	DealCountry   string `json:"dealcountry"`
 	Category      string `json:"Category"`
+	Interests     []string `json:"interests"`
 }
 
 type Translator struct {
