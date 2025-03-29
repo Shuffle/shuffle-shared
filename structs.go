@@ -634,17 +634,18 @@ type Session struct {
 }
 
 type Contact struct {
-	Firstname     string `json:"firstname"`
-	Lastname      string `json:"lastname"`
-	Title         string `json:"title"`
-	Companyname   string `json:"companyname"`
-	Phone         string `json:"phone"`
-	Email         string `json:"email"`
-	ValidateEmail string `json:"validate_email"`
-	Message       string `json:"message"`
-	DealType      string `json:"dealtype"`
-	DealCountry   string `json:"dealcountry"`
-	Category      string `json:"Category"`
+	Firstname     string   `json:"firstname"`
+	Lastname      string   `json:"lastname"`
+	Title         string   `json:"title"`
+	Companyname   string   `json:"companyname"`
+	Phone         string   `json:"phone"`
+	Email         string   `json:"email"`
+	ValidateEmail string   `json:"validate_email"`
+	Message       string   `json:"message"`
+	DealType      string   `json:"dealtype"`
+	DealCountry   string   `json:"dealcountry"`
+	Category      string   `json:"Category"`
+	Interests     []string `json:"interests"`
 }
 
 type Translator struct {
@@ -838,23 +839,23 @@ type RegionBody struct {
 }
 
 type OrgBranding struct {
-	EnableChat  bool  `json:"enable_chat" datastore:"enable_chat"`
-	HomeUrl		string `json:"home_url" datastore:"home_url"`
+	EnableChat bool   `json:"enable_chat" datastore:"enable_chat"`
+	HomeUrl    string `json:"home_url" datastore:"home_url"`
 }
 
 // Used within a user
 type OrgMini struct {
-	Name       string     `json:"name" datastore:"name"`
-	Id         string     `json:"id" datastore:"id"`
-	Users      []UserMini `json:"users" datastore:"users"`
-	Role       string     `json:"role" datastore:"role"`
-	ChildOrgs  []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
-	RegionUrl  string     `json:"region_url" datastore:"region_url"`
+	Name      string     `json:"name" datastore:"name"`
+	Id        string     `json:"id" datastore:"id"`
+	Users     []UserMini `json:"users" datastore:"users"`
+	Role      string     `json:"role" datastore:"role"`
+	ChildOrgs []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
+	RegionUrl string     `json:"region_url" datastore:"region_url"`
 
 	// Branding related
-	Image      string     `json:"image" datastore:"image,noindex"`
-	CreatorOrg string     `json:"creator_org" datastore:"creator_org"`
-	Branding   OrgBranding   `json:"branding" datastore:"branding"`
+	Image      string      `json:"image" datastore:"image,noindex"`
+	CreatorOrg string      `json:"creator_org" datastore:"creator_org"`
+	Branding   OrgBranding `json:"branding" datastore:"branding"`
 }
 
 type Priority struct {
@@ -883,12 +884,12 @@ type LeadInfo struct {
 	OldCustomer bool `json:"old_customer,omitempty" datastore:"old_customer"`
 	OldLead     bool `json:"old_lead,omitempty" datastore:"old_lead"`
 
-	TechPartner bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
-	IntegrationPartner bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
+	TechPartner         bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
+	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
 	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
-	ServicePartner bool `json:"service_partner,omitempty" datastore:"service_partner"`
+	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
 
-	Creator     bool `json:"creator,omitempty" datastore:"creator"`
+	Creator bool `json:"creator,omitempty" datastore:"creator"`
 }
 
 type Org struct {
@@ -935,11 +936,11 @@ type Org struct {
 	CreatorId string `json:"creator_id" datastore:"creator_id"`
 	Disabled  bool   `json:"disabled" datastore:"disabled"`
 
-	EulaSigned   bool    `json:"eula_signed" datastore:"eula_signed"`
-	EulaSignedBy string  `json:"eula_signed_by" datastore:"eula_signed_by"`
-	Billing      Billing `json:"Billing" datastore:"Billing"`
-	CreatorOrg        string      `json:"creator_org" datastore:"creator_org"`
-	Branding   OrgBranding   `json:"branding" datastore:"branding"`
+	EulaSigned   bool        `json:"eula_signed" datastore:"eula_signed"`
+	EulaSignedBy string      `json:"eula_signed_by" datastore:"eula_signed_by"`
+	Billing      Billing     `json:"Billing" datastore:"Billing"`
+	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
+	Branding     OrgBranding `json:"branding" datastore:"branding"`
 }
 
 type Billing struct {
@@ -4243,4 +4244,24 @@ type TimeWindow struct {
 	Duration time.Duration
 	Events   []time.Time
 	mu       sync.Mutex
+}
+
+type AgentDecision struct {
+	I          int     `json:"i" datastore:"i"`
+	Action     string  `json:"action" datastore:"action"`
+	Tool       string  `json:"tool" datastore:"tool"`
+	Confidence float64 `json:"confidence" datastore:"confidence"`
+	Reason     string  `json:"reason" datastore:"reason"`
+
+	Type string `json:"type" datastore:"type"`
+	Status string `json:"status" datastore:"status"`
+}
+
+type AgentOutput struct {
+	Status 	  string  `json:"status" datastore:"status"`
+	Input     string          `json:"input" datastore:"input"`
+	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
+
+	// For easy testing
+	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
 }

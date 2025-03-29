@@ -18490,8 +18490,9 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			for _, actionParam := range action.Parameters {
 				if actionParam.Configuration {
 					authFields += 1
-					foundFields = append(foundFields, actionParam.Name)
 				}
+
+				foundFields = append(foundFields, strings.ToLower(actionParam.Name))
 			}
 
 			// Usually url
@@ -18529,19 +18530,19 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			if err != nil {
 				log.Printf("[ERROR] Failed getting auth for single action: %s", err)
 			} else {
-				//latestTimestamp := int64(0)
+				latestTimestamp := int64(0)
 				for _, auth := range auths {
 					if auth.App.ID != appId {
-						continue
+						if auth.App.Name != app.Name {
+							continue
+						}
 					}
 
 					// Fallback to latest created
-					/*
-						if latestTimestamp < auth.Created {
-							latestTimestamp = auth.Created
-							action.AuthenticationId = auth.Id
-						}
-					*/
+					if latestTimestamp < auth.Edited {
+						latestTimestamp = auth.Edited
+						action.AuthenticationId = auth.Id
+					}
 
 					// If valid, just choose it
 					if auth.Validation.Valid {
@@ -18552,7 +18553,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 		}
 	}
-
 
 	if runValidationAction {
 		log.Printf("[INFO] Running validation action for %s for org %s (%s)", app.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
@@ -27446,7 +27446,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		if len(missingFields) > 0 {
 			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)	
 			resp.WriteHeader(400)
-			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s", "api_debugger_url": "%s}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name, fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s", "api_debugger_url": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name, fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
 			return
 		}
 
