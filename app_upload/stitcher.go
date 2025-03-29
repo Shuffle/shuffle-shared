@@ -843,6 +843,38 @@ func deployAll() {
 	}
 }
 
+// Sends a rebuild request to the shuffle API
+// 1. Rebuild makes /generated_apps/<appname>_appid/app.tar.gz get rebuilt
+// 2. This starts a rebuild of app.tar.gz in cloud build for x86 & arm
+// 3. This then pushes the images to dockerhub + /generated_dockerimages/<appname>_appid.tar
+func sendRebuildRequest(imageName string) {
+	url := fmt.Sprintf("%s/api/v1/get_docker_image?image=%s&rebuild=true", baseUrl, imageName)
+
+	log.Printf("[DEBUG] Sending rebuild request to %s", url)
+
+	client := &http.Client{}
+	req, err := http.NewRequest(
+		http.MethodPost, 
+		url, 
+		nil,
+	)
+
+	if err != nil {
+		log.Printf("[WARNING] Failed creating request: %s", err)
+		return
+	}
+
+	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
+
+	ret, err := client.Do(req)
+	if err != nil {
+		log.Printf("[WARNING] Failed sending rebuild request: %s", err)
+		return
+	}
+
+	log.Printf("[INFO] Sent rebuild request: %s", ret.Status)
+}
+
 func main() {
 	//addRequirements("generated_apps/shuffle-tools_1.0.0/requirements.txt")
 	if len(os.Args) < 3 {
@@ -902,4 +934,9 @@ func main() {
 
 	log.Printf("[INFO] Starting cloud function deploy")
 	deployAppCloudFunc(appname, appversion)
+
+	// Forces the dockerhub + storage version(s) to also be updated
+	log.Printf("[DEBUG] Waiting 90 seconds before rebuilding force rebuilding from app.tar.gz to push")
+	time.Sleep(90 * time.Second)
+	sendRebuildRequest(fmt.Sprintf("frikky/shuffle:%s_%s", appname, appversion))
 }

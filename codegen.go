@@ -3721,7 +3721,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 }
 
 func GetAppRequirements() string {
-	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\nshufflepy==0.0.91\nshuffle-sdk==0.0.24\n"
+	return "requests==2.32.3\nurllib3==2.3.0\nliquidpy==0.8.2\nMarkupSafe==3.0.2\nflask[async]==3.1.0\npython-dateutil==2.9.0.post0\nPyJWT==2.10.1\nshufflepy==0.1.0\nshuffle-sdk==0.0.25\n"
 }
 
 // Removes JSON values from the input
@@ -3856,9 +3856,19 @@ func RemoveJsonValues(input []byte, depth int64) ([]byte, string, error) {
 func DownloadDockerImageBackend(topClient *http.Client, imageName string) error {
 	// Check environment SHUFFLE_AUTO_IMAGE_DOWNLOAD
 	if os.Getenv("SHUFFLE_AUTO_IMAGE_DOWNLOAD") == "false" {
-		log.Printf("[DEBUG] SHUFFLE_AUTO_IMAGE_DOWNLOAD is false. Not downloading image %s", imageName)
+		log.Printf("[DEBUG] SHUFFLE_AUTO_IMAGE_DOWNLOAD is false. NOT downloading image %s", imageName)
 		return nil
 	}
+
+	// Remove from downloadedImages after 15 minutes for a redownload
+	time.AfterFunc(time.Minute*10, func() {
+		for i, img := range downloadedImages {
+			if img == imageName {
+				downloadedImages = append(downloadedImages[:i], downloadedImages[i+1:]...)
+				log.Printf("[DEBUG] Removed image %s from downloaded images after 10 minutes, as to allow re-downloads.", imageName)
+			}
+		}
+	})
 
 	if ArrayContains(downloadedImages, imageName) && project.Environment == "worker" {
 		log.Printf("[DEBUG] Image %s already downloaded - not re-downloading. This only applies to workers.", imageName)
@@ -3960,67 +3970,71 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	newImageName := strings.Replace(imageName, "/", "_", -1)
 	newFileName := newImageName + ".tar"
 
-	tar, err := os.Create(newFileName)
-	if err != nil {
-		log.Printf("[WARNING] Failed creating file: %s", err)
-		return err
-	}
+	go func() error {
+		tar, err := os.Create(newFileName)
+		if err != nil {
+			log.Printf("[WARNING] Failed creating file: %s", err)
+			return err
+		}
 
-	defer tar.Close()
-	_, err = io.Copy(tar, newresp.Body)
-	if err != nil {
-		log.Printf("[WARNING] Failed response body copying: %s", err)
-		return err
-	}
+		defer tar.Close()
+		_, err = io.Copy(tar, newresp.Body)
+		if err != nil {
+			log.Printf("[WARNING] Failed response body copying: %s", err)
+			return err
+		}
 
-	tar.Seek(0, 0)
-	dockercli, err := docker.NewEnvClient()
-	if err != nil {
-		log.Printf("[ERROR] Unable to create docker client (3): %s", err)
-		return err
-	}
+		tar.Seek(0, 0)
+		dockercli, err := docker.NewEnvClient()
+		if err != nil {
+			log.Printf("[ERROR] Unable to create docker client (3): %s", err)
+			return err
+		}
 
-	log.Printf("[DEBUG] Starting to load zip file for image %s", imageName)
-	defer dockercli.Close()
-	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
-	if err != nil {
-		log.Printf("[ERROR] Failed loading docker images: %s", err)
-		return err
-	}
+		log.Printf("[DEBUG] Starting to load zip file for image %s. This is a background process and may take a while.", imageName)
+		defer dockercli.Close()
+		imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
+		if err != nil {
+			log.Printf("[ERROR] Failed loading docker images: %s", err)
+			return err
+		}
+	
+		log.Printf("[DEBUG] Finished loading zip file for image %s", imageName)
+		defer imageLoadResponse.Body.Close()
+		body, err := ioutil.ReadAll(imageLoadResponse.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading docker image: %s", err)
+			return err
+		}
+	
+		if strings.Contains(string(body), "no such file") {
+			return errors.New(string(body))
+		}
+	
+		os.Remove(newFileName)
+		if strings.Contains(strings.ToLower(string(body)), "error") {
+			log.Printf("[ERROR] Error loading image %s: %s", imageName, string(body))
+			return errors.New(string(body))
+		}
+	
+		baseTag := strings.Split(imageName, ":")
+		if len(baseTag) > 1 {
+			tag := baseTag[1]
+			log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
+	
+			// Remapping
+			ctx := context.Background()
+			dockercli.ImageTag(ctx, imageName, fmt.Sprintf("frikky/shuffle:%s", tag))
+			dockercli.ImageTag(ctx, imageName, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+	
+			downloadedImages = append(downloadedImages, fmt.Sprintf("frikky/shuffle:%s", tag))
+			downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
+	
+		}
+	
+		log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
+		return nil
+	}()
 
-	defer imageLoadResponse.Body.Close()
-	body, err := ioutil.ReadAll(imageLoadResponse.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading docker image: %s", err)
-		return err
-	}
-
-	if strings.Contains(string(body), "no such file") {
-		return errors.New(string(body))
-	}
-
-	os.Remove(newFileName)
-
-	if strings.Contains(strings.ToLower(string(body)), "error") {
-		log.Printf("[ERROR] Error loading image %s: %s", imageName, string(body))
-		return errors.New(string(body))
-	}
-
-	baseTag := strings.Split(imageName, ":")
-	if len(baseTag) > 1 {
-		tag := baseTag[1]
-		log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
-
-		// Remapping
-		ctx := context.Background()
-		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("frikky/shuffle:%s", tag))
-		dockercli.ImageTag(ctx, imageName, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
-
-		downloadedImages = append(downloadedImages, fmt.Sprintf("frikky/shuffle:%s", tag))
-		downloadedImages = append(downloadedImages, fmt.Sprintf("registry.hub.docker.com/frikky/shuffle:%s", tag))
-
-	}
-
-	log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
 	return nil
 }
