@@ -26613,6 +26613,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				if param.Name == "url" {
+					log.Printf("[DEBUG] Found URL in required fields: %s - %s", param.Name, param.Value)
 					continue
 				}
 
@@ -27248,8 +27249,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 					missingFields = RemoveFromArray(missingFields, key)
 				} else if param.Name == "body" {
-					
-
 					log.Printf("\n\n\n[DEBUG] Found body field for file content: %s. Location: %#v, Value: %#v\n\n\n", key, strings.Join(mappedFieldSplit, "."), mapValue)
 
 					newBody := param.Value
@@ -27523,7 +27522,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				resp.Header().Add(attemptString, fmt.Sprintf("%d", i+1))
 			}
 
-			// log.Printf("[DEBUG] Attempt preparedAction: %s", string(preparedAction))
+
+			log.Printf("[DEBUG] Attempt preparedAction: %s", string(preparedAction))
 
 			// The request that goes to the CORRECT app
 			req, err := http.NewRequest(
@@ -28230,6 +28230,11 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 
 			// Make it FORCE look for a specific label if it exists, otherwise
 			newApp, guessedAction := AutofixAppLabels(app, label, keys)
+
+			// print the found action parameters
+			for _, param := range guessedAction.Parameters {
+				log.Printf("[DEBUG] Found parameter %s: %s", param.Name, param.Value)
+			}
 
 			if guessedAction.Name != "" {
 				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
