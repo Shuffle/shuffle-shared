@@ -367,32 +367,40 @@ func stitcher(appname string, appversion string) string {
 	bucket := client.Bucket(bucketName)
 
 	remotePath := fmt.Sprintf("apps/%s_%s.zip", appname, appversion)
-	err = createFileFromFile(bucket, remotePath, outputfile)
+	err = createCloudFileFromFile(bucket, remotePath, outputfile)
 	if err != nil {
 		log.Printf("Failed to upload to bucket %s: %v", bucketName, err)
 		return ""
 	}
 
 	os.Remove(outputfile)
+
 	return fmt.Sprintf("gs://%s/apps/%s_%s.zip", bucketName, appname, appversion)
 }
 
-func createFileFromFile(bucket *storage.BucketHandle, remotePath, localPath string) error {
+func createCloudFileFromFile(bucket *storage.BucketHandle, remotePath, localPath string) error {
+	//log.Printf("[INFO] Uploading %s to %s (bucket: %s)", localPath, remotePath, bucketName)
+
 	ctx := context.Background()
 	// [START upload_file]
 	f, err := os.Open(localPath)
 	if err != nil {
+		log.Printf("[WARNING] Failed opening file: %v", err)
 		return err
 	}
-	defer f.Close()
 
+	defer f.Close()
 	wc := bucket.Object(remotePath).NewWriter(ctx)
 	if _, err = io.Copy(wc, f); err != nil {
+		log.Printf("[WARNING] Failed copying file to bucket: %v", err)
 		return err
 	}
+
 	if err := wc.Close(); err != nil {
+		log.Printf("[WARNING] Failed closing writer: %v", err)
 		return err
 	}
+
 	// [END upload_file]
 	return nil
 }
@@ -573,9 +581,9 @@ func loadYaml(fileLocation string) (shuffle.WorkflowApp, error) {
 	return action, nil
 }
 
-// FIXME - deploy to backend (YAML config)
+
+// Deploys to backend (YAML config)
 func deployConfigToBackend(basefolder, appname, appversion string) error {
-	// FIXME - no static path pls
 	location := fmt.Sprintf("%s/%s/%s/api.yaml", basefolder, appname, appversion)
 	log.Printf("[INFO] FILE LOCATION: %s", location)
 	action, err := loadYaml(location)
@@ -593,7 +601,7 @@ func deployConfigToBackend(basefolder, appname, appversion string) error {
 	}
 
 	//log.Printf("[INFO] Starting file upload to backend")
-	url := fmt.Sprintf("%s/api/v1/workflows/apps?overwrite=%s&sharing=true", baseUrl, overwriteExistingApps)
+	url := fmt.Sprintf("%s/api/v1/apps?overwrite=%s&sharing=true", baseUrl, overwriteExistingApps)
 	client := &http.Client{}
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(data))
 	if err != nil {
@@ -626,6 +634,66 @@ func deployConfigToBackend(basefolder, appname, appversion string) error {
 
 	if ret.StatusCode != 200 {
 		return errors.New(fmt.Sprintf("Status %s. App probably already exists. Raw:\n%s", ret.Status, string(body)))
+	}
+
+	//sourceappfile := fmt.Sprintf("%s/%s/%s/src/app.py", appfolder, appname, appversion)
+	// Loop all files in appfolder/appname/appversion and upload them to  generated_apps/appname_appversion
+	files, err := ioutil.ReadDir(fmt.Sprintf("%s/%s/%s", appfolder, appname, appversion))
+	if err != nil {
+		log.Printf("[ERROR] Failed reading files in %s/%s/%s: %s", appfolder, appname, appversion, err)
+	} else {
+		ctx := context.Background()
+		storageclient, err := storage.NewClient(ctx)
+		if err != nil {
+			log.Printf("[ERROR] Failed to create client: %v", err)
+			return nil 
+		}
+
+		bucket := storageclient.Bucket(bucketName)
+
+		uploadFolder := fmt.Sprintf("generated_apps/%s_%s", strings.ReplaceAll(action.Name, " ", "_"), datareturn.ID)
+		for _, f := range files {
+			if f.IsDir() && f.Name() != "src" {
+				continue
+			}
+
+			if strings.HasSuffix(f.Name(), ".swo") || strings.HasSuffix(f.Name(), ".swp") || strings.HasSuffix(f.Name(), ".swn") {
+				continue
+			}
+
+			if strings.Contains(f.Name(), "test") {
+				continue
+			}
+
+			if strings.HasSuffix(f.Name(), ".pyc") || strings.HasSuffix(f.Name(), ".eml") || strings.HasSuffix(f.Name(), ".log") || strings.HasSuffix(f.Name(), ".txt") || strings.HasSuffix(f.Name(), ".md") {
+				continue
+			}
+
+			if f.Name() == "src" {
+				srcFiles, err := ioutil.ReadDir(fmt.Sprintf("%s/%s/%s/src", appfolder, appname, appversion))
+				if err != nil {
+					log.Printf("[ERROR] Failed reading files in %s/%s/%s/src: %s", appfolder, appname, appversion, err)
+				} else {
+					for _, srcf := range srcFiles {
+						if srcf.IsDir() {
+							continue
+						}
+
+						if strings.Contains(srcf.Name(), "test") {
+							continue
+						}
+
+						if !strings.HasSuffix(srcf.Name(), ".py") {
+							continue
+						}
+
+						createCloudFileFromFile(bucket, fmt.Sprintf("%s/src/%s", uploadFolder, srcf.Name()), fmt.Sprintf("%s/%s/%s/src/%s", appfolder, appname, appversion, srcf.Name()))
+					}
+				}
+			} else {
+				createCloudFileFromFile(bucket, fmt.Sprintf("%s/%s", uploadFolder, f.Name()), fmt.Sprintf("%s/%s/%s/%s", appfolder, appname, appversion, f.Name()))
+			}
+		}
 	}
 
 	return nil
@@ -924,8 +992,8 @@ func main() {
 		bucketName = os.Args[5]
 	}
 
-	appname := "shuffle-tools"
-	appversion := "1.2.0"
+	appname := "email"
+	appversion := "1.3.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)
@@ -936,7 +1004,7 @@ func main() {
 	deployAppCloudFunc(appname, appversion)
 
 	// Forces the dockerhub + storage version(s) to also be updated
-	log.Printf("[DEBUG] Waiting 90 seconds before rebuilding force rebuilding from app.tar.gz to push")
-	time.Sleep(90 * time.Second)
+	log.Printf("[DEBUG] Rebuilding force rebuilding from app.tar.gz to push")
+	time.Sleep(5 * time.Second)
 	sendRebuildRequest(fmt.Sprintf("frikky/shuffle:%s_%s", appname, appversion))
 }
