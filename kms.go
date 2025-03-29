@@ -1458,9 +1458,22 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	var output string
 	ctx := context.Background()
 
-	tmpApp, cacheGeterr := GetAutofixAppLabelsCache(ctx, app, label, keys)
+	tmpAppAction, cacheGeterr := GetAutofixAppLabelsCache(ctx, app, label, keys)
 	if cacheGeterr == nil {
-		guessedAction = tmpApp
+		if len(tmpAppAction.Label) == 0 {
+			log.Printf("[ERROR] No label found in cache for app %s (%s) based on label %s", app.Name, app.ID, label)
+			cacheGeterr = errors.New("No label found in cache")
+		} else {
+			guessedAction = tmpAppAction
+			log.Printf("[INFO] Found app from cache in AutofixAppLabels for app %s (%s) based on label %s -- %#v", app.Name, app.ID, label, guessedAction)
+			guessedActionString, err := json.Marshal(guessedAction)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal guessed action in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+				cacheGeterr = err
+			}
+
+			actionStruct.Action = string(guessedActionString)
+		}
 	} else {
 		log.Printf("[ERROR] Failed to get app from cache in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, cacheGeterr)
 	}
@@ -1472,7 +1485,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	//userMessage := "The available actions are as follows:\n"
 
 	if cacheGeterr != nil {
-		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
+		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
 		for _, action := range app.Actions {
@@ -1486,6 +1499,9 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		if len(keys) > 0 {
 			userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
 		}
+
+		log.Printf("[INFO] System message (find action): %s", systemMessage)
+		log.Printf("[INFO] User message (find action): %s", userMessage)
 
 		output, err := RunAiQuery(systemMessage, userMessage) 
 		if err != nil {
@@ -1637,6 +1653,14 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 	} else {
 		log.Printf("[ERROR] No action found for app %s (%s) based on label %s (2). GPT error most likely. Output: %s", app.Name, app.ID, label, output)
+	}
+
+	for paramIndex, param := range guessedAction.Parameters {
+		if param.Name == "url" {
+			param.Value = ""
+		}
+
+		guessedAction.Parameters[paramIndex] = param
 	}
 
 	SetAutofixAppLabelsCache(ctx, app, guessedAction, label, keys)
