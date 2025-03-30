@@ -3179,7 +3179,7 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 			continue
 		}
 
-		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape(`{"success": False, "reason": "Shuffle's automated cleanup bot stopped this execution as it didn't finish within 30 minutes."}`))
+		streamUrl := fmt.Sprintf("%s/api/v1/workflows/%s/executions/%s/abort?reason=%s", backendUrl, execution.Workflow.ID, execution.ExecutionId, url.QueryEscape(`{"success": False, "reason": "Shuffle's automated cleanup bot stopped this execution as it didn't finish within 30 minutes.", "details": "You may disable this by setting this environment variable on your backend container: SHUFFLE_DISABLE_RERUN_AND_ABORT=true"}`))
 		//log.Printf("Url: %s", streamUrl)
 		req, err := http.NewRequest(
 			"GET",
@@ -3371,7 +3371,7 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 			newEnvironments[envIndex].SuborgDistribution = env.SuborgDistribution
 		}
 
-		if newEnvironments[envIndex].Checkin > 0 && timenow-newEnvironments[envIndex].Checkin < 60 {
+		if newEnvironments[envIndex].Checkin > 0 && timenow-newEnvironments[envIndex].Checkin < 120 {
 			if len(newEnvironments[envIndex].RunningIp) == 0 {
 				newEnvironments[envIndex].RunningIp = "IP not available. Check back later."
 			}

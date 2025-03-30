@@ -992,8 +992,8 @@ func main() {
 		bucketName = os.Args[5]
 	}
 
-	appname := "email"
-	appversion := "1.3.0"
+	appname := "shuffle-tools"
+	appversion := "1.2.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)
@@ -1004,7 +1004,6 @@ func main() {
 	deployAppCloudFunc(appname, appversion)
 
 	// Forces the dockerhub + storage version(s) to also be updated
-	log.Printf("[DEBUG] Rebuilding force rebuilding from app.tar.gz to push")
-	time.Sleep(5 * time.Second)
+	log.Printf("[DEBUG] Force rebuilding from app.tar.gz to push")
 	sendRebuildRequest(fmt.Sprintf("frikky/shuffle:%s_%s", appname, appversion))
 }
