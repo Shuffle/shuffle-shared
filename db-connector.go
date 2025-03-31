@@ -12718,23 +12718,6 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 				log.Printf("[WARNING] Failed setting up Opensearch: %s. Typically means the backend can't connect, or that there's a HTTPS vs HTTP problem. Is the SHUFFLE_OPENSEARCH_URL correct?", err)
 			}
 
-			if strings.Contains(fmt.Sprintf("%s", err), "x509: certificate signed by unknown authority") || strings.Contains(fmt.Sprintf("%s", err), "EOF") {
-				if retryCount == 0 {
-					esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
-					if strings.Contains(esUrl, "http://") {
-						esUrl = strings.Replace(esUrl, "http://", "https://", 1)
-					}
-
-					os.Setenv("SHUFFLE_OPENSEARCH_URL", esUrl)
-
-					log.Printf("[ERROR] Automatically skipping SSL verification for Opensearch connection and swapping http/https.")
-					os.Setenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY", "true")
-
-					retryCount += 1
-					return RunInit(dbclient, storageClient, gceProject, environment, cacheDb, dbType, false, 0)
-				}
-			}
-
 			return project, err
 		}
 
