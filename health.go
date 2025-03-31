@@ -10,20 +10,28 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
 	"github.com/Masterminds/semver"
+	"github.com/frikky/kin-openapi/openapi3"
+	uuid "github.com/satori/go.uuid"
 )
 
 type appConfig struct {
 	Success bool   `json:"success"`
 	OpenAPI string `json:"openapi"`
 	App     string `json:"app"`
+}
+
+type AppResponse struct {
+	Success bool	`json:"success"`
+	Id string		`json:"id"`
+	Details string	`json:"details"`
 }
 
 type genericResp struct {
@@ -82,11 +90,19 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		ExecutionID: "",
 	}
 
-	// 1. Get App
-	baseURL := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	// if len(baseURL) == 0 {
-	baseURL = "https://shuffler.io"
-	// }
+	baseURL := "https://shuffler.io"
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseURL)
+		baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if project.Environment != "cloud" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		baseURL = "http://localhost:5001"
+		if os.Getenv("BASE_URL") != "" {
+			baseURL = os.Getenv("BASE_URL")
+		}
+	}
 
 	url := baseURL + "/api/v1/apps/edaa73d40238ee60874a853dc3ccaa6f/config"
 	log.Printf("[DEBUG] Getting app with URL: %s", url)
@@ -141,6 +157,21 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, err
 	}
 
+	type OpenApiData struct {
+		Body string `json:"body"`
+		Id	string	`json:"id"`
+		Success	bool `json:"success"`
+	}
+	var openApiData OpenApiData
+
+	err = json.Unmarshal([]byte(openapiString), &openApiData)
+	if err != nil {
+		log.Printf("Error in unm %s", err)
+		return appHealth, err
+	}
+
+	openapiString = openApiData.Body
+
 	// 2.2 call /api/v1/validate_openapi
 	// with request body openapiString
 	url = baseURL + "/api/v1/validate_openapi"
@@ -167,6 +198,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed validating app in app health check: %s. The status code was: %d", err, resp.StatusCode)
+		respBodyErr, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		} else {
+			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
+		}
+
 		return appHealth, err
 	}
 
@@ -195,15 +233,35 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	log.Printf("[DEBUG] New app id: %s", id)
 
+
 	// 2.3 call /api/v1/verify_openapi POST
 	// with request body openapiString
-	// replace edaa73d40238ee60874a853dc3ccaa6f with id from above
-	newOpenapiString := strings.Replace(openapiString, "edaa73d40238ee60874a853dc3ccaa6f", id, -1)
+	// replace edaa73d40238ee60874a853dc3ccaa6f
+	// with id from above and bunch of other data to
+	// not get same app id when verified
+	data, err := openapi3.NewSwaggerLoader().LoadSwaggerFromData([]byte(openapiString))
+	jsonId := json.RawMessage(`"`+id+`"`)
+	data.ExtensionProps.Extensions["id"] = jsonId
+	data.ExtensionProps.Extensions["editing"] = json.RawMessage(`false`)
+	data.Info.Title = "Shuffle-Copy"
+	data.Info.Version = "2.0"
+
+	//	newOpenapiString := strings.Replace(openapiString, `"edaa73d40238ee60874a853dc3ccaa6f"`, `"`+id+`"`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"editing":true`, `"editing":false`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"title":"Shuffle"`, `"title":"Shuffle-Copy"`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"version":"1.0"`, `"version":"2.0"`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"tags":[{"name":"SOAR"},{"name":"Automation"},{"name":"Shuffle"}]`, `"tags":[]`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"/api/v1/apps/search"`, `"/api/v1/different/endpoint"`, 1)
+
 	url = baseURL + "/api/v1/verify_openapi"
 
-	log.Printf("[DEBUG] New openapi string: %s", newOpenapiString)
+	newOpenapi, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[ERROR] Failed to edit app data. Did we change the specs?")
+		return appHealth, err
+	}
 
-	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(newOpenapiString)))
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer(newOpenapi))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating app check HTTP for app verify request: %s", err)
 		return appHealth, err
@@ -244,6 +302,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, err
 	}
 
+	id = validatedResp.ID
 	// Verify that the app was created
 	// Make a request to /api/v1/apps/<id>/config
 	url = baseURL + "/api/v1/apps/" + id + "/config"
@@ -269,9 +328,15 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body) // Read response body
+	if err != nil {
+		log.Printf("[ERROR] Failed reading response body: %s", err)
+		return appHealth, err
+	}
+
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed reading app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		log.Printf("[ERROR] The response body was: %s", respBody)
+		log.Printf("[ERROR] The response body was: %s", body)
 		return appHealth, err
 	}
 
@@ -388,6 +453,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
+		respBodyErr, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		} else {
+			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
+		}
+
 		return appHealth, err
 	}
 
@@ -645,19 +717,36 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		workflowHealthChannel <- workflowHealth
 		errorChannel <- err
 	}()
+	
+	// TODO: More testing for onprem health checks
+	if project.Environment == "cloud" {
+		openapiAppHealthChannel := make(chan AppHealth)
+		go func() {
+			appHealth, err := RunOpsAppHealthCheck(apiKey, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed running app health check: %s", err)
+			}
+	
+			openapiAppHealthChannel <- appHealth
+			errorChannel <- err
+		}()
+	
+		pythonAppHealthChannel := make(chan AppHealth)
+		go func() {
+			pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed running python app health check: %s", err)
+			}
+	
+			pythonAppHealthChannel <- pythonAppHealth
+			errorChannel <- err
+		}()
+		
+		// Use channel for getting RunOpsWorkflow function results
+		platformHealth.Apps = <- openapiAppHealthChannel
+		platformHealth.PythonApps = <- pythonAppHealthChannel
+	}
 
-	// go func() {
-	// 	appHealth, err := RunOpsAppHealthCheck()
-	// 	if err != nil {
-	// 		log.Printf("[ERROR] Failed running app health check: %s", err)
-	// 		appHealthChannel <- appHealth
-	// 		return
-	// 	}
-	// 	appHealthChannel <- appHealth
-	// }()
-
-	// Use channel for getting RunOpsWorkflow function results
-	// platformHealth.Apps = <-appHealthChannel
 	platformHealth.Workflows = <-workflowHealthChannel
 	err = <-errorChannel
 
@@ -1306,6 +1395,279 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	return workflowHealth, nil
 }
 
+func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error){
+	appHealth := AppHealth{
+		Create:      false,
+		Run:         false,
+		Delete:      false,
+		Read:        false,
+		Validate:    false,
+		AppId:       "",
+		Result:      "",
+		ExecutionID: "",
+	}
+
+	appZipUrl := "https://github.com/shuffle/python-apps/raw/refs/heads/master/shuffle-tools-copy.zip"
+
+	resp, err := http.Get(appZipUrl)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create an http request to the appZipUrl: %s", err)
+		return appHealth, errors.New("Failed creating an http request")
+	}
+	defer resp.Body.Close()
+
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+
+	go func() {
+		defer pw.Close()
+		defer writer.Close()
+
+		part, err := writer.CreateFormFile("shuffle_file", "app.zip")
+		if err != nil {
+			log.Printf("[ERROR] Failed to creating form field: %s", err)
+			return
+		}
+
+		_, err = io.Copy(part, resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed to stream file: %s", err)
+			return
+		}
+	}()
+
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseUrl)
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+
+	if project.Environment != "cloud" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		baseUrl = "http://localhost:5001"
+		if os.Getenv("BASE_URL") != "" {
+			baseUrl = os.Getenv("BASE_URL")
+		}
+	}
+
+	appHealth.Read = true
+
+	appUploadUrl := baseUrl + "/api/v1/apps/upload"
+
+	req, err := http.NewRequest("POST", appUploadUrl, pr)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create http request for app upload: %s", err)
+		return appHealth, errors.New("Failed to create http request for app upload")
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending request to app upload: %s", err)
+		return appHealth, errors.New("Failed sending http request to app upload")
+	}
+
+	defer res.Body.Close()
+
+	response, err := io.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read app upload response: %s", err)
+		return appHealth, errors.New("Failed to read app upload response")
+	}
+
+	if res.StatusCode != 200{
+		log.Printf("[ERROR] Failed to upload an ops app. Response: %s", string(response))
+		return appHealth, errors.New("Failed to upload app")
+	}
+
+	var appData AppResponse
+	err = json.Unmarshal(response, &appData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal response? Did we change the response struct?")
+		return appHealth, errors.New("Failed to unmarshal response")
+	}
+
+	appHealth.Create = true
+	appHealth.AppId = appData.Id
+
+	// wait 5 second before execution
+	time.Sleep(5 * time.Second)
+
+	executeUrl := baseUrl + "/api/v1/apps/" + appData.Id + "/run"
+
+	var executeBody WorkflowAppAction
+	executeBody.AppID = appData.Id
+	executeBody.AppName = "Shuffle Tools Copy"
+	executeBody.AppVersion = "1.0.0"
+	executeBody.Name = "repeat_back_to_me"
+	executeBody.Environment = "cloud"
+	executeBody.Sharing = false
+	executeBody.Parameters = []WorkflowAppActionParameter{
+		{
+			Name: "call",
+			Value: "run the test app, hello",
+			Configuration: false,
+		},
+	}
+
+	executeBodyJSON, err := json.Marshal(executeBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling app run JSON data: %s", err)
+		return appHealth, errors.New("Failed marshalling app run JSON data")
+	}
+
+	req, err = http.NewRequest("POST", executeUrl, bytes.NewBuffer(executeBodyJSON))
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP for app run request: %s", err)
+		return appHealth, errors.New("Failed to create HTTP for app run")
+	}
+
+	// set the headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// send the request
+	client = &http.Client{}
+	resp, err = client.Do(req)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
+		return appHealth, errors.New("Failed sending HTTP request")
+	}
+
+	defer resp.Body.Close()
+
+	appExecuteData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read app execution data")
+		return appHealth, err
+	}
+
+	var executionData SingleResult
+
+	err = json.Unmarshal(appExecuteData, &executionData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal single app result")
+		return appHealth, errors.New("Failed to unmarshal")
+	}
+
+	appHealth.Run = true
+	appHealth.ExecutionID = executionData.Id
+
+	runCount := 0
+	for executionData.Result == "" {
+		if runCount > 5 {
+			return appHealth, errors.New("Failed to get app execution result")
+		}
+
+		url := baseUrl + "/api/v1/streams/results"
+		req, err := http.NewRequest("POST", url, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+			return appHealth, errors.New("Failed creating HTTP request")
+		}
+
+		// set the headers
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Org-Id", orgId)
+
+		// convert the body to JSON
+		reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
+		reqBodyJson, err := json.Marshal(reqBody)
+
+		// set the body
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
+
+		// send the request
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
+			return appHealth, err
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed checking results for the workflow: %s. The status code was: %d", err, resp.StatusCode)
+			return appHealth, err
+		}
+
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+			return appHealth, err
+		}
+
+		// Unmarshal the JSON data into a Workflow instance
+		var executionResults WorkflowExecution
+		err = json.Unmarshal(respBody, &executionResults)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+			return appHealth, err
+		}
+
+		if executionResults.Status != "EXECUTING" {
+			log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
+		}
+
+		if executionResults.Status == "FINISHED" {
+			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
+			executionData.Result = executionResults.Result
+			appHealth.Validate = executionResults.Workflow.Validated
+		}
+
+		time.Sleep(2 * time.Second)
+		runCount += 1
+	}
+
+	appHealth.Result = executionData.Result
+
+	// Delete the app
+	url := baseUrl + "/api/v1/apps/" + appData.Id
+
+	log.Printf("[DEBUG] Deleting app with URL %s", url)
+
+	req, err = http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", err)
+		return appHealth, err
+	}
+
+	// set the headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// send the request
+	client = &http.Client{}
+	resp, err = client.Do(req)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", err)
+		return appHealth, err
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
+		return appHealth, err
+	}
+
+	appHealth.Delete = true
+	return appHealth, nil
+}
+
 func RunHealthTest(resp http.ResponseWriter, req *http.Request) {
 	response, err := io.ReadAll(req.Body)
 	if err != nil {
@@ -1384,7 +1746,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	if project.Environment == "cloud" {
 		// url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
 		// url := "https://shuffler.io/api/v1/workflows/7b729319-b395-4ba3-b497-d8246da67b1c"
-		//url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
+		// url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
 		url := "https://shuffler.io/api/v1/workflows/ae89a788-a26b-4866-8a0b-ce0b31d354ea"
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
