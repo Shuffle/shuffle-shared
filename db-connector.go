@@ -12719,20 +12719,20 @@ func RunInit(dbclient datastore.Client, storageClient storage.Client, gceProject
 			}
 
 			if strings.Contains(fmt.Sprintf("%s", err), "x509: certificate signed by unknown authority") || strings.Contains(fmt.Sprintf("%s", err), "EOF") {
-				if retryCount == 0 {
-					esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
-					if strings.Contains(esUrl, "http://") {
-						esUrl = strings.Replace(esUrl, "http://", "https://", 1)
-					}
+			//	if retryCount == 0 {
+			//		esUrl := os.Getenv("SHUFFLE_OPENSEARCH_URL")
+			//		if strings.Contains(esUrl, "http://") {
+			//			esUrl = strings.Replace(esUrl, "http://", "https://", 1)
+			//		}
 
-					os.Setenv("SHUFFLE_OPENSEARCH_URL", esUrl)
+			//		os.Setenv("SHUFFLE_OPENSEARCH_URL", esUrl)
 
-					log.Printf("[ERROR] Automatically skipping SSL verification for Opensearch connection and swapping http/https.")
-					os.Setenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY", "true")
+			//		log.Printf("[ERROR] Automatically skipping SSL verification for Opensearch connection and swapping http/https.")
+			//		os.Setenv("SHUFFLE_OPENSEARCH_SKIPSSL_VERIFY", "true")
 
-					retryCount += 1
-					return RunInit(dbclient, storageClient, gceProject, environment, cacheDb, dbType, false, 0)
-				}
+			//		retryCount += 1
+			//		return RunInit(dbclient, storageClient, gceProject, environment, cacheDb, dbType, false, 0)
+			//	}
 			}
 
 			return project, err
