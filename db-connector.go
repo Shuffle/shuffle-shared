@@ -4850,13 +4850,51 @@ func propagateUser(user User, delete bool) error {
 	return nil
 }
 
+func GetUsersByOrg(ctx context.Context, orgId string) ([]User, error) {
+	nameKey := "Users"
+
+	users := []User{}
+	if project.DbType == "opensearch" {
+		return users, errors.New("Not implemented")
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("orgs =", orgId)
+
+		_, err := project.Dbclient.GetAll(ctx, query, &users)
+		if err != nil {
+			if strings.Contains(err.Error(), `cannot load field`) {
+				return users, err
+			} else {
+				log.Printf("[ERROR] Problem in user loading for org %s: %s", orgId, err)
+			}
+		}
+	}
+
+	return users, nil
+}
+
 func SetOrg(ctx context.Context, data Org, id string) error {
 	if len(id) == 0 {
 		return errors.New(fmt.Sprintf("No ID provided for org %s", data.Name))
 	}
 
 	if len(data.Users) == 0 {
-		return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
+		// FIXME: Why do we need autocorrective mechanisms like this?
+		// Where do users go? wtf.
+		if project.Environment == "cloud" {
+			orgUsers, err := GetUsersByOrg(ctx, id)
+			if err != nil {
+				log.Printf("[ERROR] Error loading users during org autocorrecting: %s", err)
+			}
+
+			if len(orgUsers) > 0 {
+				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", len(data.Users), len(orgUsers))
+				data.Users = orgUsers
+			}
+		}
+
+		if len(data.Users) == 0 {
+			return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
+		}
 	}
 
 	if id != data.Id && len(data.Id) > 0 {

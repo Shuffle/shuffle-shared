@@ -11508,21 +11508,31 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		if !parentOrg.SyncFeatures.MultiTenant.Active && !parentOrg.LeadInfo.Customer && !parentOrg.LeadInfo.POV && !parentOrg.LeadInfo.Internal {
-			// Anyone is allowed to make 5
-			if parentOrg.SyncFeatures.MultiTenant.Limit <= 0 {
-				parentOrg.SyncFeatures.MultiTenant.Limit = 10
-				parentOrg.SyncFeatures.MultiTenant.Active = true
-			}
+		//if !parentOrg.SyncFeatures.MultiTenant.Active && !parentOrg.LeadInfo.Customer && !parentOrg.LeadInfo.POV && !parentOrg.LeadInfo.Internal {
+		parentOrg.SyncFeatures.MultiTenant.Active = true
 
-			if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
-				log.Printf("[WARNING] Org %s is not allowed to make more than %d sub-organizations: %s", parentOrg.Id, parentOrg.SyncFeatures.MultiTenant.Limit)
-				resp.WriteHeader(400)
-				//resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription or to be in the POV stage with access to multi-tenancy. Contact support@shuffler.io to try it out."}`))
-				resp.Write([]byte(`{"success": false, "reason": "You by default can't make more than 5 sub-organizations on our cloud. Contact support@shuffler.io to increase this limit"}`))
-				return
+		// Anyone is allowed to make 5
+		baseLimit := int64(2)
+		baseCustomerLimit := int64(5)
+
+		if parentOrg.SyncFeatures.MultiTenant.Limit <= baseLimit {
+			parentOrg.SyncFeatures.MultiTenant.Limit = baseLimit
+		}
+
+		if parentOrg.LeadInfo.Customer || parentOrg.LeadInfo.Internal || parentOrg.LeadInfo.POV {
+			if parentOrg.SyncFeatures.MultiTenant.Limit < baseCustomerLimit {
+				parentOrg.SyncFeatures.MultiTenant.Limit = baseCustomerLimit
 			}
 		}
+
+		if parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
+			log.Printf("[WARNING] Org %s is not allowed to make more than %d sub-organizations: %s", parentOrg.Id, parentOrg.SyncFeatures.MultiTenant.Limit)
+			resp.WriteHeader(400)
+			//resp.Write([]byte(`{"success": false, "reason": "Sub-organizations require an active subscription or to be in the POV stage with access to multi-tenancy. Contact support@shuffler.io to try it out."}`))
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You have made %d/%d sub-organizations. Contact support@shuffler.io to increase this limit"}`, parentOrg.SyncUsage.MultiTenant.Counter, parentOrg.SyncFeatures.MultiTenant.Limit)))
+			return
+		}
+		//}
 
 		parentOrg.SyncUsage.MultiTenant.Counter += 1
 		log.Printf("[DEBUG] Allowing suborg for %s because they have %d vs %d limit", parentOrg.Id, len(parentOrg.ChildOrgs), parentOrg.SyncFeatures.MultiTenant.Limit)
@@ -11538,14 +11548,14 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 			parentOrg.SyncUsage.MultiTenant.Counter = int64(len(childOrgs))
 		}
 
-		if len(childOrgs) >= 2 && !parentOrg.SyncFeatures.MultiTenant.Active {
+		if len(childOrgs) >= 5 && !parentOrg.SyncFeatures.MultiTenant.Active {
 			resp.WriteHeader(400)
 			resp.Write([]byte(`{"success": false, "reason": "You can't make more than 1 sub-organizations without cloud sync being active. Check out /docs/organization#hybrid-features or contact support@shuffler.io to learn more."}`))
 			return
 		}
 
 		if parentOrg.SyncFeatures.MultiTenant.Active == true && parentOrg.SyncFeatures.MultiTenant.Limit == 0 {
-			parentOrg.SyncFeatures.MultiTenant.Limit = 5
+			parentOrg.SyncFeatures.MultiTenant.Limit = 10
 		}
 
 		if parentOrg.SyncFeatures.MultiTenant.Active == true && parentOrg.SyncUsage.MultiTenant.Counter >= parentOrg.SyncFeatures.MultiTenant.Limit {
