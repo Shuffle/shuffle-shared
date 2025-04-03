@@ -3868,7 +3868,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	}
 
 	baseUrl := os.Getenv("BASE_URL")
-	log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist", imageName, baseUrl)
+	//log.Printf("[DEBUG] Trying to download image %s from backend %s as it doesn't exist", imageName, baseUrl)
 
 	if !ArrayContains(downloadedImages, imageName) {
 		downloadedImages = append(downloadedImages, imageName)
@@ -3882,7 +3882,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		dockerImgUrl = fmt.Sprintf("%s/api/v1/get_docker_image?image=%s", baseUrl, strings.Replace(imageName, " ", "-", -1))
 		isCloudDownload = true
 	} else {
-		log.Printf("[DEBUG] Downloading image as POST request WITHOUT redirects due to not being cloud")
+		//log.Printf("[DEBUG] Downloading image as POST request WITHOUT redirects due to not being cloud")
 	}
 
 	// Set request timeout to 5 min (max)
@@ -3956,7 +3956,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 	defer newresp.Body.Close()
 	if newresp.StatusCode != 200 {
-		log.Printf("[ERROR] Docker download for image %s (backend) StatusCode (1): %d", imageName, newresp.StatusCode)
+		//log.Printf("[ERROR] Docker download for image %s (backend) StatusCode (1): %d", imageName, newresp.StatusCode)
 		return errors.New(fmt.Sprintf("Failed to get image - status code %d", newresp.StatusCode))
 	}
 
@@ -3983,7 +3983,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		return err
 	}
 
-	log.Printf("[DEBUG] Starting to load zip file for image %s. This is a background process and may take a while.", imageName)
+	//log.Printf("[DEBUG] Starting to load zip file for image %s. This is a background process and may take a while.", imageName)
 	defer dockercli.Close()
 	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
 	if err != nil {
@@ -3991,7 +3991,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		return err
 	}
 
-	log.Printf("[DEBUG] Finished loading zip file for image %s", imageName)
+	//log.Printf("[DEBUG] Finished loading zip file for image %s", imageName)
 	defer imageLoadResponse.Body.Close()
 	body, err := ioutil.ReadAll(imageLoadResponse.Body)
 	if err != nil {
@@ -4012,7 +4012,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	baseTag := strings.Split(imageName, ":")
 	if len(baseTag) > 1 {
 		tag := baseTag[1]
-		log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
+		//log.Printf("[DEBUG] Creating tag copies of downloaded containers from tag %s", tag)
 
 		// Remapping
 		ctx := context.Background()
@@ -4024,7 +4024,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 
 	}
 
-	log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
+	//log.Printf("[INFO] Successfully loaded image %s: %s", imageName, string(body))
 
 	return nil
 }
