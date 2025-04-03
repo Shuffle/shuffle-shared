@@ -3115,7 +3115,7 @@ func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if strings.ToLower(os.Getenv("SHUFFLE_DISABLE_RERUN_AND_ABORT")) == "true" {
-		log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping.")
+		//log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping.")
 		resp.WriteHeader(409)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SHUFFLE_DISABLE_RERUN_AND_ABORT is active. Won't rerun executions."}`)))
 		return
@@ -3227,7 +3227,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	environmentName := fileId
 	if len(fileId) != 36 {
-		log.Printf("[DEBUG] Environment length %d for %s is not good for executions aborts. Attempting to find the actual ID for it", len(fileId), fileId)
+		//log.Printf("[DEBUG] Runtime Location length %d for '%s' is not good for executions aborts. Attempting to find the actual ID for it", len(fileId), fileId)
 
 		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 		if err != nil {
@@ -3347,7 +3347,7 @@ func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
 		if ok && deleteAll[0] == "true" {
 			log.Printf("[DEBUG] Allowing rerun and abort for environment %s for org %s with env set due to deleteall=true from frontend", fileId, user.ActiveOrg.Id)
 		} else {
-			log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping. (abort)")
+			//log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping. (abort)")
 			resp.WriteHeader(409)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SHUFFLE_DISABLE_RERUN_AND_ABORT is active. Won't rerun executions (abort)"}`)))
 			return

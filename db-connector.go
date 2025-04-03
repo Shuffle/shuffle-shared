@@ -4314,39 +4314,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
-			//log.Printf("Users: %s", curOrg.Users)
-			if strings.Contains(err.Error(), `cannot load field`) && strings.Contains(err.Error(), `users`) && !strings.Contains(err.Error(), `users_last_session`) {
-				//Self correcting Org handler for user migration. This may come in handy if we change the structure of private apps later too.
-				log.Printf("[INFO] Error in org loading (3). Migrating org to new org and user handler (2): %s", err)
-				err = nil
-
-				/*
-				users := []User{}
-				q := datastore.NewQuery("Users").Filter("orgs =", id)
-				_, usererr := project.Dbclient.GetAll(ctx, q, &users)
-
-				if usererr != nil {
-					log.Printf("[WARNING] Failed finding users for org too: %s", err)
-				}
-				//	log.Printf("[WARNING] Failed handling users in org fixer: %s", usererr)
-				//	for index, user := range users {
-				//		users[index].ActiveOrg = OrgMini{
-				//			Name: curOrg.Name,
-				//			Id:   curOrg.Id,
-				//			Role: user.Role,
-				//		}
-
-				//		//log.Printf("Should update user %s because there's an error with it", users[index].Id)
-				//		SetUser(ctx, &users[index], false)
-				//	}
-				//}
-
-				if len(users) > 0 {
-					curOrg.Users = users
-					setOrg = true
-				}
-				*/
-			} else if strings.Contains(err.Error(), `cannot load field`) {
+			if strings.Contains(err.Error(), `cannot load field`) {
 				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
@@ -6467,7 +6435,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 	}
 
 	if user.Username != "HealthWorkflowFunction" { 
-		log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
+		//log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
 	}
 
 	// 1. Caching apps locally

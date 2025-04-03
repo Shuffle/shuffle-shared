@@ -2940,8 +2940,8 @@ func HandleGetEnvironments(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed getting environments")
-		resp.WriteHeader(401)
+		log.Printf("[WARNING] Failed getting environments: %s", err)
+		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Can't get environments"}`))
 		return
 	}
@@ -6737,7 +6737,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	}
 
 	// Create / Delete / Modify tracking
-	log.Printf("\n ===== Parent: %#v, Child: %#v =====\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", parentWorkflow.ID, oldWorkflow.ID, len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
+	//log.Printf("\n ===== Parent: %#v, Child: %#v =====\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", parentWorkflow.ID, oldWorkflow.ID, len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 
 	// Use previous rev
 	ctx := context.Background()
@@ -7692,6 +7692,40 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
 		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
 		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", parentWorkflow.ID))
+
+		// Update the org with all the relevant apps
+		childOrg, err := GetOrg(ctx, childWorkflow.OrgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to load multi-tenant workflow org %s: %s", childWorkflow.OrgId, err)
+		} else {
+			oldLength := len(childOrg.ActiveApps)
+
+			handled := []string{}
+			for _, action := range childWorkflow.Actions {
+				if ArrayContains(handled, action.AppID) {
+					continue
+				}
+
+				found := false
+				for _, appId := range childOrg.ActiveApps {
+					if appId == action.AppID {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					childOrg.ActiveApps = append(childOrg.ActiveApps, action.AppID)
+				}
+			}
+
+			if len(childOrg.ActiveApps) > oldLength {
+				err := SetOrg(ctx, *childOrg, childOrg.Id)
+				if err != nil {
+					log.Printf("[ERROR] Failed updating child org %s during multi-tenant workflow update: %s", childOrg.Name, err)
+				}
+			}
+		}
 	}
 }
 
@@ -8039,7 +8073,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	} else {
-		log.Printf("[AUDIT] User %s is creating or modifying workflow with ID %s as they are the owner OR it's public", user.Username, workflow.ID)
+		log.Printf("[AUDIT] User %s is creating or modifying workflow with ID %s as they are the owner OR it's public. Actions: %d, Triggers: %d", user.Username, workflow.ID, len(workflow.Actions), len(workflow.Triggers))
 
 		if workflow.Public {
 			log.Printf("[WARNING] Rolling back public as the user set it to true themselves")
@@ -8133,7 +8167,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.DefaultReturnValue
 	}
 
-	log.Printf("[INFO] Saving workflow '%s' with %d action(s) and %d trigger(s). Org: %s", workflow.Name, len(workflow.Actions), len(workflow.Triggers), workflow.OrgId)
+	//log.Printf("[INFO] Saving workflow '%s' with %d action(s) and %d trigger(s). Org: %s", workflow.Name, len(workflow.Actions), len(workflow.Triggers), workflow.OrgId)
 
 	if len(workflow.OrgId) == 0 && len(user.ActiveOrg.Id) > 0 {
 		if len(workflow.ExecutingOrg.Id) == 0 {
@@ -28616,17 +28650,18 @@ func HandleSetenvConfig(resp http.ResponseWriter, request *http.Request) {
 		foundOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
 		if err == nil {
 			for _, childOrg := range foundOrg.ChildOrgs {
-				nameKey := "Environments"
-				cacheKey := fmt.Sprintf("%s_%s", nameKey, childOrg.Id)
-				DeleteCache(ctx, cacheKey)
+				DeleteCache(ctx, fmt.Sprintf("Environments_%s", childOrg.Id))
 			}
 		}
 
 		log.Printf("[INFO] Successfully updated environment in set env config for environment id: %s", environmentId)
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": true, "reason" : "Successfully updated environment"}`))
-
+		return
 	}
+
+	resp.WriteHeader(400)
+	resp.Write([]byte(`{"success": false, "reason": "Invalid action"}`))
 }
 
 func GetWorkflowSuggestions(ctx context.Context, user User, org *Org, orgUpdated bool, amount int) (*Org, bool) {
