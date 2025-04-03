@@ -2232,7 +2232,7 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		m := regexp.MustCompile(`_shuffle_replace_\d+`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
 
@@ -2429,7 +2429,7 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		m := regexp.MustCompile(`_shuffle_replace_\d+`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
 
@@ -2638,7 +2638,7 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		m := regexp.MustCompile(`_shuffle_replace_\d+`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
 
@@ -2832,7 +2832,7 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		m := regexp.MustCompile(`_shuffle_replace_\d+`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
 
@@ -3046,7 +3046,7 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 	baseUrl := fmt.Sprintf("%s%s", api.Link, actualPath)
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		m := regexp.MustCompile(`_shuffle_replace_\d+`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
 
@@ -3332,7 +3332,7 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 	action.Returns.Schema.Type = "string"
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		m := regexp.MustCompile(`_shuffle_replace_\d+`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
 	handleFile := false
@@ -3506,7 +3506,7 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 
 	if strings.Contains(baseUrl, "_shuffle_replace_") {
 		//log.Printf("[DEBUG] : %s", baseUrl)
-		m := regexp.MustCompile(`_shuffle_replace_\d`)
+		m := regexp.MustCompile(`_shuffle_replace_\d+`)
 		baseUrl = m.ReplaceAllString(baseUrl, "")
 	}
 
@@ -3931,7 +3931,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		// Specific to Orborus auth (org + auth) -> environment auth
 		authorization = os.Getenv("AUTH")
 		if len(authorization) > 0 {
-			log.Printf("[DEBUG] Found Orborus environment auth - adding to header.")
+			//log.Printf("[DEBUG] Found Orborus environment auth - adding to header.")
 			req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", authorization))
 
 			org := os.Getenv("ORG")

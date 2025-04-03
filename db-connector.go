@@ -4320,6 +4320,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				log.Printf("[INFO] Error in org loading (3). Migrating org to new org and user handler (2): %s", err)
 				err = nil
 
+				/*
 				users := []User{}
 				q := datastore.NewQuery("Users").Filter("orgs =", id)
 				_, usererr := project.Dbclient.GetAll(ctx, q, &users)
@@ -4344,6 +4345,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 					curOrg.Users = users
 					setOrg = true
 				}
+				*/
 			} else if strings.Contains(err.Error(), `cannot load field`) {
 				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
