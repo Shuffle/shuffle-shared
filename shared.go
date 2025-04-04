@@ -8592,27 +8592,30 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Name: user.ActiveOrg.Name,
 	}
 
-	SetWorkflowRevision(ctx, workflow)
-	err = SetGitWorkflow(ctx, workflow, org)
-	if err != nil {
+	go SetWorkflowRevision(ctx, workflow)
 
-		// Make a notification for this
-		err = CreateOrgNotification(
-			ctx,
-			fmt.Sprintf("Failed setting git workflow for %s (%s): %s", workflow.Name, workflow.ID, err),
-			fmt.Sprintf("User %s (%s) tried to upload %s (%s) but failed: %s. Make sure there is already a file in the repository, like README.md", user.Username, user.Id, workflow.Name, workflow.ID, err),
-			fmt.Sprintf("/workflows/%s", workflow.ID),
-			user.ActiveOrg.Id,
-			true,
-		)
-
+	go func() {
+		err = SetGitWorkflow(ctx, workflow, org)
 		if err != nil {
-			log.Printf("[WARNING] Failed creating notification for failed git workflow for %s (%s): %s", workflow.Name, workflow.ID, err)
-		} else {
-			log.Printf("[WARNING] Failed setting git workflow for %s (%s). Notification created. %s", workflow.Name, workflow.ID, err)
+	
+			// Make a notification for this
+			err = CreateOrgNotification(
+				ctx,
+				fmt.Sprintf("Failed setting git workflow for %s (%s): %s", workflow.Name, workflow.ID, err),
+				fmt.Sprintf("User %s (%s) tried to upload %s (%s) but failed: %s. Make sure there is already a file in the repository, like README.md", user.Username, user.Id, workflow.Name, workflow.ID, err),
+				fmt.Sprintf("/workflows/%s", workflow.ID),
+				user.ActiveOrg.Id,
+				true,
+			)
+	
+			if err != nil {
+				log.Printf("[WARNING] Failed creating notification for failed git workflow for %s (%s): %s", workflow.Name, workflow.ID, err)
+			} else {
+				log.Printf("[WARNING] Failed setting git workflow for %s (%s). Notification created. %s", workflow.Name, workflow.ID, err)
+			}
+	
 		}
-
-	}
+	}()
 
 	type returnData struct {
 		Success bool     `json:"success"`
