@@ -711,7 +711,9 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId, "")
 		if err != nil {
-			log.Printf("[ERROR] Failed workflow health check: %s", err)
+			if project.Environment == "cloud" {
+				log.Printf("[ERROR] Failed workflow health check: %s", err)
+			}
 		}
 
 		workflowHealthChannel <- workflowHealth
@@ -1347,7 +1349,10 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		// check if timeout
 		select {
 		case <-timeout:
-			log.Printf("[ERROR] Timeout reached for workflow health check. Returning")
+			if project.Environment == "cloud" {
+				log.Printf("[ERROR] Timeout reached for workflow health check. Returning")
+			}
+
 			workflowHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
 
 			return workflowHealth, errors.New("Timeout reached for workflow health check")

@@ -8,6 +8,7 @@ toolchain go1.23.1
 //replace github.com/shuffle/opensearch-go => ../opensearch-go
 
 require (
+	google.golang.org/api v0.228.0
 	cloud.google.com/go/datastore v1.11.0
 	cloud.google.com/go/scheduler v1.9.0
 	cloud.google.com/go/storage v1.29.0
@@ -33,7 +34,6 @@ require (
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.36.0
 	golang.org/x/oauth2 v0.23.0
-	google.golang.org/api v0.126.0
 	google.golang.org/appengine v1.6.8
 	gopkg.in/yaml.v2 v2.4.0
 	gopkg.in/yaml.v3 v3.0.1

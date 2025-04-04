@@ -14954,7 +14954,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	if actionResult.Action.ID == "" && actionResult.Action.Name == "" {
 		// Can we find it based on label?
 
-		log.Printf("\n\n[ERROR][%s] Failed handling EMPTY action %#v (ParsedExecutionResult). Usually ONLY happens during worker run that sets everything?\n\n", workflowExecution.ExecutionId, actionResult)
+		//log.Printf("\n\n[ERROR][%s] Failed handling EMPTY action %#v (ParsedExecutionResult). Usually ONLY happens during worker run that sets everything?\n\n", workflowExecution.ExecutionId, actionResult)
 
 		return &workflowExecution, true, nil
 	}
@@ -14966,11 +14966,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 	actionResult = FixActionResultOutput(actionResult)
 	actionCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
+
 	// Done elsewhere
-
-	// Don't set cache for triggers?
-	//log.Printf("\n\nACTIONRES: %s\n\nRES: %s\n", actionResult, actionResult.Result)
-
 	setCache := true
 	if actionResult.Action.AppName == "shuffle-subflow" {
 
@@ -16086,6 +16083,32 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	workflowExecution, newDbSave := compressExecution(ctx, workflowExecution, "mid-cleanup")
 	if !dbSave {
 		dbSave = newDbSave
+	}
+
+	// Validates RERUN of single actions  (new 2025)
+	// Identified by: 
+	// 1. Predefined result from previous exec
+	// 2. Only ONE action
+	// 3. Every predefined result having result.Action.Category == "rerun"
+	if len(workflowExecution.Workflow.Actions) == 1 && len(workflowExecution.Results) > 0 {
+		found := false
+		rerunFound := false
+		for _, result := range workflowExecution.Results {
+			if result.Action.Category == "rerun" {
+				rerunFound = true 
+			}
+
+			// Find if the result for the single action exists or not
+			if result.Action.ID == workflowExecution.Workflow.Actions[0].ID {
+				found = true
+			}
+		}
+
+		if rerunFound && found {
+			// Continue -> this means finished check is ok
+			workflowExecution.Status = "FINISHED"
+			workflowExecution.CompletedAt = int64(time.Now().Unix())
+		}
 	}
 
 	// Does it work to cache it here?
@@ -18403,7 +18426,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	if len(action.SourceWorkflow) > 0 {
-		log.Printf("[DEBUG] Validating workflow existence: %s", action.SourceWorkflow)
+		log.Printf("[DEBUG] Validating workflow existence, as this is a rerun: %s", action.SourceWorkflow)
 
 		if len(action.ID) == 0 {
 			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
@@ -18451,13 +18474,14 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 
 			if foundIndex == -1 {
+				// This is to KNOW that it's a rerun.
+				// Just had to use an existing field, as we don't wanna keep bloating the struct
+				result.Action.Category = "rerun"
 				newResults = append(newResults, result)
 			}
 		}
 
-		//log.Printf("\n\nRESULTS OLD: %d\n\n", len(workflowExecution.Results))
 		workflowExecution.Results = newResults
-		//log.Printf("\n\nRESULTS NEW: %d\n\n", len(newResults))
 
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
@@ -19270,7 +19294,7 @@ func md5sum(data []byte) string {
 
 // Checks if data is sent from Worker >0.8.51, which sends a full execution
 // instead of individial results
-func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
+func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bool) error {
 	var execution WorkflowExecution
 	err := json.Unmarshal(body, &execution)
 	if err != nil {
@@ -19306,14 +19330,21 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 		return errors.New(fmt.Sprintf("Bad length of trigger: %d (probably normal app)", len(execution.Workflow.Triggers)))
 	}
 
-	//if len(baseExecution.Results) >= len(execution.Results) {
 	if len(baseExecution.Results) > len(execution.Results) {
-		return errors.New(fmt.Sprintf("Can't have less actions in a full execution than what exists: %d (old) vs %d (new)", len(baseExecution.Results), len(execution.Results)))
-	}
+		if shouldReset == true { 
+			// Letting it pass and override. This is to ensure worker can override
+			log.Printf("[INFO][%s] Allowing workflow execution override with status %s, %d results and %d actions", execution.ExecutionId, execution.Status,len(execution.Results), len(execution.Workflow.Actions))
 
-	//if baseExecution.Status != "WAITING" && baseExecution.Status != "EXECUTING" {
-	//	return errors.New(fmt.Sprintf("Workflow is already finished or failed. Can't update"))
-	//}
+			// Reset cache for all action results for Fixexecution
+			for _, result := range baseExecution.Results {
+				DeleteCache(ctx, fmt.Sprintf("%s_%s_result", execution.ExecutionId, result.Action.ID))
+				DeleteCache(ctx, fmt.Sprintf("%s_%s_sent", execution.ExecutionId, result.Action.ID))
+			}
+
+		} else {
+			return errors.New(fmt.Sprintf("Can't have less actions in a full execution than what exists: %d (old) vs %d (new)", len(baseExecution.Results), len(execution.Results)))
+		}
+	}
 
 	if execution.Status == "EXECUTING" {
 		//log.Printf("[INFO] Inside executing.")
@@ -19374,12 +19405,6 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte) error {
 			baseExecution.CompletedAt = time.Now().Unix()
 		}
 	}
-
-	// FIXME: Add extra here
-	//executionLength := len(baseExecution.Workflow.Actions)
-	//if executionLength != len(execution.Results) {
-	//	return errors.New(fmt.Sprintf("Bad length of actions vs results: want: %d have: %d", executionLength, len(execution.Results)))
-	//}
 
 	err = SetWorkflowExecution(ctx, execution, true)
 	executionSet := true
@@ -24863,7 +24888,11 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	workflowExecution.Results = newResults
 	relevantActions := []Action{}
 
-	// For single action reruns
+	// Validates RERUN of single actions (new 2025)
+	// Identified by: 
+	// 1. Predefined result from previous exec
+	// 2. Only ONE action
+	// 3. Every predefined result having result.Action.Category == "rerun"
 	if len(workflowExecution.Workflow.Actions) == 1 && len(workflowExecution.Results) > 0 {
 		finished := ValidateFinished(ctx, extra, workflowExecution) 
 		if finished {

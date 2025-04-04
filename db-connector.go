@@ -13700,6 +13700,33 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 }
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
+
+	// Validates RERUN of single actions  (new 2025)
+	// Identified by: 
+	// 1. Predefined result from previous exec
+	// 2. Only ONE action
+	// 3. Every predefined result having result.Action.Category == "rerun"
+	rerunFound := false
+	if len(workflowExecution.Workflow.Actions) == 1 && len(workflowExecution.Results) > 0 {
+		found := false
+		for _, result := range workflowExecution.Results {
+			if result.Action.Category == "rerun" {
+				rerunFound = true 
+			}
+
+			// Find if the result for the single action exists or not
+			if result.Action.ID == workflowExecution.Workflow.Actions[0].ID {
+				found = true
+			}
+		}
+
+		if found {
+			// Continue -> this means finished check is ok
+		} else {
+			return false
+		}
+	}
+
 	// Print 1/5 times to
 	// Should find it if it doesn't exist
 	//if extra == -1 {
@@ -13753,26 +13780,9 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-			log.Printf("[INFO][%s] Already finished (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
+			log.Printf("[INFO][%s] Already finished from GetWorkflowExecution (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
 			return true
 		}
-
-		// Updating stats for the workflow
-		/*
-			if project.Environment != "cloud" {
-				for i := 0; i < validResults; i++ {
-					IncrementCache(ctx, workflowExecution.OrgId, "app_executions")
-				}
-
-				for i := 0; i < invalidResults; i++ {
-					IncrementCache(ctx, workflowExecution.OrgId, "app_executions_failed")
-				}
-
-				for i := 0; i < subflows; i++ {
-					IncrementCache(ctx, workflowExecution.OrgId, "subflow_executions")
-				}
-			}
-		*/
 
 		if len(workflowExecution.Result) == 0 && len(lastResult.Result) > 0 {
 			workflowExecution.Result = lastResult.Result
@@ -13792,7 +13802,9 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 			// Validate text vs previous executions
 			//RunTextClassifier(ctx, workflowExecution)
 
-			// Enrich IPs and the like by finding stuff with regex
+			if rerunFound { 
+				return true
+			} 
 
 			comparisonTime := workflowExecution.CompletedAt - workflowExecution.StartedAt
 
