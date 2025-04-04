@@ -450,6 +450,69 @@ func GetValidParameters(parameters []string) []string {
 	return newParams
 }
 
+func HandleCheckDuplicates(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
+}
+
+func HandleAddParameter(param string, usedParams *[]string) []string {
+	if param == "" {
+		return nil
+	}
+
+	parts := strings.Split(param, ",")
+	var validParts []string
+
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		paramName := strings.TrimSpace(strings.SplitN(part, "=", 2)[0])
+
+		if !HandleCheckDuplicates(*usedParams, paramName) {
+			*usedParams = append(*usedParams, paramName)
+			validParts = append(validParts, part)
+		}
+	}
+	return validParts
+}
+
+func BuildParameterString(params ...string) string {
+	var usedParams []string
+	var result []string
+
+	for _, param := range params {
+		trimmedParam := strings.TrimPrefix(param, ",")
+		result = append(result, HandleAddParameter(trimmedParam, &usedParams)...)
+	}
+
+	if len(result) > 0 {
+		return ", " + strings.Join(result, " , ")
+	}
+	return ""
+}
+
+func HandleCheckValidURL(url string) string {
+	parts := strings.Split(url, "/")
+
+	for i, part := range parts {
+		switch {
+		case strings.HasPrefix(part, "{") && !strings.HasSuffix(part, "}"):
+			parts[i] = part + "}"
+		case strings.HasSuffix(part, "}") && !strings.HasPrefix(part, "{"):
+			parts[i] = "{" + part
+		}
+	}
+
+	return strings.Join(parts, "/")
+}
+
 // This function generates the python code that's being used.
 // This is really meta when you program it. Handling parameters is hard here.
 func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, parameters, optionalQueries, headers []string, fileField string, api WorkflowApp, handleFile bool) (string, string) {
@@ -621,7 +684,7 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 	urlParameter := ", url"
 	urlInline := "{url}"
-
+	url = HandleCheckValidURL(url)
 	// Specific check for SSL verification
 	// This is critical for onprem stuff.
 	// Added to_file as of July 2022
@@ -659,7 +722,6 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 			}
 		}
 	}
-
 	functionname := strings.ToLower(fmt.Sprintf("%s_%s", method, name))
 	if strings.Contains(strings.ToLower(name), strings.ToLower(method)) {
 		functionname = strings.ToLower(name)
@@ -744,7 +806,8 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 	// Extra param for url if it's changeable
 	// Extra param for authentication scheme(s)
 	// The last weird one is the body.. Tabs & spaces sucks.
-	parsedParameters := fmt.Sprintf("%s%s%s%s%s%s%s",
+
+	parsedParameters := BuildParameterString(
 		authenticationParameter,
 		urlParameter,
 		fileParameter,
@@ -2162,6 +2225,13 @@ func FixFunctionName(functionName, actualPath string, lowercase bool) string {
 
 	if lowercase == true {
 		functionName = strings.ToLower(functionName)
+	}
+
+	re := regexp.MustCompile(`[^A-Za-z0-9_]`)
+	functionName = re.ReplaceAllString(functionName, "_")
+
+	if len(functionName) == 0 || (functionName[0] < 'A' || (functionName[0] > 'Z' && functionName[0] < 'a') || functionName[0] > 'z') {
+		functionName = "_" + functionName
 	}
 
 	return functionName
