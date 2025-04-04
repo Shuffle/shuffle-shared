@@ -3984,8 +3984,9 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	}
 
 	//log.Printf("[DEBUG] Starting to load zip file for image %s. This is a background process and may take a while.", imageName)
+	//imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
 	defer dockercli.Close()
-	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
+	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar)
 	if err != nil {
 		log.Printf("[ERROR] Failed loading docker images: %s", err)
 		return err

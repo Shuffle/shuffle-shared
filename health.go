@@ -1272,20 +1272,6 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	updateOpsCache(workflowHealth)
 	timeout := time.After(5 * time.Minute)
 
-//	Removed as it was deleting the workflow before execution which
-//	was effecting the subflow
-//	if workflowHealth.Create == true {
-//		log.Printf("[DEBUG] Deleting created ops workflow")
-//		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
-//		if err != nil {
-//			log.Printf("[ERROR] Failed deleting workflow: %s", err)
-//		} else {
-//			log.Printf("[DEBUG] Deleted ops workflow successfully!")
-//			workflowHealth.Delete = true
-//			updateOpsCache(workflowHealth)
-//		}
-//	}
-
 	// 3. Check if workflow ran successfully
 	// ping /api/v1/streams/results/<execution_id> while workflowHealth.RunFinished is false
 	// if workflowHealth.RunFinished is true, return workflowHealth
@@ -1374,12 +1360,12 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	}
 
 	if workflowHealth.Create == true {
-		log.Printf("[DEBUG] Deleting created ops workflow")
+		//log.Printf("[DEBUG] Deleting created ops workflow")
 		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed deleting workflow: %s", err)
 		} else {
-			log.Printf("[DEBUG] Deleted ops workflow successfully!")
+			//log.Printf("[DEBUG] Deleted ops workflow successfully!")
 			workflowHealth.Delete = true
 			updateOpsCache(workflowHealth)
 		}

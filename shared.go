@@ -30572,10 +30572,11 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	}
 
 	// FIXME: Is this necessary?
-	workflow, err := GetWorkflow(ctx, exec.Workflow.ID)
+	workflow, err := GetWorkflow(ctx, exec.Workflow.ID, true)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting workflow for %s: %s (exec status)", exec.Workflow.ID, err)
-		return exec
+		log.Printf("[WARNING] Failed getting workflow '%s': %s (exec status)", exec.Workflow.ID, err)
+		//workflow = &exec.Workflow
+		//return exec
 	}
 
 	// Make sure it only handles/keeps the relevant actions
