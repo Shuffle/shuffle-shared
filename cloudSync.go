@@ -887,6 +887,9 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		workflow.Triggers[triggerIndex].SmallImage = ""
 	}
 
+	// remove github backup info
+	workflow.BackupConfig = BackupConfig{}
+
 	// Use git to upload the workflow. 
 	workflowData, err := json.MarshalIndent(workflow, "", "  ")
 	if err != nil {
