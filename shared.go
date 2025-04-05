@@ -8595,6 +8595,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	go SetWorkflowRevision(ctx, workflow)
 
 	go func() {
+		ctx = context.Background()
 		err = SetGitWorkflow(ctx, workflow, org)
 		if err != nil {
 	
