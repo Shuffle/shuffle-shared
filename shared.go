@@ -11867,7 +11867,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	admin := false
-	if tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id {
+	if (tmpData.OrgId != user.ActiveOrg.Id || fileId != user.ActiveOrg.Id) && !tmpData.SyncFeatures.Editing {
 		log.Printf("[WARNING] User can't edit org %s (active: %s)", fileId, user.ActiveOrg.Id)
 		if !user.SupportAccess {
 			resp.WriteHeader(401)
@@ -12253,6 +12253,64 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" && user.SupportAccess && tmpData.SyncFeatures.Editing {
 		log.Printf("[DEBUG] Updating features for org %s (%s)", org.Name, org.Id)
 
+		org.SyncFeatures = tmpData.SyncFeatures
+		org.SyncFeatures.Editing = false
+	}
+
+	// check if user is editing sync features of suborg from parent org
+	if project.Environment == "cloud" && !user.SupportAccess && tmpData.SyncFeatures.Editing {
+		log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+
+		// check whether user org id is suborg of parent org
+		parentOrg, err := GetOrg(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get parent org %s: %s", user.ActiveOrg.Id, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// loop through all child orgs to check if suborg id is present in child orgs
+		found := false
+		for _, childOrg := range parentOrg.ChildOrgs {
+			if childOrg.Id == org.Id {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s) but is not allowed (1)", user.Username, user.Id, org.Name, org.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// if parent org app execution limit is <= 10k then user can not edit sync features of suborg
+		if parentOrg.SyncFeatures.AppExecutions.Limit <= 10000 {
+			log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s) but is not allowed (2)", user.Username, user.Id, org.Name, org.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		// User can't assign more app execution and workfflow runs than parent org to suborg
+		// check if current org app execution limit is changed with tmpData org app execution limit
+		if tmpData.SyncFeatures.AppExecutions.Limit >= parentOrg.SyncFeatures.AppExecutions.Limit && tmpData.SyncFeatures.AppExecutions.Limit != org.SyncFeatures.AppExecutions.Limit {
+			log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s) but is not allowed (3)", user.Username, user.Id, org.Name, org.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if tmpData.SyncFeatures.WorkflowExecutions.Limit >= parentOrg.SyncFeatures.WorkflowExecutions.Limit && tmpData.SyncFeatures.WorkflowExecutions.Limit != org.SyncFeatures.WorkflowExecutions.Limit {
+			log.Printf("[WARNING] User %s (%s) is trying to edit sync features of suborg %s (%s) but is not allowed (4)", user.Username, user.Id, org.Name, org.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		log.Printf("[DEBUG] User %s (%s) is allowed to edit sync features of suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
 		org.SyncFeatures = tmpData.SyncFeatures
 		org.SyncFeatures.Editing = false
 	}
