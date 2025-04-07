@@ -11764,7 +11764,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
-	if (tmpData.SSOConfig.OpenIdClientId != org.SSOConfig.OpenIdClientId) || (tmpData.SSOConfig.OpenIdAuthorization != org.SSOConfig.OpenIdAuthorization) {
+	if (tmpData.SSOConfig.OpenIdClientId != org.SSOConfig.OpenIdClientId) || (tmpData.SSOConfig.OpenIdAuthorization != org.SSOConfig.OpenIdAuthorization) || (tmpData.SSOConfig.RoleRequired != org.SSOConfig.RoleRequired) {
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
@@ -19923,6 +19923,25 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login! - (1)", user.Username, user.Id, userName)
 				}
 
+				// check whether role is required for org
+
+				if org.SSOConfig.RoleRequired {
+					foundRole := false
+					for _, role := range openidUser.Roles {
+						// check whether role matches with shuffle-admin, shuffle-user or shuffle-org-reader
+						if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+							foundRole = true
+						}
+					}
+
+					if !foundRole {
+						log.Printf("[WARNING] User %s (%s) role is missing in respone for org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+						return
+					}
+				}
+
 				//log.Printf("SESSION: %s", user.Session)
 				user.ActiveOrg = OrgMini{
 					Name: org.Name,
@@ -20066,6 +20085,25 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[AUDIT] Found user %s (%s) which matches SSO info for %s. Redirecting to login!- (2)", user.Username, user.Id, userName)
 				}
 				//log.Printf("SESSION: %s", user.Session)
+
+				// check whether role is required for org
+				if org.SSOConfig.RoleRequired {
+					foundRole := false
+					for _, role := range openidUser.Roles {
+						// check whether role matches with shuffle-admin, shuffle-user or shuffle-org-reader
+						if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+							foundRole = true
+						}
+					}
+
+					if !foundRole {
+						log.Printf("[WARNING] User %s (%s) role is missing in respone for org %s (%s). Please contact the administrator - (1)", user.Username, user.Id, org.Name, org.Id)
+						resp.WriteHeader(401)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+						return
+					}
+				}
+
 				user.ActiveOrg = OrgMini{
 					Name: org.Name,
 					Id:   org.Id,
@@ -20196,6 +20234,23 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(401)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "User not found in the org. Autoprovisioning is disabled. Please contact the admin of the org to allow auto-provisioning of user."}`)))
 		return
+	}
+
+	if org.SSOConfig.RoleRequired {
+		foundRole := false
+		for _, role := range openidUser.Roles {
+			// check whether role matches with shuffle-admin, shuffle-user or shuffle-org-reader
+			if role == "shuffle-admin" || role == "shuffle-user" || role == "shuffle-org-reader" {
+				foundRole = true
+			}
+		}
+
+		if !foundRole {
+			log.Printf("[WARNING] Role is missing in respone for  username %s. Please contact the administrator - (3)", userName)
+			resp.WriteHeader(401)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Role detail is missing. Please contact the administrator of org."}`)))
+			return
+		}
 	}
 
 	// Assign default role as "user" for generated user, else assign the role from openid if available
