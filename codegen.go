@@ -2285,6 +2285,13 @@ func HandleConnect(swagger *openapi3.Swagger, api WorkflowApp, extraParameters [
 			param.Value.Name = parsedName
 			path.Connect.Parameters[counter].Value.Name = parsedName
 
+			// Force it as a string to avoid nil-pointer
+			if param.Value.Schema.Value == nil {
+				param.Value.Schema.Value = &openapi3.Schema{
+					Type: "string",
+				}
+			}
+
 			curParam := WorkflowAppActionParameter{
 				Name:        parsedName,
 				Description: param.Value.Description,
@@ -2493,6 +2500,13 @@ func HandleGet(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 			param.Value.Name = parsedName
 			path.Get.Parameters[counter].Value.Name = parsedName
 
+			// Force it as a string to avoid nil-pointer
+			if param.Value.Schema.Value == nil {
+				param.Value.Schema.Value = &openapi3.Schema{
+					Type: "string",
+				}
+			}
+
 			curParam := WorkflowAppActionParameter{
 				Name:        parsedName,
 				Description: param.Value.Description,
@@ -2688,6 +2702,13 @@ func HandleHead(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Head.Parameters[counter].Value.Name = parsedName
+
+			// Force it as a string to avoid nil-pointer
+			if param.Value.Schema.Value == nil {
+				param.Value.Schema.Value = &openapi3.Schema{
+					Type: "string",
+				}
+			}
 
 			curParam := WorkflowAppActionParameter{
 				Name:        parsedName,
@@ -2901,6 +2922,13 @@ func HandleDelete(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []
 			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Delete.Parameters[counter].Value.Name = parsedName
+
+			// Force it as a string to avoid nil-pointer
+			if param.Value.Schema.Value == nil {
+				param.Value.Schema.Value = &openapi3.Schema{
+					Type: "string",
+				}
+			}
 
 			curParam := WorkflowAppActionParameter{
 				Name:        parsedName,
@@ -3147,6 +3175,13 @@ func HandlePost(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wo
 			param.Value.Name = parsedName
 			path.Post.Parameters[counter].Value.Name = parsedName
 
+			// Force it as a string to avoid nil-pointer
+			if param.Value.Schema.Value == nil {
+				param.Value.Schema.Value = &openapi3.Schema{
+					Type: "string",
+				}
+			}
+
 			curParam := WorkflowAppActionParameter{
 				Name:        parsedName,
 				Description: param.Value.Description,
@@ -3363,6 +3398,13 @@ func HandlePatch(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []W
 			param.Value.Name = parsedName
 			path.Patch.Parameters[counter].Value.Name = parsedName
 
+			// Force it as a string to avoid nil-pointer
+			if param.Value.Schema.Value == nil {
+				param.Value.Schema.Value = &openapi3.Schema{
+					Type: "string",
+				}
+			}
+
 			curParam := WorkflowAppActionParameter{
 				Name:        parsedName,
 				Description: param.Value.Description,
@@ -3575,6 +3617,13 @@ func HandlePut(swagger *openapi3.Swagger, api WorkflowApp, extraParameters []Wor
 			parsedName = ValidateParameterName(parsedName)
 			param.Value.Name = parsedName
 			path.Put.Parameters[counter].Value.Name = parsedName
+
+			// Force it as a string to avoid nil-pointer
+			if param.Value.Schema.Value == nil {
+				param.Value.Schema.Value = &openapi3.Schema{
+					Type: "string",
+				}
+			}
 
 			curParam := WorkflowAppActionParameter{
 				Name:        parsedName,
