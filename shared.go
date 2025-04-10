@@ -17189,7 +17189,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	maxAmount := 50 
+	maxAmount := 150
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
 		val, err := strconv.Atoi(top[0])
@@ -17825,7 +17825,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	if err != nil {
 
 		// Doing a last resort search, e.g. to handle spaces and the like
-		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", 30, "")
+		allkeys, _, err := GetAllCacheKeys(ctx, org.Id, "", 150, "")
 		if err == nil {
 			cacheData = &CacheKeyData{}
 			searchkey := strings.ReplaceAll(strings.Trim(strings.ToLower(tmpData.Key), " "), " ", "_")
