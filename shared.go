@@ -19999,12 +19999,39 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 						return
 					}
 				}
+				role := user.Role
+				roleChange := false
+				if len(openidUser.Roles) > 0 {
+					for _, newRole := range openidUser.Roles {
+						if newRole == "shuffle-admin" {
+							role = "admin"
+							user.Role = "admin"
+							roleChange = true
+							break
+						}
+
+						if newRole == "shuffle-user" {
+							role = "user"
+							user.Role = "user"
+							roleChange = true
+							break
+						}
+
+						if newRole == "shuffle-org-reader" {
+							role = "org-reader"
+							user.Role = "org-reader"
+							roleChange = true
+							break
+						}
+
+					}
+				}
 
 				//log.Printf("SESSION: %s", user.Session)
 				user.ActiveOrg = OrgMini{
 					Name: org.Name,
 					Id:   org.Id,
-					Role: user.Role,
+					Role: role,
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
@@ -20085,7 +20112,17 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
-				if !foundUserInOrg {
+				if roleChange {
+					// change user role in org if change
+					for i, usr := range org.Users {
+						if usr.Id == user.Id {
+							org.Users[i].Role = role
+							break
+						}
+					}
+				}
+
+				if !foundUserInOrg || roleChange {
 					err = SetOrg(ctx, *org, org.Id)
 					if err != nil {
 						log.Printf("[WARNING] Failed updating org when setting user: %s", err)
@@ -20162,10 +20199,38 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 
+				role := user.Role
+				roleChange := false
+				if len(openidUser.Roles) > 0 {
+					for _, newRole := range openidUser.Roles {
+						if newRole == "shuffle-admin" {
+							role = "admin"
+							user.Role = "admin"
+							roleChange = true
+							break
+						}
+
+						if newRole == "shuffle-user" {
+							role = "user"
+							user.Role = "user"
+							roleChange = true
+							break
+						}
+
+						if newRole == "shuffle-org-reader" {
+							role = "org-reader"
+							user.Role = "org-reader"
+							roleChange = true
+							break
+						}
+
+					}
+				}
+
 				user.ActiveOrg = OrgMini{
 					Name: org.Name,
 					Id:   org.Id,
-					Role: user.Role,
+					Role: role,
 				}
 
 				expiration := time.Now().Add(3600 * time.Second)
@@ -20245,7 +20310,17 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					return
 				}
 
-				if !foundUserInOrg {
+				if roleChange {
+					// change user role in org if change
+					for i, usr := range org.Users {
+						if usr.Id == user.Id {
+							org.Users[i].Role = role
+							break
+						}
+					}
+				}
+
+				if !foundUserInOrg || roleChange {
 					err = SetOrg(ctx, *org, org.Id)
 					if err != nil {
 						log.Printf("[WARNING] Failed updating org when setting session: %s", err)
