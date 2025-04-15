@@ -20133,7 +20133,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
-				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
+				http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
 				return
 			}
 		}
@@ -20331,7 +20331,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				}
 
 				//redirectUrl = fmt.Sprintf("%s?source=SSO&id=%s", redirectUrl, session)
-				http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
+				http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
 				return
 			}
 		}
@@ -20479,7 +20479,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	http.Redirect(resp, request, redirectUrl, http.StatusSeeOther)
+	http.Redirect(resp, request, redirectUrl+"?type=sso_login", http.StatusSeeOther)
 	return
 }
 
