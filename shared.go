@@ -9105,24 +9105,21 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		curUserFound = true
 	}
 
-	if userInfo.Role != "admin" {
-		if t.Newpassword != t.Newpassword2 {
-			err := "Passwords don't match"
+	//if userInfo.Role != "admin" {
+	if t.Newpassword != t.Newpassword2 {
+		err := "Passwords don't match"
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	if project.Environment == "cloud" {
+		if len(t.Newpassword) < 10 || len(t.Newpassword2) < 10 {
+			err := "Passwords too short - 2"
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 			return
 		}
-
-		if project.Environment == "cloud" {
-			if len(t.Newpassword) < 10 || len(t.Newpassword2) < 10 {
-				err := "Passwords too short - 2"
-				resp.WriteHeader(401)
-				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
-				return
-			}
-		}
-	} else {
-		// Check ORG HERE?
 	}
 
 	// Current password
