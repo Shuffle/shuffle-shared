@@ -9105,20 +9105,22 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 		curUserFound = true
 	}
 
-	//if userInfo.Role != "admin" {
-	if t.Newpassword != t.Newpassword2 {
-		err := "Passwords don't match"
-		resp.WriteHeader(401)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
-		return
-	}
-
-	if project.Environment == "cloud" {
-		if len(t.Newpassword) < 10 || len(t.Newpassword2) < 10 {
-			err := "Passwords too short - 2"
+	// Checking current user changing another user
+	if userInfo.Role != "admin" {
+		if t.Newpassword != t.Newpassword2 {
+			err := "Passwords don't match"
 			resp.WriteHeader(401)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 			return
+		}
+
+		if project.Environment == "cloud" {
+			if len(t.Newpassword) < 10 || len(t.Newpassword2) < 10 {
+				err := "Passwords too short - 2"
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+				return
+			}
 		}
 	}
 
@@ -9169,19 +9171,16 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	} else {
-		// Admins can re-generate others' passwords as well.
-		if userInfo.Role != "admin" {
-			err = bcrypt.CompareHashAndPassword([]byte(userInfo.Password), []byte(t.Currentpassword))
-			if err != nil {
-				log.Printf("[WARNING] Bad password for %s: %s", userInfo.Username, err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
-				return
-			}
+		// Admins can re-generate others' passwords as well (onprem only).
+		err = bcrypt.CompareHashAndPassword([]byte(userInfo.Password), []byte(t.Currentpassword))
+		if err != nil {
+			log.Printf("[WARNING] Bad password for %s: %s", userInfo.Username, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
+			return
 		}
 
 		foundUser = userInfo
-		//userInfo, err := HandleApiAuthentication(resp, request)
 	}
 
 	if len(foundUser.Id) == 0 {
