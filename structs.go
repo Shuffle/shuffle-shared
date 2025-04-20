@@ -4258,6 +4258,8 @@ type AgentDecision struct {
 
 	Type string `json:"type" datastore:"type"`
 	Status string `json:"status" datastore:"status"`
+	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
+	DebugUrl string `json:"debug_url,omitempty" datastore:"debug_url"`
 }
 
 type AgentOutput struct {

@@ -13485,7 +13485,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	}
 	changeActiveOrg := false
 	if orgerr == nil {
-		//log.Printf("Got org during signin: %s - checking SAML SSO", baseOrg.Id)
+		log.Printf("[DEBUG] Got org during signin: %s - checking SAML SSO", userdata.ActiveOrg.Id)
 		ssoRequired := org.SSOConfig.SSORequired
 		if ssoRequired {
 			orgFound := false
@@ -13582,6 +13582,11 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	// Preloading orgs into cache to speed up first requests a bit 
+	for _, orgID := range userdata.Orgs {
+		go GetOrg(ctx, orgID)
+	}
+
 	if userdata.LoginType == "SSO" {
 		log.Printf(`[WARNING] Username %s (%s) has login type set to SSO (single sign-on).`, userdata.Username, userdata.Id)
 		//resp.WriteHeader(401)
@@ -13593,11 +13598,15 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf(`[WARNING] Username %s (%s) has login type set to OpenID (single sign-on).`, userdata.Username, userdata.Id)
 	}
 
+
 	if len(data.MFACode) == 0 {
+		log.Printf("[DEBUG] No MFA code found in login request for %s (%s). Checking %d orgs", userdata.Username, userdata.Id, len(userdata.Orgs))
+
+
 		for _, orgID := range userdata.Orgs {
 			org, err := GetOrg(ctx, orgID)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting suborg %s during login: %s", orgID, err)
+				log.Printf("[ERROR] Failed getting suborg %s during login for %s (%s): %s", orgID, userdata.Username, userdata.Id, err)
 				continue
 			}
 
@@ -13626,7 +13635,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 					resp.Write([]byte(response))
 					return
 				}
-				log.Printf("MFA is required for org %s. Redirecting.", orgID)
+
+				log.Printf("[DEBUG] MFA is required for org %s. Redirecting.", orgID)
 				resp.WriteHeader(409)
 				resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "MFA_REDIRECT"}`)))
 				return
@@ -18312,7 +18322,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	// This is NOT a good solution, but a good bypass
 	if app.Authentication.Required {
 		if len(action.AuthenticationId) > 0 {
-			log.Printf("[INFO] Found auth ID for single action: %s", action.AuthenticationId)
+			log.Printf("\n\n[INFO] Found auth ID for single action: %s\n\n", action.AuthenticationId)
 		} else {
 			authFields := 0
 			foundFields := []string{}
@@ -23623,7 +23633,7 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		if !sourceExecutionOk {
 			sourceExecution, sourceExecutionOk = request.URL.Query()["execution_id"]
 			if !sourceExecutionOk {
-				log.Printf("[AUDIT] No source execution found. Bad auth.")
+				log.Printf("[AUDIT] No source execution found for workflow execution of %s (%s). Queries: %#v. Bad auth.", workflow.Name, workflow.ID, request.URL.Query())
 
 				return false, ""
 			}
@@ -26686,26 +26696,21 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[WARNING] Failed getting auths for org %s: %s", user.ActiveOrg.Id, err)
 		} else {
 			latestEdit := int64(0)
-
-			lastValid := false
 			for _, auth := range auth {
-				if auth.Edited < latestEdit {
-					continue
-				}
-
 				// Check if the app name or ID is correct
 				if auth.App.Name != selectedApp.Name && auth.App.ID != selectedApp.ID {
 					continue
 				}
 
-				if lastValid == true {
-					log.Printf("\n\n\n[DEBUG] Skipping auth %s as it's not the latest valid\n\n", auth.Id)
-					continue
+				// Taking whichever valid is last
+				if auth.Validation.Valid == true {
+					foundAuthenticationId = auth.Id
+					break
 				}
 
 				// Check if the auth is valid
-				if auth.Validation.Valid {
-					lastValid = true
+				if auth.Edited < latestEdit {
+					continue
 				}
 
 				foundAuthenticationId = auth.Id
@@ -27412,8 +27417,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				resp.Header().Add(attemptString, fmt.Sprintf("%d", i+1))
 			}
 
-
-			log.Printf("[DEBUG] Attempt preparedAction: %s", string(preparedAction))
+			//log.Printf("[DEBUG] Attempt preparedAction: %s", string(preparedAction))
 
 			// The request that goes to the CORRECT app
 			req, err := http.NewRequest(
@@ -27649,7 +27653,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			} else {
 				// Parses out data from the output
 				// Reruns the app with the new parameters
-				log.Printf("HTTP PARSE ERR: %#v", httpParseErr)
+				//log.Printf("HTTP PARSE ERR: %#v", httpParseErr)
 				if strings.Contains(strings.ToLower(fmt.Sprintf("%s", httpParseErr)), "status: ") {
 					log.Printf("\n\n\n[DEBUG] Found status code in error: %s\n\n\n", err)
 
@@ -27939,7 +27943,10 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		ExecutionArgument: executionArgument,
 	}
 
-	newExecBody, _ := json.Marshal(execData)
+	newExecBody, err  := json.Marshal(execData)
+	if err != nil {
+		log.Printf("[DEBUG] Failed ShuffleGPT data formatting: %s", err) 
+	}
 
 	// Starting execution
 	/*
@@ -28116,15 +28123,15 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 				keys = append(keys, field.Key)
 			}
 
-			log.Printf("[DEBUG] Calling AutofixAppLabels")
+			//log.Printf("[DEBUG] Calling AutofixAppLabels")
 
 			// Make it FORCE look for a specific label if it exists, otherwise
 			newApp, guessedAction := AutofixAppLabels(app, label, keys)
 
 			// print the found action parameters
-			for _, param := range guessedAction.Parameters {
-				log.Printf("[DEBUG] Found parameter %s: %s", param.Name, param.Value)
-			}
+			//for _, param := range guessedAction.Parameters {
+			//	log.Printf("[DEBUG] Found parameter %s: %s", param.Name, param.Value)
+			//}
 
 			if guessedAction.Name != "" {
 				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)

@@ -2635,7 +2635,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 				}
 
 			} else {
-				log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
+				//log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
 			}
 		}
 	}

@@ -1614,3 +1614,128 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 		}(client, request, childWorkflow)
 	}
 }
+
+// Runs an Agent Decision -> returns the result from it
+// FIXME: Handle types: https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=yIGaSXQYsYReR8cI-0
+// 
+func RunAgentDecisionAction(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
+	debugUrl := ""
+	log.Printf("[DEBUG] Running agent decision action %s with tool %s", decision.Action, decision.Tool)
+
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+
+	client := GetExternalClient(url)
+
+	parsedAction := CategoryAction{
+		AppName: 	decision.Tool,
+		Label: 		decision.Action,
+
+		SkipWorkflow: true, 
+	}
+
+	marshalledAction, err := json.Marshal(parsedAction)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling action in agent decision: %s", err)
+		return []byte{}, debugUrl, err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		url,
+		bytes.NewBuffer(marshalledAction),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed creating request for agent decision: %s", err)
+		return []byte{}, debugUrl, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed running agent decision: %s", err)
+		return []byte{}, debugUrl, err
+	}
+
+	for key, value := range resp.Header {
+		if key != "X-Debug-Url" {
+			continue
+		}
+
+		/*
+		if !strings.HasPrefix(key, "X-") {
+			continue
+		}
+
+		// Don't care about raw response
+		if key == "X-Raw-Response-Url" || key == "X-Apprun-Url" {
+			continue
+		}
+		*/
+
+		foundValue := ""
+		for _, val := range value {
+			if len(val) > 0 {
+				foundValue = val
+				break
+			}
+		}
+
+		debugUrl = foundValue 
+		/*
+		returnHeaders = append(returnHeaders, Valuereplace{
+			Key: key,
+			Value: foundValue, 
+		})
+		*/
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading body from agent decision: %s", err)
+		return []byte{}, debugUrl, err
+	}
+
+	defer resp.Body.Close()
+
+	log.Printf("\n\n\n[DEBUG] Agent decision response: %s\n\n\n", string(body))
+	// Try to map it into SchemalessOutput and grab "RawResponse"
+	outputMapped := SchemalessOutput{}
+	err = json.Unmarshal(body, &outputMapped)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling agent decision response: %s", err)
+		return body, debugUrl, err
+	}
+
+	if val, ok := outputMapped.RawResponse.(string); ok {
+		body = []byte(val)
+	} else if val, ok := outputMapped.RawResponse.([]byte); ok {
+		body = val
+	} else if val, ok := outputMapped.RawResponse.(map[string]interface{}); ok {
+		marshalledRawResp, err := json.Marshal(val)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshalling agent decision response: %s", err)
+		} else {
+			body = marshalledRawResp
+		}
+	} else {
+		log.Printf("[ERROR] FAILED MAPPING RAW RESP INTERfACE. TYPE: %T\n\n\n", outputMapped.RawResponse)
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed running agent decision with status %d: %s", resp.StatusCode, string(body))
+		return body, debugUrl, errors.New("Failed running agent decision")
+	}
+
+
+	return body, debugUrl, nil
+}
