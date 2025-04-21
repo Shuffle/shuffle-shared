@@ -15177,6 +15177,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		}
 
 		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
+	} else if actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" {
+		log.Printf("[DEBUG] Got AI Agent response: %#v", actionResult.Result)
 	}
 
 	if setCache {
@@ -18322,7 +18324,13 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	// This is NOT a good solution, but a good bypass
 	if app.Authentication.Required {
 		if len(action.AuthenticationId) > 0 {
-			log.Printf("\n\n[INFO] Found auth ID for single action: %s\n\n", action.AuthenticationId)
+			//log.Printf("\n\n[INFO] Found auth ID for single action: %s\n\n", action.AuthenticationId)
+
+			// FIXME: How do we decide what fields to replace?
+			// The problem now is that some auth fields are being set and others maybe are not
+			//for _, actionParam := range action.Parameters {
+			//	log.Printf("KEY: %s, VALUE: %s", actionParam.Name, actionParam.Value)
+			//}
 		} else {
 			authFields := 0
 			foundFields := []string{}
@@ -26685,13 +26693,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	auth := []AppAuthenticationStorage{}
 	foundAuthenticationId := value.AuthenticationId
 	if len(foundAuthenticationId) == 0 {
 		// 1. Get auth
 		// 2. Append the auth
 		// 3. Run!
 
-		auth, err := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+		auth, err = GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed getting auths for org %s: %s", user.ActiveOrg.Id, err)
 		} else {
@@ -26719,7 +26728,44 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	if len(foundAuthenticationId) == 0 {
+
+	if len(foundAuthenticationId) > 0 {
+		if len(auth) == 0 {
+			auth, err = GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[DEBUG] Failed loading auth: %s", err)
+			}
+		}
+
+		// Fixes an issue where URL replacing from auth doesn't work 
+		// due to a value already existing
+		foundUrl := ""
+		urlIndex := -1
+		for paramIndex, param := range selectedAction.Parameters {
+			if param.Name == "url" {
+				foundUrl = param.Value
+				urlIndex = paramIndex
+				break
+			}
+		}
+
+		if len(foundUrl) > 0 && urlIndex >= 0 {
+			for _, foundAuth := range auth { 
+				if foundAuth.Id != foundAuthenticationId {
+					continue
+				}
+
+				// Replaces if URL is in the authentication, as it should be 
+				// replaced at a later point
+				for _, field := range foundAuth.Fields {
+					if field.Key == "url" {
+						selectedAction.Parameters[urlIndex].Value = ""
+						break
+					}
+				}
+			}
+		}
+	} else {
 		//log.Printf("[WARNING] Couldn't find auth for app %s in org %s (%s)", selectedApp.Name, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
 		requiresAuth := false
@@ -26968,6 +27014,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
 	handledRequiredFields := []string{}
 	missingFields = []string{}
+
+
 	for _, param := range selectedAction.Parameters {
 		// Optional > Required
 		fieldChanged := false

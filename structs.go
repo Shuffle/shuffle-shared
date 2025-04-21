@@ -4249,19 +4249,32 @@ type TimeWindow struct {
 	mu       sync.Mutex
 }
 
-type AgentDecision struct {
-	I          int     `json:"i" datastore:"i"`
-	Action     string  `json:"action" datastore:"action"`
-	Tool       string  `json:"tool" datastore:"tool"`
-	Confidence float64 `json:"confidence" datastore:"confidence"`
-	Reason     string  `json:"reason" datastore:"reason"`
+// The execution details of a decision
+type AgentDecisionRunDetails struct { 
+	Id string `json:"id" datastore:"id"`
 
+	StartedAt int64  `json:"started_at" datastore:"started_at"`
+	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
 	Type string `json:"type" datastore:"type"`
 	Status string `json:"status" datastore:"status"`
 	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
 	DebugUrl string `json:"debug_url,omitempty" datastore:"debug_url"`
 }
 
+// Each decision
+type AgentDecision struct {
+	// Predictive Agent data 
+	I          int     `json:"i" datastore:"i"`
+	Action     string  `json:"action" datastore:"action"`
+	Tool       string  `json:"tool" datastore:"tool"`
+	Confidence float64 `json:"confidence" datastore:"confidence"`
+	Reason     string  `json:"reason" datastore:"reason"`
+
+	// Responses
+	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
+}
+
+// The overall Agent controller
 type AgentOutput struct {
 	Status 	  string  `json:"status" datastore:"status"`
 	Input     string          `json:"input" datastore:"input"`
@@ -4269,4 +4282,9 @@ type AgentOutput struct {
 
 	// For easy testing
 	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
+	// For tracking of details parent<->child 
+	StartedAt int64 `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt int64 `json:"completed_at,omitempty" datastore:"completed_at"`
+	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
+	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
 }
