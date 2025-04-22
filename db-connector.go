@@ -2635,7 +2635,7 @@ func GetApp(ctx context.Context, id string, user User, skipCache bool) (*Workflo
 				}
 
 			} else {
-				log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
+				//log.Printf("[DEBUG] Returning %s (%s) normally", workflowApp.Name, id)
 			}
 		}
 	}
@@ -13756,7 +13756,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		lastResult := ActionResult{}
 		for _, result := range workflowExecution.Results {
 			if result.Status == "EXECUTING" || result.Status == "WAITING" {
-				log.Printf("[WARNING][%s] Waiting for action %s to finish", workflowExecution.ExecutionId, result.Action.ID)
+				//log.Printf("[DEBUG][%s] Waiting for action %s to finish", workflowExecution.ExecutionId, result.Action.ID)
 				return false
 			}
 

@@ -1614,3 +1614,203 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 		}(client, request, childWorkflow)
 	}
 }
+
+// Runs an Agent Decision -> returns the result from it
+// FIXME: Handle types: https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=yIGaSXQYsYReR8cI-0
+// This function should handle:
+// 1. Running the decided action (user input, Singul, Workflow, Other Agent, Custom HTTP function)
+// 2. Taking the result and sending (?) it back
+// 3. Ensuring cache for an action is kept up to date
+func RunAgentDecisionAction(execution WorkflowExecution, decision AgentDecision) {
+
+	// Check if it's already ran or not
+	ctx := context.Background()
+	decisionId := fmt.Sprintf("agent-%s-%s", execution.ExecutionId, decision.RunDetails.Id)
+
+	cache, err := GetCache(ctx, decisionId)
+	if err == nil {
+		foundDecision := AgentDecision{}
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &foundDecision)
+		if err != nil {
+			log.Printf("[WARNING][%s] Failed agent decision unmarshal (not critical): %s", execution.ExecutionId, err) 
+		} 
+
+		if foundDecision.RunDetails.StartedAt > 0 {
+			log.Printf("[DEBUG][%s] Decision %s already has status '%s'. Returning as it's already started..", execution.ExecutionId, decision.RunDetails.Id, foundDecision.RunDetails.Status)
+			return
+		}
+	}
+
+	// Set it to this at the start
+	decision.RunDetails.StartedAt = time.Now().Unix()
+	decision.RunDetails.Status = "RUNNING"
+	marshalledDecision, err := json.Marshal(decision)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
+	}
+
+	go SetCache(ctx, decisionId, marshalledDecision, 60)
+
+
+	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision) 
+
+	decision.RunDetails.RawResponse = string(rawResponse)
+	decision.RunDetails.DebugUrl = debugUrl 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
+		decision.RunDetails.Status = "FAILED"
+	} else {
+		decision.RunDetails.Status = "FINISHED"
+	}
+
+	// Send this back as a result for an action
+	// Then the action itself should decide if it's done or not.
+	//decision.CompletedAt = time.Now().Unix()
+	// Would it work to send JUST this decision result?
+}
+
+func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
+	debugUrl := ""
+	log.Printf("[DEBUG][%s] Running agent decision action %s with tool %s", execution.ExecutionId, decision.Action, decision.Tool)
+
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+
+	client := GetExternalClient(url)
+
+	parsedAction := CategoryAction{
+		AppName: 	decision.Tool,
+		Label: 		decision.Action,
+
+		SkipWorkflow: true, 
+	}
+
+	marshalledAction, err := json.Marshal(parsedAction)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		url,
+		bytes.NewBuffer(marshalledAction),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed creating request for agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed running agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	for key, value := range resp.Header {
+		if key != "X-Debug-Url" {
+			continue
+		}
+
+		/*
+		if !strings.HasPrefix(key, "X-") {
+			continue
+		}
+
+		// Don't care about raw response
+		if key == "X-Raw-Response-Url" || key == "X-Apprun-Url" {
+			continue
+		}
+		*/
+
+		foundValue := ""
+		for _, val := range value {
+			if len(val) > 0 {
+				foundValue = val
+				break
+			}
+		}
+
+		debugUrl = foundValue 
+		/*
+		returnHeaders = append(returnHeaders, Valuereplace{
+			Key: key,
+			Value: foundValue, 
+		})
+		*/
+	}
+
+	originalBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	body := originalBody
+	defer resp.Body.Close()
+
+	log.Printf("\n\n\n[DEBUG] Agent decision response: %s\n\n\n", string(body))
+	// Try to map it into SchemalessOutput and grab "RawResponse"
+	outputMapped := SchemalessOutput{}
+	err = json.Unmarshal(body, &outputMapped)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling agent decision response: %s", err)
+		return body, debugUrl, err
+	}
+
+	if val, ok := outputMapped.RawResponse.(string); ok {
+		body = []byte(val)
+	} else if val, ok := outputMapped.RawResponse.([]byte); ok {
+		body = val
+	} else if val, ok := outputMapped.RawResponse.(map[string]interface{}); ok {
+		marshalledRawResp, err := json.MarshalIndent(val, "", "  ")
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed marshalling agent decision response: %s", execution.ExecutionId, err)
+		} else {
+			body = marshalledRawResp
+		}
+	} else if outputMapped.RawResponse == nil {
+		// Do nothing
+	} else {
+		log.Printf("[ERROR][%s] FAILED MAPPING RAW RESP INTERfACE. TYPE: %T\n\n\n", execution.ExecutionId, outputMapped.RawResponse)
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR][%s] Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
+		return body, debugUrl, errors.New(fmt.Sprintf("Failed running agent decision. Status code %d", resp.StatusCode))
+	}
+
+	if outputMapped.Success == false {
+		return originalBody, debugUrl, errors.New("Failed running agent decision. Success false for Singul action")
+	}
+
+
+	/*
+	agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = string(rawResponse)
+	agentOutput.Decisions[decisionIndex].RunDetails.DebugUrl = debugUrl 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
+		agentOutput.Decisions[decisionIndex].RunDetails.Status = "FAILED"
+
+		resultMapping.Status = "FAILURE"
+		resultMapping.CompletedAt = time.Now().Unix()
+		agentOutput.CompletedAt = time.Now().Unix()
+	} else {
+		agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+	}
+	*/
+
+
+	return body, debugUrl, nil
+}
