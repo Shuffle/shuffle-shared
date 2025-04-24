@@ -1072,10 +1072,8 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	// Make sure to add all orgs that are childs IF you have access
 	org.ChildOrgs = []OrgMini{}
-
 
 	wg := sync.WaitGroup{}
 	ch := make(chan OrgMini, len(user.Orgs))
@@ -1089,7 +1087,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				ch <- OrgMini{}
 				wg.Done()
 
-				return 
+				return
 			}
 
 			// Check if current user is in that org
@@ -1104,7 +1102,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 				ch <- OrgMini{}
 				wg.Done()
 
-				return 
+				return
 			}
 
 			if suborg.CreatorOrg == org.Id {
@@ -5099,7 +5097,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 						if user.ActiveOrg.Id == foundOrg.Id {
 							user.ActiveOrg.Role = t.Role
 						}
-					
+
 					}
 
 					users = append(users, user)
@@ -6084,12 +6082,12 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 
 					// Loading it back in
 					/*
-					anotherChildWorkflow, err := GetWorkflow(ctx, newChildworkflow.ID)
-					if err != nil {
-						log.Printf("[WARNING] Failed to get child workflow %s (%s) for %s (%s) during initial setup (2): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
-					} else {
-						diffWorkflows(*anotherChildWorkflow, parentWorkflow, update)
-					}
+						anotherChildWorkflow, err := GetWorkflow(ctx, newChildworkflow.ID)
+						if err != nil {
+							log.Printf("[WARNING] Failed to get child workflow %s (%s) for %s (%s) during initial setup (2): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+						} else {
+							diffWorkflows(*anotherChildWorkflow, parentWorkflow, update)
+						}
 					*/
 				}
 			}
@@ -6103,7 +6101,7 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 	return parentWorkflow
 }
 
-// Propagates a subflow in a multi-tenant workflow so that 
+// Propagates a subflow in a multi-tenant workflow so that
 // changes to the subflow also follow the same rules
 func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow, childTrigger Trigger) Trigger {
 	//log.Printf("\n\n Calling subflow propagation wrapper for %s (%s) to %s (%s)\n\n", parentWorkflow.Name, parentWorkflow.ID, childWorkflow.Name, childWorkflow.ID)
@@ -6111,7 +6109,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 	// This is apparently the parent trigger, and not child
 	// So now I'm endlessly confused.
 
-	trigger := childTrigger 
+	trigger := childTrigger
 	for paramIndex, param := range trigger.Parameters {
 		// since this is an added subflow, the workflow being referred
 		// is most likely not already distributed. let's do that.
@@ -6147,7 +6145,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 				alreadyPropagatedSubflow = childSubflow.ID
 			}
 
-			// Parent workflow ID + Suborg ID = seed 
+			// Parent workflow ID + Suborg ID = seed
 			if len(alreadyPropagatedSubflow) > 0 {
 				//log.Printf("[INFO] Subflow %s (%s) has already been propagated to org %s", childWorkflow.Name, parentSubflowPointedId, childWorkflow.OrgId)
 
@@ -6162,7 +6160,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 				if workflow.OrgId != childWorkflow.OrgId {
 					//log.Printf("[ERROR] Subflow %s has been propagated to %s, but it's not the same org as %s. This means re-propagation is required.", parentSubflowPointedId, childWorkflow.OrgId, childWorkflow.OrgId)
-				} else { 
+				} else {
 					startNodeIndexToOverwrite := -1
 					currentStartNode := ""
 
@@ -6189,7 +6187,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 				}
 			}
 
-			// Getting the PARENT workflow 
+			// Getting the PARENT workflow
 			parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
 			if err != nil {
 				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
@@ -6337,7 +6335,7 @@ func deleteScheduleGeneral(ctx context.Context, scheduleId string) error {
 	return nil
 }
 
-// This is the main function that handles the diffing 
+// This is the main function that handles the diffing
 // and merging of workflows in multi-tenant environments
 func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// Check if there is a difference in actions, and what they are
@@ -6644,7 +6642,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			continue
 		}
 
-		// Verifies a ton of stuff about branches to ensure they are 
+		// Verifies a ton of stuff about branches to ensure they are
 		// kept synced, even with e.g. ACTION/TRIGGER ID changes
 		for oldBranchIndex, oldBranch := range oldWorkflow.Branches {
 			if !oldBranch.ParentControlled {
@@ -6684,7 +6682,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				//log.Printf("[ERROR] Branch %s in workflow %s is missing something. Source: %s (%#v), Dest: %s (%#v)", newBranch.ID, oldWorkflow.ID, newBranch.SourceID, foundSource, newBranch.DestinationID, foundDestination)
 
 				// Loop through source & destination + triggers and find if the seed version exists or not
-				if !foundSource { 
+				if !foundSource {
 					seedString := fmt.Sprintf("%s_%s", newBranch.SourceID, oldWorkflow.ID)
 					hash := sha1.New()
 					hash.Write([]byte(seedString))
@@ -6751,7 +6749,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
-
 	if update {
 		// FIXME: This doesn't work does it?
 		childWorkflow := oldWorkflow
@@ -6766,7 +6763,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			childWorkflow.Errors = append(childWorkflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", childWorkflow.Name)
 			childWorkflow.SuborgDistribution = []string{}
 		}
-
 
 		// log.Printf("\n\nSTART")
 		//log.Printf("[DEBUG] CHILD ACTIONS START: %d", len(childWorkflow.Actions))
@@ -6814,7 +6810,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						}
 					}
 
-
 					found = true
 					break
 				}
@@ -6846,14 +6841,13 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 						}
 					}
 
-
 					found = true
 					break
 				}
 			}
 
 			if !found {
-				childWorkflow.ExecutionVariables= append(childWorkflow.ExecutionVariables, parentVariable)
+				childWorkflow.ExecutionVariables = append(childWorkflow.ExecutionVariables, parentVariable)
 			}
 		}
 
@@ -6873,7 +6867,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			childActions = append(childActions, action)
 		}
-
 
 		childTriggers := []Trigger{}
 		for _, trigger := range oldWorkflow.Triggers {
@@ -6946,7 +6939,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			}
 
 		}
-
 
 		// FIXME: Not necessary in the future, but useful for now
 		// Makes sure we double check EVERY node
@@ -7255,7 +7247,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 			//log.Printf("[DEBUG] Removed triggers: %#v. CHILD: %d", removedTriggers, len(childTriggers))
 
 			//newChildTriggers := childTriggers
-			newChildTriggers := []Trigger{} 
+			newChildTriggers := []Trigger{}
 			for _, trigger := range childWorkflow.Triggers {
 				if !ArrayContains(removedTriggers, trigger.ID) {
 					// Just making sure it exists
@@ -7335,10 +7327,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 					// Ensures params are in sync, at least with the size of them
 					if len(childTrigger.Parameters) != len(parentTrigger.Parameters) {
-						//log.Printf("[WARNING] Re-syncing parameters in child trigger with parent trigger %s", childTrigger.Name) 
+						//log.Printf("[WARNING] Re-syncing parameters in child trigger with parent trigger %s", childTrigger.Name)
 						childWorkflow.Triggers[childIndex].Parameters = parentTrigger.Parameters
 					}
-
 
 					relevantRevisionTrigger := Trigger{}
 					for _, parentRevisionTrigger := range lastParentRevision.Triggers {
@@ -7377,7 +7368,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 								} else {
 									//log.Printf("[DEBUG] NOT SAME: %s != %s", childParam.Value, relevantRevisionTriggerParam.Value)
 
-									// Parent workflow ID changed to not match.. Need to check if the ID is a seeded version of the same ID 
+									// Parent workflow ID changed to not match.. Need to check if the ID is a seeded version of the same ID
 									if childParam.Name == "workflow" || childParam.Name == "subflow" {
 										// Check if seed(relevantRevisionTriggerParam.Value) == childParam.Value as to see if parent has changed, but child is in sync
 										seedString := fmt.Sprintf("%s_%s", relevantRevisionTriggerParam.Value, childWorkflow.OrgId)
@@ -7400,7 +7391,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							}
 						}
 					}
-
 
 					// FIXME:
 					// Make sure it changes things such as URL & references properly
@@ -8253,7 +8243,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		//workflow.ID = uuid.NewV4().String()
 
 		// Get the workflow and check if we own it
-		skipRebuild := false 
+		skipRebuild := false
 		newWorkflow, err := GetWorkflow(ctx, workflow.ID)
 		if err == nil && newWorkflow.OrgId == user.ActiveOrg.Id {
 			skipRebuild = true
@@ -8263,7 +8253,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			workflow.ID = uuid.NewV4().String()
 		}
 
-		if !skipRebuild { 
+		if !skipRebuild {
 			workflow.Public = false
 			workflow.Owner = user.Id
 			workflow.ExecutingOrg = user.ActiveOrg
@@ -8381,7 +8371,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if len(newActions) > 1 {
 		workflow.Actions = newActions
 	}
-
 
 	auth, authOk := request.URL.Query()["set_auth"]
 	if authOk && len(auth) > 0 && auth[0] == "true" {
@@ -8545,7 +8534,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed saving workflow to database: %s", err)
@@ -8598,7 +8586,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		ctx = context.Background()
 		err = SetGitWorkflow(ctx, workflow, org)
 		if err != nil {
-	
+
 			// Make a notification for this
 			err = CreateOrgNotification(
 				ctx,
@@ -8608,13 +8596,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				user.ActiveOrg.Id,
 				true,
 			)
-	
+
 			if err != nil {
 				log.Printf("[WARNING] Failed creating notification for failed git workflow for %s (%s): %s", workflow.Name, workflow.ID, err)
 			} else {
 				log.Printf("[WARNING] Failed setting git workflow for %s (%s). Notification created. %s", workflow.Name, workflow.ID, err)
 			}
-	
+
 		}
 	}()
 
@@ -9582,7 +9570,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 	//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
 
-	// FIXME: Send a save request instead? That way 
+	// FIXME: Send a save request instead? That way
 	// propagation can keep going down.
 	// TODO: Not implemented due to recursion issues.
 	err = SetWorkflow(ctx, newWf, newWf.ID)
@@ -11277,7 +11265,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	} else {
 		//log.Printf("MULTITENANT USAGE: %d / %d. Active: %#v", parentOrg.SyncUsage.MultiTenant.Counter, parentOrg.SyncFeatures.MultiTenant.Limit, parentOrg.SyncFeatures.MultiTenant.Active)
 
-		childOrgs, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id) 
+		childOrgs, err := GetAllChildOrgs(ctx, user.ActiveOrg.Id)
 		if err != nil {
 			log.Printf("[ERROR] Failed getting child orgs for %s: %s", user.ActiveOrg.Id, err)
 		}
@@ -12238,6 +12226,76 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, Bcc
 	return err
 }
 
+func sendMailSendgridV2(toEmail []string, subject string, substitutions map[string]interface{}, emailApp bool, templateID string) error {
+	log.Printf("[DEBUG] In mail sending with subject %s. TO: %s", subject, toEmail)
+
+	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
+	srequest.Method = "POST"
+
+	type SendgridEmail struct {
+		Email string `json:"email"`
+	}
+
+	type SendgridPersonalization struct {
+		To                  []SendgridEmail        `json:"to"`
+		Subject             string                 `json:"subject"`
+		DynamicTemplateData map[string]interface{} `json:"dynamic_template_data,omitempty"`
+	}
+
+	type sendgridMailBody struct {
+		Personalizations []SendgridPersonalization `json:"personalizations"`
+		From             SendgridEmail             `json:"from"`
+		TemplateID       string                    `json:"template_id"`
+	}
+
+	newBody := sendgridMailBody{
+		Personalizations: []SendgridPersonalization{
+			{
+				To:                  []SendgridEmail{},
+				Subject:             subject,
+				DynamicTemplateData: substitutions,
+			},
+		},
+		From: SendgridEmail{
+			Email: "Shuffle Support <shuffle-support@shuffler.io>",
+		},
+		TemplateID: templateID,
+	}
+
+	if emailApp {
+		newBody.From.Email = "Shuffle Email App <email-app@shuffler.io>"
+	}
+
+	for _, email := range toEmail {
+		newBody.Personalizations[0].To = append(newBody.Personalizations[0].To,
+			SendgridEmail{
+				Email: strings.TrimSpace(email),
+			})
+	}
+
+	parsedBody, err := json.Marshal(newBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse JSON in sendmail: %s", err)
+		return err
+	}
+
+	srequest.Body = parsedBody
+
+	response, err := sendgrid.API(srequest)
+	if err != nil {
+		log.Println(err)
+	} else {
+		if response.StatusCode >= 300 {
+			log.Printf("[DEBUG] Failed sending mail! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		} else {
+			log.Printf("[DEBUG] Successfully sent email! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		}
+		return nil
+	}
+
+	return err
+}
+
 func CheckWorkflowApp(workflowApp WorkflowApp) error {
 	// Validate fields
 	if workflowApp.Name == "" {
@@ -12961,7 +13019,7 @@ func updateOrgAppCache(app WorkflowApp, user User) {
 						return
 					}
 
-					updated = true 
+					updated = true
 					allApps[appIndex] = app
 					break
 				}
@@ -13081,7 +13139,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			//log.Printf("CAN SHARE APP!")
 			parsedApi, err := GetOpenApiDatastore(ctx, fileId)
 			if err != nil {
-				go updateOrgAppCache(*app, user)	
+				go updateOrgAppCache(*app, user)
 
 				log.Printf("[WARNING] OpenApi doesn't exist for (0): %s - err: %s. Returning basic app", fileId, err)
 				resp.WriteHeader(200)
@@ -13117,7 +13175,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		go updateOrgAppCache(*app, user)	
+		go updateOrgAppCache(*app, user)
 		resp.WriteHeader(200)
 		resp.Write(appdata)
 		return
@@ -13203,7 +13261,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Should add it to their cache in the background
-	go updateOrgAppCache(*app, user)	
+	go updateOrgAppCache(*app, user)
 
 	appdata, err = json.Marshal(appReturn)
 	if err != nil {
@@ -13588,7 +13646,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Preloading orgs into cache to speed up first requests a bit 
+	// Preloading orgs into cache to speed up first requests a bit
 	for _, orgID := range userdata.Orgs {
 		go GetOrg(ctx, orgID)
 	}
@@ -13604,10 +13662,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf(`[WARNING] Username %s (%s) has login type set to OpenID (single sign-on).`, userdata.Username, userdata.Id)
 	}
 
-
 	if len(data.MFACode) == 0 {
 		log.Printf("[DEBUG] No MFA code found in login request for %s (%s). Checking %d orgs", userdata.Username, userdata.Id, len(userdata.Orgs))
-
 
 		for _, orgID := range userdata.Orgs {
 			org, err := GetOrg(ctx, orgID)
@@ -16162,7 +16218,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	}
 
 	// Validates RERUN of single actions  (new 2025)
-	// Identified by: 
+	// Identified by:
 	// 1. Predefined result from previous exec
 	// 2. Only ONE action
 	// 3. Every predefined result having result.Action.Category == "rerun"
@@ -16171,7 +16227,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		rerunFound := false
 		for _, result := range workflowExecution.Results {
 			if result.Action.Category == "rerun" {
-				rerunFound = true 
+				rerunFound = true
 			}
 
 			// Find if the result for the single action exists or not
@@ -16202,7 +16258,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 	//return &workflowExecution, dbSave, err
 	return &workflowExecution, dbSave, nil
 }
-
 
 func setExecutionVariable(actionResult ActionResult) bool {
 	if len(actionResult.Action.ExecutionVariable.Name) == 0 {
@@ -17299,7 +17354,7 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 	type cacheConfig struct {
 		Key            string   `json:"key"`
 		Action         string   `json:"action"`
-		Category 	   string 	`json:"category"`
+		Category       string   `json:"category"`
 		SelectedSuborg []string `json:"selected_suborgs"`
 	}
 
@@ -18325,7 +18380,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		app = *newApp
 	}
 
-
 	// FIXME: We need to inject missing empty auth here in some cases
 	// This is NOT a good solution, but a good bypass
 	if app.Authentication.Required {
@@ -18422,8 +18476,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		//}
 	}
 
-	
-
 	newParams := []WorkflowAppActionParameter{}
 
 	// Auth is handled in PrepareWorkflowExec, so this may not be needed
@@ -18514,7 +18566,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
 		}
 
-
 		if len(action.SourceExecution) == 0 {
 			return workflowExecution, errors.New("No source_execution provided")
 		}
@@ -18549,7 +18600,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			foundIndex := -1
 			for foundResultIndex, foundResult := range workflowExecution.Results {
 				if foundResult.Action.ID == result.Action.ID {
-					foundIndex = foundResultIndex 
+					foundIndex = foundResultIndex
 					newResults = append(newResults, foundResult)
 					break
 				}
@@ -18589,11 +18640,11 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	go SetWorkflowExecution(context.Background(), workflowExecution, true)
 
 	/*
-	err = SetWorkflowExecution(context.Background, workflowExecution, true)
-	if err != nil {
-		log.Printf("[WARNING] Failed handling single execution setup: %s", err)
-		return workflowExecution, err
-	}
+		err = SetWorkflowExecution(context.Background, workflowExecution, true)
+		if err != nil {
+			log.Printf("[WARNING] Failed handling single execution setup: %s", err)
+			return workflowExecution, err
+		}
 	*/
 
 	return workflowExecution, nil
@@ -18830,7 +18881,7 @@ func GetDocs(resp http.ResponseWriter, request *http.Request) {
 	folder, folderOk := request.URL.Query()["folder"]
 	if folderOk && len(folder) > 0 {
 		if strings.Contains(folder[0], "..") || strings.Contains(folder[0], "/") {
-			// Disallow traversal even if it's github 
+			// Disallow traversal even if it's github
 		} else {
 			path = folder[0]
 		}
@@ -19003,7 +19054,7 @@ func GetDocList(resp http.ResponseWriter, request *http.Request) {
 	folder, folderOk := request.URL.Query()["folder"]
 	if folderOk && len(folder) > 0 {
 		if strings.Contains(folder[0], "..") || strings.Contains(folder[0], "/") {
-			// Disallow traversal even if it's github 
+			// Disallow traversal even if it's github
 		} else {
 			path = folder[0]
 		}
@@ -19271,17 +19322,17 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 	resetCache := request.URL.Query().Get("resetCache") == "true" // Check for resetCache parameter
 
 	if !resetCache {
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		resp.WriteHeader(200)
-		resp.Write(cacheData)
-		return
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			resp.WriteHeader(200)
+			resp.Write(cacheData)
+			return
 		}
 	}
 	result := FileList{}
 	log.Println("[DEBUG] Skipping Cache for Articles List")
-	
+
 	client := github.NewClient(nil)
 	owner := "shuffle"
 	repo := "shuffle-docs"
@@ -19306,25 +19357,25 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 			continue
 		}
 
-        commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
-            Path: fmt.Sprintf("%s/%s", path, *item.Name),
-        })
+		commits, resp, err := client.Repositories.ListCommits(ctx, owner, repo, &github.CommitsListOptions{
+			Path: fmt.Sprintf("%s/%s", path, *item.Name),
+		})
 
-        publishedDate := time.Now().Unix()
-        if err != nil {
-            log.Printf("[WARNING] Failed getting commits for %s: %s", *item.Name, err)
-            if resp != nil {
-                log.Printf("[DEBUG] Response status: %d", resp.StatusCode)
-            }
-        } else {
-            log.Printf("[DEBUG] Found %d commits for %s", len(commits), *item.Name)
-            if len(commits) > 0 {
-                publishedDate = commits[len(commits)-1].Commit.Author.Date.Unix()
-                log.Printf("[DEBUG] Setting published date for %s to %s (%d) from first commit", *item.Name, commits[len(commits)-1].Commit.Author.Date.Format("2006-01-02 15:04:05"), publishedDate)
-            } else {
-                log.Printf("[WARNING] No commits found for %s", *item.Name)
-            }
-        }
+		publishedDate := time.Now().Unix()
+		if err != nil {
+			log.Printf("[WARNING] Failed getting commits for %s: %s", *item.Name, err)
+			if resp != nil {
+				log.Printf("[DEBUG] Response status: %d", resp.StatusCode)
+			}
+		} else {
+			log.Printf("[DEBUG] Found %d commits for %s", len(commits), *item.Name)
+			if len(commits) > 0 {
+				publishedDate = commits[len(commits)-1].Commit.Author.Date.Unix()
+				log.Printf("[DEBUG] Setting published date for %s to %s (%d) from first commit", *item.Name, commits[len(commits)-1].Commit.Author.Date.Format("2006-01-02 15:04:05"), publishedDate)
+			} else {
+				log.Printf("[WARNING] No commits found for %s", *item.Name)
+			}
+		}
 
 		// FIXME: Scuffed readtime calc
 		// Average word length = 5. Space = 1. 5+1 = 6 avg.
@@ -19332,12 +19383,12 @@ func GetArticlesList(resp http.ResponseWriter, request *http.Request) {
 		//250 = average read time / minute
 		// Doubling this for bloat removal in Markdown~
 		githubResp := GithubResp{
-			Name:         (*item.Name)[0 : len(*item.Name)-3],
-			Contributors: []GithubAuthor{},
+			Name:          (*item.Name)[0 : len(*item.Name)-3],
+			Contributors:  []GithubAuthor{},
 			PublishedDate: publishedDate,
-			Edited:       "",
-			ReadTime:     *item.Size / 6 / 250,
-			Link:         fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
+			Edited:        "",
+			ReadTime:      *item.Size / 6 / 250,
+			Link:          fmt.Sprintf("https://github.com/%s/%s/blob/master/%s/%s", owner, repo, path, *item.Name),
 		}
 
 		names = append(names, githubResp)
@@ -19413,9 +19464,9 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 	}
 
 	if len(baseExecution.Results) > len(execution.Results) {
-		if shouldReset == true { 
+		if shouldReset == true {
 			// Letting it pass and override. This is to ensure worker can override
-			log.Printf("[INFO][%s] Allowing workflow execution override with status %s, %d results and %d actions", execution.ExecutionId, execution.Status,len(execution.Results), len(execution.Workflow.Actions))
+			log.Printf("[INFO][%s] Allowing workflow execution override with status %s, %d results and %d actions", execution.ExecutionId, execution.Status, len(execution.Results), len(execution.Workflow.Actions))
 
 			// Reset cache for all action results for Fixexecution
 			for _, result := range baseExecution.Results {
@@ -21268,7 +21319,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-
 	var workflowExecution WorkflowExecution
 	workflowBytes, err := json.Marshal(workflow)
 	if err != nil {
@@ -21931,7 +21981,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Don't override workflow defaults
 	}
 
-
 	//log.Printf("[DEBUG][%s] STARTING IF/ELSE NODE REMAPPING", workflowExecution.ExecutionId)
 	for branchIndex, branch := range workflowExecution.Workflow.Branches {
 		if len(branch.SourceParent) == 0 {
@@ -22056,7 +22105,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		return workflowExecution, ExecInfo{}, "Invalid uuid", err
 	}
 
-
 	// FIXME - find owner of workflow
 	// FIXME - get the actual workflow itself and build the request
 	// MAYBE: Don't send the workflow within the pubsub, as this requires more data to be sent
@@ -22151,7 +22199,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-
 	workflowExecution.ExecutionVariables = workflow.ExecutionVariables
 	if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
 		workflowExecution.Start = workflowExecution.Workflow.Start
@@ -22185,7 +22232,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						for key, value := range headers {
 							newheaders += fmt.Sprintf("%s: %s\n", key, value)
 						}
-					
+
 						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newheaders
 						continue
 					}
@@ -22207,12 +22254,12 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 						for key, value := range queries {
 							newqueries += fmt.Sprintf("%s=%s&", key, value)
 						}
-						
+
 						// Remove trailing & if exists
 						if len(newqueries) > 0 {
 							newqueries = newqueries[:len(newqueries)-1]
 						}
-						
+
 						workflowExecution.Workflow.Actions[actionIndex].Parameters[paramIndex].Value = newqueries
 						continue
 					}
@@ -22907,7 +22954,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 					newParams = append(newParams, param)
 				}
 			} else {
-				// This may make the system miss fields. 
+				// This may make the system miss fields.
 				addedParamIndexes := []string{}
 				for _, param := range action.Parameters {
 
@@ -22992,7 +23039,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-
 	// Added fixes for e.g. URL's ending in /
 	fixes := []string{"url"}
 	for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -23068,7 +23114,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-
 	if !startFound {
 		if len(workflowExecution.Start) == 0 && len(workflowExecution.Workflow.Start) > 0 {
 			workflowExecution.Start = workflow.Start
@@ -23117,7 +23162,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-
 	// Verification for execution environments
 	workflowExecution.Results = defaultResults
 	workflowExecution.Workflow.Actions = newActions
@@ -23149,7 +23193,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		log.Printf("[ERROR] No org identified for execution of %s. Returning", workflowExecution.Workflow.ID)
 		return workflowExecution, ExecInfo{}, "No org identified for execution", errors.New("No org identified for execution")
 	}
-
 
 	if len(allEnvs) == 0 {
 		log.Printf("[ERROR] No active environments found for org: %s", workflowExecution.ExecutionOrg)
@@ -23205,7 +23248,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			environments = append(environments, action.Environment)
 		}
 	}
-
 
 	if len(workflowExecution.Workflow.ExecutingOrg.Id) == 0 || workflowExecution.ExecutionOrg != workflowExecution.Workflow.ExecutingOrg.Id {
 		workflowExecution.Workflow.ExecutingOrg = OrgMini{
@@ -23334,7 +23376,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 
 	workflowExecution.Workflow.Triggers = newTriggers
 
-
 	// Checking authentication fields as they should now be filled in no matter where
 
 	if len(workflowExecution.ExecutionOrg) == 0 {
@@ -23347,7 +23388,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			log.Printf("[ERROR] Failed to get org: %s", err)
 		}
 	}
-
 
 	// Clear out example & description fields
 	for actionIndex, action := range workflowExecution.Workflow.Actions {
@@ -23373,7 +23413,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 			}
 		}
 	}
-
 
 	if len(org.Defaults.KmsId) > 0 {
 		if len(allAuths) == 0 {
@@ -23508,7 +23547,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		}
 	}
 
-
 	// Handles org setting for subflows
 	if len(workflowExecution.Workflow.ExecutingOrg.Name) == 0 {
 		// Maybe should be set from the parentorg?
@@ -23566,7 +23604,6 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	if finished {
 		log.Printf("[INFO][%s] Workflow already finished during startup. Is this correct?", workflowExecution.ExecutionId)
 	}
-
 
 	go DeleteCache(context.Background(), fmt.Sprintf("workflowexecution_%s", workflowExecution.WorkflowId))
 	go DeleteCache(context.Background(), fmt.Sprintf("workflowexecution_%s_50", workflowExecution.WorkflowId))
@@ -23748,13 +23785,12 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	}
 
 	if workflowExecution.ExecutionId == "" {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] No execution ID found. Bad auth. Source Exec: %s", sourceExecution[0])
 		}
 
 		return false, ""
 	}
-
 
 	sourceAuth, sourceAuthOk := request.URL.Query()["source_auth"]
 	if !sourceAuthOk {
@@ -23923,8 +23959,8 @@ func EchoOpenapiData(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[DEBUG] Downloading content from %s", newbody)
 
 	req, err := http.NewRequest(
-		"GET", 
-		newbody, 
+		"GET",
+		newbody,
 		nil,
 	)
 
@@ -25101,12 +25137,12 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	relevantActions := []Action{}
 
 	// Validates RERUN of single actions (new 2025)
-	// Identified by: 
+	// Identified by:
 	// 1. Predefined result from previous exec
 	// 2. Only ONE action
 	// 3. Every predefined result having result.Action.Category == "rerun"
 	if len(workflowExecution.Workflow.Actions) == 1 && len(workflowExecution.Results) > 0 {
-		finished := ValidateFinished(ctx, extra, workflowExecution) 
+		finished := ValidateFinished(ctx, extra, workflowExecution)
 		if finished {
 			return workflowExecution, relevantActions
 		}
@@ -25777,12 +25813,12 @@ func isNoProxyHost(noProxy, host string) bool {
 	host = strings.TrimSpace(host) // Fallback to trimming
 
 	for _, noProxyEntry := range strings.Split(noProxy, ",") {
-		noProxyEntry , _, err := net.SplitHostPort(noProxyEntry)
+		noProxyEntry, _, err := net.SplitHostPort(noProxyEntry)
 		if err != nil {
 			log.Printf("[ERROR] Failed to split host and port for NOPROXY: %s", err)
 		}
 
-		noProxyEntry= strings.TrimSpace(noProxyEntry)
+		noProxyEntry = strings.TrimSpace(noProxyEntry)
 
 		// Handle wildcards or suffix matching
 		if strings.HasPrefix(noProxyEntry, ".") {
@@ -26211,7 +26247,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			if len(value.Fields) > 0 {
 				err = nil
 			}
-		} 
+		}
 
 		if err != nil {
 			if debug {
@@ -26809,7 +26845,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-
 	if len(foundAuthenticationId) > 0 {
 		if len(auth) == 0 {
 			auth, err = GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
@@ -26818,7 +26853,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		// Fixes an issue where URL replacing from auth doesn't work 
+		// Fixes an issue where URL replacing from auth doesn't work
 		// due to a value already existing
 		foundUrl := ""
 		urlIndex := -1
@@ -26831,12 +26866,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(foundUrl) > 0 && urlIndex >= 0 {
-			for _, foundAuth := range auth { 
+			for _, foundAuth := range auth {
 				if foundAuth.Id != foundAuthenticationId {
 					continue
 				}
 
-				// Replaces if URL is in the authentication, as it should be 
+				// Replaces if URL is in the authentication, as it should be
 				// replaced at a later point
 				for _, field := range foundAuth.Fields {
 					if field.Key == "url" {
@@ -26880,7 +26915,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				Apps: []WorkflowApp{
 					selectedApp,
 				},
-				ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
+				ApiDebuggerUrl:  fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 				AvailableLabels: availableLabels,
 			}
 
@@ -26945,7 +26980,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				selectedApp,
 			},
 			AvailableLabels: availableLabels,
-			ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
+			ApiDebuggerUrl:  fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
 		}
 
 		// marshalled
@@ -27095,7 +27130,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	//log.Printf("[DEBUG] Required bodyfields: %#v", selectedAction.RequiredBodyFields)
 	handledRequiredFields := []string{}
 	missingFields = []string{}
-
 
 	for _, param := range selectedAction.Parameters {
 		// Optional > Required
@@ -27468,7 +27502,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	if value.SkipWorkflow {
 		//log.Printf("[DEBUG] Skipping workflow generation, and instead attempting to directly run the action. This is only applicable IF the action is atomic (skip_workflow=true).")
 		if len(missingFields) > 0 {
-			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)	
+			log.Printf("[WARNING] Not all required fields were found in category action. Want: %#v in action %s", missingFields, selectedAction.Name)
 			resp.WriteHeader(400)
 			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Not all required fields are set", "label": "%s", "missing_fields": "%s", "action": "%s", "api_debugger_url": "%s"}`, value.Label, strings.Join(missingFields, ","), selectedAction.Name, fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID))))
 			return
@@ -28072,9 +28106,9 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		ExecutionArgument: executionArgument,
 	}
 
-	newExecBody, err  := json.Marshal(execData)
+	newExecBody, err := json.Marshal(execData)
 	if err != nil {
-		log.Printf("[DEBUG] Failed ShuffleGPT data formatting: %s", err) 
+		log.Printf("[DEBUG] Failed ShuffleGPT data formatting: %s", err)
 	}
 
 	// Starting execution
@@ -28137,14 +28171,14 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 	selectedApp.LargeImage = ""
 	selectedApp.Actions = []WorkflowAppAction{}
 	structuredFeedback := StructuredCategoryAction{
-		Success:     true,
-		WorkflowId:  parentWorkflow.ID,
-		ExecutionId: workflowExecution.ExecutionId,
-		Action:      "done",
-		Category:    discoveredCategory,
-		Reason:      "Analyze Result for details",
+		Success:        true,
+		WorkflowId:     parentWorkflow.ID,
+		ExecutionId:    workflowExecution.ExecutionId,
+		Action:         "done",
+		Category:       discoveredCategory,
+		Reason:         "Analyze Result for details",
 		ApiDebuggerUrl: fmt.Sprintf("https://shuffler.io/apis/%s", selectedApp.ID),
-		Result: returnBody.Result,
+		Result:         returnBody.Result,
 	}
 
 	jsonParsed, err := json.Marshal(structuredFeedback)
@@ -28266,7 +28300,7 @@ func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixL
 				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
 				selectedAction = guessedAction
 			} else {
-				if (count > 5) {
+				if count > 5 {
 					log.Printf("[WARNING] Too many attempts to find action for label '%s' in app %s (%s)", label, newApp.Name, newApp.ID)
 				} else {
 					return GetActionFromLabel(ctx, newApp, label, false, fields, count+1)
@@ -31208,7 +31242,7 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 					subProblem.Type = fmt.Sprintf("sub_%s", subProblem.Type)
 					if len(subProblem.Type) > 20 {
-						subProblem.Type = subProblem.Type[:20]+"_app"
+						subProblem.Type = subProblem.Type[:20] + "_app"
 					}
 
 					workflow.Validation.SubflowApps = append(workflow.Validation.SubflowApps, subProblem)
