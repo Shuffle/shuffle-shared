@@ -1633,7 +1633,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
 	client := GetExternalClient(url)
-
 	parsedAction := CategoryAction{
 		AppName: 	decision.Tool,
 		Label: 		decision.Action,
@@ -1854,11 +1853,11 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		// Map in the node ID (action ID) and decision ID to set/continue the right result
 		Action: Action{
 			AppName: "AI Agent",
+			Label: fmt.Sprintf("Agent Decision %s", decision.RunDetails.Id),
 			ID: agentOutput.NodeId,
 		},
 		Status: fmt.Sprintf("agent_%s", decision.RunDetails.Id),
 		Result: string(marshalledDecision),
-
 	}
 
 	marshalledAction, err := json.Marshal(parsedAction)

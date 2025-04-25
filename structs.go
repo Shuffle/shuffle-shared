@@ -4288,4 +4288,5 @@ type AgentOutput struct {
 	CompletedAt int64 `json:"completed_at,omitempty" datastore:"completed_at"`
 	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
 	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
+	Memory string `json:"memory,omitempty" datastore:"memory"`
 }

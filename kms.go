@@ -1338,19 +1338,18 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	}
 
 	// // Double check if it has it or not
-	// parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
-	// for _, action := range app.Actions {
-	// 	for _, actionLabel := range action.CategoryLabel {
-	// 		parsedActionLabel := strings.ToLower(strings.ReplaceAll(actionLabel, " ", "_"))
-	// 		if parsedActionLabel == parsedLabel {
-	// 			return app, action
-	// 		}
-	// 	}
-	// }
+	parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
+	for _, action := range app.Actions {
+		for _, actionLabel := range action.CategoryLabel {
+			parsedActionLabel := strings.ToLower(strings.ReplaceAll(actionLabel, " ", "_"))
+			if parsedActionLabel == parsedLabel {
+				return app, action
+			}
+		}
+	}
 
 	// Fix the label to be as it is in category (uppercase + spaces)
 	// fml, there is no consistency to casing + underscores, so we keep the new
-	//label = strings.ReplaceAll(strings.Title(strings.ToLower(label)), "_", " ")
 
 	log.Printf("[INFO][AI] Running app fix for label '%s' for app %s (%s) with %d actions", label, app.Name, app.ID, len(app.Actions))
 

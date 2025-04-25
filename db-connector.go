@@ -1955,12 +1955,67 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 		workflowExecution.Workflow.Actions[actionIndex].LargeImage = ""
 		workflowExecution.Workflow.Actions[actionIndex].SmallImage = ""
+		for resultIndex, innerresult := range workflowExecution.Results {
+			if innerresult.Action.ID != action.ID {
+				continue
+			}
 
-		for _, innerresult := range workflowExecution.Results {
-			if innerresult.Action.ID == action.ID && innerresult.Status != "WAITING" {
+			if innerresult.Status != "WAITING" {
 				found = true
 				result = innerresult
 				break
+
+			} else if innerresult.Status == "WAITING" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
+				// Auto fixing decision data based on cache for better decisionmaking
+				log.Printf("[DEBUG] Found action result %s with WAITING status", action.AppName)
+
+				// Map the result into AgentOutput to check decisions
+				mappedOutput := AgentOutput{}
+				err = json.Unmarshal([]byte(innerresult.Result), &mappedOutput)
+				if err != nil {
+					log.Printf("[DEBUG] Failed in mapped output mapping: %s", err)
+				}
+
+				log.Printf("[DEBUG] Got %d results to look for", len(mappedOutput.Decisions))
+
+				decisionsUpdated := false
+				for decisionIndex, decision := range mappedOutput.Decisions {
+					if decision.RunDetails.Status == "" || decision.RunDetails.Status == "NOT IMPLEMENTED" {
+						continue
+					}
+
+					if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "FAILURE" {
+						continue
+					}
+
+					log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
+					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
+					cache, err := GetCache(ctx, decisionId)
+					if err == nil {
+						foundDecision := AgentDecision{}
+						cacheData := []byte(cache.([]uint8))
+						err = json.Unmarshal(cacheData, &foundDecision)
+						if err != nil {
+							log.Printf("[ERROR][%s] Faled mapping foundDecision: %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Id)
+						} else {
+							if foundDecision.RunDetails.Status != "" {
+								decisionsUpdated = true
+								mappedOutput.Decisions[decisionIndex] = foundDecision
+							}
+						}
+					}
+				}
+
+				if decisionsUpdated {
+					log.Printf("[DEBUG] Decisions updated!") 
+
+					marshalledResult, err := json.Marshal(mappedOutput)
+					if err == nil {
+						workflowExecution.Results[resultIndex].Result = string(marshalledResult)
+					} else {
+						log.Printf("[DEBUG] Failed unmarshalling agent decision: %s", err)
+					}
+				}
 			}
 		}
 
