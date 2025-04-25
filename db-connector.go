@@ -13746,7 +13746,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
-	log.Printf("[INFO][%s] Workflow Finished Check. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	//log.Printf("[INFO][%s] Workflow Finished Check. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0

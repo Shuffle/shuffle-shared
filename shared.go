@@ -15178,7 +15178,39 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	} else if actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" {
-		log.Printf("[DEBUG] Got AI Agent response: %#v", actionResult.Result)
+		log.Printf("[DEBUG] Got AI Agent response: %#v. STATUS: %#v", actionResult.Result, actionResult.Status)
+		if strings.HasPrefix(actionResult.Status, "agent_") {
+			decisionIdSplit := strings.Split(actionResult.Status, "_") 
+			decisionId := ""
+			if len(decisionIdSplit) > 1 {
+				decisionId = strings.Join(decisionIdSplit[1:len(decisionIdSplit)-1], "_")
+			}
+
+
+			log.Printf("\n\n\nHANDLE AGENT DECISION RESULT! Decision ID: %s\n\n\n", decisionId)
+			if len(decisionId) == 0 {
+				log.Printf("[ERROR][%s] No decision ID found for node %s. This means we can't map the decision result in any way. Should we set the agent to FAILURE?", actionResult.ExecutionId, actionResult.Action.ID)
+				return &workflowExecution, false, errors.New("Agent decision failed")
+			}
+
+			foundActionResultIndex := -1
+			for actionIndex, result := range workflowExecution.Results {
+				if result.Action.ID == actionResult.Action.ID {
+					foundActionResultIndex = actionIndex
+					break
+				}
+			}
+
+			if foundActionResultIndex < 0 {
+				log.Printf("[ERROR][%s] Action %s was not found", workflowExecution.ExecutionId, actionResult.Action.ID)
+				return &workflowExecution, false, errors.New(fmt.Sprintf("Agent node ID for decision ID %s not found", decisionId))
+			}
+
+			log.Printf("executionId, action AND decision ID found. Continue decisionmaking!")
+
+
+			os.Exit(3)
+		}
 	}
 
 	if setCache {
@@ -21763,13 +21795,13 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							)
 
 							if err != nil {
-								log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
+								log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input (1): %s", err)
 								return workflowExecution, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip. Contact support if this persists.")
 							}
 
 							newresp, err := topClient.Do(req)
 							if err != nil {
-								log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
+								log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input (2): %s", err)
 								return workflowExecution, ExecInfo{}, fmt.Sprintf("Execution (%s) action failed to skip during send. Contact support if this persists.", oldExecution.ExecutionId), errors.New("Execution action failed to skip during send. Contact support if this persists.")
 							}
 
