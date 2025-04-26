@@ -6609,7 +6609,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		for {
 			it := project.Dbclient.Run(ctx, query)
 			if cnt > maxAmount {
-				log.Printf("[ERROR] Maximum try exceeded for workflowapp (1)")
+				//log.Printf("[ERROR] Maximum try exceeded for workflowapp (1)")
 				break
 			}
 

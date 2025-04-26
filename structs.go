@@ -4279,6 +4279,7 @@ type AgentDecision struct {
 type AgentOutput struct {
 	Status 	  string  `json:"status" datastore:"status"`
 	Input     string          `json:"input" datastore:"input"`
+	Error 	  string `json:"error,omitempty" datastore:"error"`
 	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
 
 	// For easy testing

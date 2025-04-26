@@ -15022,8 +15022,26 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 
 	log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status) 
+	fixedActionResult := AgentOutput{}
+	err = json.Unmarshal([]byte(actionResult.Result), &fixedActionResult)
+	if err == nil && fixedActionResult.Status != "" {
+		if fixedActionResult.Status == "RUNNING" {
+			if status == "FINISHED" {
+				fixedActionResult.Status = "FINISHED"
+			} else if status == "ABORTED" || status == "FAILURE" {
+				fixedActionResult.Status = "FAILURE"
+			}
+		}
 
+		if status == "FINISHED" || status == "ABORTED" {
+			fixedActionResult.CompletedAt = time.Now().Unix()
+		}
 
+		marshalledResult, err := json.Marshal(fixedActionResult)
+		if err == nil {
+			actionResult.Result = string(marshalledResult)
+		}
+	}
 
 	actionResult.ExecutionId = workflowExecution.ExecutionId
 	actionResult.Authorization = workflowExecution.Authorization
@@ -15403,7 +15421,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	} else if actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" {
-		log.Printf("[DEBUG] Got AI Agent response: %#v. STATUS: %#v", actionResult.Result, actionResult.Status)
+		log.Printf("[DEBUG] Got AI Agent response - STATUS: %#v, resp: %#v.", actionResult.Status, actionResult.Result)
 		if strings.HasPrefix(actionResult.Status, "agent_") {
 
 			return handleAgentDecisionStreamResult(workflowExecution, actionResult)
@@ -18866,6 +18884,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 					}
 				}
 
+				// FIXME: This is a custom fix for single action custom runs.
 				// Wait for validation to have ran
 				if newExecution.Workflow.Validation.ValidationRan {
 
