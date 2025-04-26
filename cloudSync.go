@@ -1804,7 +1804,11 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	decision.RunDetails.DebugUrl = debugUrl 
 	if err != nil {
 		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
-		decision.RunDetails.Status = "FAILED"
+		decision.RunDetails.Status = "FAILURE"
+
+		if len(decision.RunDetails.RawResponse) == 0 {
+			decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start action. Raw Error: %s", err)
+		}
 	} else {
 		decision.RunDetails.Status = "FINISHED"
 	}

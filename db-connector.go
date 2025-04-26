@@ -1967,7 +1967,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 			} else if innerresult.Status == "WAITING" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
 				// Auto fixing decision data based on cache for better decisionmaking
-				log.Printf("[DEBUG] Found action result %s with WAITING status", action.AppName)
+				//log.Printf("[DEBUG] Found action result %s with WAITING status", action.AppName)
 
 				// Map the result into AgentOutput to check decisions
 				mappedOutput := AgentOutput{}
@@ -1976,19 +1976,24 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					log.Printf("[DEBUG] Failed in mapped output mapping: %s", err)
 				}
 
-				log.Printf("[DEBUG] Got %d results to look for", len(mappedOutput.Decisions))
-
 				decisionsUpdated := false
+
+				finishedDecisions := []string{}
+				failedFound := false
 				for decisionIndex, decision := range mappedOutput.Decisions {
 					if decision.RunDetails.Status == "" || decision.RunDetails.Status == "NOT IMPLEMENTED" {
 						continue
 					}
 
-					if decision.RunDetails.Status == "FINISHED" || decision.RunDetails.Status == "FAILURE" {
+					if decision.RunDetails.Status == "FINISHED" {
+						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+						continue
+					} else if decision.RunDetails.Status == "FAILURE" {
+						failedFound = true
 						continue
 					}
 
-					log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
+					//log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
 					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
 					cache, err := GetCache(ctx, decisionId)
 					if err == nil {
@@ -2006,9 +2011,23 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					}
 				}
 
-				if decisionsUpdated {
-					log.Printf("[DEBUG] Decisions updated!") 
+				if failedFound {
+					decisionsUpdated = true
 
+					mappedOutput.Status = "FAILURE"
+					workflowExecution.Results[resultIndex].Status = "ABORTED"
+
+					sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
+
+				} else if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+					decisionsUpdated = true
+					mappedOutput.Status = "FINISHED"
+					workflowExecution.Results[resultIndex].Status = "SUCCESS"
+
+					sendAgentActionSelfRequest("FINISHED", workflowExecution, workflowExecution.Results[resultIndex])
+				} 
+
+				if decisionsUpdated {
 					marshalledResult, err := json.Marshal(mappedOutput)
 					if err == nil {
 						workflowExecution.Results[resultIndex].Result = string(marshalledResult)
@@ -5323,7 +5342,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			obj := bucket.Object(fullParsedPath)
 			fileReader, err := obj.NewReader(ctx)
 			if err != nil {
-				log.Printf("[ERROR] Failed making OpenAPI reader for %s: %s", fullParsedPath, err)
+				//log.Printf("[ERROR] Failed making OpenAPI reader for %s: %s", fullParsedPath, err)
 				return *api, err
 			}
 

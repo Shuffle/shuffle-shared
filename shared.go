@@ -15008,6 +15008,81 @@ func RunExecutionTranslation(ctx context.Context, actionResult ActionResult) {
 	//log.Printf("\n\n[DEBUG] Found body in action result of length: %d", len(parsedBody))
 }
 
+func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecution, actionResult ActionResult) error {
+	ctx := context.Background()
+
+	// Check if the request has been sent already (just in case)
+	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
+	_, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		log.Printf("ALREADY HANDLED! RETURN!!")
+		return nil
+	} else {
+		SetCache(ctx, cacheKey, []byte("1"), 1)
+	}
+
+	log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status) 
+
+
+
+	actionResult.ExecutionId = workflowExecution.ExecutionId
+	actionResult.Authorization = workflowExecution.Authorization
+	actionResult.Status = status
+	actionResult.CompletedAt = time.Now().Unix()
+	
+	baseUrl := fmt.Sprintf("https://shuffler.io")
+	if len(os.Getenv("BASE_URL")) > 0 {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	marshalledResult, err := json.Marshal(actionResult)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling failure request for agent: %s", workflowExecution.ExecutionId, err) 
+		return err
+	}
+
+	actionResultCacheId := fmt.Sprintf("%s_%s_result", actionResult.ExecutionId, actionResult.Action.ID)
+	go SetCache(context.Background(), actionResultCacheId, marshalledResult, 35)
+
+	fullUrl := fmt.Sprintf("%s/api/v1/streams", baseUrl)
+	req, err := http.NewRequest(
+		"POST",
+		fullUrl,
+		bytes.NewBuffer(marshalledResult),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR][%s] Error building agent '%s' request: %s", workflowExecution.ExecutionId, status, err)
+		return err
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Error running agent '%s' request (%s): %s", workflowExecution.ExecutionId, status, err)
+		return err
+	}
+
+	defer resp.Body.Close()
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed reading agent '%s' body: %s", workflowExecution.ExecutionId, status, err)
+		return err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent: %s", workflowExecution.ExecutionId, status, string(body)) 
+		return errors.New(fmt.Sprintf("No result in %s request for agent", status))
+	}
+
+	return nil
+}
+
+
 // Handles the recursiveness of a stream result sent to the backend with an Agent Decision
 func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
 	decisionIdSplit := strings.Split(actionResult.Status, "_")
@@ -15055,7 +15130,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	// FIXME: Need to check the current value from the workflowexecution here, instead of using the currently sent in decision
 
-
 	// 1. Get the current result for the action
 	// 2. Find the decision in there
 	decisionIdResultIndex := -1 // Index of the item in the decision list
@@ -15080,10 +15154,20 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
 
+	if mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "FAILURE" || mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "ABORTED" {
+		sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+		return &workflowExecution, false, nil
+	}
+
 	//mappedResult.Decisions[decisionIdResultIndex] = actionResult.Result
 
 	// Find next action
+	allFinishedDecisions := []string{}
 	for _, curDecision := range mappedResult.Decisions {
+		if curDecision.RunDetails.Status == "FINISHED" { 
+			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
+		}
+
 		if curDecision.I <= decisionIndex {
 			continue
 		}
@@ -15116,22 +15200,30 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 		// FIXME: Set the status of the node to failed
 		if len(failedDecisions) > 0 {
-			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %s", workflowExecution.ExecutionId, decisionId)
+			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %s. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
 
+			sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 			break
 		} 
 
 		if len(foundDecisions) == len(finishedDecisions) {
-			log.Printf("[DEBUG][%s] Should execute next decision '%s' as all %d parent jobs are finished", workflowExecution.ExecutionId, curDecision.RunDetails.Id, len(foundDecisions))
+			//log.Printf("[DEBUG][%s] Should execute next decision '%s' as all %d parent jobs are finished", workflowExecution.ExecutionId, curDecision.RunDetails.Id, len(foundDecisions))
+
+			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision) 
 		} 
 	}
 
+	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
+		sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+		return &workflowExecution, false, nil
+	}
+
 	// FIXME: How do we handle 3rd party memory sources?
-	ctx := context.Background()
 	if mappedResult.Memory == "shuffle_db" {
 		requestKey := fmt.Sprintf("chat_%s_%s", actionResult.ExecutionId, actionResult.Action.ID)
 		log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
 
+		ctx := context.Background()
 		agentRequestMemory, err := GetCacheKey(ctx, requestKey, "agent_requests") 
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed to find request memory for updates", actionResult.ExecutionId) 
@@ -15144,7 +15236,8 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	os.Exit(3)
+	log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
+	//os.Exit(3)
 	return &workflowExecution, true, nil
 }
 
