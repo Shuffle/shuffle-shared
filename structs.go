@@ -3826,6 +3826,8 @@ type SingleResult struct {
 	Result        string         `json:"result"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
+
+	Parameters []WorkflowAppActionParameter `json:"parameters"`
 }
 
 type DockerRequestCheck struct {

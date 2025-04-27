@@ -13854,7 +13854,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-			log.Printf("[INFO][%s] Already finished from GetWorkflowExecution (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
+			//log.Printf("[INFO][%s] Already finished from GetWorkflowExecution (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
 			return true
 		}
 

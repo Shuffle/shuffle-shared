@@ -15113,10 +15113,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	if strings.HasSuffix(decisionId, "_") {
-		decisionId = decisionId[:len(decisionId)-1]
-	}
-
 	log.Printf("\n\n\nHANDLE AGENT DECISION RESULT '%s' -> '%s'!\n\n\n", actionResult.Status, decisionId)
 	if len(decisionId) == 0 {
 		log.Printf("[ERROR][%s] No decision ID found for node %s. This means we can't map the decision result in any way. Should we set the agent to FAILURE?", actionResult.ExecutionId, actionResult.Action.ID)
@@ -18745,7 +18741,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	if len(action.SourceWorkflow) > 0 {
-		log.Printf("[DEBUG] Validating workflow existence, as this is a rerun: %s", action.SourceWorkflow)
+		//log.Printf("[DEBUG] Validating workflow existence, as this is a rerun: %s", action.SourceWorkflow)
 
 		if len(action.ID) == 0 {
 			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
@@ -18799,10 +18795,26 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			}
 		}
 
+		for _, variable := range oldExec.Workflow.WorkflowVariables {
+			workflowExecution.Workflow.WorkflowVariables = append(workflowExecution.Workflow.WorkflowVariables, variable)
+		}
+
+		for _, variable := range oldExec.Workflow.ExecutionVariables {
+			workflowExecution.Workflow.ExecutionVariables = append(workflowExecution.Workflow.ExecutionVariables , variable)
+		}
+
+		for _, variable := range oldExec.ExecutionVariables {
+			workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables , variable)
+		}
+
 		workflowExecution.Results = newResults
 
 		workflowExecution.WorkflowId = action.SourceWorkflow
 		workflowExecution.Workflow.ID = action.SourceWorkflow
+
+		workflowExecution.ExecutionSource = action.SourceWorkflow
+		workflowExecution.ExecutionParent = action.SourceExecution
+
 		workflow.ID = action.SourceWorkflow
 	}
 
@@ -18846,6 +18858,9 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		Result:        "",
 		Errors:        []string{},
 		Validation:    workflowExecution.Workflow.Validation,
+
+		// In case input parameters are wanted. This can happen due to translation.
+		Parameters: []WorkflowAppActionParameter{},
 	}
 
 	// VERY short sleeptime here on purpose
@@ -18854,6 +18869,7 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 		maxSeconds = 60
 	}
 
+	addedParams := []string{}
 	sleeptime := 100
 	for {
 		time.Sleep(100 * time.Millisecond)
@@ -18868,21 +18884,33 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		//log.Printf("\n\n\n[INFO] Checking single action execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
 
+
 		if len(newExecution.Results) > resultAmount-1 {
 			relevantIndex := len(newExecution.Results) - 1
 
 			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
 				returnBody.Result = newExecution.Results[relevantIndex].Result
 
-				// Check for single action errors in liquid and similar
-				// to be used in the frontend
-				//log.Printf("[INFO] Checking for errors in single execution %s", workflowExecution.ExecutionId)
 
-				for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
-					if strings.Contains(param.Name, "liquid") && !ArrayContains(returnBody.Errors, param.Value) {
-						returnBody.Errors = append(returnBody.Errors, param.Value)
+				if len(newExecution.Results[relevantIndex].Action.Parameters) > 0 {
+					for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
+						// Remove auth just in case
+						if param.Configuration && param.Name != "url" {
+							continue
+						}
+
+						if (strings.Contains(param.Name, "liquid") || strings.Contains(param.Name, "warning") || strings.Contains(param.Name, "error")) && !ArrayContains(returnBody.Errors, param.Value) {
+							returnBody.Errors = append(returnBody.Errors, param.Value)
+						} else {
+
+							if !ArrayContains(addedParams, param.Name) {
+								returnBody.Parameters = append(returnBody.Parameters, param) 
+								addedParams = append(addedParams, param.Name)
+							}
+						}
 					}
 				}
+
 
 				// FIXME: This is a custom fix for single action custom runs.
 				// Wait for validation to have ran
