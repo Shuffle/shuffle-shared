@@ -1615,61 +1615,8 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
-// Runs an Agent Decision -> returns the result from it
-// FIXME: Handle types: https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=yIGaSXQYsYReR8cI-0
-// This function should handle:
-// 1. Running the decided action (user input, Singul, Workflow, Other Agent, Custom HTTP function)
-// 2. Taking the result and sending (?) it back
-// 3. Ensuring cache for an action is kept up to date
-func RunAgentDecisionAction(execution WorkflowExecution, decision AgentDecision) {
-
-	// Check if it's already ran or not
-	ctx := context.Background()
-	decisionId := fmt.Sprintf("agent-%s-%s", execution.ExecutionId, decision.RunDetails.Id)
-
-	cache, err := GetCache(ctx, decisionId)
-	if err == nil {
-		foundDecision := AgentDecision{}
-		cacheData := []byte(cache.([]uint8))
-		err = json.Unmarshal(cacheData, &foundDecision)
-		if err != nil {
-			log.Printf("[WARNING][%s] Failed agent decision unmarshal (not critical): %s", execution.ExecutionId, err) 
-		} 
-
-		if foundDecision.RunDetails.StartedAt > 0 {
-			log.Printf("[DEBUG][%s] Decision %s already has status '%s'. Returning as it's already started..", execution.ExecutionId, decision.RunDetails.Id, foundDecision.RunDetails.Status)
-			return
-		}
-	}
-
-	// Set it to this at the start
-	decision.RunDetails.StartedAt = time.Now().Unix()
-	decision.RunDetails.Status = "RUNNING"
-	marshalledDecision, err := json.Marshal(decision)
-	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
-	}
-
-	go SetCache(ctx, decisionId, marshalledDecision, 60)
-
-
-	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision) 
-
-	decision.RunDetails.RawResponse = string(rawResponse)
-	decision.RunDetails.DebugUrl = debugUrl 
-	if err != nil {
-		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
-		decision.RunDetails.Status = "FAILED"
-	} else {
-		decision.RunDetails.Status = "FINISHED"
-	}
-
-	// Send this back as a result for an action
-	// Then the action itself should decide if it's done or not.
-	//decision.CompletedAt = time.Now().Unix()
-	// Would it work to send JUST this decision result?
-}
-
+// This is JUST for Singul actions with AI agents.
+// As AI Agents can have multiple types of runs, this could change every time.
 func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
 	debugUrl := ""
 	log.Printf("[DEBUG][%s] Running agent decision action %s with tool %s", execution.ExecutionId, decision.Action, decision.Tool)
@@ -1686,7 +1633,6 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
 	client := GetExternalClient(url)
-
 	parsedAction := CategoryAction{
 		AppName: 	decision.Tool,
 		Label: 		decision.Action,
@@ -1813,4 +1759,141 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 
 	return body, debugUrl, nil
+}
+
+
+// Runs an Agent Decision -> returns the result from it
+// FIXME: Handle types: https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=yIGaSXQYsYReR8cI-0
+// This function should handle:
+// 1. Running the decided action (user input, Singul, Workflow, Other Agent, Custom HTTP function)
+// 2. Taking the result and sending (?) it back
+// 3. Ensuring cache for an action is kept up to date
+func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) {
+
+	// Check if it's already ran or not
+	ctx := context.Background()
+	decisionId := fmt.Sprintf("agent-%s-%s", execution.ExecutionId, decision.RunDetails.Id)
+	cache, err := GetCache(ctx, decisionId)
+	if err == nil {
+		foundDecision := AgentDecision{}
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &foundDecision)
+		if err != nil {
+			log.Printf("[WARNING][%s] Failed agent decision unmarshal (not critical): %s", execution.ExecutionId, err) 
+		} 
+
+		if foundDecision.RunDetails.StartedAt > 0 {
+			log.Printf("[DEBUG][%s] Decision %s already has status '%s'. Returning as it's already started..", execution.ExecutionId, decision.RunDetails.Id, foundDecision.RunDetails.Status)
+			return
+		}
+	}
+
+	// Set it to this at the start
+	decision.RunDetails.StartedAt = time.Now().Unix()
+	decision.RunDetails.Status = "RUNNING"
+	marshalledDecision, err := json.Marshal(decision)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
+	}
+
+	go SetCache(ctx, decisionId, marshalledDecision, 60)
+
+
+	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision) 
+	decision.RunDetails.RawResponse = string(rawResponse)
+	decision.RunDetails.DebugUrl = debugUrl 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
+		decision.RunDetails.Status = "FAILURE"
+
+		if len(decision.RunDetails.RawResponse) == 0 {
+			decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start action. Raw Error: %s", err)
+		}
+	} else {
+		decision.RunDetails.Status = "FINISHED"
+	}
+
+
+	// 1. Send this back as a result for an action
+	// Then the action itself should decide if it's done or not.
+	// Would it work to send JUST this decision result? 
+	// This could start the next step(s) automatically?
+	decision.RunDetails.CompletedAt = time.Now().Unix()
+	marshalledDecision, err = json.Marshal(decision)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
+	}
+
+	go SetCache(ctx, decisionId, marshalledDecision, 60)
+
+	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
+	// 2. On the streams API, make sure to: 
+	//     1. Check if the execution(s) are finished 
+	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
+	//     3: Start the next steps of decisions after updates
+
+
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+	url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
+
+	log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", execution.ExecutionId, decision.RunDetails.Id, decision.RunDetails.Status, agentOutput.NodeId, url)
+
+	//?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+	client := GetExternalClient(url)
+
+	parsedAction := ActionResult{
+		ExecutionId: 	execution.ExecutionId,
+		Authorization: 	execution.Authorization,
+
+		// Map in the node ID (action ID) and decision ID to set/continue the right result
+		Action: Action{
+			AppName: "AI Agent",
+			Label: fmt.Sprintf("Agent Decision %s", decision.RunDetails.Id),
+			ID: agentOutput.NodeId,
+		},
+		Status: fmt.Sprintf("agent_%s", decision.RunDetails.Id),
+		Result: string(marshalledDecision),
+	}
+
+	marshalledAction, err := json.Marshal(parsedAction)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		url,
+		bytes.NewBuffer(marshalledAction),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed agent decision request creation: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed sending agent decision result: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	foundBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	log.Printf("[DEBUG] Status %d for decision %s. Body: %s", resp.StatusCode, decision.RunDetails.Id, string(foundBody))
+
 }

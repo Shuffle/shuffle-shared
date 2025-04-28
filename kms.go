@@ -260,6 +260,10 @@ func DecryptKMS(ctx context.Context, auth AppAuthenticationStorage, key, authori
 	}
 
 	baseUrl := fmt.Sprintf("https://shuffler.io")
+	if len(os.Getenv("BASE_URL")) > 0 {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
 	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
 		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
 	}
@@ -1035,7 +1039,7 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 
 				openapiWrapper, err := GetOpenApiDatastore(ctx, app.ID)
 				if err != nil {
-					log.Printf("[ERROR] Failed to get openapi datastore in get action body for find http endpoint (10): %s", err)
+					log.Printf("[WARNING] Failed to get openapi datastore in get action body for find http endpoint (10): %s", err)
 					return contentOutput, nil
 				}
 
@@ -1337,7 +1341,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		return app, WorkflowAppAction{}
 	}
 
-	// Double check if it has it or not
+	// // Double check if it has it or not
 	parsedLabel := strings.ToLower(strings.ReplaceAll(label, " ", "_"))
 	for _, action := range app.Actions {
 		for _, actionLabel := range action.CategoryLabel {
@@ -1350,7 +1354,6 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 	// Fix the label to be as it is in category (uppercase + spaces)
 	// fml, there is no consistency to casing + underscores, so we keep the new
-	//label = strings.ReplaceAll(strings.Title(strings.ToLower(label)), "_", " ")
 
 	log.Printf("[INFO][AI] Running app fix for label '%s' for app %s (%s) with %d actions", label, app.Name, app.ID, len(app.Actions))
 
@@ -1583,7 +1586,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	if updatedIndex >= 0 {
 		err := SetWorkflowAppDatastore(context.Background(), app, app.ID)
 		if err != nil {
-			log.Printf("[ERROR] Failed to set app datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+			log.Printf("[WARNING] Failed to set app datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 		}
 
 		//log.Printf("\n\n\n[WARNING] Updated app %s (%s) with label %s. SHOULD update OpenAPI action as well\n\n\n", app.Name, app.ID, label)
@@ -1591,7 +1594,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 		// Find the OpenAPI version and update it too
 		openapiApp, err := GetOpenApiDatastore(context.Background(), app.ID)
 		if err != nil {
-			log.Printf("[ERROR] Failed to get openapi datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
+			log.Printf("[WARNING] Failed to get openapi datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
 			return app, WorkflowAppAction{}
 		} 
 

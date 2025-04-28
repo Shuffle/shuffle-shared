@@ -3826,6 +3826,8 @@ type SingleResult struct {
 	Result        string         `json:"result"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
+
+	Parameters []WorkflowAppActionParameter `json:"parameters"`
 }
 
 type DockerRequestCheck struct {
@@ -4279,6 +4281,7 @@ type AgentDecision struct {
 type AgentOutput struct {
 	Status 	  string  `json:"status" datastore:"status"`
 	Input     string          `json:"input" datastore:"input"`
+	Error 	  string `json:"error,omitempty" datastore:"error"`
 	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
 
 	// For easy testing
@@ -4288,4 +4291,5 @@ type AgentOutput struct {
 	CompletedAt int64 `json:"completed_at,omitempty" datastore:"completed_at"`
 	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
 	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
+	Memory string `json:"memory,omitempty" datastore:"memory"`
 }
