@@ -9634,7 +9634,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, fileId)
-	if err != nil {
+	if err != nil || len(workflow.ID) == 0 {
 		if project.Environment == "cloud" {
 			gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 			if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
