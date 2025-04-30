@@ -1274,7 +1274,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// Fixes missing pieces
 	workflowExecution, newDbSave := Fixexecution(ctx, workflowExecution)
-
 	workflowExecution = cleanupExecutionNodes(ctx, workflowExecution)
 	if newDbSave {
 		dbSave = true
@@ -1980,8 +1979,9 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 				finishedDecisions := []string{}
 				failedFound := false
+				// FIXME: Optimize it to not run too far past "FINISHED" on cache searches
 				for decisionIndex, decision := range mappedOutput.Decisions {
-					if decision.RunDetails.Status == "" || decision.RunDetails.Status == "NOT IMPLEMENTED" {
+					if decision.RunDetails.Status == "NOT IMPLEMENTED" {
 						continue
 					}
 
@@ -2247,6 +2247,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		skipFinished := false
 		for _, result := range workflowExecution.Results {
 			if result.Status == "WAITING" {
+				skipFinished = true
+				break
+			}
+		}
+
+		// Has to do with rerun systems from April 2025
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.Category == "rerun" {
 				skipFinished = true
 				break
 			}
@@ -13775,6 +13783,8 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
 
+	//log.Printf("\n\nVALIDATING FINISHED. STATUS: %s. Action: %d, Results: %d\n", workflowExecution.Status, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
+
 	// Validates RERUN of single actions  (new 2025)
 	// Identified by: 
 	// 1. Predefined result from previous exec
@@ -13793,6 +13803,8 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 				found = true
 			}
 		}
+
+		//log.Printf("ACTIONS: %d, RESULTS: %d, FOUND: %t", len(workflowExecution.Workflow.Actions), len(workflowExecution.Results), found)
 
 		if found {
 			// Continue -> this means finished check is ok
@@ -13864,7 +13876,6 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 		workflowExecution.CompletedAt = int64(time.Now().Unix())
 		workflowExecution.Status = "FINISHED"
-
 		HandleExecutionCacheIncrement(ctx, workflowExecution)
 
 		err = SetWorkflowExecution(ctx, workflowExecution, true)

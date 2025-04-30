@@ -2165,6 +2165,11 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				org.SecurityFramework.IAM.Name = app.Name
 				org.SecurityFramework.IAM.LargeImage = app.LargeImage
 				org.SecurityFramework.IAM.Description = app.Description
+			} else if lowercased == "ai" {
+				org.SecurityFramework.AI.ID = app.ID
+				org.SecurityFramework.AI.Name = app.Name
+				org.SecurityFramework.AI.LargeImage = app.LargeImage
+				org.SecurityFramework.AI.Description = app.Description
 			} else {
 				log.Printf("[ERROR] Unknown category %s for app %s (%s)", lowercased, app.Name, app.ID)
 			}
@@ -5724,7 +5729,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.Created = timeNow
 
 	auth, authOk := request.URL.Query()["set_auth"]
-	//log.Printf("\n\n\n[DEBUG] AUTH: %#v\n\n\n", auth)
 	if authOk && len(auth) > 0 && auth[0] == "true" {
 		allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 		workflowapps, apperr := GetPrioritizedApps(ctx, user)
@@ -15113,7 +15117,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("\n\n\nHANDLE AGENT DECISION RESULT '%s' -> '%s'!\n\n\n", actionResult.Status, decisionId)
+	log.Printf("[DEBUG] HANDLE AGENT DECISION RESULT '%s' -> '%s'!", actionResult.Status, decisionId)
 	if len(decisionId) == 0 {
 		log.Printf("[ERROR][%s] No decision ID found for node %s. This means we can't map the decision result in any way. Should we set the agent to FAILURE?", actionResult.ExecutionId, actionResult.Action.ID)
 		return &workflowExecution, false, errors.New("Agent decision failed")
@@ -15150,7 +15154,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	decisionIndex := -1 		// Assigned index to it by LLM
 	for resultDecisionIndex, resultDecision := range mappedResult.Decisions {
 		if resultDecision.RunDetails.Id == decisionId {
-			log.Printf("[DEBUG][%s] Current decision (%s) status is %s", workflowExecution.ExecutionId, resultDecision.RunDetails.Id, resultDecision.RunDetails.Status) 
+			log.Printf("[DEBUG][%s] Current decision (%s) status is '%s'", workflowExecution.ExecutionId, resultDecision.RunDetails.Id, resultDecision.RunDetails.Status) 
 
 			decisionIdResultIndex = resultDecisionIndex 
 			decisionIndex = resultDecision.I
@@ -15177,7 +15181,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	// Find next action
 	allFinishedDecisions := []string{}
-	for _, curDecision := range mappedResult.Decisions {
+	for decisionId, curDecision := range mappedResult.Decisions {
 		if curDecision.RunDetails.Status == "FINISHED" { 
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
 		}
@@ -15221,12 +15225,13 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		} 
 
 		if len(foundDecisions) == len(finishedDecisions) {
-			//log.Printf("[DEBUG][%s] Should execute next decision '%s' as all %d parent jobs are finished", workflowExecution.ExecutionId, curDecision.RunDetails.Id, len(foundDecisions))
-
+			mappedResult.Decisions[decisionId].RunDetails.Status = "RUNNING"
+			mappedResult.Decisions[decisionId].RunDetails.StartedAt = time.Now().Unix()
 			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision) 
 		} 
 	}
 
+	log.Printf("[DEBUG] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v", len(mappedResult.Decisions), len(allFinishedDecisions))
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
 		sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
@@ -15250,7 +15255,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
+	//log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
 	//os.Exit(3)
 	return &workflowExecution, true, nil
 }
@@ -16421,6 +16426,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// Continue -> this means finished check is ok
 			workflowExecution.Status = "FINISHED"
 			workflowExecution.CompletedAt = int64(time.Now().Unix())
+			dbSave = true
 		}
 	}
 
@@ -18741,11 +18747,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	if len(action.SourceWorkflow) > 0 {
-		//log.Printf("[DEBUG] Validating workflow existence, as this is a rerun: %s", action.SourceWorkflow)
-
 		if len(action.ID) == 0 {
 			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
 		}
+
 
 		if len(action.SourceExecution) == 0 {
 			return workflowExecution, errors.New("No source_execution provided")
@@ -18771,7 +18776,13 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return workflowExecution, errors.New("Previous execution (source_execution) doesn't belong to the workflow. Please try again.")
 		}
 
+		// Updated action stuff, ensuring everything is on par
+		if len(workflowExecution.Workflow.Actions) == 1 {
+			action = workflowExecution.Workflow.Actions[0]
+		}
+
 		// Fill in missing actions and dedup
+		action.Category = "rerun"
 		newResults := []ActionResult{}
 		for _, result := range oldExec.Results {
 			if result.Action.ID == action.ID {
@@ -18791,6 +18802,12 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				// This is to KNOW that it's a rerun.
 				// Just had to use an existing field, as we don't wanna keep bloating the struct
 				result.Action.Category = "rerun"
+
+				// Ensures "normal" behavior based on existing data
+				if result.Status != "SKIPPED" {
+					result.Status = "SUCCESS"
+				}
+
 				newResults = append(newResults, result)
 			}
 		}
@@ -18815,7 +18832,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.ExecutionSource = action.SourceWorkflow
 		workflowExecution.ExecutionParent = action.SourceExecution
 
+		// Ensures it's set correctly
 		workflow.ID = action.SourceWorkflow
+		workflow.Actions = []Action{action}
+		workflowExecution.Workflow.Actions = []Action{action}
 	}
 
 	// Overwriting as auth may also do
@@ -18848,9 +18868,13 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 }
 
 // Handles the return of a single action
-func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int) SingleResult {
-	cnt := 0
+func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int, actionId ...string) SingleResult {
+	findActionId := ""
+	if len(actionId) > 0 {
+		findActionId = actionId[0]
+	}
 
+	cnt := 0
 	returnBody := SingleResult{
 		Success:       true,
 		Id:            workflowExecution.ExecutionId,
@@ -18882,11 +18906,27 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		returnBody.Validation = newExecution.Workflow.Validation
 
+		relevantIndex := -1
+		if len(findActionId) > 0 {
+			found := false
+			for i, res := range newExecution.Results {
+				if res.Action.ID == findActionId {
+					relevantIndex = i
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				continue
+			}
+		}
+
 		//log.Printf("\n\n\n[INFO] Checking single action execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
-
-
 		if len(newExecution.Results) > resultAmount-1 {
-			relevantIndex := len(newExecution.Results) - 1
+			if relevantIndex == -1 {
+				relevantIndex = len(newExecution.Results) - 1
+			}
 
 			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
 				returnBody.Result = newExecution.Results[relevantIndex].Result

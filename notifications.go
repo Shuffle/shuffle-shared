@@ -521,8 +521,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	_ = respBody 
 
 	//log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
-	log.Printf("[DEBUG] Finished notification request to %s with status %d. If status is not 200, an error is created.", executionUrl, newresp.StatusCode)
 	if newresp.StatusCode != 200 {
+		log.Printf("[DEBUG] Finished notification request to %s with status %d. If status is not 200, an error is created.", executionUrl, newresp.StatusCode)
 		return errors.New(fmt.Sprintf("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId))
 	}
 
@@ -849,32 +849,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		for _, user := range filteredUsers {
 			if user.Role == "admin" && len(user.ApiKey) > 0 && len(selectedApikey) == 0 {
 				// Checking if it's the right active org
-				// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
 				foundUser, err := GetUser(ctx, user.Id)
 				if err == nil {
-					if foundUser.ActiveOrg.Id == orgId {
-						log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
-						selectedApikey = user.ApiKey
-					}
+					log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
+					selectedApikey = user.ApiKey
 				}
 			}
-
-			//log.Printf("[DEBUG] Made notification for user %s (%s)", user.Username, user.Id)
-			// Skipping personal notifications. Making them orgwide instead
-			// FIXME: Point of personal was to make it possible to see them across
-			// orgs. But that's not really used anymore. 
-			/*
-			newNotification := mainNotification
-			newNotification.Id = uuid.NewV4().String()
-			newNotification.OrgNotificationId = generatedId
-			newNotification.UserId = user.Id
-			newNotification.Personal = true
-
-			err = SetNotification(ctx, newNotification)
-			if err != nil {
-				log.Printf("[WARNING] Failed making USER notification with title %#v for user %s in org %s", title, user.Id, orgId)
-			}
-			*/
 		}
 
 		if len(org.Defaults.NotificationWorkflow) > 0 {

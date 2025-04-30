@@ -1202,7 +1202,7 @@ func GetOrgspecificParameters(ctx context.Context, org Org, action WorkflowAppAc
 
 		// log.Printf("[DEBUG] content it got and is putting into example: %s - %d", string(content), paramIndex)
 
-		log.Printf("\n\n\n[INFO] Found content for file %s for action %s in app %s. Should set param.\n\n\n", fileId, action.Name, action.AppName)
+		//log.Printf("[INFO] Found content for file %s for action %s in app %s. Should set param.", fileId, action.Name, action.AppName)
 		action.Parameters[paramIndex].Example = string(content)
 	}
 
