@@ -6112,7 +6112,6 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 	// This is apparently the parent trigger, and not child
 	// So now I'm endlessly confused.
-
 	trigger := childTrigger
 	for paramIndex, param := range trigger.Parameters {
 		// since this is an added subflow, the workflow being referred
@@ -6125,8 +6124,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			}
 
 			if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
-				//log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID")
-
+				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID")
 				// Point to same
 				trigger.Parameters[paramIndex].Value = childWorkflow.ID
 
@@ -6134,7 +6132,6 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			}
 
 			// Check if it's the same as previous revision?
-
 			ctx := context.Background()
 			alreadyPropagatedSubflow := ""
 			childSubflow, err := GetWorkflow(ctx, parentSubflowPointedId)
@@ -9573,6 +9570,16 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newWf.Triggers = []Trigger{}
 
 	//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
+
+
+	if len(newWf.ParentWorkflowId) > 0 {
+		// check if parent workflow even exists
+		_, err := GetWorkflow(ctx, newWf.ParentWorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Parent workflow %s doesn't exist. Can't set child workflow %s", newWf.ParentWorkflowId, newWf.ID)	
+			return nil, err
+		}
+	}
 
 	// FIXME: Send a save request instead? That way
 	// propagation can keep going down.
