@@ -839,9 +839,10 @@ type RegionBody struct {
 }
 
 type OrgBranding struct {
-	EnableChat bool   `json:"enable_chat" datastore:"enable_chat"`
-	HomeUrl    string `json:"home_url" datastore:"home_url"`
-	Theme      string `json:"theme" datastore:"theme"`
+	EnableChat        bool   `json:"enable_chat" datastore:"enable_chat"`
+	HomeUrl           string `json:"home_url" datastore:"home_url"`
+	Theme             string `json:"theme" datastore:"theme"`
+	DocumentationLink string `json:"documentation_link" datastore:"documentation_link"`
 }
 
 // Used within a user
