@@ -750,11 +750,9 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			// Checking if it's the right active org
 			// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
 			foundUser, err := GetUser(ctx, user.Id)
-			if err == nil {
-				if foundUser.ActiveOrg.Id == orgId {
-					//log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
-					selectedApikey = foundUser.ApiKey
-				}
+			if err == nil && len(foundUser.ApiKey) > 0 {
+				selectedApikey = foundUser.ApiKey
+				break
 			}
 		}
 	}
@@ -817,7 +815,7 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		return nil
 	} else {
-		log.Printf("[INFO] New notification with title %#v is being made for users in org %s", title, orgId)
+		//log.Printf("[INFO] New notification with title %#v is being made for users in org %s", title, orgId)
 
 
 		// Only gonna load this after
@@ -848,11 +846,10 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		selectedApikey := ""
 		for _, user := range filteredUsers {
 			if user.Role == "admin" && len(user.ApiKey) > 0 && len(selectedApikey) == 0 {
-				// Checking if it's the right active org
 				foundUser, err := GetUser(ctx, user.Id)
-				if err == nil {
-					log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
-					selectedApikey = user.ApiKey
+				if err == nil && len(foundUser.ApiKey) > 0 {
+					selectedApikey = foundUser.ApiKey
+					break
 				}
 			}
 		}
