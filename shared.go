@@ -2165,6 +2165,11 @@ func AddAppAuthentication(resp http.ResponseWriter, request *http.Request) {
 				org.SecurityFramework.IAM.Name = app.Name
 				org.SecurityFramework.IAM.LargeImage = app.LargeImage
 				org.SecurityFramework.IAM.Description = app.Description
+			} else if lowercased == "ai" {
+				org.SecurityFramework.AI.ID = app.ID
+				org.SecurityFramework.AI.Name = app.Name
+				org.SecurityFramework.AI.LargeImage = app.LargeImage
+				org.SecurityFramework.AI.Description = app.Description
 			} else {
 				log.Printf("[ERROR] Unknown category %s for app %s (%s)", lowercased, app.Name, app.ID)
 			}
@@ -3769,7 +3774,7 @@ func GetWorkflowExecutions(resp http.ResponseWriter, request *http.Request) {
 		if workflow.OrgId == user.ActiveOrg.Id {
 			log.Printf("[AUDIT] User %s is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, workflow.Name, workflow.ID, user.Role)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, fileId)
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow execs)", user.Username, workflow.ID)
 			resp.WriteHeader(401)
@@ -3921,7 +3926,7 @@ func GetWorkflowExecutionsV2(resp http.ResponseWriter, request *http.Request) {
 		if workflow.OrgId == user.ActiveOrg.Id {
 			log.Printf("[AUDIT] User %s (%s) is accessing workflow '%s' (%s) executions as %s (get executions)", user.Username, user.Id, workflow.Name, workflow.ID, user.Role)
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs for %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow execs (V2) for %s", user.Username, fileId)
 			checkExecOrg = false
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow execs)", user.Username, workflow.ID)
@@ -5724,7 +5729,6 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	workflow.Created = timeNow
 
 	auth, authOk := request.URL.Query()["set_auth"]
-	//log.Printf("\n\n\n[DEBUG] AUTH: %#v\n\n\n", auth)
 	if authOk && len(auth) > 0 && auth[0] == "true" {
 		allAuths, autherr := GetAllWorkflowAppAuth(ctx, user.ActiveOrg.Id)
 		workflowapps, apperr := GetPrioritizedApps(ctx, user)
@@ -6108,7 +6112,6 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 	// This is apparently the parent trigger, and not child
 	// So now I'm endlessly confused.
-
 	trigger := childTrigger
 	for paramIndex, param := range trigger.Parameters {
 		// since this is an added subflow, the workflow being referred
@@ -6121,8 +6124,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			}
 
 			if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
-				//log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID")
-
+				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID")
 				// Point to same
 				trigger.Parameters[paramIndex].Value = childWorkflow.ID
 
@@ -6130,7 +6132,6 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			}
 
 			// Check if it's the same as previous revision?
-
 			ctx := context.Background()
 			alreadyPropagatedSubflow := ""
 			childSubflow, err := GetWorkflow(ctx, parentSubflowPointedId)
@@ -9569,6 +9570,16 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newWf.Triggers = []Trigger{}
 
 	//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
+
+
+	if len(newWf.ParentWorkflowId) > 0 {
+		// check if parent workflow even exists
+		_, err := GetWorkflow(ctx, newWf.ParentWorkflowId)
+		if err != nil {
+			log.Printf("[WARNING] Parent workflow %s doesn't exist. Can't set child workflow %s", newWf.ParentWorkflowId, newWf.ID)	
+			return nil, err
+		}
+	}
 
 	// FIXME: Send a save request instead? That way
 	// propagation can keep going down.
@@ -15015,13 +15026,12 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	cacheKey := fmt.Sprintf("agent_request_%s_%s_%s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	_, err := GetCache(ctx, cacheKey)
 	if err == nil {
-		log.Printf("ALREADY HANDLED! RETURN!!")
 		return nil
 	} else {
 		SetCache(ctx, cacheKey, []byte("1"), 1)
 	}
 
-	log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status) 
+	//log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status) 
 	fixedActionResult := AgentOutput{}
 	err = json.Unmarshal([]byte(actionResult.Result), &fixedActionResult)
 	if err == nil && fixedActionResult.Status != "" {
@@ -15109,11 +15119,11 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if len(decisionIdSplit) == 2 {
 			decisionId = decisionIdSplit[1]
 		} else {
-			decisionId = strings.Join(decisionIdSplit[1:len(decisionIdSplit)-1], "_")
+			decisionId = strings.Join(decisionIdSplit[1:], "_")
 		}
 	}
 
-	log.Printf("\n\n\nHANDLE AGENT DECISION RESULT '%s' -> '%s'!\n\n\n", actionResult.Status, decisionId)
+	//log.Printf("[DEBUG] HANDLE AGENT DECISION RESULT '%s' -> '%s'!", actionResult.Status, decisionId)
 	if len(decisionId) == 0 {
 		log.Printf("[ERROR][%s] No decision ID found for node %s. This means we can't map the decision result in any way. Should we set the agent to FAILURE?", actionResult.ExecutionId, actionResult.Action.ID)
 		return &workflowExecution, false, errors.New("Agent decision failed")
@@ -15150,7 +15160,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	decisionIndex := -1 		// Assigned index to it by LLM
 	for resultDecisionIndex, resultDecision := range mappedResult.Decisions {
 		if resultDecision.RunDetails.Id == decisionId {
-			log.Printf("[DEBUG][%s] Current decision (%s) status is %s", workflowExecution.ExecutionId, resultDecision.RunDetails.Id, resultDecision.RunDetails.Status) 
+			//log.Printf("[DEBUG][%s] Current decision (%s) status is '%s'", workflowExecution.ExecutionId, resultDecision.RunDetails.Id, resultDecision.RunDetails.Status) 
 
 			decisionIdResultIndex = resultDecisionIndex 
 			decisionIndex = resultDecision.I
@@ -15166,10 +15176,10 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// FIXME: Update the value of the decision here?
 	//mappedResult.Decisions[decisionIdResultIndex] = actionResult.Result
 
-	log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
+	//log.Printf("[DEBUG][%s] Action '%s' AND decision ID '%s' (%d). Decision Index: %d. Continue decisionmaking!", workflowExecution.ExecutionId, actionResult.Action.ID, decisionId, decisionIdResultIndex, decisionIndex)
 
 	if mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "FAILURE" || mappedResult.Decisions[decisionIdResultIndex].RunDetails.Status == "ABORTED" {
-		sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+		go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
 	}
 
@@ -15177,7 +15187,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 	// Find next action
 	allFinishedDecisions := []string{}
-	for _, curDecision := range mappedResult.Decisions {
+	for decisionId, curDecision := range mappedResult.Decisions {
 		if curDecision.RunDetails.Status == "FINISHED" { 
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
 		}
@@ -15216,19 +15226,20 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		if len(failedDecisions) > 0 {
 			log.Printf("[WARNING][%s] Failed decision found. Should exit out agent %s. It should have exited before this point.", workflowExecution.ExecutionId, decisionId)
 
-			sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+			go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 			break
 		} 
 
 		if len(foundDecisions) == len(finishedDecisions) {
-			//log.Printf("[DEBUG][%s] Should execute next decision '%s' as all %d parent jobs are finished", workflowExecution.ExecutionId, curDecision.RunDetails.Id, len(foundDecisions))
-
+			mappedResult.Decisions[decisionId].RunDetails.Status = "RUNNING"
+			mappedResult.Decisions[decisionId].RunDetails.StartedAt = time.Now().Unix()
 			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision) 
 		} 
 	}
 
+	//log.Printf("[DEBUG] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v", len(mappedResult.Decisions), len(allFinishedDecisions))
 	if len(allFinishedDecisions) == len(mappedResult.Decisions) {
-		sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
+		go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 		return &workflowExecution, false, nil
 	}
 
@@ -15250,7 +15261,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
+	//log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
 	//os.Exit(3)
 	return &workflowExecution, true, nil
 }
@@ -15417,8 +15428,8 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 
 		//log.Printf("[DEBUG] Skipping setcache for subflow? SetCache: %t", setCache)
 	} else if actionResult.Action.AppName == "AI Agent" || actionResult.Action.AppName == "Shuffle Agent" {
-		log.Printf("[DEBUG] Got AI Agent response - STATUS: %#v, resp: %#v.", actionResult.Status, actionResult.Result)
 		if strings.HasPrefix(actionResult.Status, "agent_") {
+			log.Printf("[DEBUG] Got AI Agent response - STATUS: %#v, resp: %#v.", actionResult.Status, actionResult.Result)
 
 			return handleAgentDecisionStreamResult(workflowExecution, actionResult)
 		}
@@ -16421,6 +16432,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			// Continue -> this means finished check is ok
 			workflowExecution.Status = "FINISHED"
 			workflowExecution.CompletedAt = int64(time.Now().Unix())
+			dbSave = true
 		}
 	}
 
@@ -18741,11 +18753,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	if len(action.SourceWorkflow) > 0 {
-		//log.Printf("[DEBUG] Validating workflow existence, as this is a rerun: %s", action.SourceWorkflow)
-
 		if len(action.ID) == 0 {
 			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
 		}
+
 
 		if len(action.SourceExecution) == 0 {
 			return workflowExecution, errors.New("No source_execution provided")
@@ -18771,7 +18782,13 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return workflowExecution, errors.New("Previous execution (source_execution) doesn't belong to the workflow. Please try again.")
 		}
 
+		// Updated action stuff, ensuring everything is on par
+		if len(workflowExecution.Workflow.Actions) == 1 {
+			action = workflowExecution.Workflow.Actions[0]
+		}
+
 		// Fill in missing actions and dedup
+		action.Category = "rerun"
 		newResults := []ActionResult{}
 		for _, result := range oldExec.Results {
 			if result.Action.ID == action.ID {
@@ -18791,6 +18808,12 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				// This is to KNOW that it's a rerun.
 				// Just had to use an existing field, as we don't wanna keep bloating the struct
 				result.Action.Category = "rerun"
+
+				// Ensures "normal" behavior based on existing data
+				if result.Status != "SKIPPED" {
+					result.Status = "SUCCESS"
+				}
+
 				newResults = append(newResults, result)
 			}
 		}
@@ -18815,7 +18838,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.ExecutionSource = action.SourceWorkflow
 		workflowExecution.ExecutionParent = action.SourceExecution
 
+		// Ensures it's set correctly
 		workflow.ID = action.SourceWorkflow
+		workflow.Actions = []Action{action}
+		workflowExecution.Workflow.Actions = []Action{action}
 	}
 
 	// Overwriting as auth may also do
@@ -18834,6 +18860,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
+	if len(workflowExecution.ExecutionSource) == 0 || workflowExecution.ExecutionSource == "default" { 
+		workflowExecution.ExecutionSource = "single_action"
+	}
+
 	go SetWorkflowExecution(context.Background(), workflowExecution, true)
 
 	/*
@@ -18848,9 +18878,13 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 }
 
 // Handles the return of a single action
-func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int) SingleResult {
-	cnt := 0
+func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecution, resultAmount int, actionId ...string) SingleResult {
+	findActionId := ""
+	if len(actionId) > 0 {
+		findActionId = actionId[0]
+	}
 
+	cnt := 0
 	returnBody := SingleResult{
 		Success:       true,
 		Id:            workflowExecution.ExecutionId,
@@ -18882,11 +18916,27 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 
 		returnBody.Validation = newExecution.Workflow.Validation
 
+		relevantIndex := -1
+		if len(findActionId) > 0 {
+			found := false
+			for i, res := range newExecution.Results {
+				if res.Action.ID == findActionId {
+					relevantIndex = i
+					found = true
+					break
+				}
+			}
+
+			if !found {
+				continue
+			}
+		}
+
 		//log.Printf("\n\n\n[INFO] Checking single action execution %s. Status: %s. Len: %d, resultAmount: %d", workflowExecution.ExecutionId, newExecution.Status, len(newExecution.Results), resultAmount-1)
-
-
 		if len(newExecution.Results) > resultAmount-1 {
-			relevantIndex := len(newExecution.Results) - 1
+			if relevantIndex == -1 {
+				relevantIndex = len(newExecution.Results) - 1
+			}
 
 			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
 				returnBody.Result = newExecution.Results[relevantIndex].Result
@@ -27372,8 +27422,6 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 			// FIXME: Look for key:values and inject values into them
 			// This SHOULD be just a dumb injection of existing value.Fields & value.OptionalFields for now with synonyms, but later on it should be a more advanced (use schemaless & cross org referencing)
-			// FIXME: Should PRELOAD all of this?
-
 			if len(param.Example) > 0 {
 				param.Value = param.Example
 			} else {
@@ -27957,10 +28005,11 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 						continue
 					}
 
-					err = uploadParameterBase(ctx, user.ActiveOrg.Id, selectedApp.ID, secondAction.Name, param.Name, param.Value)
-					if err != nil {
-						log.Printf("[WARNING] Failed uploading parameter base for %s: %s", param.Name, err)
-					}
+					go uploadParameterBase(context.Background(), user.ActiveOrg.Id, selectedApp.ID, secondAction.Name, param.Name, param.Value)
+					//err = uploadParameterBase(ctx, user.ActiveOrg.Id, selectedApp.ID, secondAction.Name, param.Name, param.Value)
+					//if err != nil {
+					//	log.Printf("[WARNING] Failed uploading parameter base for %s: %s", param.Name, err)
+					//}
 				}
 
 				if len(fieldHash) > 0 && fieldFileFound == false {
@@ -27971,61 +28020,64 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 					// Finds location of some data in another part of the data. This is to have a predefined location in subsequent requests
 					// Allows us to map text -> field and not just field -> text (2-way)
-					reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
-					if err != nil {
-						log.Printf("[ERROR] Problem with reversing: %s", err)
-					} else {
-						log.Printf("[DEBUG] Raw reverse: %s", reversed)
 
-						finishedFields := 0
-						mappedFields := map[string]interface{}{}
-						err = json.Unmarshal([]byte(reversed), &mappedFields)
-						if err == nil {
-							for _, value := range mappedFields {
-								if _, ok := value.(string); ok && len(value.(string)) > 0 {
-									finishedFields++
+					go func() {
+						reversed, err := schemaless.ReverseTranslate(parsedParameterMap, inputFieldMap)
+						if err != nil {
+							log.Printf("[ERROR] Problem with reversing: %s", err)
+						} else {
+							log.Printf("[DEBUG] Raw reverse: %s", reversed)
+
+							finishedFields := 0
+							mappedFields := map[string]interface{}{}
+							err = json.Unmarshal([]byte(reversed), &mappedFields)
+							if err == nil {
+								for _, value := range mappedFields {
+									if _, ok := value.(string); ok && len(value.(string)) > 0 {
+										finishedFields++
+									} else {
+										log.Printf("[DEBUG] Found non-string value: %#v", value)
+									}
+								}
+							}
+
+							log.Printf("Reversed fields (%d): %s", finishedFields, reversed)
+							if finishedFields == 0 {
+							} else {
+
+								timeNow := time.Now().Unix()
+
+								fileId := fmt.Sprintf("file_%s", fieldHash)
+								encryptionKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, fileId)
+								folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
+								downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
+								file := &File{
+									Id:           fileId,
+									CreatedAt:    timeNow,
+									UpdatedAt:    timeNow,
+									Description:  "",
+									Status:       "active",
+									Filename:     fmt.Sprintf("%s.json", fieldHash),
+									OrgId:        user.ActiveOrg.Id,
+									WorkflowId:   "global",
+									DownloadPath: downloadPath,
+									Subflows:     []string{},
+									StorageArea:  "local",
+									Namespace:    "translation_output",
+									Tags: []string{
+										"autocomplete",
+									},
+								}
+
+								returnedId, err := uploadFile(context.Background(), file, encryptionKey, []byte(reversed))
+								if err != nil {
+									log.Printf("[ERROR] Problem uploading file: %s", err)
 								} else {
-									log.Printf("[DEBUG] Found non-string value: %#v", value)
+									log.Printf("[DEBUG] Uploaded file with ID: %s", returnedId)
 								}
 							}
 						}
-
-						log.Printf("Reversed fields (%d): %s", finishedFields, reversed)
-						if finishedFields == 0 {
-						} else {
-
-							timeNow := time.Now().Unix()
-
-							fileId := fmt.Sprintf("file_%s", fieldHash)
-							encryptionKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, fileId)
-							folderPath := fmt.Sprintf("%s/%s/%s", basepath, user.ActiveOrg.Id, "global")
-							downloadPath := fmt.Sprintf("%s/%s", folderPath, fileId)
-							file := &File{
-								Id:           fileId,
-								CreatedAt:    timeNow,
-								UpdatedAt:    timeNow,
-								Description:  "",
-								Status:       "active",
-								Filename:     fmt.Sprintf("%s.json", fieldHash),
-								OrgId:        user.ActiveOrg.Id,
-								WorkflowId:   "global",
-								DownloadPath: downloadPath,
-								Subflows:     []string{},
-								StorageArea:  "local",
-								Namespace:    "translation_output",
-								Tags: []string{
-									"autocomplete",
-								},
-							}
-
-							returnedId, err := uploadFile(ctx, file, encryptionKey, []byte(reversed))
-							if err != nil {
-								log.Printf("[ERROR] Problem uploading file: %s", err)
-							} else {
-								log.Printf("[DEBUG] Uploaded file with ID: %s", returnedId)
-							}
-						}
-					}
+					}()
 				}
 			} else {
 				// Parses out data from the output
@@ -29711,7 +29763,7 @@ func GetWorkflowRevisions(resp http.ResponseWriter, request *http.Request) {
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, fileId)
 
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow revisions). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)

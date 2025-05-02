@@ -1632,7 +1632,10 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
+
+	// Change timeout to be 30 seconds (just in case)
 	client := GetExternalClient(url)
+	client.Timeout = 60 * time.Second
 	parsedAction := CategoryAction{
 		AppName: 	decision.Tool,
 		Label: 		decision.Action,
@@ -1894,6 +1897,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		return 
 	}
 
-	log.Printf("[DEBUG] Status %d for decision %s. Body: %s", resp.StatusCode, decision.RunDetails.Id, string(foundBody))
-
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR][%s] Status %d for decision %s. Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, string(foundBody))
+	}
 }
