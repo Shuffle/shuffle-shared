@@ -4271,6 +4271,9 @@ type AgentDecision struct {
 	Action     string  `json:"action" datastore:"action"`
 	Tool       string  `json:"tool" datastore:"tool"`
 	Confidence float64 `json:"confidence" datastore:"confidence"`
+	Runs 	   string  `json:"runs" datastore:"runs"`
+	Sources    string  `json:"sources,omitempty" datastore:"sources"`
+	Fields     []Valuereplace `json:"fields" datastore:"fields"`
 	Reason     string  `json:"reason" datastore:"reason"`
 
 	// Responses

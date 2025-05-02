@@ -2015,16 +2015,18 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					decisionsUpdated = true
 
 					mappedOutput.Status = "FAILURE"
+					mappedOutput.CompletedAt = time.Now().Unix()
 					workflowExecution.Results[resultIndex].Status = "ABORTED"
 
-					sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
+					go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
 
 				} else if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
 					decisionsUpdated = true
 					mappedOutput.Status = "FINISHED"
+					mappedOutput.CompletedAt = time.Now().Unix()
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
 
-					sendAgentActionSelfRequest("FINISHED", workflowExecution, workflowExecution.Results[resultIndex])
+					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
 				} 
 
 				if decisionsUpdated {
@@ -3848,7 +3850,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 	// Appending the users' workflows
 	nameKey := "workflow"
-	log.Printf("[AUDIT] Getting up to %d workflows for user %s (%s - %s)", maxAmount, user.Username, user.Role, user.Id)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
