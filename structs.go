@@ -2682,6 +2682,7 @@ type HandleInfo struct {
 	HasCardAvailable    bool `json:"has_card_available,omitempty"`
 	ActivatedPayasyougo bool `json:"activated_pay_as_you_go,omitempty"`
 	Licensed            bool `json:"licensed"`
+	UserRegion          string `json:"user_region,omitempty"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
