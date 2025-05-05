@@ -1218,7 +1218,7 @@ func uploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 	fileId := fmt.Sprintf("file_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
 	file, err := GetFile(ctx, fileId)
 	if err == nil && file.Status == "active" {
-		log.Printf("[INFO] File %s already exists. Not re-uploading", fileId)
+		//log.Printf("[INFO] File %s already exists. NOT re-uploading", fileId)
 		return nil
 	}
 

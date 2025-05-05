@@ -539,7 +539,9 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
-	log.Printf("[AUDIT] User '%s' (%s) is trying to get files from namespace %#v", user.Username, user.Id, namespace)
+	if len(user.Username) > 0 { 
+		log.Printf("[AUDIT] User '%s' (%s) is trying to get files from namespace %#v", user.Username, user.Id, namespace)
+	}
 
 	ctx := GetContext(request)
 	files, err := GetAllFiles(ctx, user.ActiveOrg.Id, namespace)
