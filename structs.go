@@ -4270,7 +4270,8 @@ type AgentDecision struct {
 	// Predictive Agent data 
 	I          int     `json:"i" datastore:"i"`
 	Action     string  `json:"action" datastore:"action"`
-	Tool       string  `json:"tool" datastore:"tool"`
+	Tool	   string  `json:"tool" datastore:"tool"`
+	Category   string  `json:"category" datastore:"category"`
 	Confidence float64 `json:"confidence" datastore:"confidence"`
 	Runs 	   string  `json:"runs" datastore:"runs"`
 	Sources    string  `json:"sources,omitempty" datastore:"sources"`

@@ -18429,7 +18429,7 @@ func CheckHookAuth(request *http.Request, auth string) error {
 }
 
 // Body = The action body received from the user to test.
-func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool) (WorkflowExecution, error) {
+func PrepareSingleAction(ctx context.Context, user User, appId string, body []byte, runValidationAction bool, decision ...string) (WorkflowExecution, error) {
 
 	workflowExecution := WorkflowExecution{}
 
@@ -18441,8 +18441,12 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	if appId != action.AppID {
-		log.Printf("[WARNING] Bad appid in single execution of App %s", appId)
-		return workflowExecution, err
+		if appId == "agent" {
+			action.AppID = "agent"
+		} else {
+			log.Printf("[WARNING] Bad appid in single execution of App %s", appId)
+			return workflowExecution, errors.New(fmt.Sprintf("No App ID found matching %s", appId))
+		}
 	}
 
 	if len(action.ID) == 0 {
@@ -18454,7 +18458,12 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	app := WorkflowApp{}
-	if strings.ToLower(appId) == "http" {
+	decisionId := ""
+	if strings.ToLower(appId) == "agent" {
+		if len(decision) > 0 {
+			decisionId = decision[0]
+		}
+	} else if strings.ToLower(appId) == "http" {
 		// Find the app and the ID for it
 		apps, err := FindWorkflowAppByName(ctx, "http")
 		if err != nil {
@@ -18570,6 +18579,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			//action.Parameters = newApp.Parameters
 			log.Printf("[INFO] No parameters in single action. Does it matter?")
 		}
+
 		app = *newApp
 	}
 
@@ -18788,10 +18798,12 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		// Fill in missing actions and dedup
+		foundResultIndex := -1
 		action.Category = "rerun"
 		newResults := []ActionResult{}
-		for _, result := range oldExec.Results {
+		for resIndex, result := range oldExec.Results {
 			if result.Action.ID == action.ID {
+				foundResultIndex = resIndex
 				continue
 			}
 
@@ -18842,6 +18854,92 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflow.ID = action.SourceWorkflow
 		workflow.Actions = []Action{action}
 		workflowExecution.Workflow.Actions = []Action{action}
+
+		// Special handled for Decision reruns in AI Agents
+		// 1. Find the decision & reset cache 
+		// 2. Update the execution itself to not have the relevant data
+		if len(decisionId) > 0 {
+			log.Printf("[DEBUG][%s] Handling Single action rerun for AI Agent decision. DecisionID: %#v", oldExec.ExecutionId, decisionId)
+
+			if foundResultIndex == -1 {
+				return workflowExecution, errors.New("Failed to find the action. Please try again or contact support@shuffler.io if this persists.")
+			}
+
+			mappedOutput := AgentOutput{}
+			err = json.Unmarshal([]byte(oldExec.Results[foundResultIndex].Result), &mappedOutput)
+			if err != nil {
+				log.Printf("[ERROR][%s] Failed in decision output mapping (2): %s", oldExec.ExecutionId, err)
+			}
+
+			availableDecisions := []string{}
+			foundDecisionIndex := -1
+			for decisionIndex, decision := range mappedOutput.Decisions {
+				availableDecisions = append(availableDecisions, decision.RunDetails.Id)
+				if decision.RunDetails.Id != decisionId {
+					continue
+				}
+
+				foundDecisionIndex = decisionIndex
+
+				mappedOutput.CompletedAt = 0
+				mappedOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+				mappedOutput.Decisions[decisionIndex].RunDetails.CompletedAt = 0
+				mappedOutput.Decisions[decisionIndex].RunDetails.RawResponse = ""
+				mappedOutput.Decisions[decisionIndex].RunDetails.DebugUrl = ""
+				break
+			}
+
+			if foundDecisionIndex == -1 {
+				return workflowExecution, errors.New(fmt.Sprintf("Failed to find and rerun decision '%s' out of '%s' in execution %s. Please try again or contact support@shuffler.io if the error persists.", decisionId, strings.Join(availableDecisions, ","), oldExec.ExecutionId))
+			}
+
+			mappedOutput.Status = "WAITING"
+			marshalledResult, err := json.Marshal(mappedOutput)
+			if err == nil {
+				oldExec.Results[foundResultIndex].Result = string(marshalledResult)
+			} else {
+				return workflowExecution, errors.New(fmt.Sprintf("Failed to marshal and rerun the decision. Please try again or contact support@shuffler.io if the error persists."))
+			}
+
+			oldExec.Results[foundResultIndex].Status = "WAITING"
+			oldExec.Results[foundResultIndex].CompletedAt = 0
+			oldExec.Results[foundResultIndex].Result = string(marshalledResult)
+
+			// Resets the action cache to ensure reruns happen
+
+			// 1. Update db & cache etc.
+			// 2. Force rerun the decision 
+			oldExec.CompletedAt = 0
+			oldExec.Status = "EXECUTING"
+
+
+			// Action reset (in the workflow)
+			SetCache(ctx, fmt.Sprintf("%s_%s_result", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID), marshalledResult, 60)
+
+			// Decision reset
+			DeleteCache(ctx, fmt.Sprintf("agent-%s-%s", oldExec.ExecutionId, decisionId))
+
+			// Decision run reset
+			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_FINISHED", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
+			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_SUCCESS", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
+			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_ABORTED", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
+			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_FAILURE", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
+
+
+			// Execution reset
+			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
+			DeleteCache(ctx, executionCacheKey)
+			marshalledTotalResult, err := json.Marshal(oldExec) 
+			if err == nil {
+				SetCache(ctx, executionCacheKey, marshalledTotalResult, 30)
+			}
+			SetWorkflowExecution(ctx, *oldExec, true)
+
+			go RunAgentDecisionAction(*oldExec, mappedOutput, mappedOutput.Decisions[foundDecisionIndex]) 
+
+			// FIXME: This is to ensure hadnling of the EXACT SAME decision happens.
+			return workflowExecution, errors.New(fmt.Sprintf("Successfully started rerun of decision %s. This will replace the current result.", decisionId))
+		}
 	}
 
 	// Overwriting as auth may also do
@@ -26450,7 +26548,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 
 		if !debug {
 			if exec.Status != "EXECUTING" {
-				log.Printf("[WARNING] Execution is not executing in run category action: %s", exec.Status)
+				log.Printf("[WARNING][%s] Execution is not executing in run category action: %s", exec.ExecutionId, exec.Status)
 				resp.WriteHeader(403)
 				resp.Write([]byte(`{"success": false, "reason": "Execution is not executing. Can't modify."}`))
 				return

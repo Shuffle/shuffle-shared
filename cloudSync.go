@@ -1640,6 +1640,8 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		AppName: 	decision.Tool,
 		Label: 		decision.Action,
 
+		Fields: decision.Fields,
+
 		SkipWorkflow: true, 
 	}
 
@@ -1709,7 +1711,7 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	body := originalBody
 	defer resp.Body.Close()
 
-	log.Printf("\n\n\n[DEBUG] Agent decision response: %s\n\n\n", string(body))
+	log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
 	// Try to map it into SchemalessOutput and grab "RawResponse"
 	outputMapped := SchemalessOutput{}
 	err = json.Unmarshal(body, &outputMapped)
@@ -1792,7 +1794,10 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	}
 
 	// Set it to this at the start
-	decision.RunDetails.StartedAt = time.Now().Unix()
+	if decision.RunDetails.StartedAt <= 0 {
+		decision.RunDetails.StartedAt = time.Now().Unix()
+	}
+
 	decision.RunDetails.Status = "RUNNING"
 	marshalledDecision, err := json.Marshal(decision)
 	if err != nil {
@@ -1806,7 +1811,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	decision.RunDetails.RawResponse = string(rawResponse)
 	decision.RunDetails.DebugUrl = debugUrl 
 	if err != nil {
-		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
+		log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
 		decision.RunDetails.Status = "FAILURE"
 
 		if len(decision.RunDetails.RawResponse) == 0 {
