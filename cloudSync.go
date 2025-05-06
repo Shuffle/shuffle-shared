@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/url"
 	"context"
+	"regexp"
 	"io"
 	"encoding/json"
 	"errors"
@@ -1615,6 +1616,83 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
+// Fixes potential decision return or reference problems: 
+// {{list_tickets}} -> $list_tickets
+// {{list_tickets[0].description}} -> $list_tickets.#0.description
+// {{ticket.description}} -> $ticket.description
+func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
+	for fieldIndex, _ := range fields {
+		field := fields[fieldIndex]
+		if !strings.Contains(field.Value, "{{") || !strings.Contains(field.Value, "}}") {
+			continue
+		}
+
+		field.Value = strings.ReplaceAll(field.Value, `{{list_tickets[0].summary}}`, `{{ list_tickets[].summary }}`)
+
+		// Regex match {{list_tickets[0].description}} and {{ list_tickets[0].description }}
+		re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]+\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
+		matches := re.FindAllStringSubmatch(field.Value, -1)
+		if len(matches) == 0 {
+			continue
+		}
+
+		stringBuild := "$"
+		for _, match := range matches {
+			for i, matchValue := range match {
+				if i == 0 {
+					continue
+				}
+
+				if i != 1 {
+					if !strings.HasPrefix(matchValue, ".") {
+						stringBuild += "."
+					}
+				}
+
+				if strings.HasPrefix(matchValue, "[") && strings.HasSuffix(matchValue, "]") {
+					// Find the formats:
+					// [] -> #
+					// [:] -> #
+					// [0] -> #0
+					// [0:1] -> #0-1
+					// [0:] -> #0-max
+					if matchValue == "[]" || matchValue == "[:]" {
+						stringBuild += "#"
+					} else if strings.Contains(matchValue, ":") {
+						parts := strings.Split(matchValue, ":")
+						if len(parts) == 2 {
+							stringBuild += fmt.Sprintf("#%s-%s", parts[0], parts[1])
+						} else {
+							stringBuild += fmt.Sprintf("#%s-max", parts[0])
+						}
+
+						stringBuild += fmt.Sprintf("#%s", matchValue)
+					} else {
+						// Remove the brackets
+						matchValue = strings.ReplaceAll(matchValue, "[", "")
+						matchValue = strings.ReplaceAll(matchValue, "]", "")
+						stringBuild += fmt.Sprintf("#%s", matchValue)
+					}
+
+					continue
+				}
+
+				stringBuild += matchValue
+			}
+
+
+			if len(match) > 1 {
+				field.Value = strings.ReplaceAll(field.Value, match[0], stringBuild)
+				fields[fieldIndex].Value = field.Value
+			}
+
+			stringBuild = "$"
+		}
+	}
+
+	return fields
+}
+
 // This is JUST for Singul actions with AI agents.
 // As AI Agents can have multiple types of runs, this could change every time.
 func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
@@ -1636,11 +1714,13 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 	// Change timeout to be 30 seconds (just in case)
 	client := GetExternalClient(url)
 	client.Timeout = 60 * time.Second
+
+	parsedFields := TranslateBadFieldFormats(decision.Fields)
 	parsedAction := CategoryAction{
 		AppName: 	decision.Tool,
 		Label: 		decision.Action,
 
-		Fields: decision.Fields,
+		Fields: parsedFields,
 
 		SkipWorkflow: true, 
 	}

@@ -2141,7 +2141,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	newResults := []ActionResult{}
 	for _, result := range workflowExecution.Results {
 		if result.Action.ID == "" && result.Action.Name == "" && result.Result == "" {
-			log.Printf("[WARNING][%s] Removing empty result started at '%d' and finished at '%d'. ID: %#v, Name: %#v", workflowExecution.ExecutionId, result.StartedAt, result.CompletedAt, result.Action.ID, result.Action.Name)
+			//log.Printf("[WARNING][%s] Removing empty result started at '%d' and finished at '%d'. ID: %#v, Name: %#v.", workflowExecution.ExecutionId, result.StartedAt, result.CompletedAt, result.Action.ID, result.Action.Name)
 			continue
 		}
 

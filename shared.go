@@ -15043,8 +15043,11 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 			}
 		}
 
-		if status == "FINISHED" || status == "ABORTED" {
+		if status == "FINISHED" {
 			fixedActionResult.CompletedAt = time.Now().Unix()
+		} else if status == "ABORTED" || status == "FAILURE" {
+			fixedActionResult.CompletedAt = time.Now().Unix()
+			fixedActionResult.Error = "Agent decision was aborted or failed. Check the last decision for more information."
 		}
 
 		marshalledResult, err := json.Marshal(fixedActionResult)
@@ -20537,6 +20540,30 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
+				for _, orgID := range user.Orgs {
+					org, err := GetOrg(ctx, orgID)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
+						continue
+					}
+
+					if len(org.Region) > 0 {
+						if ArrayContains(user.Regions, org.Region) {
+							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
+							continue
+						}
+
+						user.Regions = append(user.Regions, org.RegionUrl)
+						err = SetUser(ctx, &user, false)
+						if err != nil {
+							log.Printf("[WARNING] Failed updating user when setting region: %s", err)
+							resp.WriteHeader(401)
+							resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
+							return
+						}
+					}
+				}
+
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -20732,6 +20759,30 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Timestamp: time.Now().Unix(),
 				})
 
+				for _, orgID := range user.Orgs {
+					org, err := GetOrg(ctx, orgID)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
+						continue
+					}
+
+					if len(org.Region) > 0 {
+						if ArrayContains(user.Regions, org.Region) {
+							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
+							continue
+						}
+
+						user.Regions = append(user.Regions, org.RegionUrl)
+						err = SetUser(ctx, &user, false)
+						if err != nil {
+							log.Printf("[WARNING] Failed updating user when setting region: %s", err)
+							resp.WriteHeader(401)
+							resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
+							return
+						}
+					}
+				}
+
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
@@ -20900,6 +20951,30 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newUser.Session = sessionToken
+
+	for _, orgID := range newUser.Orgs {
+		user := newUser
+		org, err := GetOrg(ctx, orgID)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
+			continue
+		}
+
+		if len(org.Region) > 0 {
+			if ArrayContains(user.Regions, org.Region) {
+				continue
+			}
+
+			user.Regions = append(user.Regions, org.RegionUrl)
+			err = SetUser(ctx, user, false)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating user when setting region: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
+				return
+			}
+		}
+	}
 
 	//Store users last session as new session so user don't have to go through sso again while changing org.
 	newUser.UsersLastSession = sessionToken
@@ -25594,7 +25669,10 @@ func DecideExecution(ctx context.Context, workflowExecution WorkflowExecution, e
 	// care if it gets stuck in a loop.
 	// FIXME: Force killing a worker should result in a notification somewhere
 	if len(nextActions) == 0 {
-		log.Printf("[DEBUG] No next action. Finished? Result vs Actions: %d - %d", len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+		if project.Environment != "cloud" || len(workflowExecution.Results) != len(workflowExecution.Workflow.Actions) {
+			log.Printf("[DEBUG][%s] No next action. Finished? Result vs Actions: %d - %d", workflowExecution.ExecutionId, len(workflowExecution.Results), len(workflowExecution.Workflow.Actions))
+		}
+
 		extra = 0
 
 		for _, trigger := range workflowExecution.Workflow.Triggers {
@@ -26940,11 +27018,12 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		file, err := GetFile(ctx, discoverFile)
 
 		if err != nil {
-			log.Printf("[DEBUG] Error with getting file '%s' in category action autorun: %s", discoverFile, err)
+			log.Printf("[ERROR] Problem with getting file '%s' in category action autorun: %s", discoverFile, err)
 		} else {
-			log.Printf("[DEBUG] Found tranlsation file in category action: %#v. Status: %s. Category: %s", file, file.Status, file.Namespace)
+			//log.Printf("[DEBUG] Found translation file in category action: %#v. Status: %s. Category: %s", file.Id, file.Status, file.Namespace)
 
 			if file.Status == "active" {
+
 				fieldFileFound = true
 
 				log.Printf("[DEBUG File found: %s", file.Filename)
@@ -26960,6 +27039,8 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				if err != nil {
 					log.Printf("[ERROR] Failed unmarshaling file content in category action: %s", err)
 				}
+			} else {
+				log.Printf("[ERROR] File %s (%s) not active in category action: %s", file.Filename, file.Id, file.Status)
 			}
 		}
 	}
@@ -27549,7 +27630,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		for _, field := range handledRequiredFields {
-			log.Printf("[DEBUG] fields required: %s", field)
+			log.Printf("[DEBUG] fields required (2): %s", field)
 		}
 
 		for missingIndex, missingField := range missingFields {
@@ -27562,7 +27643,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 
-		log.Printf("[WARNING] Not all required fields were handled. Missing: %#v. Should force use of all fields?", missingFields)
+		log.Printf("[WARNING] Not all required fields were handled. Missing: %#v. Should force use of all fields? Handled fields: %3v", missingFields, handledRequiredFields)
 	}
 
 	// Send request to /api/v1/conversation with this data
@@ -27647,7 +27728,7 @@ func RunCategoryAction(resp http.ResponseWriter, request *http.Request) {
 				break
 			}
 
-			log.Printf("[DEBUG] Found value for key %s: %s", key, mapValue)
+			log.Printf("[DEBUG] Found value for key %#v: '%s'", key, mapValue)
 
 			// Check if the key exists in the parameters
 			for paramIndex, param := range selectedAction.Parameters {
