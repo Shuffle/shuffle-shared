@@ -20540,6 +20540,30 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
+				for _, orgID := range user.Orgs {
+					org, err := GetOrg(ctx, orgID)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
+						continue
+					}
+
+					if len(org.Region) > 0 {
+						if ArrayContains(user.Regions, org.Region) {
+							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
+							continue
+						}
+
+						user.Regions = append(user.Regions, org.RegionUrl)
+						err = SetUser(ctx, &user, false)
+						if err != nil {
+							log.Printf("[WARNING] Failed updating user when setting region: %s", err)
+							resp.WriteHeader(401)
+							resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
+							return
+						}
+					}
+				}
+
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -20735,6 +20759,30 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Timestamp: time.Now().Unix(),
 				})
 
+				for _, orgID := range user.Orgs {
+					org, err := GetOrg(ctx, orgID)
+					if err != nil {
+						log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
+						continue
+					}
+
+					if len(org.Region) > 0 {
+						if ArrayContains(user.Regions, org.Region) {
+							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
+							continue
+						}
+
+						user.Regions = append(user.Regions, org.RegionUrl)
+						err = SetUser(ctx, &user, false)
+						if err != nil {
+							log.Printf("[WARNING] Failed updating user when setting region: %s", err)
+							resp.WriteHeader(401)
+							resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
+							return
+						}
+					}
+				}
+
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
@@ -20903,6 +20951,30 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newUser.Session = sessionToken
+
+	for _, orgID := range newUser.Orgs {
+		user := newUser
+		org, err := GetOrg(ctx, orgID)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
+			continue
+		}
+
+		if len(org.Region) > 0 {
+			if ArrayContains(user.Regions, org.Region) {
+				continue
+			}
+
+			user.Regions = append(user.Regions, org.RegionUrl)
+			err = SetUser(ctx, user, false)
+			if err != nil {
+				log.Printf("[WARNING] Failed updating user when setting region: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
+				return
+			}
+		}
+	}
 
 	//Store users last session as new session so user don't have to go through sso again while changing org.
 	newUser.UsersLastSession = sessionToken
