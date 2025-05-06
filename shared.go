@@ -13357,6 +13357,61 @@ func GetRequestIp(r *http.Request) string {
 
 }
 
+func GetUserLocation(r *http.Request) string {
+	region := ""
+	geoapifyKey := os.Getenv("GEOAPIFY_KEY")
+	ip := GetRequestIp(r)
+
+	if geoapifyKey == "" {
+		log.Printf("[ERROR] GEOAPIFY_KEY is not set for IP %s", ip)
+		return ""
+	}
+
+	// Reject local or invalid IPs early
+	if strings.Contains(ip, "::1") || strings.Contains(ip, "127.0.0.1") || strings.Contains(ip, "localhost") {
+		log.Printf("[ERROR] Skipping Geoapify request : Invalid IP %s", ip)
+		return ""
+	}
+
+	url := fmt.Sprintf("https://api.geoapify.com/v1/ipinfo?apiKey=%s&ip=%s", geoapifyKey, ip)
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get user location for IP %s: %s", ip, err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	// Handle non-200 responses
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body) // Read even if failed to get error message
+		log.Printf("[ERROR] Geoapify returned status %d for IP %s: %s", resp.StatusCode, ip, string(body))
+		return ""
+	}
+
+	type userLocation struct {
+		Country struct {
+			ISOCode string `json:"iso_code"`
+		} `json:"country"`
+	}
+
+	var userLocationData userLocation
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read user location data for IP %s: %s", ip, err)
+		return ""
+	}
+
+	err = json.Unmarshal(body, &userLocationData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse user location data for IP %s: %s", ip, err)
+		return ""
+	}
+
+	region = userLocationData.Country.ISOCode
+	return region
+}
+
+
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
