@@ -20548,7 +20548,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if len(org.Region) > 0 {
-						if ArrayContains(user.Regions, org.Region) {
+						if ArrayContains(user.Regions, org.RegionUrl) {
 							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
 							continue
 						}
@@ -20767,7 +20767,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					}
 
 					if len(org.Region) > 0 {
-						if ArrayContains(user.Regions, org.Region) {
+						if ArrayContains(user.Regions, org.RegionUrl) {
 							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
 							continue
 						}
@@ -20908,6 +20908,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newUser.LoginType = "OpenID"
 	newUser.Role = role
 	newUser.Session = uuid.NewV4().String()
+	newUser.Regions = []string{"https://shuffler.io"}
 	newUser.ActiveOrg = OrgMini{
 		Name: org.Name,
 		Id:   org.Id,
@@ -20952,30 +20953,11 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	newUser.Session = sessionToken
 
-	for _, orgID := range newUser.Orgs {
-		user := newUser
-		org, err := GetOrg(ctx, orgID)
-		if err != nil {
-			log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
-			continue
-		}
-
-		if len(org.Region) > 0 {
-			if ArrayContains(user.Regions, org.Region) {
-				continue
-			}
-
-			user.Regions = append(user.Regions, org.RegionUrl)
-			err = SetUser(ctx, user, false)
-			if err != nil {
-				log.Printf("[WARNING] Failed updating user when setting region: %s", err)
-				resp.WriteHeader(401)
-				resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
-				return
-			}
+	if len(org.Region) > 0 {
+		if !ArrayContains(newUser.Regions, org.RegionUrl) {
+			newUser.Regions = append(newUser.Regions, org.RegionUrl)
 		}
 	}
-
 	//Store users last session as new session so user don't have to go through sso again while changing org.
 	newUser.UsersLastSession = sessionToken
 
