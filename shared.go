@@ -18359,7 +18359,15 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData.Category = ""
 	}
 
+
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
+	
+	// Check if cache already existed and if distributed
+	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
+	if err == nil {
+		tmpData.SuborgDistribution = cacheData.SuborgDistribution
+	}
+
 	err = SetCacheKey(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
