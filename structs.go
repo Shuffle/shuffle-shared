@@ -839,9 +839,11 @@ type RegionBody struct {
 }
 
 type OrgBranding struct {
-	EnableChat bool   `json:"enable_chat" datastore:"enable_chat"`
-	HomeUrl    string `json:"home_url" datastore:"home_url"`
-	Theme      string `json:"theme" datastore:"theme"`
+	EnableChat        bool   `json:"enable_chat" datastore:"enable_chat"`
+	HomeUrl           string `json:"home_url" datastore:"home_url"`
+	Theme             string `json:"theme" datastore:"theme"`
+	DocumentationLink string `json:"documentation_link" datastore:"documentation_link"`
+	GlobalUser        bool   `json:"global_user" datastore:"global_user"` // Global user is true when the user is admin of both parent org and suborg.
 }
 
 // Used within a user
