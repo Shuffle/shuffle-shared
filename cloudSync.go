@@ -603,13 +603,14 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	// Allows parent & childorgs to run as much as they want. No limitations
 	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		//log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
+		// log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
 		return org, nil
 	}
 
+
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
-		//log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
+		// log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
 			org.SyncFeatures.AppExecutions.Limit = 10000
@@ -623,9 +624,9 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 		// FIXME: When inside this, check if usage should be sent to the user
 		// if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV || org.LeadInfo.Internal) {
-		// if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV) {
-		// 	return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this for org %s (%s)", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit, org.Name, org.Id))
-		// }
+		if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV) {
+			return org, errors.New(fmt.Sprintf("You are above your limited usage of app executions this month (%d / %d) when running with triggers. Contact support@shuffler.io or the live chat to extend this for org %s (%s)", org.SyncFeatures.AppExecutions.Usage, org.SyncFeatures.AppExecutions.Limit, org.Name, org.Id))
+		}
 
 		return org, nil
 	} else {
