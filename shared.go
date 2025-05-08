@@ -9572,14 +9572,14 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
 
 
-	if len(newWf.ParentWorkflowId) > 0 {
-		// check if parent workflow even exists
-		_, err := GetWorkflow(ctx, newWf.ParentWorkflowId)
-		if err != nil {
-			log.Printf("[WARNING] Parent workflow %s doesn't exist. Can't set child workflow %s", newWf.ParentWorkflowId, newWf.ID)	
-			return nil, err
-		}
-	}
+	// if len(newWf.ParentWorkflowId) > 0 {
+	// 	// check if parent workflow even exists
+	// 	_, err := GetWorkflow(ctx, newWf.ParentWorkflowId)
+	// 	if err != nil {
+	// 		log.Printf("[WARNING] Parent workflow %s doesn't exist. Can't set child workflow %s", newWf.ParentWorkflowId, newWf.ID)	
+	// 		return nil, err
+	// 	}
+	// }
 
 	// FIXME: Send a save request instead? That way
 	// propagation can keep going down.
