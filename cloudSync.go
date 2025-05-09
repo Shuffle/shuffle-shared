@@ -603,13 +603,14 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	// Allows parent & childorgs to run as much as they want. No limitations
 	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		//log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
+		// log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
 		return org, nil
 	}
 
+
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
-		//log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
+		// log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
 			org.SyncFeatures.AppExecutions.Limit = 10000
