@@ -6058,6 +6058,78 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 	return nil
 }
 
+// Partners functions
+func SetPartner(ctx context.Context, partner *Partner) error {
+    if partner == nil {
+        return errors.New("partner cannot be nil")
+    }
+
+    nameKey := "Partners"
+    timeNow := int64(time.Now().Unix())
+
+    // Set created time for new partners
+    if partner.Created == 0 {
+        partner.Created = timeNow
+        // Generate new ID only for new partners
+        if partner.Id == "" {
+            partner.Id = uuid.NewV4().String()
+        }
+    }
+
+    // Always update edited time
+    partner.Edited = timeNow
+
+    // Create datastore key and save
+    k := datastore.NameKey(nameKey, partner.Id, nil)
+    _, err := project.Dbclient.Put(ctx, k, partner)
+    return err
+}
+
+func GetPartners(ctx context.Context) ([]Partner, error) {
+    nameKey := "Partners"
+    var partners []Partner
+
+    // Simple query to get all partners
+    q := datastore.NewQuery(nameKey)
+    _, err := project.Dbclient.GetAll(ctx, q, &partners)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get partners: %w", err)
+    }
+
+    return partners, nil
+}
+
+func GetPartner(ctx context.Context, id string) (*Partner, error) {
+    if id == "" {
+        return nil, errors.New("id cannot be empty")
+    }
+
+    nameKey := "Partners"
+    
+    // First try to get by partner ID
+    k := datastore.NameKey(nameKey, id, nil)
+    partner := &Partner{}
+    err := project.Dbclient.Get(ctx, k, partner)
+    if err == nil {
+        return partner, nil
+    }
+
+    // If not found by ID, try to find by org_id
+    var partners []Partner
+    q := datastore.NewQuery(nameKey).Filter("org_id =", id)
+    _, err = project.Dbclient.GetAll(ctx, q, &partners)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get partner: %w", err)
+    }
+
+    if len(partners) == 0 {
+        return nil, fmt.Errorf("no partner found with id %s", id)
+    }
+
+    // Return the first match if found by org_id
+    return &partners[0], nil
+}
+
 func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
 	// FIXME - this doesn't work
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))

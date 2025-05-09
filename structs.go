@@ -897,6 +897,29 @@ type LeadInfo struct {
 	Creator bool `json:"creator,omitempty" datastore:"creator"`
 }
 
+// Partners Structs
+type PartnerType struct {
+	TechPartner         bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
+	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
+	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
+	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
+}
+
+type Partner struct {
+	Id          string      `json:"id" datastore:"id"`
+	Name        string      `json:"name" datastore:"name"`
+	Description string      `json:"description" datastore:"description"`
+	OrgId       string      `json:"org_id" datastore:"org_id"`
+	ImageUrl    string      `json:"image_url" datastore:"image_url,noindex"`
+	ArticleUrl  string      `json:"article_url" datastore:"article_url,noindex"`
+	WebsiteUrl  string      `json:"website_url" datastore:"website_url,noindex"`
+	Expertise   []string      `json:"expertise" datastore:"expertise"`
+	PartnerType PartnerType `json:"partner_type" datastore:"partner_type"`
+	Region      string      `json:"region" datastore:"region"`
+	Created     int64       `json:"created" datastore:"created"`
+	Edited      int64       `json:"edited" datastore:"edited"`
+}
+
 type Org struct {
 	Name            string       `json:"name" datastore:"name"`
 	Description     string       `json:"description" datastore:"description"`
@@ -3835,7 +3858,7 @@ type SingleResult struct {
 }
 
 type DockerRequestCheck struct {
-	Name string `datastore:"name" json:"name" yaml:"name"`
+	Name  string `datastore:"name" json:"name" yaml:"name"`
 	Image string `datastore:"image" json:"image" yaml:"image"`
 }
 
@@ -4032,11 +4055,11 @@ type LiveExecutionStatus struct {
 }
 
 type HealthCheck struct {
-	Success bool  `json:"success"`
-	Updated int64 `json:"updated"`
-	Apps AppHealth `json:"apps"`
-	Workflows WorkflowHealth `json:"workflows"`
-	PythonApps AppHealth `json:"python_apps"`
+	Success    bool           `json:"success"`
+	Updated    int64          `json:"updated"`
+	Apps       AppHealth      `json:"apps"`
+	Workflows  WorkflowHealth `json:"workflows"`
+	PythonApps AppHealth      `json:"python_apps"`
 }
 
 type HealthCheckDB struct {
@@ -4257,29 +4280,29 @@ type TimeWindow struct {
 }
 
 // The execution details of a decision
-type AgentDecisionRunDetails struct { 
+type AgentDecisionRunDetails struct {
 	Id string `json:"id" datastore:"id"`
 
-	StartedAt int64  `json:"started_at" datastore:"started_at"`
+	StartedAt   int64  `json:"started_at" datastore:"started_at"`
 	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
-	Type string `json:"type" datastore:"type"`
-	Status string `json:"status" datastore:"status"`
+	Type        string `json:"type" datastore:"type"`
+	Status      string `json:"status" datastore:"status"`
 	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
-	DebugUrl string `json:"debug_url,omitempty" datastore:"debug_url"`
+	DebugUrl    string `json:"debug_url,omitempty" datastore:"debug_url"`
 }
 
 // Each decision
 type AgentDecision struct {
-	// Predictive Agent data 
-	I          int     `json:"i" datastore:"i"`
-	Action     string  `json:"action" datastore:"action"`
-	Tool	   string  `json:"tool" datastore:"tool"`
-	Category   string  `json:"category" datastore:"category"`
-	Confidence float64 `json:"confidence" datastore:"confidence"`
-	Runs 	   string  `json:"runs" datastore:"runs"`
-	Sources    string  `json:"sources,omitempty" datastore:"sources"`
+	// Predictive Agent data
+	I          int            `json:"i" datastore:"i"`
+	Action     string         `json:"action" datastore:"action"`
+	Tool       string         `json:"tool" datastore:"tool"`
+	Category   string         `json:"category" datastore:"category"`
+	Confidence float64        `json:"confidence" datastore:"confidence"`
+	Runs       string         `json:"runs" datastore:"runs"`
+	Sources    string         `json:"sources,omitempty" datastore:"sources"`
 	Fields     []Valuereplace `json:"fields" datastore:"fields"`
-	Reason     string  `json:"reason" datastore:"reason"`
+	Reason     string         `json:"reason" datastore:"reason"`
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
@@ -4287,19 +4310,19 @@ type AgentDecision struct {
 
 // The overall Agent controller
 type AgentOutput struct {
-	Status 	  string  `json:"status" datastore:"status"`
+	Status    string          `json:"status" datastore:"status"`
 	Input     string          `json:"input" datastore:"input"`
-	Error 	  string `json:"error,omitempty" datastore:"error"`
+	Error     string          `json:"error,omitempty" datastore:"error"`
 	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
 
 	// For easy testing
 	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
-	// For tracking of details parent<->child 
-	StartedAt int64 `json:"started_at,omitempty" datastore:"started_at"`
-	CompletedAt int64 `json:"completed_at,omitempty" datastore:"completed_at"`
+	// For tracking of details parent<->child
+	StartedAt   int64  `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt int64  `json:"completed_at,omitempty" datastore:"completed_at"`
 	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
-	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
-	Memory string `json:"memory,omitempty" datastore:"memory"`
+	NodeId      string `json:"node_id,omitempty" datastore:"node_id"`
+	Memory      string `json:"memory,omitempty" datastore:"memory"`
 }
 
 type HTTPWrapper struct {
