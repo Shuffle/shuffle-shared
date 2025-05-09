@@ -53,7 +53,6 @@ import (
 	"github.com/frikky/kin-openapi/openapi2conv"
 	"github.com/frikky/kin-openapi/openapi3"
 
-	"github.com/frikky/schemaless"
 	"github.com/google/go-github/v28/github"
 	"golang.org/x/crypto/bcrypt"
 
@@ -66,6 +65,10 @@ var SSOUrl = ""
 var kmsDebug = false
 
 var debug = os.Getenv("DEBUG") == "true"
+
+func GetProject() ShuffleStorage {
+	return project
+}
 
 func RequestMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -23060,349 +23063,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 				}
 			}
 
-			curAuth := AppAuthenticationStorage{Id: ""}
-			authIndex := -1
-			for innerIndex, auth := range allAuths {
-				if auth.Id != action.AuthenticationId {
-					continue
-				}
-
-				authIndex = innerIndex
-				curAuth = auth
-				break
-			}
-
-			if len(curAuth.Id) == 0 {
-				log.Printf("[ERROR] App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id)
-
-				workflowExecution.NotificationsCreated += 1
-				CreateOrgNotification(
-					ctx,
-					fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
-					fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
-					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
-					workflowExecution.ExecutionOrg,
-					true,
-				)
-
-				//return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
-			} else {
-				if curAuth.Encrypted {
-					setField := true
-					newFields := []AuthenticationStore{}
-					fieldLength := 0
-					for _, field := range curAuth.Fields {
-						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-						newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-						if err != nil {
-							if field.Key != "access_token" {
-								log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
-								setField = false
-								//fieldLength = 0
-								break
-							} else {
-								continue
-							}
-						}
-
-						// Remove / at end of urls
-						// TYPICALLY shouldn't use them.
-						if field.Key == "url" {
-							//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
-							if strings.HasSuffix(string(newValue), "/") {
-								newValue = []byte(string(newValue)[0 : len(newValue)-1])
-							}
-
-							//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
-						}
-
-						fieldLength += len(newValue)
-						field.Value = string(newValue)
-						newFields = append(newFields, field)
-					}
-
-					// There is some Very weird bug that has caused encryption to sometimes be skipped.
-					// This is a way to discover when this happens properly.
-					// The problem happens about every 10.000~ decryption, which is still way too much.
-					// By adding the full total, there should be no problem with this, seeing as lengths are added together
-					fieldNames := ""
-					for _, field := range curAuth.Fields {
-						fieldNames += field.Key + ", "
-					}
-
-					if setField {
-						curAuth.Fields = newFields
-
-						//log.Printf("[DEBUG] Outer decryption (1) debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
-					} else {
-						//log.Printf("[ERROR] Outer decryption (2) debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
-
-					}
-				} else {
-					//log.Printf("[INFO] AUTH IS NOT ENCRYPTED - attempting auto-encrypting if key is set!")
-					err = SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
-					if err != nil {
-						log.Printf("[WARNING] Failed running encryption during execution: %s", err)
-					}
-				}
-			}
-
-			newParams := []WorkflowAppActionParameter{}
-			if strings.ToLower(curAuth.Type) == "oauth2-app" {
-				// Check if they need to be decrypted
-
-				// Check if it already has a new token in cache from same auth current execution
-
-				setAuth := false
-				executionAuthKey := fmt.Sprintf("oauth2_%s", curAuth.Id)
-
-				//log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
-				execAuthData, err := GetCache(ctx, executionAuthKey)
-				if err == nil {
-					//log.Printf("[DEBUG] Successfully retrieved auth wrapper from cache for %s", executionAuthKey)
-					cacheData := []byte(execAuthData.([]uint8))
-
-					appAuthWrapper := AppAuthenticationStorage{}
-					err = json.Unmarshal(cacheData, &appAuthWrapper)
-					if err == nil {
-						//log.Printf("[DEBUG] Successfully unmarshalled auth wrapper from cache for %s", executionAuthKey)
-
-						newParams = action.Parameters
-						for _, param := range appAuthWrapper.Fields {
-							if param.Key != "access_token" {
-								continue
-							}
-
-							newParams = append(newParams, WorkflowAppActionParameter{
-								Name:  param.Key,
-								Value: param.Value,
-							})
-						}
-
-						setAuth = true
-					} else {
-						log.Printf("[ERROR] Failed unmarshalling auth wrapper from cache for %s: %s", executionAuthKey, err)
-					}
-				}
-
-				if !setAuth {
-					for fieldIndex, field := range curAuth.Fields {
-
-						parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
-						decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
-						if err != nil {
-							log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
-							if field.Key != "access_key" && field.Key != "access_token" {
-								//log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
-							}
-
-							continue
-						}
-
-						curAuth.Fields[fieldIndex].Value = string(decrypted)
-						//field.Value = decrypted
-					}
-
-					user := User{
-						Username: "refresh",
-						ActiveOrg: OrgMini{
-							Id: curAuth.OrgId,
-						},
-					}
-
-					newAuth, err := GetOauth2ApplicationPermissionToken(ctx, user, curAuth)
-					if err != nil {
-						log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens (2): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
-						//workflowExecution.Status = "ABORTED"
-						//workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
-
-						workflowExecution.NotificationsCreated += 1
-						workflowExecution.Results = append(workflowExecution.Results, ActionResult{
-							Action:        action,
-							ExecutionId:   workflowExecution.ExecutionId,
-							Authorization: workflowExecution.Authorization,
-							Result:        fmt.Sprintf(`{"success": false, "reason": "Failed running oauth2 request to refresh tokens. Are your credentials and URL correct? Contact support@shuffler.io if this persists.", "details": "%s"}`, strings.ReplaceAll(fmt.Sprintf("%s", err), `"`, `\"`)),
-							StartedAt:     workflowExecution.StartedAt,
-							CompletedAt:   workflowExecution.StartedAt,
-							Status:        "SKIPPED",
-						})
-
-						CreateOrgNotification(
-							ctx,
-							fmt.Sprintf("Failed to refresh Oauth2 tokens for auth '%s'. Did the credentials change?", curAuth.Label),
-							fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
-							fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
-							workflowExecution.ExecutionOrg,
-							true,
-						)
-
-						// Abort the workflow due to auth being bad
-
-					} else {
-						// Resets the params and overwrites with the relevant fields
-						curAuth = newAuth
-						newParams = action.Parameters
-						for _, param := range newAuth.Fields {
-							if param.Key != "access_token" {
-								continue
-							}
-
-							newParams = append(newParams, WorkflowAppActionParameter{
-								Name:  param.Key,
-								Value: param.Value,
-							})
-						}
-
-						marshalledAuth, err := json.Marshal(newAuth)
-						if err == nil {
-							err = SetCache(ctx, executionAuthKey, marshalledAuth, 1)
-							if err != nil {
-								log.Printf("[ERROR] Failed setting cache for %s: %s", executionAuthKey, err)
-							}
-						} else {
-							log.Printf("[ERROR] Failed marshalling auth wrapper for %s: %s", executionAuthKey, err)
-						}
-					}
-				}
-			} else if strings.ToLower(curAuth.Type) == "oauth2" {
-				//log.Printf("[DEBUG] Should replace auth parameters (Oauth2)")
-
-				runRefresh := false
-				refreshUrl := ""
-				for _, param := range curAuth.Fields {
-					if param.Key == "expiration" {
-						val, err := strconv.Atoi(param.Value)
-						timeNow := int64(time.Now().Unix())
-						if err == nil {
-							//log.Printf("Checking expiration vs timenow: %d %d. Err: %s", timeNow, int64(val)+120, err)
-							if timeNow >= int64(val)+120 {
-								runRefresh = true
-							}
-
-						}
-
-						continue
-					}
-
-					if param.Key == "refresh_url" {
-						refreshUrl = param.Value
-						continue
-					}
-
-					if param.Key != "url" && param.Key != "access_token" {
-						//log.Printf("Skipping key %s", param.Key)
-						continue
-					}
-
-					newParams = append(newParams, WorkflowAppActionParameter{
-						Name:  param.Key,
-						Value: param.Value,
-					})
-				}
-
-				runRefresh = true
-				if runRefresh {
-					user := User{
-						Username: "refresh",
-						ActiveOrg: OrgMini{
-							Id: curAuth.OrgId,
-						},
-					}
-
-					if len(refreshUrl) == 0 {
-						log.Printf("[ERROR] No Oauth2 request to run, as no refresh url is set!")
-					} else {
-						//log.Printf("[INFO] Running Oauth2 request with URL %s", refreshUrl)
-
-						newAuth, err := RunOauth2Request(ctx, user, curAuth, true)
-						if err != nil {
-							log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens (1): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
-
-							CreateOrgNotification(
-								ctx,
-								fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
-								fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
-								fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
-								workflowExecution.ExecutionOrg,
-								true,
-							)
-
-							// Adding so it can be used to fail the auth naturally with Outlook
-
-							authfieldFound := false
-							for _, field := range curAuth.Fields {
-								if field.Key == "access_token" {
-									authfieldFound = true
-									break
-								}
-							}
-
-							if !authfieldFound {
-								newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
-									Key:   "access_token",
-									Value: "FAILURE_REFRESH",
-								})
-							}
-
-							// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens
-						}
-
-						allAuths[authIndex] = newAuth
-
-						// Does the oauth2 replacement
-						newParams = []WorkflowAppActionParameter{}
-						for _, param := range newAuth.Fields {
-							if param.Key != "url" && param.Key != "access_token" {
-								//log.Printf("Skipping key %s (2)", param.Key)
-								continue
-							}
-
-							newParams = append(newParams, WorkflowAppActionParameter{
-								Name:  param.Key,
-								Value: param.Value,
-							})
-						}
-					}
-				}
-
-				for _, param := range action.Parameters {
-					if param.Configuration {
-						continue
-					}
-
-					newParams = append(newParams, param)
-				}
-			} else {
-				// This may make the system miss fields.
-				addedParamIndexes := []string{}
-				for _, param := range action.Parameters {
-
-					for paramIndex, authparam := range curAuth.Fields {
-						if param.Name != authparam.Key {
-							continue
-						}
-
-						addedParamIndexes = append(addedParamIndexes, string(paramIndex))
-						param.Value = authparam.Value
-						break
-					}
-
-					newParams = append(newParams, param)
-				}
-
-				for paramIndex, authparam := range curAuth.Fields {
-					if ArrayContains(addedParamIndexes, string(paramIndex)) {
-						continue
-					}
-
-					newParams = append(newParams, WorkflowAppActionParameter{
-						Name:  authparam.Key,
-						Value: authparam.Value,
-					})
-				}
-			}
-
-			action.Parameters = newParams
+			// Simplified it all into a single function
+			action, workflowExecution = GetAuthentication(ctx, workflowExecution, action, allAuths)
+			//action.Parameters = newParams
 		}
 
 		action.LargeImage = ""
@@ -24031,6 +23694,362 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	// Force it into the database
 	return workflowExecution, ExecInfo{OnpremExecution: onpremExecution, Environments: environments, CloudExec: cloudExec, ImageNames: imageNames}, "", nil
 }
+
+func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution, action Action, allAuths []AppAuthenticationStorage) (Action, WorkflowExecution) {
+	if len(allAuths) == 0 {
+		return action, workflowExecution
+	}
+
+	workflow := workflowExecution.Workflow
+
+	curAuth := AppAuthenticationStorage{Id: ""}
+	authIndex := -1
+	for innerIndex, auth := range allAuths {
+		if auth.Id != action.AuthenticationId {
+			continue
+		}
+
+		authIndex = innerIndex
+		curAuth = auth
+		break
+	}
+
+	if len(curAuth.Id) == 0 {
+		log.Printf("[ERROR] App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id)
+
+		workflowExecution.NotificationsCreated += 1
+		CreateOrgNotification(
+			ctx,
+			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
+			fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id),
+			fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+			workflowExecution.ExecutionOrg,
+			true,
+		)
+
+		//return workflowExecution, ExecInfo{}, fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (1).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id), errors.New(fmt.Sprintf("App Auth ID %s doesn't exist for app '%s' among %d auth for org ID '%s'. Please re-authenticate the app (2).", action.AuthenticationId, action.AppName, len(allAuths), workflow.ExecutingOrg.Id))
+	} else {
+		if curAuth.Encrypted {
+			setField := true
+			newFields := []AuthenticationStore{}
+			fieldLength := 0
+			for _, field := range curAuth.Fields {
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+				newValue, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				if err != nil {
+					if field.Key != "access_token" {
+						log.Printf("[ERROR] Failed decryption (3) in auth org %s for %s: %s. Auth label: %s", curAuth.OrgId, field.Key, err, curAuth.Label)
+						setField = false
+						//fieldLength = 0
+						break
+					} else {
+						continue
+					}
+				}
+
+				// Remove / at end of urls
+				// TYPICALLY shouldn't use them.
+				if field.Key == "url" {
+					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+					if strings.HasSuffix(string(newValue), "/") {
+						newValue = []byte(string(newValue)[0 : len(newValue)-1])
+					}
+
+					//log.Printf("Value2 (%s): %s", field.Key, string(newValue))
+				}
+
+				fieldLength += len(newValue)
+				field.Value = string(newValue)
+				newFields = append(newFields, field)
+			}
+
+			// There is some Very weird bug that has caused encryption to sometimes be skipped.
+			// This is a way to discover when this happens properly.
+			// The problem happens about every 10.000~ decryption, which is still way too much.
+			// By adding the full total, there should be no problem with this, seeing as lengths are added together
+			fieldNames := ""
+			for _, field := range curAuth.Fields {
+				fieldNames += field.Key + ", "
+			}
+
+			if setField {
+				curAuth.Fields = newFields
+
+				//log.Printf("[DEBUG] Outer decryption (1) debugging for %s. Auth: %s, Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+			} else {
+				//log.Printf("[ERROR] Outer decryption (2) debugging for org %s. Auth: '%s'. Fields: %s. Length: %d", curAuth.OrgId, curAuth.Label, fieldNames, fieldLength)
+
+			}
+		} else {
+			standaloneEnv := os.Getenv("STANDALONE")
+			if standaloneEnv != "true" {
+				err := SetWorkflowAppAuthDatastore(ctx, curAuth, curAuth.Id)
+				if err != nil {
+					log.Printf("[WARNING] Failed running encryption during execution: %s", err)
+				}
+			}
+		}
+	}
+
+	newParams := []WorkflowAppActionParameter{}
+	if strings.ToLower(curAuth.Type) == "oauth2-app" {
+		// Check if they need to be decrypted
+
+		// Check if it already has a new token in cache from same auth current execution
+
+		setAuth := false
+		executionAuthKey := fmt.Sprintf("oauth2_%s", curAuth.Id)
+
+		//log.Printf("[DEBUG] Looking for cached authkey '%s'", executionAuthKey)
+		execAuthData, err := GetCache(ctx, executionAuthKey)
+		if err == nil {
+			//log.Printf("[DEBUG] Successfully retrieved auth wrapper from cache for %s", executionAuthKey)
+			cacheData := []byte(execAuthData.([]uint8))
+
+			appAuthWrapper := AppAuthenticationStorage{}
+			err = json.Unmarshal(cacheData, &appAuthWrapper)
+			if err == nil {
+				//log.Printf("[DEBUG] Successfully unmarshalled auth wrapper from cache for %s", executionAuthKey)
+
+				newParams = action.Parameters
+				for _, param := range appAuthWrapper.Fields {
+					if param.Key != "access_token" {
+						continue
+					}
+
+					newParams = append(newParams, WorkflowAppActionParameter{
+						Name:  param.Key,
+						Value: param.Value,
+					})
+				}
+
+				setAuth = true
+			} else {
+				log.Printf("[ERROR] Failed unmarshalling auth wrapper from cache for %s: %s", executionAuthKey, err)
+			}
+		}
+
+		if !setAuth {
+			for fieldIndex, field := range curAuth.Fields {
+
+				parsedKey := fmt.Sprintf("%s_%d_%s_%s", curAuth.OrgId, curAuth.Created, curAuth.Label, field.Key)
+				decrypted, err := HandleKeyDecryption([]byte(field.Value), parsedKey)
+				if err != nil {
+					log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+					if field.Key != "access_key" && field.Key != "access_token" {
+						//log.Printf("[ERROR] Failed decryption (1) in org %s for %s: %s", curAuth.OrgId, field.Key, err)
+					}
+
+					continue
+				}
+
+				curAuth.Fields[fieldIndex].Value = string(decrypted)
+				//field.Value = decrypted
+			}
+
+			user := User{
+				Username: "refresh",
+				ActiveOrg: OrgMini{
+					Id: curAuth.OrgId,
+				},
+			}
+
+			newAuth, err := GetOauth2ApplicationPermissionToken(ctx, user, curAuth)
+			if err != nil {
+				log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens (2): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+				//workflowExecution.Status = "ABORTED"
+				//workflowExecution.Result = "Oauth2 failed during start of execution. Please re-authenticate the app."
+
+				workflowExecution.NotificationsCreated += 1
+				workflowExecution.Results = append(workflowExecution.Results, ActionResult{
+					Action:        action,
+					ExecutionId:   workflowExecution.ExecutionId,
+					Authorization: workflowExecution.Authorization,
+					Result:        fmt.Sprintf(`{"success": false, "reason": "Failed running oauth2 request to refresh tokens. Are your credentials and URL correct? Contact support@shuffler.io if this persists.", "details": "%s"}`, strings.ReplaceAll(fmt.Sprintf("%s", err), `"`, `\"`)),
+					StartedAt:     workflowExecution.StartedAt,
+					CompletedAt:   workflowExecution.StartedAt,
+					Status:        "SKIPPED",
+				})
+
+				CreateOrgNotification(
+					ctx,
+					fmt.Sprintf("Failed to refresh Oauth2 tokens for auth '%s'. Did the credentials change?", curAuth.Label),
+					fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
+					fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+					workflowExecution.ExecutionOrg,
+					true,
+				)
+
+				// Abort the workflow due to auth being bad
+
+			} else {
+				// Resets the params and overwrites with the relevant fields
+				curAuth = newAuth
+				newParams = action.Parameters
+				for _, param := range newAuth.Fields {
+					if param.Key != "access_token" {
+						continue
+					}
+
+					newParams = append(newParams, WorkflowAppActionParameter{
+						Name:  param.Key,
+						Value: param.Value,
+					})
+				}
+
+				marshalledAuth, err := json.Marshal(newAuth)
+				if err == nil {
+					err = SetCache(ctx, executionAuthKey, marshalledAuth, 1)
+					if err != nil {
+						log.Printf("[ERROR] Failed setting cache for %s: %s", executionAuthKey, err)
+					}
+				} else {
+					log.Printf("[ERROR] Failed marshalling auth wrapper for %s: %s", executionAuthKey, err)
+				}
+			}
+		}
+	} else if strings.ToLower(curAuth.Type) == "oauth2" {
+		//log.Printf("[DEBUG] Should replace auth parameters (Oauth2)")
+
+		runRefresh := false
+		refreshUrl := ""
+		for _, param := range curAuth.Fields {
+			if param.Key == "expiration" {
+				val, err := strconv.Atoi(param.Value)
+				timeNow := int64(time.Now().Unix())
+				if err == nil {
+					//log.Printf("Checking expiration vs timenow: %d %d. Err: %s", timeNow, int64(val)+120, err)
+					if timeNow >= int64(val)+120 {
+						runRefresh = true
+					}
+
+				}
+
+				continue
+			}
+
+			if param.Key == "refresh_url" {
+				refreshUrl = param.Value
+				continue
+			}
+
+			if param.Key != "url" && param.Key != "access_token" {
+				//log.Printf("Skipping key %s", param.Key)
+				continue
+			}
+
+			newParams = append(newParams, WorkflowAppActionParameter{
+				Name:  param.Key,
+				Value: param.Value,
+			})
+		}
+
+		runRefresh = true
+		if runRefresh {
+			user := User{
+				Username: "refresh",
+				ActiveOrg: OrgMini{
+					Id: curAuth.OrgId,
+				},
+			}
+
+			if len(refreshUrl) == 0 {
+				log.Printf("[ERROR] No Oauth2 request to run, as no refresh url is set!")
+			} else {
+				//log.Printf("[INFO] Running Oauth2 request with URL %s", refreshUrl)
+
+				newAuth, err := RunOauth2Request(ctx, user, curAuth, true)
+				if err != nil {
+					log.Printf("[ERROR] Failed running oauth request to refresh oauth2 tokens (1): '%s'. Stopping Oauth2 continuation and sending abort for app. This is NOT critical, but means refreshing access_token failed, and it will stop working in the future.", err)
+
+					CreateOrgNotification(
+						ctx,
+						fmt.Sprintf("Failed to refresh Oauth2 tokens for app '%s'", curAuth.Label),
+						fmt.Sprintf("Failed running oauth2 request to refresh oauth2 tokens for app '%s'. Are your credentials and URL correct? Please check backend logs for more details or contact support@shiffler.io for additional help. Details: %#v", curAuth.App.Name, err.Error()),
+						fmt.Sprintf("/workflows/%s?execution_id=%s", workflowExecution.Workflow.ID, workflowExecution.ExecutionId),
+						workflowExecution.ExecutionOrg,
+						true,
+					)
+
+					// Adding so it can be used to fail the auth naturally with Outlook
+
+					authfieldFound := false
+					for _, field := range curAuth.Fields {
+						if field.Key == "access_token" {
+							authfieldFound = true
+							break
+						}
+					}
+
+					if !authfieldFound {
+						newAuth.Fields = append(newAuth.Fields, AuthenticationStore{
+							Key:   "access_token",
+							Value: "FAILURE_REFRESH",
+						})
+					}
+
+					// FIXME: There used to be code here to stop the app, but for now we just continue with the old tokens
+				}
+
+				allAuths[authIndex] = newAuth
+
+				// Does the oauth2 replacement
+				newParams = []WorkflowAppActionParameter{}
+				for _, param := range newAuth.Fields {
+					if param.Key != "url" && param.Key != "access_token" {
+						//log.Printf("Skipping key %s (2)", param.Key)
+						continue
+					}
+
+					newParams = append(newParams, WorkflowAppActionParameter{
+						Name:  param.Key,
+						Value: param.Value,
+					})
+				}
+			}
+		}
+
+		for _, param := range action.Parameters {
+			if param.Configuration {
+				continue
+			}
+
+			newParams = append(newParams, param)
+		}
+	} else {
+		// This may make the system miss fields.
+		addedParamIndexes := []string{}
+		for _, param := range action.Parameters {
+
+			for paramIndex, authparam := range curAuth.Fields {
+				if param.Name != authparam.Key {
+					continue
+				}
+
+				addedParamIndexes = append(addedParamIndexes, string(paramIndex))
+				param.Value = authparam.Value
+				break
+			}
+
+			newParams = append(newParams, param)
+		}
+
+		for paramIndex, authparam := range curAuth.Fields {
+			if ArrayContains(addedParamIndexes, string(paramIndex)) {
+				continue
+			}
+
+			newParams = append(newParams, WorkflowAppActionParameter{
+				Name:  authparam.Key,
+				Value: authparam.Value,
+			})
+		}
+	}
+
+	action.Parameters = newParams
+	return action, workflowExecution
+}
+
 
 func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppAuthenticationGroup, apikey string) error {
 	if len(apikey) == 0 {
@@ -26556,105 +26575,6 @@ func FindMatchingCategoryApps(category string, apps []WorkflowApp, org *Org) []W
 	}
 
 	return matchingApps
-}
-
-func GetActionFromLabel(ctx context.Context, app WorkflowApp, label string, fixLabels bool, fields []Valuereplace, count int) (WorkflowAppAction, AppCategory, []string) {
-	availableLabels := []string{}
-	selectedCategory := AppCategory{}
-	selectedAction := WorkflowAppAction{}
-
-	if len(app.ID) == 0 || len(app.Actions) == 0 {
-		log.Printf("[WARNING] No actions in app %s (%s) for label '%s'", app.Name, app.ID, label)
-		return selectedAction, selectedCategory, availableLabels
-	}
-
-	// Reload the app to be the proper one with updated actions instead
-	// of random cache issues
-	newApp, err := GetApp(ctx, app.ID, User{}, false)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting app in category action: %s", err)
-	} else {
-		app = *newApp
-	}
-
-	categories := GetAllAppCategories()
-	lowercaseLabel := strings.ReplaceAll(strings.ToLower(label), " ", "_")
-	exactMatch := false
-	for _, action := range app.Actions {
-		if len(action.CategoryLabel) == 0 {
-			//log.Printf("%s: %#v\n", action.Name, action.CategoryLabel)
-			continue
-		}
-
-		//log.Printf("FOUND LABELS: %s -> %#v\n", action.Name, action.CategoryLabel)
-
-		for _, label := range action.CategoryLabel {
-			newLabel := strings.ReplaceAll(strings.ToLower(label), " ", "_")
-			if newLabel == "no_label" {
-				continue
-			}
-
-			// To ensure we have both normal + parsed label
-			availableLabels = append(availableLabels, newLabel)
-			availableLabels = append(availableLabels, label)
-
-			if newLabel == lowercaseLabel || strings.HasPrefix(newLabel, lowercaseLabel) {
-				//log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, app.Name, app.ID, action.Name)
-				selectedAction = action
-
-				for _, category := range categories {
-					if strings.ToLower(category.Name) == strings.ToLower(app.Categories[0]) {
-						selectedCategory = category
-						break
-					}
-				}
-
-				if newLabel == lowercaseLabel {
-					exactMatch = true
-					break
-				}
-			}
-		}
-
-		if len(selectedAction.ID) > 0 && exactMatch {
-			break
-		}
-	}
-
-	// Decides if we are to autocomplete the app if labels are not found
-	if len(selectedAction.ID) == 0 {
-		if fixLabels == true {
-			//log.Printf("\n\n[DEBUG] Action not found in app %s (%s) for label '%s'. Autodiscovering and updating the app!!!\n\n", app.Name, app.ID, label)
-
-			keys := []string{}
-			for _, field := range fields {
-				keys = append(keys, field.Key)
-			}
-
-			//log.Printf("[DEBUG] Calling AutofixAppLabels")
-
-			// Make it FORCE look for a specific label if it exists, otherwise
-			newApp, guessedAction := AutofixAppLabels(app, label, keys)
-
-			// print the found action parameters
-			//for _, param := range guessedAction.Parameters {
-			//	log.Printf("[DEBUG] Found parameter %s: %s", param.Name, param.Value)
-			//}
-
-			if guessedAction.Name != "" {
-				log.Printf("[DEBUG] Found action for label '%s' in app %s (%s): %s", label, newApp.Name, newApp.ID, guessedAction.Name)
-				selectedAction = guessedAction
-			} else {
-				if count > 5 {
-					log.Printf("[WARNING] Too many attempts to find action for label '%s' in app %s (%s)", label, newApp.Name, newApp.ID)
-				} else {
-					return GetActionFromLabel(ctx, newApp, label, false, fields, count+1)
-				}
-			}
-		}
-	}
-
-	return selectedAction, selectedCategory, availableLabels
 }
 
 func GetActiveCategories(resp http.ResponseWriter, request *http.Request) {
