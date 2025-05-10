@@ -9505,13 +9505,6 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
-	_, err = GetWorkflow(ctx, parentWorkflowId)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting parent workflow %s: %s", parentWorkflowId, err)
-		return nil, err
-	}
-
-
 	// before doing anything, verify if the parent workflow is a child workflow itself
 	if len(workflow.ParentWorkflowId) > 0 {
 		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere.", workflow.Name, workflow.ID)
