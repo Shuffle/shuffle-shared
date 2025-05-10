@@ -382,21 +382,21 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 	_, marshalledBody, err := FindHttpBody(fullBody)
 	if err != nil {
 		log.Printf("[ERROR] Failed to find HTTP body in KMS response: %s", err)
-		return "", err
+		return string(fullBody), err
 	}
 
 	// Added a filename_prefix to know which field each belongs to
 	schemalessOutput, err := schemaless.Translate(ctx, "get_kms_key", marshalledBody, authConfig, fmt.Sprintf("filename_prefix:%s-", paramName))
 	if err != nil {
 		log.Printf("[ERROR] Failed to translate KMS response (2): %s", err)
-		return "", err
+		return string(fullBody), err
 	}
 
 	var labeledResponse map[string]string
 	err = json.Unmarshal(schemalessOutput, &labeledResponse)
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal KMS response (3): %s", err)
-		return "", err
+		return string(fullBody), err
 	}
 
 
@@ -577,7 +577,7 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 
 			action, additionalInfo, err := RunSelfCorrectingRequest(action, status, additionalInfo, string(body), useApp, inputdata)
 			if err != nil {
-				//log.Printf("[ERROR] Error running self-correcting request: %s", err)
+				log.Printf("[ERROR] Error running self-correcting request: %s", err)
 				return "", action, err, additionalInfo
 			}
 
@@ -687,38 +687,40 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	}
 
 	//systemMessage := fmt.Sprintf("Return all fields from the last paragraph in the same JSON format they came in. Must be valid JSON as an output.")
-	systemMessage := fmt.Sprintf("Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments. Anything starting with $ is a variable and should be replaced with the correct value (Example if $helpful_function.parameter.value is present ANYWHERE in YOUR output -> This HAS to be replaced with the correct value provided by the user IF it exists at all, then make sure that you replace all values starting with $ with the correct output, else don't do anything about this).")
+	systemMessage := fmt.Sprintf(`Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments. Anything starting with $ is a variable and should be replaced with the correct value (Example if $helpful_function.parameter.value is present ANYWHERE in YOUR output -> This HAS to be replaced with the correct value provided by the user IF it exists at all, then make sure that you replace all values starting with $ with the correct output, else don't do anything about this).
 
-	//inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same with modified values.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
+	Strict output rules to follow:
 
-	// inputData := fmt.Sprintf("Change the fields sent to the HTTP API for %s to be correct according to the HTTP error. \n\nHTTP Status: %d\nHTTP error: %s\n\n%s\nUpdate the following field(s) to have modified values to fix the error (change ALL values that yo can. These values are MERELY examples. You are strictly advised to change the JSON values. Make sure to NOT invent values on your own or use older values provided in the example and instead use the user provided keys to generate a result):\n%s", appname, status, outputBodies, invalidFieldsString, inputBody)
-	inputData := fmt.Sprintf(`Precise JSON Field Correction Instructions:
-
-	1. Given the HTTP API context for %s:
-	   - HTTP Status: %d
-	   - Detailed Error: %s
-	
-	2. Input JSON Payload:
-	%s
-	
-	3. Validation Requirements:
+	1. Validation Requirements:
 	   - Modify ONLY the fields directly related to the HTTP error
 	   - Use ONLY values derived from:
 		 a) Error message context
 		 b) Existing JSON structure
 		 c) Minimal necessary changes to resolve the error
 	
-	4. Strict Constraints:
+	2. Strict Constraints:
 	   - NO invented values
 	   - NO external data generation
 	   - MUST use keys present in original JSON
 	   - MUST maintain original JSON structure
 	   - DON'T use older values or examples
 	
-	5. Output Format:
+	3. Output Format:
 	   - Provide corrected JSON
 	   - No comments. Must be valid JSON.
-	`, appname, status, outputBodies, inputBody)
+
+	4. User Error Handling:
+	   - IF we are missing a value for the user to input, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. ONLY do this if the field(s) are REQUIRED.
+
+	`)
+
+	inputData := fmt.Sprintf(`Precise JSON Field Correction Instructions:
+Given the HTTP API context for %s:
+- HTTP Status: %d
+- Detailed Error: %s
+
+Input JSON Payload:
+%s`, appname, status, outputBodies, inputBody)
 
 	log.Printf("[INFO] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
 
@@ -744,13 +746,18 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 						Content: inputData,
 					},
 				},
-				Temperature: 0.4,
+				Temperature: 0.9,
 			},
 		)
 
 		if err != nil {
+			if strings.Contains(err.Error(), "status code: 401") || strings.Contains(err.Error(), "status code: 403") {
+				return action, additionalInfo, errors.New(fmt.Sprintf("AI API key is invalid. Please check your key. Bad status code."))
+			}
+
 			log.Printf("[ERROR] Failed to create chat completion in run self correcting. Retrying in 3 seconds (5): %s", err)
-			time.Sleep(3 * time.Second)
+
+			time.Sleep(2 * time.Second)
 			cnt += 1
 			continue
 		}
@@ -763,7 +770,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 	contentOutput = FixContentOutput(contentOutput)
 
-	log.Printf("[INFO] Autocorrect output: %s", contentOutput)
+	log.Printf("[INFO] Autocorrected output: %s", contentOutput)
 
 	// Fix the params based on the contentOuput JSON
 	// Parse output into JSOn
@@ -773,6 +780,21 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		log.Printf("[ERROR] Failed unmarshalling data '%s'. Failed to unmarshal outputJSON in action fix for app %s with action %s: %s", contentOutput, appname, action.Name, err)
 
 		return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
+	}
+
+	if strings.Contains(contentOutput, "missing_fields") {
+		log.Printf("Missing fields found!")
+
+		successField, ok := outputJSON["success"] 
+		if ok {
+			if successField, ok := successField.(bool); ok {
+				if successField == false {
+					return action, additionalInfo, errors.New(contentOutput)
+				}
+			}
+		}
+
+		log.Printf("[ERROR] Missing fields, but not skipping. Raw: %s", contentOutput)
 	}
 
 	sendNewRequest := false
@@ -1166,51 +1188,9 @@ func UpdateActionBody(action WorkflowAppAction) (string, error) {
 	return contentOutput, nil
 }
 
-func GetOrgspecificParameters(ctx context.Context, org Org, action WorkflowAppAction) WorkflowAppAction {
-	log.Printf("\n\n\n\n")
-	for paramIndex, param := range action.Parameters {
-		if param.Configuration {
-			continue
-		}
-
-		if len(param.Options) > 0 {
-			continue
-		}
-
-		fileId := fmt.Sprintf("file_%s-%s-%s-%s.json", org.Id, strings.ToLower(action.AppID), strings.Replace(strings.ToLower(action.Name), " ", "_", -1), strings.ToLower(param.Name))
-
-		file, err := GetFile(ctx, fileId)
-		if err != nil || file.Status != "active" {
-			//log.Printf("[WARNING] File %s NOT found or not active. Status: %#v", fileId, file.Status)
-			continue
-		}
-
-		if file.OrgId != org.Id {
-			file.OrgId = org.Id
-		}
-
-		// make a fake resp to get the content
-		//func GetFileContent(ctx context.Context, file *File, resp http.ResponseWriter) ([]byte, error) {
-		content, err := GetFileContent(ctx, file, nil)
-		if err != nil {
-			continue
-		}
-
-		if len(content) < 5 {
-			continue
-		}
-
-		// log.Printf("[DEBUG] content it got and is putting into example: %s - %d", string(content), paramIndex)
-
-		//log.Printf("[INFO] Found content for file %s for action %s in app %s. Should set param.", fileId, action.Name, action.AppName)
-		action.Parameters[paramIndex].Example = string(content)
-	}
-
-	return action
-}
 
 // Uploads modifyable parameter data to file storage, as to be used in the future executions of the app
-func uploadParameterBase(ctx context.Context, orgId, appId, actionName, paramName, paramValue string) error {
+func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramName, paramValue string) error {
 	timeNow := time.Now().Unix()
 
 	// Check if the file already exists
@@ -1252,7 +1232,7 @@ func uploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 
 	// Upload to /api/v1/files/{fileId}/upload with the data from paramValue
 	parsedKey := fmt.Sprintf("%s_%s", orgId, newFile.Id)
-	fileId, err = uploadFile(ctx, &newFile, parsedKey, []byte(paramValue))
+	fileId, err = UploadFile(ctx, &newFile, parsedKey, []byte(paramValue))
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file in uploadParameterBase: %s", err)
 		return err
@@ -1680,3 +1660,1133 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	SetAutofixAppLabelsCache(ctx, app, guessedAction, label, keys)
 	return app, guessedAction
 }
+
+func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user shuffle.User, org shuffle.Org, outputFormat string, input shuffle.QueryInput) {
+
+	if !user.SupportAccess {
+		//if org.SyncFeatures.ShuffleGPT.Active && org.SyncFeatures.ShuffleGPT.Usage < org.SyncFeatures.ShuffleGPT.Limit {
+		if org.SyncFeatures.ShuffleGPT.Usage < 100 {
+			log.Printf("[AUDIT] Org %s has access to the auto feature. Allowing user %s to use it", org.Name, user.Username)
+			org.SyncFeatures.ShuffleGPT.Usage += 1
+
+			// Managing usage (this happens elsewhere as well apparently
+			//shuffle.IncrementCache(ctx, org.Id, "ai_executions", 1)
+
+		} else {
+			log.Printf("[AUDIT] User %s (%s) tried to use the auto feature but doesn't have support access. Checking if org has access", user.Username, user.Id)
+
+			if !org.SyncFeatures.ShuffleGPT.Active {
+				resp.WriteHeader(403)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "The Shuffle AI feature is unavailable to your organisation for now. Contact support@shuffler.io if you want to try out this feature."}`)))
+				return
+			} else {
+				resp.WriteHeader(429)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You are above your limits for the The Shuffle AI feature (%d/%d). Resets monthly. Contact support@shuffler.io if you need more credits. 100 AI runs per month are included by default."}`, org.SyncFeatures.ShuffleGPT.Usage, org.SyncFeatures.ShuffleGPT.Limit)))
+				return
+			}
+		}
+	}
+
+	inputQuery := input.Query
+	if outputFormat == "raw" {
+		relevancyOutput := findRelevantOutput(inputQuery, org, user)
+		if len(relevancyOutput) > 0 && !strings.Contains(relevancyOutput, "cannot be answered") && !strings.Contains(relevancyOutput, "does not require") && !(strings.HasPrefix(relevancyOutput, "{") && strings.HasSuffix(relevancyOutput, "}")) {
+			log.Printf("[INFO] Found relevant output for '%s': %s", inputQuery, relevancyOutput)
+			resp.WriteHeader(500)
+			resp.Write([]byte(relevancyOutput))
+			return
+		}
+	}
+
+	var err error
+	/*
+		googleResp, err := RunGoogleSearch(ctx, inputQuery)
+		if err != nil {
+			log.Printf("[ERROR] Failed to run google search: %s", err)
+		}
+		_ = googleResp
+	*/
+
+	// Here to fix categories for this part
+	appCategories := shuffle.GetAllAppCategories()
+	for _, category := range appCategories {
+		if category.Name == "Communication" {
+			newCategory := category
+			newCategory.Name = "Email"
+			appCategories = append(appCategories, newCategory)
+			break
+		}
+	}
+
+	//appCategories := org.SecurityFramework
+	parseCategories := "Categories:\n"
+	categoryNames := []string{}
+	for _, category := range appCategories {
+		if category.Name == "Other" {
+			continue
+		}
+
+		categoryNames = append(categoryNames, strings.ToLower(category.Name))
+
+		parseCategories += fmt.Sprintf("category: %s, labels: ", category.Name)
+		for _, actionLabel := range category.ActionLabels {
+			parseCategories += fmt.Sprintf(actionLabel)
+
+			// Check if actionLabel in RequiredFields map
+			required, ok := category.RequiredFields[actionLabel]
+			optional, ok2 := category.OptionalFields[actionLabel]
+			if ok {
+				parseCategories += fmt.Sprintf(" (%s), ", strings.Join(required, ","))
+
+				if ok2 {
+					// Add optional fields
+					_ = optional
+				}
+				// , strings.Join(optional, ",")
+			} else {
+				parseCategories += ", "
+			}
+		}
+
+		if len(category.ActionLabels) > 0 {
+			parseCategories = parseCategories[:len(parseCategories)-2]
+		}
+
+		parseCategories += "\n"
+	}
+
+	// Check if appname is specified
+	foundApp := shuffle.WorkflowApp{}
+	if len(input.AppId) > 0 {
+		// Get app directly
+		newApp, err := shuffle.GetApp(ctx, input.AppId, user, false)
+		if err == nil {
+			foundApp = *newApp
+		}
+	}
+
+	appname := input.AppName
+	category := input.Category
+	actionName := input.ActionName
+
+	originalAppname := input.AppName
+	httpOutput := HTTPWrapper{}
+
+	contentOutput := ""
+	var output map[string]interface{}
+	if len(appname) == 0 && !strings.Contains(inputQuery, "http://") && !strings.Contains(inputQuery, "https://") {
+
+		//log.Printf("[INFO] Parsed labels: %s", parseCategories)
+		systemMessage := "Check if the input categories match any of the categories and action labels. Return the matching category, action label and all required fields in JSON. Required fields are in paranethesis, and should be output in the 'fields' key. If appname is specified add it. If not, output as json {\"success\": false, \"appname\": \"\"} with the name of a brand or app that can answer the question"
+
+		// Parses the input and returns the category and action label
+		openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
+		openaiResp, err := openaiClient.CreateChatCompletion(
+			context.Background(),
+			openai.ChatCompletionRequest{
+				Model: model,
+				Messages: []openai.ChatCompletionMessage{
+					{
+						Role:    openai.ChatMessageRoleSystem,
+						Content: systemMessage,
+					},
+					{
+						Role:    openai.ChatMessageRoleAssistant,
+						Content: parseCategories,
+					},
+					{
+						Role:    openai.ChatMessageRoleUser,
+						Content: inputQuery,
+					},
+				},
+				Temperature: 0.4,
+			},
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] ChatCompletion error: %v\n", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if len(openaiResp.Choices) > 0 {
+			log.Printf("[INFO] Raw Output (1): %s", openaiResp.Choices[0].Message.Content)
+			contentOutput = openaiResp.Choices[0].Message.Content
+
+			// Used for debugging random inputs
+			//contentOutput = `{"success": true, "category": "SIEM", "fields": {"query": "1.2.3.4"}}`
+
+			// Used for analytics testing
+			//contentOutput = `{"success": true, "category": "Assets", "action": "Search Assets", "fields": ["appname", "date_range", "asset_type"], "appname": "Google Analytics"}`
+		}
+
+		contentOutput = shuffle.FixContentOutput(contentOutput)
+
+		err = json.Unmarshal([]byte(contentOutput), &output)
+		if err != nil {
+			log.Printf("[ERROR] Failed to unmarshal output in runActionAI: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+		if outputFormat != "action_parameters" && outputFormat != "action" {
+
+			// Should try the HTTP app
+			appname = "HTTP"
+			//output["appname"] = "HTTP"
+			category = ""
+
+			// regex out the URL
+			re := regexp.MustCompile(`(http[s]?:\/\/[^\s]+)`)
+			matches := re.FindAllStringSubmatch(inputQuery, -1)
+			if len(matches) > 0 {
+				log.Printf("[INFO] Found HTTP URL: %s", matches[0][1])
+				httpOutput.URL = matches[0][1]
+
+				if strings.HasSuffix(httpOutput.URL, "?") {
+					httpOutput.URL = httpOutput.URL[:len(httpOutput.URL)-1]
+				}
+
+				originalAppname = httpOutput.URL
+			}
+
+			log.Printf("[INFO] Trying to run HTTP app for query: %s. URL: %s", inputQuery, httpOutput.URL)
+			httpOutput, err = findHTTPrequestInformation(inputQuery, httpOutput.URL)
+			if err != nil {
+				log.Printf("[ERROR] Failed to find HTTP request information (2): %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false}`))
+				return
+			}
+
+			actionName = strings.ToUpper(httpOutput.Method)
+			jsonoutput, err := json.Marshal(httpOutput)
+			if err == nil {
+				inputQuery += "\n\n" + string(jsonoutput)
+			}
+		}
+	}
+
+	apps := []shuffle.WorkflowApp{}
+	if len(foundApp.ID) == 0 {
+		apps, err = shuffle.GetPrioritizedApps(ctx, user)
+		if err != nil {
+			log.Printf("[ERROR] Failed to get apps in runActionAI: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to get apps for your organization. Please try again"}`))
+			return
+		}
+	}
+
+	appname1, appok := output["appname"]
+	if appok && len(appname) == 0 {
+		appname = appname1.(string)
+	}
+
+	log.Printf("[INFO] Starting AI Translation with app '%s' and category '%s' for query '%s'", appname, category, inputQuery)
+
+	if strings.Contains(contentOutput, "success\": false") {
+		// Maybe look for a Workflow that does what they want?
+		if appok && len(appname1.(string)) > 0 && !shuffle.ArrayContains(categoryNames, strings.ToLower(appname1.(string))) {
+			// 1. Check for the appname in Shuffle
+			// 2. Check in GPT-4
+			// 3. Check internet
+
+			log.Printf("[INFO] Appname specified in success false. Find most likely apps for:'%s'", appname1.(string))
+			foundApps, err := shuffle.FindWorkflowAppByName(ctx, appname)
+			if err != nil {
+				log.Printf("[ERROR] Failed to find app by name in runActionAI: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s'."}`, appname)))
+				return
+			}
+
+			if len(foundApps) == 0 {
+				// Use Algolia to find the app
+				algoliaApp, err := shuffle.HandleAlgoliaAppSearch(ctx, appname)
+				if err == nil && len(algoliaApp.ObjectID) > 0 {
+
+					log.Printf("[INFO] Found app by name in Algolia (1): %s (%s)", algoliaApp.Name, algoliaApp.ObjectID)
+					// Get actual app based on objectID
+
+					// Get the app
+					discoveredApp, err := shuffle.GetApp(ctx, algoliaApp.ObjectID, user, false)
+					if err != nil {
+						log.Printf("[ERROR] Failed to get app in runActionAI for ID app %s (%s) (2): %s", algoliaApp.Name, algoliaApp.ObjectID, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get app '%s' (1). Please be more specific."}`, algoliaApp.Name)))
+						return
+					}
+
+					foundApp = *discoveredApp
+				}
+
+			} else {
+				foundApp = foundApps[0]
+			}
+
+			if len(foundApp.Name) > 0 {
+				if len(foundApp.Categories) > 0 {
+					category = foundApp.Categories[0]
+				}
+			} else {
+				relevantApps := findRelevantOpenAIAppsForCategory(appname1.(string))
+				log.Println()
+				selectedAppIndex := 0
+				authHeader := "Bearer " + user.ApiKey
+				for _, foundApp := range relevantApps {
+					//log.Printf("[INFO] Discovered App: %s. Check whether it exists and try to run action in the background", foundApp.Name)
+
+					// Send to function to validate if the app exists or not
+					// Try to find an action for it as well
+
+					go expandShuffleApps(authHeader, foundApp, apps, user)
+
+					//break
+				}
+
+				//relevantApps = []shuffle.WorkflowApp{
+				//	shuffle.WorkflowApp{
+				//		Name: foundApp[0].Name,
+				//	},
+				//}
+
+				// Using the first one to find how to run it as a HTTP request
+				// "Fill in the following HTTP information with the API of 'Appname' based on the following information: 'CTA from user'"
+				if len(relevantApps) > 0 {
+					httpOutput, err = findHTTPrequestInformation(inputQuery, relevantApps[selectedAppIndex].Name)
+					if err != nil {
+						log.Printf("[ERROR] Failed to find HTTP request information (1): %s", err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false}`))
+						return
+					}
+
+					log.Printf("[INFO] Found HTTP request information (1) for app %s: %#v", relevantApps[0].Name, httpOutput)
+					authMessage := fmt.Sprintf(`{"success": false, "reason": "API for %s requires auth, but it wasn't supplied. As %s is not fully supported by Shuffle yet, Authentication saving for it isn't available yet. Sample curl command:\n\n%s"}`, relevantApps[0].Name, relevantApps[0].Name, strings.Replace(httpOutput.CurlCommand, "\"", "\\'", -1))
+
+					if strings.Contains(strings.ToLower(httpOutput.URL), "api_key") || strings.Contains(strings.ToLower(httpOutput.Headers), "api_key") {
+						if httpOutput.Apikey != "" && httpOutput.Apikey != "API_KEY" {
+							httpOutput.URL = strings.ReplaceAll(httpOutput.URL, "API_KEY", httpOutput.Apikey)
+							httpOutput.URL = strings.ReplaceAll(httpOutput.URL, "APIKEY", httpOutput.Apikey)
+							httpOutput.URL = strings.ReplaceAll(httpOutput.URL, "api_key", httpOutput.Apikey)
+							httpOutput.Headers = strings.ReplaceAll(httpOutput.Headers, "API_KEY", httpOutput.Apikey)
+							httpOutput.Headers = strings.ReplaceAll(httpOutput.Headers, "APIKEY", httpOutput.Apikey)
+							httpOutput.Headers = strings.ReplaceAll(httpOutput.Headers, "api_key", httpOutput.Apikey)
+						} else {
+							log.Printf("[INFO] API for %s requires auth (2), but we don't have it. Returning error: %s", relevantApps[0].Name, err)
+
+							if !strings.HasPrefix(outputFormat, "action") {
+								resp.WriteHeader(500)
+								resp.Write([]byte(fmt.Sprintf(authMessage)))
+								return
+							}
+						}
+					} else if httpOutput.Oauth2Auth {
+						log.Printf("[INFO] API for %s requires Oauth2 auth (3), but we don't have it. Returning error: %s", relevantApps[0].Name, err)
+
+						if !strings.HasPrefix(outputFormat, "action") {
+							resp.WriteHeader(500)
+							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "API for '%s' uses Oauth2, which is not supported yet without a proper app.\n\nSample curl command: \n\n%s"}`, appname, httpOutput.CurlCommand)))
+							return
+						}
+					}
+
+					/*
+						if httpOutput.RequiresAuthentication == true {
+							log.Printf("[INFO] API for %s requires auth (1), but we don't have it. Returning error: %s", relevantApps[0].Name, err)
+							resp.WriteHeader(500)
+							resp.Write([]byte(fmt.Sprintf(authMessage)))
+							return
+						}
+					*/
+
+					// Translate the data into the HTTP app
+					originalAppname = appname
+					appname = "HTTP"
+					appname1 = "HTTP"
+					category = ""
+					actionName = strings.ToUpper(httpOutput.Method)
+
+					// Marshal output and overwrite to try to ONLY use the parsed command
+					// to set the full HTTP output
+					jsonoutput, err := json.Marshal(httpOutput)
+					if err == nil {
+						inputQuery += "\n\n" + string(jsonoutput)
+					}
+
+				}
+			}
+
+			log.Println()
+		}
+
+	}
+
+	category1, ok := output["category"]
+	if ok {
+		category = category1.(string)
+	} else {
+		if appok && appname1.(string) != "" {
+			category = appname1.(string)
+		}
+	}
+
+	if appok && appname1.(string) != "" && len(appname) == 0 {
+		appname = appname1.(string)
+	}
+
+	//log.Printf("[INFO] Running with app '%s' and category '%s'", appname, category)
+
+	// Hardcoded for now. Appname should not be equal to category (farther down)
+	if appok && len(appname1.(string)) > 0 && appname1.(string) != category {
+		log.Printf("[INFO] Appname specified in runActionAI: %s", appname1)
+		appname = appname1.(string)
+	} else {
+		fields, ok := output["fields"]
+		if ok {
+			// Check if appname is specified in fields
+			fieldsMap, ok := fields.(map[string]interface{})
+			if ok {
+				appname1, appok := fieldsMap["appname"]
+				appname2, platformok := fieldsMap["platform"]
+				if appok {
+					log.Printf("[INFO] Appname specified in runActionAI (3): %s", appname1)
+					appname = appname1.(string)
+					if len(category) == 0 {
+						category = appname
+					}
+				} else if platformok {
+					log.Printf("[INFO] Appname specified in runActionAI (2): %s", appname2)
+					appname1 = appname2
+					appname = appname2.(string)
+					if len(category) == 0 {
+						category = appname
+					}
+				}
+			}
+		}
+	}
+
+	// Check if appname is a category
+	if len(appname) > 0 {
+		//log.Printf("[INFO] Checking if appname '%s' is a category", appname)
+		appnameLower := strings.ToLower(appname)
+		for _, innercategory := range appCategories {
+			if strings.ToLower(innercategory.Name) == appnameLower {
+				category = innercategory.Name
+				appname1 = nil
+				appname = ""
+				break
+			}
+		}
+	}
+
+	if len(category) == 0 && category1 != nil {
+		category = strings.ToLower(category1.(string))
+	}
+
+	actionLabel := ""
+	if len(appname) > 0 {
+		// Pass :)
+	} else if appname1 == nil || len(appname1.(string)) == 0 {
+		// Should find the category and find active apps matching it
+		for _, app := range apps {
+			if app.Name == "Shuffle" || strings.ToLower(app.Name) == "email" {
+				continue
+			}
+
+			// appnamesplit should match
+			if strings.Contains(strings.ToLower(strings.Replace(inputQuery, "_", " ", -1)), strings.ToLower(strings.Replace(app.Name, "_", " ", -1))) {
+				log.Printf("[INFO] Found app '%s' in input query '%s'", app.Name, inputQuery)
+				appname = app.Name
+				foundApp = app
+				break
+			}
+		}
+
+		if len(appname) == 0 {
+			matchingApps := shuffle.FindMatchingCategoryApps(category, apps, &org)
+
+			if len(matchingApps) > 0 {
+				appname = matchingApps[0].Name
+			} else {
+				log.Printf("[ERROR] No matching apps found in the org for category '%s' and action label '%s'", category, actionLabel)
+
+				googleQuery := fmt.Sprintf(inputQuery)
+				if !strings.Contains(inputQuery, "API") {
+					googleQuery += "API for " + inputQuery
+				}
+
+				googleResp, err := RunGoogleSearch(ctx, googleQuery)
+				if err != nil {
+					log.Printf("[ERROR] Failed to run google search: %s", err)
+				}
+
+				_ = googleResp
+
+				resp.WriteHeader(400)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No matching apps found. Be more specific about what app to use, or what you want to do."}`)))
+				return
+			}
+		}
+	} else {
+		if len(appname) == 0 {
+			appname = appname1.(string)
+		}
+	}
+
+	appname = strings.Replace(appname, "_", " ", -1)
+	log.Printf("[INFO] Using app '%s' for action '%s' (1)", appname, actionName)
+
+	actionLabel1, ok := output["action"]
+	if !ok && len(actionName) == 0 {
+		actionLabel1, ok = output["action_label"]
+
+		if !ok {
+			// Should search for it
+
+			log.Printf("[ERROR] No actionLabel found in runActionAI for your input with app %s and category %s. Trying to find the action that matches the best anyway", appname, category)
+
+			// Should run Action search in the correct app
+			if len(appname) > 0 && foundApp.ID == "" {
+				foundApps, err := shuffle.FindWorkflowAppByName(ctx, appname)
+				if err != nil {
+					log.Printf("[ERROR] Failed to find app by name in runActionAI: %s", err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s' in category '%s'"}`, appname, category)))
+					return
+				}
+
+				if len(foundApps) == 0 {
+
+					// Use Algolia to find the app
+					algoliaApp, err := shuffle.HandleAlgoliaAppSearch(ctx, appname)
+					if err != nil || algoliaApp.ObjectID == "" {
+						log.Printf("[ERROR] Failed to find app by name %s in runActionAI: %s", appname, err)
+						resp.WriteHeader(400)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s' in category '%s' (2)"}`, appname, category)))
+						return
+					}
+
+					log.Printf("[INFO] Found app by name in Algolia (3): %s (%s)", algoliaApp.Name, algoliaApp.ObjectID)
+					// Get actual app based on objectID
+
+					// Get the app
+					discoveredApp, err := shuffle.GetApp(ctx, algoliaApp.ObjectID, user, false)
+					if err != nil {
+						log.Printf("[ERROR] Failed to get app in runActionAI for ID app %s (%s) (2): %s", algoliaApp.Name, algoliaApp.ObjectID, err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get app '%s' (2). Please be more specific."}`, algoliaApp.Name)))
+						return
+					}
+
+					foundApp = *discoveredApp
+
+				} else {
+					foundApp = foundApps[0]
+				}
+			}
+		} else {
+			actionLabel = actionLabel1.(string)
+		}
+
+		// Check foundApp if the category matches the category we're looking for
+		if category != "" && len(foundApp.Categories) > 0 && len(actionName) == 0 {
+			if strings.ToLower(foundApp.Categories[0]) != strings.ToLower(category) {
+				log.Printf("[ERROR] Found app by name, but category doesn't match: %s != %s", foundApp.Categories[0], category)
+				category = ""
+				actionLabel = ""
+			}
+		}
+
+		if len(actionName) == 0 {
+			log.Printf("[INFO] Finding action name for input '%s' in app '%s'", inputQuery, appname)
+			actionName, err = findActionByInput(inputQuery, actionLabel, foundApp)
+			if err != nil {
+				log.Printf("[ERROR] Failed to find action by input in runActionAI (1): %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to find action for app. Please be more specific."}`))
+				return
+			}
+		}
+
+		log.Printf("[INFO] Output in Action Name synonym for app %s: '%s'. If success: false, we ask directly to find it", foundApp.Name, actionName)
+		if strings.Contains(actionName, `{"success": "false"}`) {
+			/*
+				contentOutput, err := findHTTPendpoint(inputQuery, foundApp)
+				if err != nil {
+					log.Printf("[ERROR] Failed to find HTTP endpoint in runActionAI for App %s: %s", foundApp.Name, err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed to find relevant API for your query"}`))
+					return
+				}
+
+				log.Printf("[INFO] Output in HTTP endpoint synonym for app %s: %s. If false, we ask directly to find it", foundApp.Name, contentOutput)
+			*/
+
+			// FIXMe: Should check existing API for this url. Remove the start of it if it has http://
+
+			log.Printf("[ERROR] No matching action (1) found for app '%s' with label '%s' in runActionAI. Actionname: %#v", appname, actionLabel, actionName)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No matching action found. Please specify the app and action to use.", "action": "select_app"}`))
+			return
+		}
+
+		//log.Printf("[INFO] Found action by input in runActionAI: %s", actionName)
+
+		if len(actionName) == 0 {
+			log.Printf("[ERROR] No actionLabel found in runActionAI for your input with app %s and category '%s'", appname, category)
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "No matching action label found. Please try again with a different prompt. App: %s, category: %s"}`, appname, category)))
+			return
+		}
+	} else {
+		if ok {
+			actionLabel = actionLabel1.(string)
+		}
+	}
+
+	if len(actionName) == 0 {
+		log.Printf("[INFO] Found appname (1): %s (%s). Label: '%s'. Action: '%s'. Discovering action!", appname, foundApp.ID, actionLabel, actionName)
+	}
+
+	if actionName == "" && actionLabel1 != nil && len(actionLabel) == 0 {
+		actionLabel = strings.Replace(strings.ToLower(actionLabel1.(string)), " ", "_", -1)
+	}
+
+	if strings.ToLower(category) == "email" {
+		category = "communication"
+	}
+
+	// Check if appname is a category
+
+	if foundApp.ID == "" || foundApp.Name == "" {
+		for _, app := range apps {
+			if strings.Replace(app.Name, " ", "_", -1) == strings.Replace(appname, " ", "_", -1) {
+				foundApp = app
+				break
+			}
+		}
+
+		// 1. Search locally
+		// 2. Get from Algolia
+		foundApps, err := shuffle.FindWorkflowAppByName(ctx, appname)
+		if err != nil {
+			log.Printf("[ERROR] Failed to find app by name in runActionAI: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s' in category '%s' (3)"}`, appname, category)))
+			return
+		}
+
+		if len(foundApps) == 0 {
+			// Use Algolia to find the app
+			algoliaApp, err := shuffle.HandleAlgoliaAppSearch(ctx, appname)
+			if err != nil {
+				log.Printf("[ERROR] Failed to find app by name in runActionAI: %s", err)
+				resp.WriteHeader(400)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s' in category '%s' (4)"}`, appname, category)))
+				return
+			}
+
+			if len(algoliaApp.ObjectID) == 0 {
+				log.Printf("[ERROR] Failed to find app by name in Algolia (4): %s", err)
+
+				// Should try to search and build it out and make it into an HTTP app
+				relevantApps := findRelevantOpenAIAppsForCategory(appname)
+				log.Println()
+				selectedAppIndex := 0
+				authHeader := "Bearer " + user.ApiKey
+				for _, loopedApp := range relevantApps {
+					//log.Printf("[INFO] Discovered App: %s (2). Check whether it exists and try to run action in the background", loopedApp.Name)
+
+					// Send to function to validate if the app exists or not
+					// Try to find an action for it as well
+					go expandShuffleApps(authHeader, loopedApp, apps, user)
+				}
+
+				// Using the first one to find how to run it as a HTTP request
+				// "Fill in the following HTTP information with the API of 'Appname' based on the following information: 'CTA from user'"
+				if len(relevantApps) > 0 {
+					httpOutput, err = findHTTPrequestInformation(inputQuery, relevantApps[selectedAppIndex].Name)
+					if err != nil {
+						log.Printf("[ERROR] Failed to find HTTP request information (2): %s", err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(`{"success": false}`))
+						return
+					}
+
+					log.Printf("[INFO] Found HTTP request information (2) for app %s: %#v", relevantApps[0].Name, httpOutput)
+					authMessage := fmt.Sprintf(`{"success": false, "reason": "API for %s requires auth, but it wasn't supplied. As %s is not fully supported by Shuffle yet, Authentication saving for it isn't available yet. Sample curl command:\n\n%s"}`, relevantApps[0].Name, relevantApps[0].Name, httpOutput.CurlCommand)
+
+					if strings.Contains(strings.ToLower(httpOutput.URL), "api_key") || strings.Contains(strings.ToLower(httpOutput.Headers), "api_key") {
+						if httpOutput.Apikey != "" && httpOutput.Apikey != "API_KEY" {
+							httpOutput.URL = strings.ReplaceAll(httpOutput.URL, "API_KEY", httpOutput.Apikey)
+							httpOutput.URL = strings.ReplaceAll(httpOutput.URL, "APIKEY", httpOutput.Apikey)
+							httpOutput.URL = strings.ReplaceAll(httpOutput.URL, "api_key", httpOutput.Apikey)
+							httpOutput.Headers = strings.ReplaceAll(httpOutput.Headers, "API_KEY", httpOutput.Apikey)
+							httpOutput.Headers = strings.ReplaceAll(httpOutput.Headers, "APIKEY", httpOutput.Apikey)
+							httpOutput.Headers = strings.ReplaceAll(httpOutput.Headers, "api_key", httpOutput.Apikey)
+						} else {
+							log.Printf("[INFO] API for %s requires auth (2), but we didn't get a key. Returning error: %s", relevantApps[0].Name, err)
+
+							if !strings.HasPrefix(outputFormat, "action") {
+								resp.WriteHeader(500)
+								resp.Write([]byte(fmt.Sprintf(authMessage)))
+								return
+							}
+						}
+					} else if httpOutput.Oauth2Auth {
+						log.Printf("[INFO] API for %s requires Oauth2 auth (3), but we don't have it. Returning error: %s", relevantApps[0].Name, err)
+
+						if !strings.HasPrefix(outputFormat, "action") {
+							resp.WriteHeader(500)
+							resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "API for '%s' uses Oauth2, which is not supported yet without a proper app.\n\nSample curl command: \n\n%s"}`, appname, httpOutput.CurlCommand)))
+							return
+						}
+					}
+
+					/*
+						if httpOutput.RequiresAuthentication == true {
+							log.Printf("[INFO] API for %s requires auth (1), but we don't have it. Returning error: %s", relevantApps[0].Name, err)
+							resp.WriteHeader(500)
+							resp.Write([]byte(fmt.Sprintf(authMessage)))
+							return
+						}
+					*/
+
+					// Translate the data into the HTTP app
+					originalAppname = appname
+					appname = "HTTP"
+					appname1 = "HTTP"
+					category = ""
+					actionName = strings.ToUpper(httpOutput.Method)
+
+					// Marshal output and overwrite to try to ONLY use the parsed command
+					// to set the full HTTP output
+					jsonoutput, err := json.Marshal(httpOutput)
+					if err == nil {
+						inputQuery += "\n\n" + string(jsonoutput)
+					}
+
+					// Making sure to load the HTTP app
+					foundApps, err := shuffle.FindWorkflowAppByName(ctx, appname)
+					if err != nil {
+						log.Printf("[ERROR] Failed to find app by name (5): %s", err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s' in category '%s' (4)"}`, appname, category)))
+						return
+					}
+
+					if len(foundApps) == 0 {
+						log.Printf("[ERROR] Failed to find app by name (6): %s", err)
+						resp.WriteHeader(500)
+						resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s' in category '%s' (6)"}`, appname, category)))
+						return
+					}
+
+					foundApp = foundApps[0]
+				} else {
+					resp.WriteHeader(400)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to load app for name '%s' in category '%s' (5)"}`, appname, category)))
+					return
+				}
+			} else {
+				log.Printf("[INFO] Found app by name in Algolia (4): %s (%s)", algoliaApp.Name, algoliaApp.ObjectID)
+				// Get actual app based on objectID
+
+				// Get the app
+				discoveredApp, err := shuffle.GetApp(ctx, algoliaApp.ObjectID, user, false)
+				if err != nil {
+					log.Printf("[ERROR] Failed to get app in runActionAI for ID app %s (%s) (2): %s", algoliaApp.Name, algoliaApp.ObjectID, err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get app '%s' (3). Please be more specific."}`, algoliaApp.Name)))
+					return
+				}
+
+				foundApp = *discoveredApp
+			}
+
+		} else {
+			foundApp = foundApps[0]
+		}
+	}
+
+	if len(actionName) == 0 {
+		log.Printf("[INFO] Found appname (2): %s. Label: '%s'. Action: '%s'. Discovering action!", appname, actionLabel, actionName)
+	}
+
+	// Check foundApp if the category matches the category we're looking for
+	if category != "" && len(foundApp.Categories) > 0 && len(actionName) == 0 {
+		if strings.ToLower(foundApp.Categories[0]) != strings.ToLower(category) {
+			log.Printf("[ERROR] Found app by name, but category doesn't match: %s != %s", foundApp.Categories[0], category)
+			category = ""
+			actionLabel = ""
+		}
+	}
+
+	if len(actionName) == 0 {
+		log.Printf("[INFO] Found appname (3): %s. Label: '%s'. Action: '%s'. Discovering action!", appname, actionLabel, actionName)
+	}
+
+	// Check for the right action label
+	selectedAction := shuffle.WorkflowAppAction{}
+	newActionName := shuffle.GetCorrectActionName(strings.ToLower(strings.Replace(actionName, " ", "_", -1)))
+	for _, action := range foundApp.Actions {
+		parsedName := strings.ToLower(strings.Replace(action.Name, " ", "_", -1))
+		parsedName = shuffle.GetCorrectActionName(parsedName)
+
+		if len(newActionName) > 0 && parsedName == newActionName {
+			selectedAction = action
+			break
+		}
+
+		if len(action.CategoryLabel) == 0 {
+			continue
+		}
+
+		if strings.Replace(strings.ToLower(action.CategoryLabel[0]), " ", "_", -1) == actionLabel {
+			log.Printf("[INFO] Found action in runActionAI (1) with action %s and label %s", action.Name, action.Label)
+			selectedAction = action
+			break
+		}
+	}
+
+	if len(selectedAction.Name) == 0 {
+		log.Printf("[INFO] Found appname (4): %s. Label: '%s'. Action: '%s'. Discovering action!", appname, actionLabel, actionName)
+	}
+
+	if len(selectedAction.Name) == 0 {
+		// Use OpenAI to find the right one based on name matches
+		log.Printf("[INFO] Have existing action name: '%s', but no action found. Trying to find the right one with OpenAI.", actionName)
+
+		if input.OutputFormat == "action_parameters" {
+			log.Printf("[ERROR] Failed to find action with name '%s' and label '%s' in app '%s' (1). Critical!", actionName, actionLabel, appname)
+		}
+
+		// Do automatic name translation
+		// Cases: alert = incident = case = issue = ticket
+		// Track original names
+		contentOutput, err := findActionByInput(inputQuery, actionLabel, foundApp)
+		if err != nil {
+			log.Printf("[ERROR] Failed to find action by input in runActionAI (2): %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Couldn't find the action you were looking for. Please try with a more specific prompt."}`))
+			return
+		}
+
+		log.Printf("[INFO] Output in action synonym: %s", contentOutput)
+		if strings.Contains(contentOutput, `{"success": "false"}`) {
+			log.Printf("[ERROR] No matching action (2) found for app '%s' with label '%s' in runActionAI", foundApp.Name, actionLabel)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No matching action found. Please try again with a more specific prompt (1)."}`))
+			return
+		}
+
+		log.Printf("[INFO] Found action in runActionAI (2). Action '%s' and label '%s'", contentOutput, actionLabel)
+		newActionName := shuffle.GetCorrectActionName(strings.ToLower(strings.Replace(contentOutput, " ", "_", -1)))
+		for _, action := range foundApp.Actions {
+			parsedName := strings.ToLower(strings.Replace(action.Name, " ", "_", -1))
+			parsedName = shuffle.GetCorrectActionName(parsedName)
+
+			log.Printf("'%s' with '%s'", newActionName, parsedName)
+			if len(newActionName) > 0 && parsedName == newActionName {
+				selectedAction = action
+				break
+			}
+
+			if len(action.CategoryLabel) == 0 {
+				continue
+			}
+
+			if len(actionLabel) > 0 && strings.Replace(strings.ToLower(action.CategoryLabel[0]), " ", "_", -1) == actionLabel {
+				log.Printf("[INFO] Found action in runActionAI (1) with action %s and label %s", action.Name, action.Label)
+				selectedAction = action
+				break
+			}
+		}
+
+		if len(selectedAction.Name) == 0 {
+			log.Printf("[ERROR] No matching action label (3) found for app '%s' with label '%s' in runActionAI (2)", foundApp.Name, actionLabel)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No matching action found. Please try again with a more specific prompt (2)."}`))
+			return
+		}
+	}
+
+	if len(input.Parameters) > 0 {
+		selectedAction.Parameters = input.Parameters
+	}
+
+	input.Query = inputQuery
+	selectedAction, err = getSelectedAppParameters(ctx, user, selectedAction, foundApp, appname, category, outputFormat, httpOutput, input)
+	if err != nil {
+		// Check if reason inside
+		errString := err.Error()
+		if strings.Contains(errString, "\"reason\"") {
+			resp.WriteHeader(400)
+			resp.Write([]byte(errString))
+			return
+		}
+
+		log.Printf("[ERROR] Failed to get selected app parameters in runActionAI: %s", err)
+
+		// Sanitize err to work in json
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, errString)))
+		return
+	}
+
+	if strings.HasPrefix(outputFormat, "action") {
+		log.Printf("[INFO] Skipping execution and returning action: %s", selectedAction.Name)
+		//selectedAction.LargeImage = foundApp.LargeImage
+		selectedAction.LargeImage = ""
+		selectedAction.AppName = foundApp.Name
+		selectedAction.AppID = foundApp.ID
+		selectedAction.Environment = "cloud"
+
+		if len(actionLabel) > 0 {
+			selectedAction.Label = actionLabel
+		}
+
+		if len(selectedAction.Label) == 0 {
+			selectedAction.Label = fmt.Sprintf("%s_%s", foundApp.Name, selectedAction.Name)
+		}
+
+		/*
+			for _, param := range selectedAction.Parameters {
+				log.Printf("[INFO] PRE RETURN: %s: '%s'", param.Name, param.Value)
+			}
+		*/
+
+		// Marshal action and send it
+		returnJSON, err := json.Marshal(selectedAction)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal selectedAction: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to decode action. Please try again"}`)))
+			return
+		}
+
+		resp.WriteHeader(200)
+		resp.Write([]byte(returnJSON))
+		return
+	}
+
+	cnt := 1
+	selfCorrectAttempts := 3
+	additionalInfo := ""
+	outputString := ""
+	outputAction := shuffle.Action{}
+
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("SHUFFLE_GCEPROJECT")) > 0 && len(os.Getenv("SHUFFLE_GCEPROJECT_LOCATION")) > 0 {
+		baseUrl = fmt.Sprintf("https://%s.%s.r.appspot.com", os.Getenv("SHUFFLE_GCEPROJECT"), os.Getenv("SHUFFLE_GCEPROJECT_LOCATION"))
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	for {
+		if cnt >= selfCorrectAttempts {
+			// Should send error reply
+			// And should never happen
+			log.Printf("[ERROR] Failed to match output data for %s", appname)
+			break
+		}
+
+		log.Printf("[INFO] Running attempt %d for app %s with action %s", cnt, appname, selectedAction.Name)
+
+		newAction := shuffle.Action{
+			Name:              selectedAction.Name,
+			Label:             selectedAction.Label,
+			Parameters:        selectedAction.Parameters,
+			InvalidParameters: selectedAction.InvalidParameters,
+			AppName:           foundApp.Name,
+			AppVersion:        foundApp.AppVersion,
+			AppID:             foundApp.ID,
+			Environment:       "cloud",
+			AuthenticationId:  selectedAction.AuthenticationId,
+		}
+
+		sendBody, err := json.Marshal(newAction)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal action in runActionAI: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to marshal action in runActionAI"}`))
+			return
+		}
+
+		// Gut auth from request auth header and forward with the same one
+		parsedUrl := fmt.Sprintf("%s/api/v1/apps/%s/run", baseUrl, foundApp.ID)
+
+		// Could've used session token too, tho
+		authHeader := "Bearer " + user.ApiKey
+		returnValue, err := sendRequestToSelf(parsedUrl, authHeader, sendBody)
+		if err != nil {
+			if len(returnValue) > 0 {
+				log.Printf("[ERROR] Response from self: %s", returnValue)
+				resp.WriteHeader(400)
+				resp.Write([]byte(returnValue))
+				return
+			}
+
+			log.Printf("[ERROR] Failed to send run request to self: %s", err)
+			if strings.Contains(fmt.Sprintf("%s", err), "Failed to run") {
+				resp.WriteHeader(400)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to run app %s with action %s. Please be more specific and try again."}`, newAction.AppName, newAction.Name)))
+				return
+			}
+
+			resp.WriteHeader(400)
+			//resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			resp.Write([]byte(err.Error()))
+			return
+		}
+
+		// Find result field in json body from returnValue
+		outputString, outputAction, err, additionalInfo = findNextAction(newAction, returnValue, additionalInfo, inputQuery, originalAppname)
+		_ = additionalInfo
+		if err != nil {
+			// Check for auth and send auth in that case
+
+			if strings.Contains(fmt.Sprintf("%s", err), "re-authenticate") {
+				outputResult := fmt.Sprintf("Found existing auth for app %s in category %s, but failed to use it. Please re-authenticate below.", strings.Replace(strings.Replace(foundApp.Name, "_", " ", -1), "\"", "", -1), strings.Replace(strings.Replace(category, "_", " ", -1), "\"", "", -1))
+				actionOutput := "app_authentication"
+				if appname == "HTTP" {
+					outputResult = fmt.Sprintf("Your API-key is invalid for the app '%s'. Please add a valid API-key to the prompt, and specify the type of auth to use.", originalAppname)
+					actionOutput = ""
+				}
+
+				returnStruct := appAuthStruct{
+					Success: false,
+					Reason:  outputResult,
+					Action:  actionOutput,
+					Apps: []shuffle.AppMini{
+						{
+							ActionName:             selectedAction.Name,
+							Category:               category,
+							Id:                     foundApp.ID,
+							Name:                   foundApp.Name,
+							Version:                foundApp.AppVersion,
+							LargeImage:             foundApp.LargeImage,
+							AuthenticationRequired: true,
+							Authentication:         foundApp.Authentication,
+						},
+					},
+				}
+
+				returnJSON, err := json.Marshal(returnStruct)
+				if err == nil {
+					resp.Write(returnJSON)
+					resp.WriteHeader(400)
+					return
+				} else {
+					log.Printf("[ERROR] Failed to marshal return struct: %s", err)
+				}
+			}
+
+			if len(err.Error()) == 0 || err == nil {
+				err = errors.New(fmt.Sprintf("Failed to run app '%s' with action '%s' in category '%s'. Please try again with a different query.", strings.Replace(strings.Replace(foundApp.Name, "_", " ", -1), "\"", "", -1), strings.Replace(strings.Replace(selectedAction.Name, "_", " ", -1), "\"", "", -1), strings.Replace(strings.Replace(category, "_", " ", -1), "\"", "", -1)))
+			}
+
+			log.Printf("[ERROR] Failed to find next action: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+			return
+		}
+
+		// Means success :)
+		if len(outputString) > 0 {
+			resp.WriteHeader(200)
+			resp.Write([]byte(outputString))
+			return
+		}
+
+		selectedAction.Name = outputAction.Name
+		selectedAction.Label = outputAction.Label
+		selectedAction.Parameters = outputAction.Parameters
+		selectedAction.InvalidParameters = outputAction.InvalidParameters
+		log.Printf("[INFO] Have %d invalid parameters and %d valid ones. Trying again", len(selectedAction.InvalidParameters), len(selectedAction.Parameters))
+
+		cnt += 1
+	}
+
+	/*
+
+
+
+
+
+
+
+		Below here are test functions for OpenAPI3 interactions and searching
+
+
+
+
+
+
+
+
+	*/
+
+	// Check if we have all required fields
+	//for _, field := range requiredFields {
+	//	if _, ok := body[field]; !ok {
+	//		log.Printf("[ERROR] Missing required field '%s' in runActionAI", field)
+
+	/*
+		// Check the JSON for the action with example response from openapi
+		parsedApi, err := shuffle.GetOpenApiDatastore(ctx, foundApp.ID)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get openapi data in runActionAI: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to get openapi data in runActionAI"}`))
+			return
+		}
+
+		// Unmarshal parsedApi.Body into swagger
+			swagger := &openapi3.Swagger{}
+			err = json.Unmarshal([]byte(parsedApi.Body), swagger)
+			if err != nil {
+				log.Printf("[WARNING] Failed to unmarshal openapi data in runActionAI: %s", err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to unmarshal openapi data in runActionAI"}`))
+				return
+			}
+
+			foundActionName := strings.ToLower(strings.Replace(selectedAction.Name, " ", "_", -1))
+			foundActionName = shuffle.GetCorrectActionName(foundActionName)
+
+			// Find the right action
+			var foundAction *openapi3.Operation
+			for _, urlItem := range swagger.Paths {
+				for _, operation := range urlItem.Operations() {
+					log.Printf("[INFO] Operation: %s - %s - %s", operation.OperationID, operation.Summary, foundActionName)
+
+					if (strings.Replace(strings.ToLower(operation.OperationID), " ", "_", -1) == foundActionName) || (strings.Replace(strings.ToLower(operation.Summary), " ", "_", -1) == foundActionName) {
+						foundAction = operation
+						break
+					}
+				}
+			}
+
+			if foundAction == nil {
+				log.Printf("[WARNING] Failed to find action %s in runActionAI", foundActionName)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Failed to find action in runActionAI"}`))
+				return
+			}
+
+			log.Printf("[INFO] Found action in runActionAI (3): %s", foundAction.OperationID)
+	*/
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
+

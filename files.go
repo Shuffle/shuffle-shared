@@ -736,7 +736,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 					// Handle file encryption if an encryption key is set
 
 					parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-					fileId, err = uploadFile(ctx, &file, parsedKey, contents)
+					fileId, err = UploadFile(ctx, &file, parsedKey, contents)
 					if err != nil {
 						log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
 						continue
@@ -1266,7 +1266,7 @@ func HandleEditFile(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Found multipart form data in the body itself - autocleanup ran.")
 	}
 
-	fileId, err = uploadFile(ctx, file, parsedKey, body)
+	fileId, err = UploadFile(ctx, file, parsedKey, body)
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file with ID %s: %s", fileId, err)
 		resp.WriteHeader(500)
@@ -1434,7 +1434,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	// Handle file encryption if an encryption key is set
 
 	parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-	fileId, err = uploadFile(ctx, file, parsedKey, contents)
+	fileId, err = UploadFile(ctx, file, parsedKey, contents)
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
 		resp.WriteHeader(500)
@@ -1459,7 +1459,7 @@ func HandleUploadFile(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(fmt.Sprintf(`{"success": true, "file_id": "%s"}`, fileId)))
 }
 
-func uploadFile(ctx context.Context, file *File, encryptionKey string, contents []byte) (string, error) {
+func UploadFile(ctx context.Context, file *File, encryptionKey string, contents []byte) (string, error) {
 	md5 := Md5sum(contents)
 	sha256Sum := sha256.Sum256(contents)
 
@@ -1961,7 +1961,7 @@ func HandleDownloadRemoteFiles(resp http.ResponseWriter, request *http.Request) 
 		// Handle file encryption if an encryption key is set
 
 		parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-		fileId, err = uploadFile(ctx, &file, parsedKey, contents)
+		fileId, err = UploadFile(ctx, &file, parsedKey, contents)
 		if err != nil {
 			log.Printf("[ERROR] Failed to upload file %s: %s", fileId, err)
 			continue
