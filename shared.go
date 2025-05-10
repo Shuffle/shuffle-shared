@@ -9502,6 +9502,28 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
+	_, err = GetWorkflow(ctx, parentWorkflowId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting parent workflow %s: %s", parentWorkflowId, err)
+		return nil, err
+	}
+
+
+	// before doing anything, verify if the parent workflow is a child workflow itself
+	if len(workflow.ParentWorkflowId) > 0 {
+		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere.", workflow.Name, workflow.ID)
+		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
+		workflow.SuborgDistribution = []string{}
+
+		err = SetWorkflow(ctx, workflow, workflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting workflow %s while overwriting during SubOrgDistribution error: %s", workflow.ID, err)
+			return nil, err
+		}
+
+		return nil, errors.New("Parent workflow is a child workflow itself")
+	}
+
 	// Returns the existing one in case it has been made in the past
 	// This is to ensure old nodes still exist.
 	foundWorkflow, err := GetWorkflow(ctx, newId)
