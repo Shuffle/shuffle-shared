@@ -4299,3 +4299,22 @@ type AgentOutput struct {
 	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
 	Memory string `json:"memory,omitempty" datastore:"memory"`
 }
+
+type HTTPWrapper struct {
+	ActionName             string `json:"action_name"`
+	URL                    string `json:"url"`
+	Headers                string `json:"headers"`
+	Body                   string `json:"body"`
+	Method                 string `json:"method"`
+	RequiresAuthentication bool   `json:"requires_authentication"`
+	Oauth2Auth             bool   `json:"oauth2_auth"`
+	CurlCommand            string `json:"curl_command"`
+	Apikey                 string `json:"apikey"`
+}
+
+type appAuthStruct struct {
+	Success bool              `json:"success"`
+	Reason  string            `json:"reason"`
+	Action  string            `json:"action"`
+	Apps    []AppMini `json:"apps"`
+}
