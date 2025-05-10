@@ -634,6 +634,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return errors.New("No org ID provided")
 	}
 
+	// Since we use a static workflow name, this should be effective.
+	if strings.Contains(title, "Ops Dashboard Workflow") {
+		log.Printf("[INFO] Skipping create notification for health check workflow")
+		return errors.New("Health check workflow detected")
+	}
+
 	if project.Environment == "" {
 
 		auth := os.Getenv("AUTH")
