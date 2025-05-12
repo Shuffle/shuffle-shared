@@ -6037,10 +6037,9 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 
 			if !found {
 				//log.Printf("[WARNING] Child workflow of '%s' (%s) for parent org %s may not be distributed to %s yet. Creating or re-finding...", parentWorkflow.Name, parentWorkflow.ID, parentWorkflow.OrgId, suborgId)
-
 				childWorkflow, err := GenerateWorkflowFromParent(ctx, parentWorkflow, parentWorkflow.OrgId, suborgId)
 				if err != nil {
-					log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+					log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s [diffWorkflowWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 				} else {
 					//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
 					childWorkflows = append(childWorkflows, *childWorkflow)
@@ -6127,7 +6126,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			}
 
 			if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
-				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID")
+				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID", parentSubflowPointedId)
 				// Point to same
 				trigger.Parameters[paramIndex].Value = childWorkflow.ID
 
@@ -6218,7 +6217,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
 			if err != nil {
-				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 			} else {
 
 				//diffWorkflows(*newChildworkflow, parentWorkflow, update)
@@ -9507,7 +9506,8 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
 	// before doing anything, verify if the parent workflow is a child workflow itself
-	if len(workflow.ParentWorkflowId) > 0 {
+	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != parentWorkflowId {
+		log.Printf("[ERROR] Tried to create new workflow with ID %s (%s) from parent workflow %s (%s) but the parent workflow is a child workflow itself. This is not allowed.", newId, workflow.Name, workflow.ParentWorkflowId, workflow.Name)
 		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere from parent org (%s) to child org (%s)", workflow.ID, workflow.Name, parentOrgId, subOrgId)
 		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
 		workflow.SuborgDistribution = []string{}
