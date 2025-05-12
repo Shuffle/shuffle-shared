@@ -6202,6 +6202,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			if !ArrayContains(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId) {
 				for _, parentTenantId := range parentWorkflow.SuborgDistribution {
 					if !ArrayContains(parentSubflowPointed.SuborgDistribution, parentTenantId) {
+						log.Printf("[DEBUG] Adding org %s to subflow %s (%s)", parentTenantId, parentSubflowPointed.Name, parentSubflowPointed.ID)
 						parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, parentTenantId)
 					}
 				}
@@ -9507,7 +9508,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 	// before doing anything, verify if the parent workflow is a child workflow itself
 	if len(workflow.ParentWorkflowId) > 0 {
-		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere.", workflow.Name, workflow.ID)
+		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere from parent org (%s) to child org (%s)", workflow.ID, workflow.Name, parentOrgId, subOrgId)
 		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
 		workflow.SuborgDistribution = []string{}
 
@@ -9517,7 +9518,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 			return nil, err
 		}
 
-		return nil, errors.New("Parent workflow is a child workflow itself")
+		return &Workflow{}, errors.New("Parent workflow is a child workflow itself")
 	}
 
 	// Returns the existing one in case it has been made in the past
