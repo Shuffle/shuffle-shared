@@ -31,7 +31,7 @@ import (
 
 //var model = "gpt-4-turbo-preview"
 //var model = "gpt-4o-mini"
-var model = "gpt-4o"
+var model = "o4-mini"
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
 	//log.Printf("\n\n[DEBUG] Getting KMS cache for key %s\n\n", key)
@@ -583,7 +583,10 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 
 			action, additionalInfo, err := RunSelfCorrectingRequest(action, status, additionalInfo, string(body), useApp, inputdata)
 			if err != nil {
-				log.Printf("[ERROR] Error running self-correcting request: %s", err)
+				if !strings.Contains(err.Error(), "missing_fields") { 
+					log.Printf("[ERROR] Error running self-correcting request: %s", err)
+				}
+
 				return "", action, err, additionalInfo
 			}
 
@@ -716,7 +719,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	   - No comments. Must be valid JSON.
 
 	4. User Error Handling:
-	   - IF we are missing a value for the user to input, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. ONLY do this if the field(s) are REQUIRED.
+	   - IF we are missing a value for the user to input, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. ONLY do this if the field(s) are REQUIRED, and make the fields human readable.
 
 	`)
 
@@ -752,7 +755,6 @@ Input JSON Payload:
 						Content: inputData,
 					},
 				},
-				Temperature: 0.9,
 			},
 		)
 
@@ -928,7 +930,6 @@ func RunAiQuery(systemMessage, userMessage string) (string, error) {
 	chatCompletion := openai.ChatCompletionRequest{
 		Model: model,
 		Messages: []openai.ChatCompletionMessage{},
-		Temperature: 0.8, // A tiny bit of creativity 
 		MaxTokens:   maxTokens,
 	}
 
@@ -1777,7 +1778,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 		if standalone {
 			newApp, err := GetSingulApp("", input.AppId) 
 			if err == nil {
-				foundApp = newApp
+				foundApp = *newApp
 			}
 		} else {
 			newApp, err := GetApp(ctx, input.AppId, user, false)
@@ -1821,7 +1822,6 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 						Content: inputQuery,
 					},
 				},
-				Temperature: 0.4,
 			},
 		)
 
@@ -1939,7 +1939,13 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 					// Get actual app based on objectID
 
 					// Get the app
-					discoveredApp, err := GetApp(ctx, algoliaApp.ObjectID, user, false)
+					discoveredApp := &WorkflowApp{}
+					if standalone { 
+						discoveredApp, err = GetSingulApp("", algoliaApp.ObjectID)
+					} else {
+						discoveredApp, err = GetApp(ctx, algoliaApp.ObjectID, user, false)
+					}
+
 					if err != nil {
 						log.Printf("[ERROR] Failed to get app in runActionAI for ID app %s (%s) (2): %s", algoliaApp.Name, algoliaApp.ObjectID, err)
 						respBody = []byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get app '%s' (1). Please be more specific."}`, algoliaApp.Name))
@@ -2940,14 +2946,13 @@ func findRelevantOutput(inputQuery string, org Org, user User) string {
 		openaiResp2, err := openaiClient.CreateChatCompletion(
 			context.Background(),
 			openai.ChatCompletionRequest{
-				Model: "gpt-3.5-turbo",
+				Model: model,
 				Messages: []openai.ChatCompletionMessage{
 					{
 						Role:    openai.ChatMessageRoleUser,
 						Content: userMessage,
 					},
 				},
-				Temperature: 0.4,
 			},
 		)
 
@@ -3012,7 +3017,6 @@ func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, 
 						Content: userMessage,
 					},
 				},
-				Temperature: 0.5,
 			},
 		)
 
@@ -3071,7 +3075,6 @@ func findRelevantOpenAIAppsForCategory(category string) []WorkflowApp {
 						Content: userMessage,
 					},
 				},
-				Temperature: 0.4,
 			},
 		)
 
@@ -3382,7 +3385,6 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 						Content: parsedNames,
 					},
 				},
-				Temperature: 0.5,
 			},
 		)
 
@@ -3595,11 +3597,6 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 			})
 		}
 
-		// FIXME: Is this consequential?
-		if len(authenticationFields) > 0 {
-			log.Printf("[INFO] Authentication fields for app %s: %s", foundApp.Name, strings.Join(authenticationFields, ", "))
-		}
-
 		if len(requiredFields) > 0 {
 			// "For the app 'Gmail', fill in the following fields in JSON format based on our input. If a specific input is not supplied, make a guess. If you are unsure, leave it blank."
 			formattedFields := `{`
@@ -3742,7 +3739,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 		// FIXME: May cause weird bugs where same should be used multiple times
 		inputQuery = fixInputQuery(inputQuery, selectedAction)
 		outputBody = MatchBodyWithInputdata(inputQuery, appname, selectedAction.Name, sampleBody, newAppContext)
-		//log.Printf("[INFO] Found output body to match input data (required fields): %s", outputBody)
+		log.Printf("[INFO] Found output body to match input data (required fields): %s", outputBody)
 
 		// FIXME: Check if in the body it has skipped using e.g. ".body" and automatically fix it.
 		if len(outputBody) > 0 {
@@ -3812,7 +3809,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 	}
 
 	if len(outputBody) > 0 && bodyIndex >= 0 {
-		log.Printf("\n\n\n[INFO] Found matching body: %s\n\n", outputBody)
+		log.Printf("\n\n\n[INFO] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
 		selectedAction.Parameters[bodyIndex].Value = outputBody
 	}
 
@@ -3856,7 +3853,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 	// Don't run this part for shuffle tools specific stuff :3
 	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
-		log.Printf("[ERROR] Failed to get workflows to compare. Not fatal, and will continue without: %s", err)
+		//log.Printf("[ERROR] Failed to get workflows to compare. Not fatal, and will continue without: %s", err)
 	}
 
 	currentWorkflow := Workflow{}
@@ -4207,7 +4204,6 @@ func MatchRequiredFieldsWithInputdata(inputdata, appname, inputAction, body stri
 						Content: body,
 					},
 				},
-				Temperature: 0.4,
 			},
 		)
 
@@ -4428,7 +4424,7 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	systemMessage := fmt.Sprintf("If the User Instruction tells you what to do, do exactly what it tells you. Match the JSON body exactly and fill in relevant data from the message '%s' only IF it looks like JSON. Match output format exactly for '%s' doing '%s'. Output valid JSON if the input looks like JSON, otherwise follow the format. Do NOT remove JSON fields - instead follow the format, or add to it. Don't tell us to provide more information. If it does not look like JSON, don't force it to be JSON. DO NOT use the example provided in your response. It is strictly just an example and has not much to do with what the user would want. If you see anything starting with $ in the example, just assume it to be a variable and needs to be ALWAYS populated by you like a template based on the user provided details. User Instruction to follow exactly: '%s'", inputdata, strings.Replace(appname, "_", " ", -1), actionName, inputdata)
 	log.Printf("[DEBUG] System: %s", systemMessage)
 
-	assistantInfo := fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '$label.key.subkey' if it has no list, else '$label.key.#.subkey'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get $shuffle_tools_1.name.lastname This is the example body you should modify '%s': \n%s\n\nSources:`, actionName, body)
+	assistantInfo := fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. This is the example body you should add to or modify '%s': \n%s\n\nSources:`, actionName, body)
 
 	//assistantInfo := "Use JSON keys from the example responses below as additional context, and add values from it:"
 	if len(appContext) > 0 {
@@ -4452,7 +4448,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 			context.Background(),
 			openai.ChatCompletionRequest{
 				Model: model,
-				//Model: "gpt-4o",
 				Messages: []openai.ChatCompletionMessage{
 					{
 						Role:    openai.ChatMessageRoleSystem,
@@ -4467,7 +4462,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 					//	Content: body,
 					//},
 				},
-				Temperature: 0.4,
 			},
 		)
 
@@ -4486,7 +4480,7 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		break
 	}
 
-	log.Printf("\n\nTOKENS (Inputdata~): In: %d, Out: %d\n\n", (len(systemMessage)+len(assistantInfo)+len(body))/4, len(contentOutput)/4)
+	log.Printf("\n\nTOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(assistantInfo)+len(body))/4, len(contentOutput)/4, string(body))
 
 	// Diff and find strings from body vs contentOutput
 	// If there are any strings that are not in contentOutput, add them to the contentOutput
@@ -4563,7 +4557,6 @@ func HandleOutputFormatting(result, inputdata, appname string) string {
 						Content: result,
 					},
 				},
-				Temperature: 0.4,
 				MaxTokens:   1500,
 			},
 		)
@@ -4699,7 +4692,6 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 						Content: inputData,
 					},
 				},
-				Temperature: 0.4,
 			},
 		)
 
@@ -4786,9 +4778,10 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	return action, additionalInfo, nil
 }
 
-func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
+func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
+	returnApp := &WorkflowApp{}
 	if len(appname) == 0 {
-		return WorkflowApp{}, errors.New("Appname not set")
+		return returnApp, errors.New("Appname not set")
 	}
 
 	// Failover for handling default Singul setup
@@ -4812,19 +4805,19 @@ func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
 		// File exists, read it
 		file, err := os.Open(appPath)
 		if err != nil {
-			return WorkflowApp{}, err
+			return returnApp, err
 		}
 
 		defer file.Close()
 		responseBody, err = os.ReadFile(appPath)
 		if err != nil {
 			log.Printf("[ERROR] Error reading file: %s", err)
-			return WorkflowApp{}, err
+			return returnApp, err
 		}
 	} else {
 		algoliaPublicKey := os.Getenv("ALGOLIA_PUBLICKEY")
 		if len(algoliaPublicKey) == 0 {
-			return WorkflowApp{}, errors.New("Algolia public key not set")
+			return returnApp, errors.New("Algolia public key not set")
 		}
 
 		algoliaAppId := "JNSS5CFDZZ"
@@ -4834,7 +4827,7 @@ func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
 		res, err := index.Search(appname)
 		if err != nil {
 			log.Printf("[ERROR] Error searching for app in Algolia index: %s", err)
-			return WorkflowApp{}, err
+			return returnApp, err
 		}
 
 		appId := ""
@@ -4866,7 +4859,7 @@ func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
 
 		if appId == "" {
 			log.Printf("[ERROR] App not found in Algolia index: %s", appname)
-			return WorkflowApp{}, errors.New("App not found")
+			return returnApp, errors.New("App not found")
 		}
 
 		//url := fmt.Sprintf("https://singul.io/apps/%s", appname)
@@ -4880,26 +4873,26 @@ func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
 
 		if err != nil {
 			log.Printf("[ERROR] Error in new request for singul app: %s", err)
-			return WorkflowApp{}, err
+			return returnApp, err
 		}
 
 		client := &http.Client{}
 		newresp, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ERROR] Error running request for singul app: %s. URL: %s", err, url)
-			return WorkflowApp{}, err
+			return returnApp, err
 		}
 
 		if newresp.StatusCode != 200 {
 			log.Printf("[ERROR] Bad status code for app: %s. URL: %s", newresp.Status, url)
-			return WorkflowApp{}, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
+			return returnApp, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
 		}
 
 		defer newresp.Body.Close()
 		responseBody, err = ioutil.ReadAll(newresp.Body)
 		if err != nil {
 			log.Printf("[ERROR] Failed reading body for singul app: %s", err)
-			return WorkflowApp{}, err
+			return returnApp, err
 		}
 	}
 
@@ -4908,15 +4901,15 @@ func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
 	err = json.Unmarshal(responseBody, &newApp)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling body for singul app: %s %+v", err, string(responseBody))
-		return WorkflowApp{}, err
+		return returnApp, err
 	}
 
 	if !newApp.Success {
-		return WorkflowApp{}, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
+		return returnApp, errors.New("Failed getting app details from backend. Please try again. Appnames may be case sensitive.")
 	}
 
 	if len(newApp.App) == 0 {
-		return WorkflowApp{}, errors.New("Failed finding app for this ID")
+		return returnApp, errors.New("Failed finding app for this ID")
 	}
 
 	// Unmarshal the newApp.App into workflowApp
@@ -4924,12 +4917,12 @@ func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
 	err = json.Unmarshal(newApp.App, &parsedApp)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling app: %s", err)
-		return parsedApp, err
+		return &parsedApp, err
 	}
 
 	if len(parsedApp.ID) == 0 {
 		log.Printf("[WARNING] Failed finding app for this ID")
-		return parsedApp, errors.New("Failed finding app for this ID")
+		return &parsedApp, errors.New("Failed finding app for this ID")
 	}
 
 	if statErr != nil {
@@ -4942,11 +4935,11 @@ func GetSingulApp(sourcepath, appname string) (WorkflowApp, error) {
 		err = os.WriteFile(appPath, responseBody, 0644)
 		if err != nil {
 			log.Printf("[ERROR] Error writing file: %s", err)
-			return parsedApp, err
+			return &parsedApp, err
 		} else {
 			log.Printf("[DEBUG] Wrote app to file: %s", appPath)
 		}
 	}
 
-	return parsedApp, nil
+	return &parsedApp, nil
 }

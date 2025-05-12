@@ -5778,7 +5778,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 	err = SetWorkflow(ctx, workflow, workflow.ID)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting workflow: %s (Set workflow)", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
