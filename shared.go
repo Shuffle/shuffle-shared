@@ -6036,10 +6036,9 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 
 			if !found {
 				//log.Printf("[WARNING] Child workflow of '%s' (%s) for parent org %s may not be distributed to %s yet. Creating or re-finding...", parentWorkflow.Name, parentWorkflow.ID, parentWorkflow.OrgId, suborgId)
-
 				childWorkflow, err := GenerateWorkflowFromParent(ctx, parentWorkflow, parentWorkflow.OrgId, suborgId)
 				if err != nil {
-					log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+					log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s [diffWorkflowWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 				} else {
 					//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
 					childWorkflows = append(childWorkflows, *childWorkflow)
@@ -6126,7 +6125,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			}
 
 			if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
-				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID")
+				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID", parentSubflowPointedId)
 				// Point to same
 				trigger.Parameters[paramIndex].Value = childWorkflow.ID
 
@@ -6201,6 +6200,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			if !ArrayContains(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId) {
 				for _, parentTenantId := range parentWorkflow.SuborgDistribution {
 					if !ArrayContains(parentSubflowPointed.SuborgDistribution, parentTenantId) {
+						log.Printf("[DEBUG] Adding org %s to subflow %s (%s)", parentTenantId, parentSubflowPointed.Name, parentSubflowPointed.ID)
 						parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, parentTenantId)
 					}
 				}
@@ -6216,7 +6216,7 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
 			if err != nil {
-				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 			} else {
 
 				//diffWorkflows(*newChildworkflow, parentWorkflow, update)
@@ -9505,8 +9505,8 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
 	// before doing anything, verify if the parent workflow is a child workflow itself
-	if len(workflow.ParentWorkflowId) > 0 {
-		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere.", workflow.Name, workflow.ID)
+	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != parentWorkflowId {
+		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere from parent org (%s) to child org (%s)", workflow.ID, workflow.Name, parentOrgId, subOrgId)
 		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
 		workflow.SuborgDistribution = []string{}
 
@@ -9516,7 +9516,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 			return nil, err
 		}
 
-		return nil, errors.New("Parent workflow is a child workflow itself")
+		return &Workflow{}, errors.New("Parent workflow is a child workflow itself")
 	}
 
 	// Returns the existing one in case it has been made in the past
@@ -18376,7 +18376,15 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData.Category = ""
 	}
 
+
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
+	
+	// Check if cache already existed and if distributed
+	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
+	if err == nil {
+		tmpData.SuborgDistribution = cacheData.SuborgDistribution
+	}
+
 	err = SetCacheKey(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
@@ -26319,7 +26327,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 	if err == nil && project.Environment != "cloud" {
 		// Check if host has shuffle- as prefix OR uses a shuffle-specific port
 		// Check until 33350 (Orborus -> Worker and Worker -> Apps)
-		if strings.HasSuffix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" {
+		if strings.HasPrefix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" {
 
 			log.Printf("[INFO] Running with internal proxy for %s", parsedUrl)
 			httpProxy = os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
