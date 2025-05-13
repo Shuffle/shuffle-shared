@@ -616,11 +616,11 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		log.Printf("\n\nGot %d invalid params and additional info of length %d", len(action.InvalidParameters), len(additionalInfo))
 
 	}
-	*/
 
 	log.Printf("[DEBUG] additionalInfo: %s", additionalInfo)
 	log.Printf("[DEBUG] outputBody: %s", outputBody)
 	log.Printf("[DEBUG] inputdata: %s", inputdata)
+	*/
 
 	additionalInfo = ""
 	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
@@ -688,8 +688,8 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	// Append previous problems too
 	outputBodies := outputBody
 
-	log.Printf("[Critical] InputBody generated here: %s", inputBody)
-	log.Printf("[Critical] OutputBodies generated here: %s", outputBodies)
+	//log.Printf("[Critical] InputBody generated here: %s", inputBody)
+	//log.Printf("[Critical] OutputBodies generated here: %s", outputBodies)
 
 	//appendpoint := "/gmail/v1/users/{userId}/messages/send"
 	if !strings.Contains(additionalInfo, "How the API works") && len(additionalInfo) > 0 {
@@ -778,7 +778,7 @@ Input JSON Payload:
 		break
 	}
 
-	log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
+	//log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
 
 	contentOutput = FixContentOutput(contentOutput)
 
@@ -2177,7 +2177,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	}
 
 	appname = strings.Replace(appname, "_", " ", -1)
-	log.Printf("[INFO] Using app '%s' for action '%s' (1)", appname, actionName)
+	//log.Printf("[INFO] Using app '%s' for action '%s' (1)", appname, actionName)
 
 	actionLabel1, ok := output["action"]
 	if !ok && len(actionName) == 0 {
@@ -2598,7 +2598,8 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	}
 
 	if strings.HasPrefix(outputFormat, "action") {
-		log.Printf("[INFO] Skipping execution and returning action: %s", selectedAction.Name)
+		//log.Printf("[INFO] Skipping execution and returning action: %s", selectedAction.Name)
+
 		//selectedAction.LargeImage = foundApp.LargeImage
 		selectedAction.LargeImage = ""
 		selectedAction.AppName = foundApp.Name
@@ -4347,7 +4348,10 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	}
 
 	systemMessage := fmt.Sprintf("If the User Instruction tells you what to do, do exactly what it tells you. Match the JSON body exactly and fill in relevant data from the message '%s' only IF it looks like JSON. Match output format exactly for '%s' doing '%s'. Output valid JSON if the input looks like JSON, otherwise follow the format. Do NOT remove JSON fields - instead follow the format, or add to it. Don't tell us to provide more information. If it does not look like JSON, don't force it to be JSON. DO NOT use the example provided in your response. It is strictly just an example and has not much to do with what the user would want. If you see anything starting with $ in the example, just assume it to be a variable and needs to be ALWAYS populated by you like a template based on the user provided details. User Instruction to follow exactly: '%s'", inputdata, strings.Replace(appname, "_", " ", -1), actionName, inputdata)
-	log.Printf("[DEBUG] System: %s", systemMessage)
+
+	if debug {
+		log.Printf("[DEBUG] System: %s", systemMessage)
+	}
 
 	assistantInfo := fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. Don't randomly make fields empty for no reason. Add keys and values to ensure ALL input fields are included. Below is the body you should add to or modify for API '%s' in app '%s'. \n%s`, actionName, strings.ReplaceAll(appname, "_", " "), body)
 
@@ -4359,9 +4363,11 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		}
 	}
 
-	log.Printf("[DEBUG] Assistant: %s", assistantInfo)
-	// FIX: Add required fields as a list of what fields need to be set
+	if debug { 
+		log.Printf("[DEBUG] Assistant: %s", assistantInfo)
+	}
 
+	// FIX: Add required fields as a list of what fields need to be set
 	contentOutput := ""
 	for {
 		if cnt >= 5 {
@@ -4604,9 +4610,10 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 	inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same format.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 
-	log.Printf("[INFO] INPUTDATA: %s\n\n\n", inputData)
-
-	log.Printf("[Critical] Input body sent: %s", inputBody)
+	if debug {
+		log.Printf("[DEBUG] INPUTDATA: %s\n\n\n", inputData)
+		log.Printf("[DEBUG] Input body sent: %s", inputBody)
+	}
 
 	contentOutput := ""
 	for {
@@ -4964,7 +4971,7 @@ func UploadFileSingul(ctx context.Context, file *File, key string, data []byte) 
 func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
 	if standalone {
 		if debug {
-			log.Printf("\n\n\n[DEBUG] Looking for file ID %s locally.\n\n\n", fileId)
+			log.Printf("[DEBUG] Looking for file ID %s locally.", fileId)
 		}
 
 		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), fileId)
