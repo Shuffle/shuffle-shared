@@ -732,7 +732,10 @@ Given the HTTP API context for %s:
 Input JSON Payload:
 %s`, appname, status, outputBodies, inputBody)
 
-	log.Printf("[INFO] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
+	// Use this for debugging
+	if debug {
+		log.Printf("[DEBUG] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
+	}
 
 	contentOutput := ""
 	for {
@@ -1236,8 +1239,6 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 		return err
 	}
 
-	log.Printf("SHOULD UPLOAD FILE TO ID %s", fileId)
-
 	// Upload to /api/v1/files/{fileId}/upload with the data from paramValue
 	parsedKey := fmt.Sprintf("%s_%s", orgId, newFile.Id)
 	fileId, err = UploadFileSingul(ctx, &newFile, parsedKey, []byte(paramValue))
@@ -1245,8 +1246,6 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 		log.Printf("[ERROR] Failed to upload file in uploadParameterBase: %s", err)
 		return err
 	}
-
-	log.Printf("UPLOADED FILE TO ID %s", fileId)
 
 	return nil
 }
@@ -4900,8 +4899,27 @@ func GetSingulStandaloneFilepath() string {
 
 func GetFileContentSingul(ctx context.Context, file *File, resp http.ResponseWriter) ([]byte, error) {
 	if standalone {
-		log.Printf("\n\n\nGET FILE CONTENT FAILING\n\n\n")
-		return []byte{}, errors.New(fmt.Sprintf("Standalone mode not supported/implemented YET for file CONTENT ID '%s'", file.Id))
+		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), file.Id)
+
+		// File exists, read it
+		file, err := os.Open(filepath)
+		if err != nil {
+			log.Printf("[ERROR] Problem opening Singul file '%s': %s", filepath, err)
+			return []byte{}, err
+		}
+
+		defer file.Close()
+
+		data, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Printf("[ERROR] Problem reading Singul file data for '%s': %s", filepath, err)
+			return []byte{}, err
+		}
+
+		return data, nil 
+
+		//log.Printf("\n\n\n[ERROR] GET FILE CONTENT FAILING\n\n\n")
+		//return []byte{}, errors.New(fmt.Sprintf("GetContent: Standalone mode not supported/implemented YET for file CONTENT ID '%s'", file.Id))
 	}
 
 	return GetFileContent(ctx, file, resp)
@@ -4909,8 +4927,9 @@ func GetFileContentSingul(ctx context.Context, file *File, resp http.ResponseWri
 
 func SetFileSingul(ctx context.Context, file File) error {
 	if standalone {
-		log.Printf("\n\n\n[ERROR] SET FILE FAILING\n\n\n")
-		return errors.New(fmt.Sprintf("Standalone mode not supported/implemented YET for file ID '%s'", file.Id))
+		//log.Printf("\n\n\n[ERROR] SET FILE FAILING. ID: %#v, Name: %#v\n\n\n", file.Id, file.Filename)
+		//return errors.New(fmt.Sprintf("SetFile: Standalone mode not supported/implemented YET for file ID '%s'", file.Id))
+		return nil
 	}
 
 	return SetFile(ctx, file)
@@ -4936,7 +4955,6 @@ func UploadFileSingul(ctx context.Context, file *File, key string, data []byte) 
 			return "", err
 		}
 
-		log.Printf("[DEBUG] Wrote file to %s", filepath)
 		return filepath, nil
 	}
 
@@ -4945,13 +4963,17 @@ func UploadFileSingul(ctx context.Context, file *File, key string, data []byte) 
 
 func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
 	if standalone {
-		log.Printf("\n\n\n[DEBUG] Looking for file ID %s locally.\n\n\n", fileId)
+		if debug {
+			log.Printf("\n\n\n[DEBUG] Looking for file ID %s locally.\n\n\n", fileId)
+		}
+
 		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), fileId)
 		_, statErr := os.Stat(filepath) 
 		if statErr == nil { 
 			return &File{
 				Status: "active",
 				Id:    fileId,
+				Filename: fileId,
 			}, nil
 		} 
 

@@ -444,8 +444,8 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &files)
-			if err == nil {
-				//return files, nil
+			if err == nil && len(files) > 0 {
+				return files, nil
 			}
 		}
 	} 
