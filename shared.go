@@ -6021,9 +6021,8 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 		newChildWorkflows = append(newChildWorkflows, childWorkflow)
 	}
 
-	childWorkflows = newChildWorkflows
-
 	newlyAdded := []string{}
+	childWorkflows = newChildWorkflows
 	if len(childWorkflows) < len(parentWorkflow.SuborgDistribution) {
 		for _, suborgId := range parentWorkflow.SuborgDistribution {
 			found := false
@@ -8134,7 +8133,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
 
 		for _, subflow := range workflow.Subflows {
-			SetWorkflow(ctx, subflow, subflow.ID)
+			go SetWorkflow(ctx, subflow, subflow.ID)
 		}
 
 		workflow.Subflows = []Workflow{}
@@ -26431,90 +26430,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 	return client
 }
 
-func GetAllAppCategories() []AppCategory {
-	categories := []AppCategory{
-		AppCategory{
-			Name:         "Cases",
-			Color:        "",
-			Icon:         "cases",
-			ActionLabels: []string{"Create ticket", "List tickets", "Get ticket", "Create ticket", "Close ticket", "Add comment", "Update ticket"},
-			RequiredFields: map[string][]string{
-				"Create ticket": []string{"title"},
-				"Add comment":   []string{"comment"},
-				"Lis tickets":   []string{"time_range"},
-			},
-			OptionalFields: map[string][]string{
-				"Create ticket": []string{"description"},
-			},
-		},
-		AppCategory{
-			Name:           "Communication",
-			Color:          "",
-			Icon:           "communication",
-			ActionLabels:   []string{"List Messages", "Send Message", "Get Message", "Search messages"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "SIEM",
-			Color:          "",
-			Icon:           "siem",
-			ActionLabels:   []string{"Search", "List Alerts", "Close Alert", "Create detection", "Add to lookup list"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Eradication",
-			Color:          "",
-			Icon:           "eradication",
-			ActionLabels:   []string{"List Alerts", "Close Alert", "Create detection", "Block hash", "Search Hosts", "Isolate host", "Unisolate host"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Assets",
-			Color:          "",
-			Icon:           "assets",
-			ActionLabels:   []string{"List Assets", "Get Asset", "Search Assets", "Search Users", "Search endpoints", "Search vulnerabilities"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Intel",
-			Color:          "",
-			Icon:           "intel",
-			ActionLabels:   []string{"Get IOC", "Search IOC", "Create IOC", "Update IOC", "Delete IOC"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "IAM",
-			Color:          "",
-			Icon:           "iam",
-			ActionLabels:   []string{"Reset Password", "Enable user", "Disable user", "Get Identity", "Get Asset", "Search Identity"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Network",
-			Color:          "",
-			Icon:           "network",
-			ActionLabels:   []string{"Get Rules", "Allow IP", "Block IP"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Other",
-			Color:          "",
-			Icon:           "other",
-			ActionLabels:   []string{"Update Info", "Get Info", "Get Status", "Get Version", "Get Health", "Get Config", "Get Configs", "Get Configs by type", "Get Configs by name", "Run script"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-	}
 
-	return categories
-}
 
 // Function with the name RemoveFromArray to remove a string from a string array
 func RemoveFromArray(array []string, element string) []string {
