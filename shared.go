@@ -9505,7 +9505,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
 	// before doing anything, verify if the parent workflow is a child workflow itself
-	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != parentWorkflowId {
+	if len(workflow.ParentWorkflowId) > 0 && len(workflow.SuborgDistribution) > 0 {
 		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere from parent org (%s) to child org (%s)", workflow.ID, workflow.Name, parentOrgId, subOrgId)
 		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
 		workflow.SuborgDistribution = []string{}
