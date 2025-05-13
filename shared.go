@@ -11604,9 +11604,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		CreatorConfig string              `json:"creator_config" datastore:"creator_config"`
 		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
 
-		SyncFeatures SyncFeatures `json:"sync_features" datastore:"sync_features"`
-		Billing      Billing      `json:"billing" datastore:"billing"`
-		Branding     OrgBranding  `json:"branding" datastore:"branding"`
+		SyncFeatures    SyncFeatures `json:"sync_features" datastore:"sync_features"`
+		Billing         Billing      `json:"billing" datastore:"billing"`
+		Branding        OrgBranding  `json:"branding" datastore:"branding"`
+		EditingBranding bool         `json:"editing_branding" datastore:"editing_branding"`
 	}
 
 	var tmpData ReturnData
@@ -12023,7 +12024,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.Editing = false
 	}
 
-	if project.Environment == "cloud" && (tmpData.Branding.EnableChat != org.Branding.EnableChat || tmpData.Branding.HomeUrl != org.Branding.HomeUrl || tmpData.Branding.Theme != org.Branding.Theme || tmpData.Branding.EnableChat != org.Branding.EnableChat) {
+	if project.Environment == "cloud" && tmpData.EditingBranding {
 		log.Printf("[DEBUG] Updating branding for org %s (%s)", org.Name, org.Id)
 		org.Branding = tmpData.Branding
 	}
