@@ -9587,17 +9587,6 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newWf.Triggers = []Trigger{}
 
 	//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
-
-
-	// if len(newWf.ParentWorkflowId) > 0 {
-	// 	// check if parent workflow even exists
-	// 	_, err := GetWorkflow(ctx, newWf.ParentWorkflowId)
-	// 	if err != nil {
-	// 		log.Printf("[WARNING] Parent workflow %s doesn't exist. Can't set child workflow %s", newWf.ParentWorkflowId, newWf.ID)	
-	// 		return nil, err
-	// 	}
-	// }
-
 	// FIXME: Send a save request instead? That way
 	// propagation can keep going down.
 	// TODO: Not implemented due to recursion issues.
@@ -12250,6 +12239,76 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, Bcc
 		}
 		return nil
 		//log.Printf(response.Headers)
+	}
+
+	return err
+}
+
+func sendMailSendgridV2(toEmail []string, subject string, substitutions map[string]interface{}, emailApp bool, templateID string) error {
+	log.Printf("[DEBUG] In mail sending with subject %s. TO: %s", subject, toEmail)
+
+	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
+	srequest.Method = "POST"
+
+	type SendgridEmail struct {
+		Email string `json:"email"`
+	}
+
+	type SendgridPersonalization struct {
+		To                  []SendgridEmail        `json:"to"`
+		Subject             string                 `json:"subject"`
+		DynamicTemplateData map[string]interface{} `json:"dynamic_template_data,omitempty"`
+	}
+
+	type sendgridMailBody struct {
+		Personalizations []SendgridPersonalization `json:"personalizations"`
+		From             SendgridEmail             `json:"from"`
+		TemplateID       string                    `json:"template_id"`
+	}
+
+	newBody := sendgridMailBody{
+		Personalizations: []SendgridPersonalization{
+			{
+				To:                  []SendgridEmail{},
+				Subject:             subject,
+				DynamicTemplateData: substitutions,
+			},
+		},
+		From: SendgridEmail{
+			Email: "Shuffle Support <shuffle-support@shuffler.io>",
+		},
+		TemplateID: templateID,
+	}
+
+	if emailApp {
+		newBody.From.Email = "Shuffle Email App <email-app@shuffler.io>"
+	}
+
+	for _, email := range toEmail {
+		newBody.Personalizations[0].To = append(newBody.Personalizations[0].To,
+			SendgridEmail{
+				Email: strings.TrimSpace(email),
+			})
+	}
+
+	parsedBody, err := json.Marshal(newBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse JSON in sendmail: %s", err)
+		return err
+	}
+
+	srequest.Body = parsedBody
+
+	response, err := sendgrid.API(srequest)
+	if err != nil {
+		log.Println(err)
+	} else {
+		if response.StatusCode >= 300 {
+			log.Printf("[DEBUG] Failed sending mail! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		} else {
+			log.Printf("[DEBUG] Successfully sent email! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		}
+		return nil
 	}
 
 	return err
@@ -18795,7 +18854,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		if len(action.ID) == 0 {
 			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
 		}
-
 
 		if len(action.SourceExecution) == 0 {
 			return workflowExecution, errors.New("No source_execution provided")
