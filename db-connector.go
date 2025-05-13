@@ -8795,7 +8795,7 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 
-	if len(workflow.Actions) == 0 && workflow.ExecutionEnvironment != "onprem" {
+	if len(workflow.Actions) == 0 && workflow.ExecutionEnvironment == "cloud" {
 		log.Printf("[WARNING] No actions in workflow %s. Not saving.", id)
 		return errors.New("At least one action required to save")
 	}

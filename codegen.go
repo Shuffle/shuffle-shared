@@ -1347,6 +1347,9 @@ func AddCustomAction(swagger *openapi3.Swagger, api WorkflowApp) (WorkflowAppAct
 func GenerateYaml(swagger *openapi3.Swagger, newmd5 string) (*openapi3.Swagger, WorkflowApp, []string, error) {
 	api := WorkflowApp{}
 	//log.Printf("%#v", swagger.Info)
+	if swagger.Info == nil {
+		return swagger, WorkflowApp{}, []string{}, errors.New("Swagger.Info can't be empty.")
+	}
 
 	if len(swagger.Info.Title) == 0 {
 		return swagger, WorkflowApp{}, []string{}, errors.New("Swagger.Info.Title can't be empty.")
@@ -1915,11 +1918,10 @@ func VerifyApi(api WorkflowApp) WorkflowApp {
 
 func GetBasePython() string {
 	baseString := `import requests
-import asyncio
 import json
 import urllib3
 
-from walkoff_app_sdk.app_base import AppBase
+from shuffle_sdk import AppBase
 
 class %s(AppBase):
     """
@@ -1939,6 +1941,8 @@ class %s(AppBase):
 if __name__ == "__main__":
     %s.run()
 `
+	
+	// From old when we actually used asyncio (:
 	//#asyncio.run(%s.run(), debug=True)
 	return baseString
 
@@ -4035,6 +4039,7 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 	//log.Printf("[DEBUG] Starting to load zip file for image %s. This is a background process and may take a while.", imageName)
 	//imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar, true)
 	defer dockercli.Close()
+	//imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar)
 	imageLoadResponse, err := dockercli.ImageLoad(context.Background(), tar)
 	if err != nil {
 		log.Printf("[ERROR] Failed loading docker images: %s", err)

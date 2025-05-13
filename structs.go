@@ -844,6 +844,8 @@ type OrgBranding struct {
 	Theme             string `json:"theme" datastore:"theme"`
 	DocumentationLink string `json:"documentation_link" datastore:"documentation_link"`
 	GlobalUser        bool   `json:"global_user" datastore:"global_user"` // Global user is true when the user is admin of both parent org and suborg.
+	SupportEmail      string `json:"support_email" datastore:"support_email"`
+	LogoutUrl         string `json:"logout_url" datastore:"logout_url"`
 }
 
 // Used within a user
@@ -4298,4 +4300,23 @@ type AgentOutput struct {
 	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
 	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
 	Memory string `json:"memory,omitempty" datastore:"memory"`
+}
+
+type HTTPWrapper struct {
+	ActionName             string `json:"action_name"`
+	URL                    string `json:"url"`
+	Headers                string `json:"headers"`
+	Body                   string `json:"body"`
+	Method                 string `json:"method"`
+	RequiresAuthentication bool   `json:"requires_authentication"`
+	Oauth2Auth             bool   `json:"oauth2_auth"`
+	CurlCommand            string `json:"curl_command"`
+	Apikey                 string `json:"apikey"`
+}
+
+type appAuthStruct struct {
+	Success bool              `json:"success"`
+	Reason  string            `json:"reason"`
+	Action  string            `json:"action"`
+	Apps    []AppMini `json:"apps"`
 }

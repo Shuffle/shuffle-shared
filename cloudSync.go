@@ -603,13 +603,14 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	// Allows parent & childorgs to run as much as they want. No limitations
 	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		//log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
+		// log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
 		return org, nil
 	}
 
+
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
-		//log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
+		// log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
 			org.SyncFeatures.AppExecutions.Limit = 10000
@@ -1629,8 +1630,9 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 
 		field.Value = strings.ReplaceAll(field.Value, `{{list_tickets[0].summary}}`, `{{ list_tickets[].summary }}`)
 
-		// Regex match {{list_tickets[0].description}} and {{ list_tickets[0].description }}
-		re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]+\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
+		// Regex match {{list_tickets[0].description}} and {{ list_tickets[].description }} and {{ list_tickets[:] }}
+		//re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]+\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
+		re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]*\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
 		matches := re.FindAllStringSubmatch(field.Value, -1)
 		if len(matches) == 0 {
 			continue
@@ -1684,11 +1686,14 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 			if len(match) > 1 {
 				field.Value = strings.ReplaceAll(field.Value, match[0], stringBuild)
 				fields[fieldIndex].Value = field.Value
+				log.Printf("VALUE: %#v", field.Value)
 			}
 
 			stringBuild = "$"
 		}
 	}
+		
+	os.Exit(3)
 
 	return fields
 }
