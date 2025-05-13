@@ -84,6 +84,21 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		return AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
 	}
 
+	normalizedAppName := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(appname, "_", " "), " ", "_")))
+	cacheKey := fmt.Sprintf("appsearch_%s", normalizedAppName)
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		if cacheData, ok := cache.([]byte); ok {
+			var cachedApp AlgoliaSearchApp
+			err = json.Unmarshal(cacheData, &cachedApp)
+			if err == nil {
+				return cachedApp, nil
+			}
+			log.Printf("[ERROR] Failed unmarshalling cached app search data in Handle algolia app search: %s", err)
+		}
+	}
+
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
 	algoliaIndex := algClient.InitIndex("appsearch")
 	appname = strings.TrimSpace(strings.ToLower(strings.Replace(appname, "_", " ", -1)))
@@ -105,6 +120,13 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if newApp == appname || newRecord.ObjectID == appname {
 			//return newRecord.ObjectID, nil
+			appData, err := json.Marshal(newRecord)
+			if err == nil {
+				SetCache(ctx, cacheKey, appData, 30)
+			} else {
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (1): %s", err)
+			}
+
 			return newRecord, nil
 		}
 	}
@@ -113,6 +135,13 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 	for _, newRecord := range newRecords {
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if strings.Contains(newApp, appname) {
+			appData, err := json.Marshal(newRecord)
+			if err == nil {
+				SetCache(ctx, cacheKey, appData, 30)
+			} else {
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+			}
+
 			return newRecord, nil
 		}
 	}
