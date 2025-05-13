@@ -839,9 +839,15 @@ type RegionBody struct {
 }
 
 type OrgBranding struct {
-	EnableChat bool   `json:"enable_chat" datastore:"enable_chat"`
-	HomeUrl    string `json:"home_url" datastore:"home_url"`
-	Theme      string `json:"theme" datastore:"theme"`
+	EnableChat        bool   `json:"enable_chat" datastore:"enable_chat"`
+	HomeUrl           string `json:"home_url" datastore:"home_url"`
+	Theme             string `json:"theme" datastore:"theme"`
+	DocumentationLink string `json:"documentation_link" datastore:"documentation_link"`
+	GlobalUser        bool   `json:"global_user" datastore:"global_user"` // Global user is true when the user is admin of both parent org and suborg.
+	SupportEmail      string `json:"support_email" datastore:"support_email"`
+	LogoutUrl         string `json:"logout_url" datastore:"logout_url"`
+	BrandColor        string `json:"brand_color" datastore:"brand_color"`
+	BrandName         string `json:"brand_name" datastore:"brand_name"`
 }
 
 // Used within a user
@@ -3826,6 +3832,8 @@ type SingleResult struct {
 	Result        string         `json:"result"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
+
+	Parameters []WorkflowAppActionParameter `json:"parameters"`
 }
 
 type DockerRequestCheck struct {
@@ -4267,8 +4275,12 @@ type AgentDecision struct {
 	// Predictive Agent data 
 	I          int     `json:"i" datastore:"i"`
 	Action     string  `json:"action" datastore:"action"`
-	Tool       string  `json:"tool" datastore:"tool"`
+	Tool	   string  `json:"tool" datastore:"tool"`
+	Category   string  `json:"category" datastore:"category"`
 	Confidence float64 `json:"confidence" datastore:"confidence"`
+	Runs 	   string  `json:"runs" datastore:"runs"`
+	Sources    string  `json:"sources,omitempty" datastore:"sources"`
+	Fields     []Valuereplace `json:"fields" datastore:"fields"`
 	Reason     string  `json:"reason" datastore:"reason"`
 
 	// Responses
@@ -4279,6 +4291,7 @@ type AgentDecision struct {
 type AgentOutput struct {
 	Status 	  string  `json:"status" datastore:"status"`
 	Input     string          `json:"input" datastore:"input"`
+	Error 	  string `json:"error,omitempty" datastore:"error"`
 	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
 
 	// For easy testing
@@ -4288,4 +4301,24 @@ type AgentOutput struct {
 	CompletedAt int64 `json:"completed_at,omitempty" datastore:"completed_at"`
 	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
 	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
+	Memory string `json:"memory,omitempty" datastore:"memory"`
+}
+
+type HTTPWrapper struct {
+	ActionName             string `json:"action_name"`
+	URL                    string `json:"url"`
+	Headers                string `json:"headers"`
+	Body                   string `json:"body"`
+	Method                 string `json:"method"`
+	RequiresAuthentication bool   `json:"requires_authentication"`
+	Oauth2Auth             bool   `json:"oauth2_auth"`
+	CurlCommand            string `json:"curl_command"`
+	Apikey                 string `json:"apikey"`
+}
+
+type appAuthStruct struct {
+	Success bool              `json:"success"`
+	Reason  string            `json:"reason"`
+	Action  string            `json:"action"`
+	Apps    []AppMini `json:"apps"`
 }

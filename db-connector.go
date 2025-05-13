@@ -1286,7 +1286,6 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 
 	// Fixes missing pieces
 	workflowExecution, newDbSave := Fixexecution(ctx, workflowExecution)
-
 	workflowExecution = cleanupExecutionNodes(ctx, workflowExecution)
 	if newDbSave {
 		dbSave = true
@@ -1967,12 +1966,89 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 
 		workflowExecution.Workflow.Actions[actionIndex].LargeImage = ""
 		workflowExecution.Workflow.Actions[actionIndex].SmallImage = ""
+		for resultIndex, innerresult := range workflowExecution.Results {
+			if innerresult.Action.ID != action.ID {
+				continue
+			}
 
-		for _, innerresult := range workflowExecution.Results {
-			if innerresult.Action.ID == action.ID && innerresult.Status != "WAITING" {
+			if innerresult.Status != "WAITING" {
 				found = true
 				result = innerresult
 				break
+
+			} else if innerresult.Status == "WAITING" && (action.AppName == "AI Agent" || action.AppName == "Shuffle Agent") {
+				// Auto fixing decision data based on cache for better decisionmaking
+				//log.Printf("[DEBUG] Found action result %s with WAITING status", action.AppName)
+
+				// Map the result into AgentOutput to check decisions
+				mappedOutput := AgentOutput{}
+				err = json.Unmarshal([]byte(innerresult.Result), &mappedOutput)
+				if err != nil {
+					log.Printf("[DEBUG] Failed in mapped output mapping: %s", err)
+				}
+
+				decisionsUpdated := false
+
+				finishedDecisions := []string{}
+				failedFound := false
+				// FIXME: Optimize it to not run too far past "FINISHED" on cache searches
+				for decisionIndex, decision := range mappedOutput.Decisions {
+					if decision.RunDetails.Status == "NOT IMPLEMENTED" {
+						continue
+					}
+
+					if decision.RunDetails.Status == "FINISHED" {
+						finishedDecisions = append(finishedDecisions, decision.RunDetails.Id)
+						continue
+					} else if decision.RunDetails.Status == "FAILURE" {
+						failedFound = true
+						continue
+					}
+
+					//log.Printf("[DEBUG] Check cache for %s with status %s", decision.RunDetails.Id, decision.RunDetails.Status)
+					decisionId := fmt.Sprintf("agent-%s-%s", workflowExecution.ExecutionId, decision.RunDetails.Id)
+					cache, err := GetCache(ctx, decisionId)
+					if err == nil {
+						foundDecision := AgentDecision{}
+						cacheData := []byte(cache.([]uint8))
+						err = json.Unmarshal(cacheData, &foundDecision)
+						if err != nil {
+							log.Printf("[ERROR][%s] Faled mapping foundDecision: %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Id)
+						} else {
+							if foundDecision.RunDetails.Status != "" {
+								decisionsUpdated = true
+								mappedOutput.Decisions[decisionIndex] = foundDecision
+							}
+						}
+					}
+				}
+
+				if failedFound {
+					decisionsUpdated = true
+
+					mappedOutput.Status = "FAILURE"
+					mappedOutput.CompletedAt = time.Now().Unix()
+					workflowExecution.Results[resultIndex].Status = "ABORTED"
+
+					go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[resultIndex])
+
+				} else if len(finishedDecisions) == len(mappedOutput.Decisions) && mappedOutput.Status != "FINISHED" && mappedOutput.Status != "FAILURE" && mappedOutput.Status != "ABORTED" {
+					decisionsUpdated = true
+					mappedOutput.Status = "FINISHED"
+					mappedOutput.CompletedAt = time.Now().Unix()
+					workflowExecution.Results[resultIndex].Status = "SUCCESS"
+
+					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
+				} 
+
+				if decisionsUpdated {
+					marshalledResult, err := json.Marshal(mappedOutput)
+					if err == nil {
+						workflowExecution.Results[resultIndex].Result = string(marshalledResult)
+					} else {
+						log.Printf("[DEBUG] Failed unmarshalling agent decision: %s", err)
+					}
+				}
 			}
 		}
 
@@ -2077,7 +2153,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	newResults := []ActionResult{}
 	for _, result := range workflowExecution.Results {
 		if result.Action.ID == "" && result.Action.Name == "" && result.Result == "" {
-			log.Printf("[DEBUG][%s] Removing empty result started at %d and finished at %d", workflowExecution.ExecutionId, result.StartedAt, result.CompletedAt)
+			//log.Printf("[WARNING][%s] Removing empty result started at '%d' and finished at '%d'. ID: %#v, Name: %#v.", workflowExecution.ExecutionId, result.StartedAt, result.CompletedAt, result.Action.ID, result.Action.Name)
 			continue
 		}
 
@@ -2185,6 +2261,14 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 		skipFinished := false
 		for _, result := range workflowExecution.Results {
 			if result.Status == "WAITING" {
+				skipFinished = true
+				break
+			}
+		}
+
+		// Has to do with rerun systems from April 2025
+		for _, action := range workflowExecution.Workflow.Actions {
+			if action.Category == "rerun" {
 				skipFinished = true
 				break
 			}
@@ -3777,7 +3861,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 
 	// Appending the users' workflows
 	nameKey := "workflow"
-	log.Printf("[AUDIT] Getting up to %d workflows for user %s (%s - %s)", maxAmount, user.Username, user.Role, user.Id)
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
 		query := map[string]interface{}{
@@ -5279,7 +5362,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 			obj := bucket.Object(fullParsedPath)
 			fileReader, err := obj.NewReader(ctx)
 			if err != nil {
-				log.Printf("[ERROR] Failed making OpenAPI reader for %s: %s", fullParsedPath, err)
+				//log.Printf("[ERROR] Failed making OpenAPI reader for %s: %s", fullParsedPath, err)
 				return *api, err
 			}
 
@@ -6546,7 +6629,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		for {
 			it := project.Dbclient.Run(ctx, query)
 			if cnt > maxAmount {
-				log.Printf("[ERROR] Maximum try exceeded for workflowapp (1)")
+				//log.Printf("[ERROR] Maximum try exceeded for workflowapp (1)")
 				break
 			}
 
@@ -8723,7 +8806,7 @@ func FixWorkflowPosition(ctx context.Context, workflow Workflow) Workflow {
 
 func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEditedSecondsOffset ...int) error {
 
-	if len(workflow.Actions) == 0 && workflow.ExecutionEnvironment != "onprem" {
+	if len(workflow.Actions) == 0 && workflow.ExecutionEnvironment == "cloud" {
 		log.Printf("[WARNING] No actions in workflow %s. Not saving.", id)
 		return errors.New("At least one action required to save")
 	}
@@ -13712,6 +13795,8 @@ func RunCacheCleanup(ctx context.Context, workflowExecution WorkflowExecution) {
 
 func ValidateFinished(ctx context.Context, extra int, workflowExecution WorkflowExecution) bool {
 
+	//log.Printf("\n\nVALIDATING FINISHED. STATUS: %s. Action: %d, Results: %d\n", workflowExecution.Status, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
+
 	// Validates RERUN of single actions  (new 2025)
 	// Identified by:
 	// 1. Predefined result from previous exec
@@ -13730,6 +13815,8 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 				found = true
 			}
 		}
+
+		//log.Printf("ACTIONS: %d, RESULTS: %d, FOUND: %t", len(workflowExecution.Workflow.Actions), len(workflowExecution.Results), found)
 
 		if found {
 			// Continue -> this means finished check is ok
@@ -13757,7 +13844,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 	workflowExecution, _ = Fixexecution(ctx, workflowExecution)
 	//if rand.Intn(5) == 1 || len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions) {
-	log.Printf("[INFO][%s] Workflow Finished Check. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
+	//log.Printf("[INFO][%s] Workflow Finished Check. Status: %s, Actions: %d, Extra: %d, Results: %d\n", workflowExecution.ExecutionId, workflowExecution.Status, len(workflowExecution.Workflow.Actions), extra, len(workflowExecution.Results))
 
 	if len(workflowExecution.Results) >= len(workflowExecution.Workflow.Actions)+extra && len(workflowExecution.Workflow.Actions) > 0 {
 		validResults := 0
@@ -13791,7 +13878,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		// Check if status is already set first from cache
 		newexec, err := GetWorkflowExecution(ctx, workflowExecution.ExecutionId)
 		if err == nil && (newexec.Status == "FINISHED" || newexec.Status == "ABORTED") {
-			log.Printf("[INFO][%s] Already finished from GetWorkflowExecution (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
+			//log.Printf("[INFO][%s] Already finished from GetWorkflowExecution (validate)! Stopping the rest of the request for execution.", workflowExecution.ExecutionId)
 			return true
 		}
 
@@ -13801,7 +13888,6 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 		workflowExecution.CompletedAt = int64(time.Now().Unix())
 		workflowExecution.Status = "FINISHED"
-
 		HandleExecutionCacheIncrement(ctx, workflowExecution)
 
 		err = SetWorkflowExecution(ctx, workflowExecution, true)
