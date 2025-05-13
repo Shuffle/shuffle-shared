@@ -18377,7 +18377,15 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData.Category = ""
 	}
 
+
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
+	
+	// Check if cache already existed and if distributed
+	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
+	if err == nil {
+		tmpData.SuborgDistribution = cacheData.SuborgDistribution
+	}
+
 	err = SetCacheKey(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
@@ -26320,7 +26328,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 	if err == nil && project.Environment != "cloud" {
 		// Check if host has shuffle- as prefix OR uses a shuffle-specific port
 		// Check until 33350 (Orborus -> Worker and Worker -> Apps)
-		if strings.HasSuffix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" {
+		if strings.HasPrefix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" {
 
 			log.Printf("[INFO] Running with internal proxy for %s", parsedUrl)
 			httpProxy = os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
