@@ -367,7 +367,9 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	}
 
 	if httpOutput.Status >= 300 && httpOutput.Status != 404 {
-		log.Printf("[ERROR] Schemaless action failed with status: %d. Trying Autocorrecting feature", httpOutput.Status)
+		if debug { 
+			log.Printf("[DEBUG] Translated action failed with status: %d. Rerun Autocorrecting feature!", httpOutput.Status)
+		}
 
 		return *httpOutput, []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
 	}
@@ -544,8 +546,6 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 			}
 		}
 	}
-
-	log.Printf("[DEBUG] Previous Status: %d, ok: %t", status, bodyOk)
 
 	if bodyOk {
 		if val, ok := body1.(map[string]interface{}); ok {
@@ -795,8 +795,6 @@ Input JSON Payload:
 	}
 
 	if strings.Contains(contentOutput, "missing_fields") {
-		log.Printf("Missing fields found!")
-
 		successField, ok := outputJSON["success"] 
 		if ok {
 			if successField, ok := successField.(bool); ok {
@@ -906,7 +904,9 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 
 	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
 
-	log.Printf("[DEBUG] Skipping output formatting (bad output string)")
+	if debug { 
+		log.Printf("[DEBUG] Skipping output formatting (bad output string)")
+	}
 	//errorString := HandleOutputFormatting(string(outputData), inputdata, appname)
 
 	return outputData 
@@ -1205,11 +1205,19 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 	timeNow := time.Now().Unix()
 
 	// Check if the file already exists
-	//fileId := fmt.Sprintf("file_%s-%s-%s.json", strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
-	fileId := fmt.Sprintf("file_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
+	fileId := fmt.Sprintf("file_parameter_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
+
+	category := "app_defaults"
+	if standalone {
+		fileId = fmt.Sprintf("%s/%s", category, fileId)
+	}
+
 	file, err := GetFileSingul(ctx, fileId)
 	if err == nil && file.Status == "active" {
-		//log.Printf("[INFO] File %s already exists. NOT re-uploading", fileId)
+		if debug { 
+			log.Printf("[DEBUG] Parameter file '{root}/singul/%s' already exists. NOT re-uploading", fileId)
+		}
+
 		return nil
 	}
 
@@ -1229,7 +1237,7 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 		DownloadPath: downloadPath,
 		Subflows:     []string{},
 		StorageArea:  "local",
-		Namespace:    "app_defaults",
+		Namespace:    category,
 		Tags:         []string{"parameter base"},
 	}
 
@@ -1679,7 +1687,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	if project.Environment == "cloud" && !user.SupportAccess {
 		//if org.SyncFeatures.ShuffleGPT.Active && org.SyncFeatures.ShuffleGPT.Usage < org.SyncFeatures.ShuffleGPT.Limit {
 		if org.SyncFeatures.ShuffleGPT.Usage < 100 {
-			log.Printf("[AUDIT] Org %s has access to the auto feature. Allowing user %s to use it", org.Name, user.Username)
+			log.Printf("[AUDIT] Org %#v (%s) has access to the auto feature. Allowing user %s to use it", org.Name, org.Id,  user.Username)
 			org.SyncFeatures.ShuffleGPT.Usage += 1
 
 			// Managing usage (this happens elsewhere as well apparently
@@ -4055,7 +4063,9 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 			body = []byte(val)
 		}
 
-		log.Printf("Inside body: %s", string(body))
+		if debug { 
+			log.Printf("[DEBUG] ERROR in body handler. Status: %#v: %s", string(body), status)
+		}
 
 		// Should turn body into a string and check OpenAPI for problems if status is bad
 		if status >= 200 && status < 300 {
@@ -4949,6 +4959,25 @@ func UploadFileSingul(ctx context.Context, file *File, key string, data []byte) 
 		}
 
 		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), file.Id)
+		if len(file.Namespace) > 0 && !strings.HasPrefix(file.Id, file.Namespace) {
+			if strings.HasSuffix(file.Namespace, "/") {
+				file.Namespace = strings.TrimSuffix(file.Namespace, "/")
+			}
+
+			filepath = fmt.Sprintf("%s%s/%s", GetSingulStandaloneFilepath(), file.Namespace, file.Id)
+		}
+
+		// Check if the filepath exists as folders, else make it
+		folderpath := filepath[0:strings.LastIndex(filepath, "/")]
+		_, statErr := os.Stat(folderpath)
+		if statErr != nil {
+			err := os.MkdirAll(folderpath, os.ModePerm)
+			if err != nil {
+				log.Printf("[ERROR] Error creating directory: %s", err)
+				return "", err
+			}
+		}
+
 		withFile, err := os.Create(filepath)
 		if err != nil {
 			log.Printf("[ERROR] Error creating file: %s", err)
@@ -4970,11 +4999,12 @@ func UploadFileSingul(ctx context.Context, file *File, key string, data []byte) 
 
 func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
 	if standalone {
-		if debug {
-			log.Printf("[DEBUG] Looking for file ID %s locally.", fileId)
-		}
 
 		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), fileId)
+		//if debug {
+		//	log.Printf("[DEBUG] Looking for file ID %s locally.\n\nFull search path: %s", fileId, filepath)
+		//}
+
 		_, statErr := os.Stat(filepath) 
 		if statErr == nil { 
 			return &File{

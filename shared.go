@@ -15798,7 +15798,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							}
 
 							if parentTrigger {
-								log.Printf("[DEBUG][%s] Parent %s (of child %s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
+								if debug {
+									log.Printf("[DEBUG][%s] Parent %s (of child %s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
+								}
+
 								continue
 							}
 
@@ -15807,13 +15810,18 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							sourceNodeFound := false
 							for _, item := range childNodes {
 								if item == branch.SourceID {
-									log.Printf("[DEBUG][%s] Found source node %s (%s) for node %s", workflowExecution.ExecutionId, branch.SourceID, curAction.Label, nodeId)
+									if debug { 
+										log.Printf("[DEBUG][%s] Found source node %s (%s) for node %s", workflowExecution.ExecutionId, branch.SourceID, curAction.Label, nodeId)
+									}
+
 									sourceNodeFound = true
 									break
 								}
 							}
 
-							log.Printf("[DEBUG][%s] sourceNodeFound: %t for node %s", workflowExecution.ExecutionId, sourceNodeFound, nodeId)
+							if debug { 
+								log.Printf("[DEBUG][%s] sourceNodeFound: %t for node %s", workflowExecution.ExecutionId, sourceNodeFound, nodeId)
+							}
 
 							if !sourceNodeFound {
 								// FIXME: Shouldn't add skip for child nodes of these nodes. Check if this node is parent of upcoming nodes.
@@ -26972,7 +26980,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 					if foundAction.Name == "" {
 						log.Printf("[ERROR] No action explainer found for category '%s'", categoryname)
 					} else {
-						log.Printf("Found action %s for category %s", foundAction.Name, categoryname)
+						log.Printf("[DEBUG] Found action %s for category %s", foundAction.Name, categoryname)
 					}
 
 					recommendation = Recommendations{

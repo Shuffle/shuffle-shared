@@ -3827,9 +3827,9 @@ type AppCategory struct {
 
 type SingleResult struct {
 	Success       bool           `json:"success"`
+	Result        string         `json:"result"`
 	Id            string         `json:"id"`
 	Authorization string         `json:"authorization"`
-	Result        string         `json:"result"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
 
