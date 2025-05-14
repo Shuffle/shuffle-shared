@@ -9042,6 +9042,15 @@ func HandleGetAllPartners(resp http.ResponseWriter, request *http.Request) {
         return
     }
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
     ctx := GetContext(request)
     partners, err := GetPartners(ctx)
     if err != nil {
@@ -9077,6 +9086,15 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
         return
     }
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
     // Get ID from URL parameters - could be either partner ID or org ID
 	parts := strings.Split(request.URL.Path, "/")
     if len(parts) < 4 {
@@ -9108,7 +9126,7 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
         Partner Partner `json:"partner"`
     }{
         Success: true,
-        Partner: *partner,
+        Partner: partner[0],
     })
 
     if err != nil {
@@ -9123,9 +9141,19 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 }
 
 func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
-    if HandleCors(resp, request) {
+	cors := HandleCors(resp, request)
+    if cors {
         return
     }
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
 
     user, err := HandleApiAuthentication(resp, request)
     if err != nil || !user.SupportAccess {
@@ -9134,14 +9162,23 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
         return
     }
 
-    // Step 1: Define an intermediate struct to parse partner_type array
-    var input struct {
-        Partner
-        PartnerTypeList []string `json:"partner_type"`
-        ImageUrl        string   `json:"image_url"` // Added this to properly parse from JSON
-    }
+	var partnerId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	
+		partnerId = location[4]
+		if partnerId == "" {
+			partnerId = uuid.NewV4().String()
+		}
+	}
 
-    body, err := ioutil.ReadAll(request.Body)
+	body, err := ioutil.ReadAll(request.Body)
     if err != nil {
         log.Printf("[WARNING] Failed reading body: %v", err)
         resp.WriteHeader(400)
@@ -9149,35 +9186,24 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
         return
     }
 
-    if err := json.Unmarshal(body, &input); err != nil {
+	var tmpData Partner
+
+    err = json.Unmarshal(body, &tmpData)
+	if err != nil {
         log.Printf("[WARNING] Failed unmarshalling partner: %v", err)
         resp.WriteHeader(400)
         resp.Write([]byte(`{"success": false}`))
         return
     }
 
-    // Step 2: Map string list to boolean fields
-    pt := PartnerType{}
-    for _, t := range input.PartnerTypeList {
-        switch t {
-        case "tech_partner":
-            pt.TechPartner = true
-        case "integration_partner":
-            pt.IntegrationPartner = true
-        case "distribution_partner":
-            pt.DistributionPartner = true
-        case "service_partner":
-            pt.ServicePartner = true
-        }
-    }
-    input.Partner.PartnerType = pt
-    
-    // Set the ImageUrl from the parsed input
-    input.Partner.ImageUrl = input.ImageUrl
+	ctx := GetContext(request)
 
-    // Step 3: Save partner
-    ctx := GetContext(request)
-    if err := SetPartner(ctx, &input.Partner); err != nil {
+	if len(tmpData.OrgId) == 0 {
+		tmpData.OrgId = user.ActiveOrg.Id
+	}
+
+    err = SetPartner(ctx, &tmpData)
+	if err != nil {
         log.Printf("[WARNING] Failed publishing partner: %v", err)
         resp.WriteHeader(500)
         resp.Write([]byte(`{"success": false}`))
@@ -9186,95 +9212,6 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 
     resp.WriteHeader(200)
     resp.Write([]byte(`{"success": true, "message": "Partner published"}`))
-}
-
-func HandleEditPartner(resp http.ResponseWriter, request *http.Request) {
-    cors := HandleCors(resp, request)
-    if cors {
-        return
-    }
-
-    // Authentication check
-    user, err := HandleApiAuthentication(resp, request)
-    if err != nil || !user.SupportAccess {
-        resp.WriteHeader(http.StatusUnauthorized)
-        resp.Write([]byte(`{"success": false, "reason": "Unauthorized access"}`))
-        return
-    }
-
-    // Get partnerId from URL parameters
-    // Get ID from URL path parameter
-    parts := strings.Split(request.URL.Path, "/")
-    if len(parts) < 4 {
-        resp.WriteHeader(http.StatusBadRequest)
-        resp.Write([]byte(`{"success": false, "reason": "Invalid URL format"}`))
-        return
-    }
-
-    partnerId := parts[len(parts)-1]
-    if partnerId == "" {
-        resp.WriteHeader(http.StatusBadRequest)
-        resp.Write([]byte(`{"success": false, "reason": "Missing partnerId parameter"}`))
-        return
-    }
-
-    // Parse request body
-    var input struct {
-        Partner
-        PartnerType PartnerType `json:"partner_type"`
-        ImageUrl        string   `json:"image_url"`
-    }
-
-    body, err := ioutil.ReadAll(request.Body)
-    if err != nil {
-        log.Printf("[WARNING] Failed reading body: %v", err)
-        resp.WriteHeader(http.StatusBadRequest)
-        resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
-        return
-    }
-
-    if err := json.Unmarshal(body, &input); err != nil {
-        log.Printf("[WARNING] Failed unmarshalling partner: %v", err)
-        resp.WriteHeader(http.StatusBadRequest)
-        resp.Write([]byte(`{"success": false, "reason": "Invalid request format"}`))
-        return
-    }
-
-    // Verify the partner ID matches
-    if input.Partner.Id != partnerId {
-        resp.WriteHeader(http.StatusBadRequest)
-        resp.Write([]byte(`{"success": false, "reason": "Partner ID mismatch"}`))
-        return
-    }
-
-    // Get existing partner to verify it exists
-    ctx := GetContext(request)
-    existingPartner, err := GetPartner(ctx, partnerId)
-    if err != nil {
-        log.Printf("[WARNING] Failed to find partner with ID %s: %v", partnerId, err)
-        resp.WriteHeader(http.StatusNotFound)
-        resp.Write([]byte(`{"success": false, "reason": "Partner not found"}`))
-        return
-    }
-
-
-    // Update partner fields while preserving important data
-    input.Partner.Created = existingPartner.Created  // Preserve creation time
-    input.Partner.Edited = time.Now().Unix()         // Update edited time
-    input.Partner.PartnerType = input.PartnerType
-    input.Partner.ImageUrl = input.ImageUrl          // Set ImageUrl from input
-
-    // Save updated partner
-    if err := SetPartner(ctx, &input.Partner); err != nil {
-        log.Printf("[WARNING] Failed updating partner: %v", err)
-        resp.WriteHeader(http.StatusInternalServerError)
-        resp.Write([]byte(`{"success": false, "reason": "Failed to update partner"}`))
-        return
-    }
-
-    // Return success response
-    resp.WriteHeader(http.StatusOK)
-    resp.Write([]byte(`{"success": true, "message": "Partner updated successfully"}`))
 }
 
 func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {

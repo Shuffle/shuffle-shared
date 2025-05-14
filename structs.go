@@ -911,9 +911,11 @@ type Partner struct {
 	Description string      `json:"description" datastore:"description"`
 	OrgId       string      `json:"org_id" datastore:"org_id"`
 	ImageUrl    string      `json:"image_url" datastore:"image_url,noindex"`
+	LandscapeImageUrl string      `json:"landscape_image_url" datastore:"landscape_image_url,noindex"`
 	ArticleUrl  string      `json:"article_url" datastore:"article_url,noindex"`
 	WebsiteUrl  string      `json:"website_url" datastore:"website_url,noindex"`
 	Expertise   []string      `json:"expertise" datastore:"expertise"`
+	Services    []string      `json:"services" datastore:"services"`
 	PartnerType PartnerType `json:"partner_type" datastore:"partner_type"`
 	Region      string      `json:"region" datastore:"region"`
 	Created     int64       `json:"created" datastore:"created"`
