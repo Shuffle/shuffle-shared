@@ -3863,6 +3863,11 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	nameKey := "workflow"
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
+		// increased the maxAmount for onprem user on May 15th
+		if maxAmount <= 250 {
+			maxAmount = 600
+		}
+
 		query := map[string]interface{}{
 			"size": maxAmount,
 			"query": map[string]interface{}{
