@@ -18,7 +18,7 @@ require (
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
 	github.com/docker/docker v28.0.4+incompatible
 	github.com/frikky/kin-openapi v0.41.0
-	github.com/frikky/schemaless v0.0.13
+	github.com/frikky/schemaless v0.0.15
 	github.com/go-git/go-billy/v5 v5.6.0
 	github.com/go-git/go-git/v5 v5.13.0
 	github.com/google/go-github/v28 v28.1.1
