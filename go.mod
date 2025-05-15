@@ -16,7 +16,7 @@ require (
 	github.com/algolia/algoliasearch-client-go/v3 v3.18.1
 	github.com/bradfitz/gomemcache v0.0.0-20230905024940-24af94b03874
 	github.com/bradfitz/slice v0.0.0-20180809154707-2b758aa73013
-	github.com/docker/docker v27.5.0+incompatible
+	github.com/docker/docker v28.0.4+incompatible
 	github.com/frikky/kin-openapi v0.41.0
 	github.com/frikky/schemaless v0.0.13
 	github.com/go-git/go-billy/v5 v5.6.0
