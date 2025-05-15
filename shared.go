@@ -8494,7 +8494,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	if !workflow.BackupConfig.TokensEncrypted {
 		if len(workflow.BackupConfig.UploadRepo) > 0 {
 			parsedKey := fmt.Sprintf("%s_upload_repo", workflow.OrgId)
-			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadRepo), parsedKey)
+			encryptedToken, err := HandleKeyEncryption([]byte(workflow.BackupConfig.UploadRepo), parsedKey)
 			if err != nil {
 				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
 			} else {
@@ -8505,7 +8505,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		if len(workflow.BackupConfig.UploadBranch) > 0 {
 			parsedKey := fmt.Sprintf("%s_upload_branch", workflow.OrgId)
-			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadBranch), parsedKey)
+			encryptedToken, err := HandleKeyEncryption([]byte(workflow.BackupConfig.UploadBranch), parsedKey)
 			if err != nil {
 				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
 			} else {
@@ -8516,7 +8516,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		if len(workflow.BackupConfig.UploadUsername) > 0 {
 			parsedKey := fmt.Sprintf("%s_upload_username", workflow.OrgId)
-			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadUsername), parsedKey)
+			encryptedToken, err := HandleKeyEncryption([]byte(workflow.BackupConfig.UploadUsername), parsedKey)
 			if err != nil {
 				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
 			} else {
@@ -8527,7 +8527,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 		if len(workflow.BackupConfig.UploadToken) > 0 {
 			parsedKey := fmt.Sprintf("%s_upload_token", workflow.OrgId)
-			encryptedToken, err := handleKeyEncryption([]byte(workflow.BackupConfig.UploadToken), parsedKey)
+			encryptedToken, err := HandleKeyEncryption([]byte(workflow.BackupConfig.UploadToken), parsedKey)
 			if err != nil {
 				log.Printf("[ERROR] Failed encrypting token for %s (%s): %s", workflow.Name, workflow.ID, err)
 			} else {
@@ -17405,7 +17405,7 @@ func GetReplacementNodes(ctx context.Context, execution WorkflowExecution, trigg
 func create32Hash(key string) ([]byte, error) {
 	encryptionModifier := os.Getenv("SHUFFLE_ENCRYPTION_MODIFIER")
 	if len(encryptionModifier) == 0 {
-		return []byte{}, errors.New(fmt.Sprintf("No encryption modifier set. Define SHUFFLE_ENCRYPTION_MODIFIER and NEVER change it to start encrypting auth."))
+		return []byte{}, errors.New(fmt.Sprintf("No encryption modifier set. Define env SHUFFLE_ENCRYPTION_MODIFIER to some random string and NEVER change it to start using encrypted auth."))
 	}
 
 	key += encryptionModifier
@@ -17414,7 +17414,7 @@ func create32Hash(key string) ([]byte, error) {
 	return []byte(hex.EncodeToString(hasher.Sum(nil))), nil
 }
 
-func handleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
+func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 	key, err := create32Hash(passphrase)
 	if err != nil {
 		log.Printf("[WARNING] Failed hashing in encrypt: %s", err)
@@ -29950,3 +29950,5 @@ func (tw *TimeWindow) cleanOldEvents(now time.Time) {
 		tw.Events = tw.Events[1:]
 	}
 }
+
+

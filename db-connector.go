@@ -9005,7 +9005,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 			//}
 
 			parsedKey := fmt.Sprintf("%s_%d_%s_%s", workflowappauth.OrgId, workflowappauth.Created, workflowappauth.Label, field.Key)
-			newKey, err := handleKeyEncryption([]byte(field.Value), parsedKey)
+			newKey, err := HandleKeyEncryption([]byte(field.Value), parsedKey)
 			if err != nil {
 				//log.Printf("[WARNING] Failed encrypting key '%s': %s", field.Key, err)
 				setEncrypted = false

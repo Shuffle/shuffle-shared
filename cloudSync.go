@@ -665,56 +665,16 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	return org, nil
 }
 
-func RunActionAI(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in get action AI: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	ctx := GetContext(request)
-	org, err := GetOrg(ctx, user.ActiveOrg.Id)
-	if err != nil {
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting the organization`)))
-		return
-	}
-
-	log.Printf("[DEBUG] Running action AI for org %s (%s). Cloud sync: %#v and %#v", org.Name, org.Id, org.CloudSyncActive, org.CloudSync)
-	if !org.CloudSync {
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud sync is not active for this organization"}`)))
-		return
-	}
-
-	// For now, just redirecting
-	log.Printf("[DEBUG] Redirecting Action AI request to main site handler (shuffler.io)")
-
-	// Add api-key from the org sync
-	if org.SyncConfig.Apikey != "" {
-		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", org.SyncConfig.Apikey))
-
-		// Remove cookie header after checking if it exists
-		if request.Header.Get("Cookie") != "" {
-			request.Header.Del("Cookie")
-		}
-	}
-
-	RedirectUserRequest(resp, request)
-	return
-}
-
 func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
+	if project.Environment == "cloud" && gceProject == "shuffler" {
+		log.Printf("[ERROR] Recursive RedirectRequest for %s", req.RequestURI)
+		w.WriteHeader(400)
+		w.Write([]byte(`{"success": false, "reason": "Recursive redirect request detected"}`))
+		return
+	}
+
 	proxyScheme := "https"
 	proxyHost := fmt.Sprintf("shuffler.io")
-
 	httpClient := &http.Client{
 		Timeout: 120 * time.Second,
 	}

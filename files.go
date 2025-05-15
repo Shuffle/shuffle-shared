@@ -1490,7 +1490,7 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 
 		if len(encryptionKey) > 0 {
 			newContents := contents
-			newFileValue, err := handleKeyEncryption(contents, encryptionKey)
+			newFileValue, err := HandleKeyEncryption(contents, encryptionKey)
 			if err != nil {
 				log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
 				newContents = contents

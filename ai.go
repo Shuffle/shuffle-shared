@@ -74,7 +74,7 @@ func SetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key, value 
 	md5String := hex.EncodeToString(hashInBytes)
 	encryptionKey := fmt.Sprintf("%s_%d_%s", auth.OrgId, auth.Created, md5String)
 
-	encrypted, err := handleKeyEncryption([]byte(value), encryptionKey) 
+	encrypted, err := HandleKeyEncryption([]byte(value), encryptionKey) 
 	if err != nil {
 		log.Printf("[ERROR] Failed to encrypt KMS cache for key %s: %s", key, err)
 		return err
@@ -5700,7 +5700,7 @@ func GetAtomicSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter
 // 16. Oauth2 autorefresh on single-actions
 // 17. Make it work without action label (1) & category (2), and do auto-tagging if it's correct
 // 18. Check for continuity. e.g. for an gmail, listing mails isn't always enough, but and requires further searching into the contents
-func runActionAI(resp http.ResponseWriter, request *http.Request) {
+func RunActionAI(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
 		return
@@ -6767,12 +6767,41 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 }
 
-func RunAiQuery(systemMessage, userMessage string) (string, error) {
+// Runs ANY AI query based on the system message and user message.
+// This can also be overridden by passing in a custom OpenAI ChatCompletion request
+func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
 	cnt := 0
 	maxTokens := 5000
 	maxCharacters := 100000
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
 
+	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
+
+	aiRequestUrl := os.Getenv("OPENAI_API_URL")
+	if len(os.Getenv("OPENAI_API_URL")) > 0 {
+		config.BaseURL = aiRequestUrl
+
+		if strings.Contains("azure", aiRequestUrl) {
+			config.APIType = openai.APITypeAzure
+		} else if strings.Contains("anthropic", aiRequestUrl) {
+			config.APIType = openai.APITypeAnthropic
+		} else if strings.Contains("cloudflare", aiRequestUrl) {
+			config.APIType = openai.APITypeCloudflareAzure
+		} else if strings.Contains("azuread", aiRequestUrl) {
+			config.APIType = openai.APITypeAzureAD
+		} else {
+			config.APIType = openai.APITypeOpenAI
+		}
+	}
+
+	if len(os.Getenv("OPENAI_API_ORG")) > 0 {
+		config.OrgID = os.Getenv("OPENAI_API_ORG")
+	}
+
+	if len(os.Getenv("OPENAI_API_VERSION")) > 0 {
+		config.APIVersion = os.Getenv("OPENAI_API_VERSION")
+	}
+
+	openaiClient := openai.NewClientWithConfig(config)
 	if len(systemMessage) > maxCharacters {
 		systemMessage = systemMessage[:maxCharacters]
 	}
@@ -6811,6 +6840,10 @@ func RunAiQuery(systemMessage, userMessage string) (string, error) {
 
 	if len(chatCompletion.Messages) == 0 {
 		return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
+	}
+
+	if len(incomingRequest) > 0 {
+		chatCompletion = incomingRequest[0]
 	}
 
 	maxRetries := 3
