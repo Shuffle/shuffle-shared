@@ -14803,3 +14803,128 @@ func GetOrgAuth(ctx context.Context, session string) (User, error) {
 	// If found, return a sample admin user
 	return User{}, nil
 }
+
+// Returns the orgid related to the key
+func GetSyncApikeyByOrg(ctx context.Context, orgId string) (string, error) {
+	nameKey := "SyncKey"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+	newstring := []string{}
+	var syncKeys []SyncKey
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %s", cacheData)
+		err = json.Unmarshal(cacheData, &syncKeys)
+		if err == nil {
+			for _, item := range syncKeys {
+				newstring = append(newstring, item.Apikey)
+			}
+
+			return strings.Join(newstring, ","), nil
+		}
+	} else {
+		//log.Printf("[INFO] Failed getting cache for synckeys: %s", err)
+	}
+
+	dbclient, err := GetDatastoreClient(ctx, gceProject)
+	if err != nil {
+		log.Println(err)
+		return "", err
+	}
+
+	q := datastore.NewQuery(nameKey).Filter("OrgId =", orgId)
+	_, err = dbclient.GetAll(ctx, q, &syncKeys)
+	if err != nil && len(syncKeys) == 0 {
+		log.Printf("[WARNING] Error getting cloudsync apikeys: %s", err)
+		return "", err
+	}
+
+	returnData := ""
+	if len(syncKeys) == 1 {
+		returnData = syncKeys[0].Apikey
+	} else {
+		log.Printf("[WARNING] Error: Found %d synckeys for org %s. Should be one..? Returning with comma.", len(syncKeys), orgId)
+
+		for _, item := range syncKeys {
+			newstring = append(newstring, item.Apikey)
+		}
+
+		returnData = strings.Join(newstring, ",")
+	}
+
+	data, err := json.Marshal(syncKeys)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in getSynckeys: %s", err)
+		return returnData, nil
+	}
+
+	err = SetCache(ctx, cacheKey, data, 30)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for getSynckeys: %s", err)
+	}
+
+	return returnData, nil
+	//errors.New(fmt.Sprintf("Found %d keys for org %s", len(syncKeys), orgId))
+}
+
+// Returns the orgid related to the key
+func getSyncApikey(ctx context.Context, apikey string) (string, error) {
+	nameKey := "SyncKey"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+
+	synckey := &SyncKey{}
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %s", cacheData)
+		err = json.Unmarshal(cacheData, &synckey)
+		if err == nil {
+			//log.Printf("[INFO] Successfully got cache for synckey with orgid %s", synckey.OrgId)
+			return synckey.OrgId, nil
+		}
+	} else {
+		log.Printf("[INFO] Failed getting cache for syncKEY: %s", err)
+	}
+
+	dbclient, err := GetDatastoreClient(ctx, gceProject)
+	if err != nil {
+		log.Println(err)
+		return "", err
+	}
+
+	key := datastore.NameKey(nameKey, apikey, nil)
+	if err := dbclient.Get(ctx, key, synckey); err != nil {
+		return "", err
+	}
+
+	data, err := json.Marshal(synckey)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in getSynckeys: %s", err)
+		return synckey.OrgId, nil
+	}
+
+	err = SetCache(ctx, cacheKey, data, 30)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for getSynckeys: %s", err)
+	}
+
+	return synckey.OrgId, nil
+}
+
+func SetSyncApikey(ctx context.Context, synckey *SyncKey) error {
+	// clear session_token and API_token for user
+	dbclient, err := GetDatastoreClient(ctx, gceProject)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	synckey.CreatedAt = time.Now().Unix()
+
+	k := datastore.NameKey("SyncKey", synckey.Apikey, nil)
+	if _, err := dbclient.Put(ctx, k, synckey); err != nil {
+		return err
+	}
+
+	return nil
+}

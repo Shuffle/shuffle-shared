@@ -4322,3 +4322,10 @@ type appAuthStruct struct {
 	Action  string            `json:"action"`
 	Apps    []AppMini `json:"apps"`
 }
+
+type SyncKey struct {
+	Apikey    string `json:"api_key"`
+	OrgId     string `json:"org_id"`
+	SourceIP  string `json:"source_ip"`
+	CreatedAt int64  `json:"created_at"`
+}

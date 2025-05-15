@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"time"
+	"sync"
 	"bytes"
 	"regexp"
 	"reflect"
@@ -13,26 +14,30 @@ import (
 	"strings"
 	"strconv"
 	"net/http"
+	"math/rand"
 	"io/ioutil"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/base64"
 
+	uuid "github.com/satori/go.uuid"
 	openai "github.com/sashabaranov/go-openai"
 	option "google.golang.org/api/option"
 	"google.golang.org/api/customsearch/v1"
+	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 
 	"github.com/frikky/schemaless"
 	"github.com/frikky/kin-openapi/openapi3"
-
-	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 )
 
 //var model = "gpt-4-turbo-preview"
 //var model = "gpt-4o-mini"
 var standalone bool
 var model = "o4-mini"
+var fallbackModel = ""
+var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
+var assistantModel = model
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
 	//log.Printf("\n\n[DEBUG] Getting KMS cache for key %s\n\n", key)
@@ -559,7 +564,9 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 			body = []byte(val)
 		}
 
-		log.Printf("Inside body: %s", string(body))
+		if debug {
+			log.Printf("[DEBUG] Inside body handler: %s", string(body))
+		}
 
 		// Should turn body into a string and check OpenAPI for problems if status is bad
 		if status >= 0 && status < 300 {
@@ -605,28 +612,8 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 }
 
 func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputBody, appname, inputdata string) (Action, string, error) {
-	// FIX: Make it find shuffle internal docs as well for how an app works
-	// Make it work with Shuffle tools, as now it's explicitly trying to fix fields for HTTP apps
-
-	/*
-	if len(action.InvalidParameters) == 0 && additionalInfo == "" && strings.ToUpper(appname) != "HTTP" && !strings.Contains(strings.ToUpper(appname), "SHUFFLE") {
-		additionalInfo = getOpenApiInformation(strings.Replace(appname, " ", "", -1), strings.Replace(action.Name, "_", " ", -1))
-	} else {
-
-		log.Printf("\n\nGot %d invalid params and additional info of length %d", len(action.InvalidParameters), len(additionalInfo))
-
-	}
-
-	log.Printf("[DEBUG] additionalInfo: %s", additionalInfo)
-	log.Printf("[DEBUG] outputBody: %s", outputBody)
-	log.Printf("[DEBUG] inputdata: %s", inputdata)
-	*/
-
-	additionalInfo = ""
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-	cnt := 0
-
 	// Add all fields with value from here
+	additionalInfo = ""
 	inputBody := "{\n"
 	for _, param := range action.Parameters {
 		//if param.Name == "headers" || param.Name == "ssl_verify" || param.Name == "to_file" || param.Name == "url" || strings.Contains(param.Name, "username_") || strings.Contains(param.Name, "password_") {
@@ -639,10 +626,7 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		//	continue
 		//}
 
-
 		checkValue := strings.TrimSpace(strings.Replace(param.Value, "\n", "", -1))
-		//log.Printf("PARAM START: '%s'. END: '%s'", checkValue[:10], checkValue[len(checkValue)-10:])
-
 		if  (strings.HasPrefix(checkValue, "{") && strings.HasSuffix(checkValue, "}")) || (strings.HasPrefix(param.Value, "[") && strings.HasSuffix(param.Value, "]")) {
 			inputBody += fmt.Sprintf("\"%s\": %s,\n", param.Name, param.Value)
 			continue
@@ -737,57 +721,23 @@ Input JSON Payload:
 		log.Printf("[DEBUG] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
 	}
 
-	contentOutput := ""
-	for {
-		if cnt >= 3 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 3 tries for self correcting")
-
-			return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: inputData,
-					},
-				},
-			},
-		)
-
-		if err != nil {
-			if strings.Contains(err.Error(), "status code: 401") || strings.Contains(err.Error(), "status code: 403") {
-				return action, additionalInfo, errors.New(fmt.Sprintf("AI API key is invalid. Please check your key. Bad status code."))
-			}
-
-			log.Printf("[ERROR] Failed to create chat completion in run self correcting. Retrying in 3 seconds (5): %s", err)
-
-			time.Sleep(2 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		contentOutput = openaiResp2.Choices[0].Message.Content
-		break
+	contentOutput, err := RunAiQuery(systemMessage, inputData) 
+	if err != nil {
+		return action, additionalInfo, err
 	}
 
 	//log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
 
 	contentOutput = FixContentOutput(contentOutput)
 
-	log.Printf("[INFO] Autocorrected output: %s", contentOutput)
+	if debug { 
+		log.Printf("[DEBUG] Autocorrected output: %s", contentOutput)
+	}
 
 	// Fix the params based on the contentOuput JSON
 	// Parse output into JSOn
 	var outputJSON map[string]interface{}
-	err := json.Unmarshal([]byte(contentOutput), &outputJSON)
+	err = json.Unmarshal([]byte(contentOutput), &outputJSON)
 	if err != nil {
 		log.Printf("[ERROR] Failed unmarshalling data '%s'. Failed to unmarshal outputJSON in action fix for app %s with action %s: %s", contentOutput, appname, action.Name, err)
 
@@ -910,76 +860,6 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 	//errorString := HandleOutputFormatting(string(outputData), inputdata, appname)
 
 	return outputData 
-}
-
-func RunAiQuery(systemMessage, userMessage string) (string, error) {
-	maxTokens := 5000
-	maxCharacters := 100000
-	//if len(systemMessage) > maxTokens || len(userMessage) > maxTokens {
-		// FIXME: Error or just cut it off?
-		//return "", errors.New("Message too long for general usage. Max 10000 characters for system & user message")
-
-	if len(systemMessage) > maxCharacters {
-		systemMessage = systemMessage[:maxCharacters]
-	}
-
-	if len(userMessage) > maxCharacters {
-		log.Printf("[WARNING] User message too long. Cutting off from %d to %d characters", len(userMessage), maxCharacters)
-		userMessage = userMessage[:maxCharacters]
-	}
-	//}
-
-	cnt := 0
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-	chatCompletion := openai.ChatCompletionRequest{
-		Model: model,
-		Messages: []openai.ChatCompletionMessage{},
-		MaxTokens:   maxTokens,
-	}
-
-	if len(systemMessage) > 0 {
-		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: systemMessage,
-		})
-	}
-
-	if len(userMessage) > 0 {
-		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: userMessage,
-		})
-	}
-
-	if len(chatCompletion.Messages) == 0 {
-		return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
-	}
-
-	contentOutput := ""
-	for {
-		if cnt >= 3 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
-
-			return "", errors.New("Failed to match JSON in runActionAI after 5 tries for openapi info")
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			chatCompletion,
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion for api info. Retrying in 3 seconds (4): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		contentOutput = openaiResp2.Choices[0].Message.Content
-		break
-	}
-
-	return contentOutput, nil
 }
 
 // Ask itself for information about the API in case it has it
@@ -2796,9 +2676,6 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 // Used at first to answer general questions
 func findRelevantOutput(inputQuery string, org Org, user User) string {
 	// Based on the following info,
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-	cnt := 0
-
 	usecasesString := GetUsecaseData()
 	// Unmarshal this
 	var usecases []map[string]interface{}
@@ -2874,38 +2751,10 @@ func findRelevantOutput(inputQuery string, org Org, user User) string {
 
 	//log.Printf("[INFO] User message (find relevant output type): %s", userMessage)
 
-	contentOutput := ""
-	for {
-		if cnt >= 3 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for find relevant")
-
-			return ""
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: userMessage,
-					},
-				},
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion for relevant output. Retrying in 3 seconds (7): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		if len(openaiResp2.Choices) > 0 {
-			contentOutput = openaiResp2.Choices[0].Message.Content
-		}
-		break
+	contentOutput, err := RunAiQuery("", userMessage)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in findRelevantOutput: %s", err)
+		return ""
 	}
 
 	log.Printf("[INFO] Content output for initial relevancy check: %s", contentOutput)
@@ -2923,8 +2772,6 @@ func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, 
 		return HTTPWrapper{}, errors.New("No text input")
 	}
 
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-
 	systemMessage := fmt.Sprintf("Fill in the following HTTP information with the API of '%s' based on the following information: '%s'. If an API_KEY is required and provided, use it. Otherwise, specify it as API_KEY with authentication required. Headers should be a string with newlines between each key value pair. Make sure the format is valid JSON.", appname, textInput)
 
 	userMessage := fmt.Sprintf(`{"url": "", "headers": "Content-Type=application/json\nAccept=application/json", "body": "", "method": "GET", "requires_authentication": false, "oauth2_auth": false, "apikey": "", "curl_command": ""}`)
@@ -2933,48 +2780,15 @@ func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, 
 	log.Printf("[INFO] User message (find http request info - 1): %s", userMessage)
 
 	// Parses the input and returns the category and action label
-	cnt := 0
-	contentOutput := ""
-
-	for {
-		if cnt >= 5 {
-			log.Printf("[ERROR] Failed to find action in runActionAI after 5 tries")
-			return HTTPWrapper{}, errors.New("AI API unavailable. Please try again later.")
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: userMessage,
-					},
-				},
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion in runActionAI. Retrying in 3 seconds (8): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		if len(openaiResp2.Choices) > 0 {
-			contentOutput = openaiResp2.Choices[0].Message.Content
-		}
-		break
+	var httpWrapper HTTPWrapper
+	contentOutput, err := RunAiQuery(systemMessage, userMessage) 
+	if err != nil {
+		log.Printf("[DEBUG] Failed to run AI query in findHTTPrequestInformation: %s", err)
+		return httpWrapper, err
 	}
 
 	// Parse out the output
-	var httpWrapper HTTPWrapper
-	err := json.Unmarshal([]byte(contentOutput), &httpWrapper)
+	err = json.Unmarshal([]byte(contentOutput), &httpWrapper)
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal http wrapper in runActionAI with data %s: %s. Return as per normal anyway and skipping invalid field.", contentOutput, err)
 	}
@@ -2984,60 +2798,23 @@ func findHTTPrequestInformation(textInput string, appname string) (HTTPWrapper, 
 }
 
 func findRelevantOpenAIAppsForCategory(category string) []WorkflowApp {
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
 	newApps := []WorkflowApp{}
-	cnt := 0
 
 	systemMessage := fmt.Sprintf("Use this exact format: [{\"rank\": 1, \"name\": \"appname\", \"logo\": \"logo url\", \"api url\": \"api doc url\", \"requires_oauth2\": false}]. If no apps, return {\"success\": false}")
 	userMessage := fmt.Sprintf("Create a list of the top three apps in the category '%s'", category)
 	log.Printf("[INFO] System message (find relevant apps for category): %s. Usermsg: %s", systemMessage, userMessage)
 
-	contentOutput := ""
-	for {
-		if cnt >= 3 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for find relevant")
-
-			return []WorkflowApp{}
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: userMessage,
-					},
-				},
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion in runActionAI. Retrying in 3 seconds (6): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		if len(openaiResp2.Choices) > 0 {
-			contentOutput = openaiResp2.Choices[0].Message.Content
-			break
-		} else {
-			cnt += 1
-			log.Printf("[INFO] No content output in find relevant apps for category. Retrying.")
-		}
+	contentOutput, err := RunAiQuery(systemMessage, userMessage) 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in findRelevantOpenAIAppsForCategory: %s", err)
+		return newApps
 	}
 
 	log.Printf("[INFO] Content output for relevant apps: %s", contentOutput)
 
 	// Map back to JSON and start building in the background?
 	var apps []map[string]interface{}
-	err := json.Unmarshal([]byte(contentOutput), &apps)
+	err = json.Unmarshal([]byte(contentOutput), &apps)
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal JSON in runActionAI for relevant apps. Data & err %s: %s", contentOutput, err)
 
@@ -3260,9 +3037,6 @@ func RunGoogleSearch(ctx context.Context, query string) (string, error) {
 }
 
 func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (string, error) {
-
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-
 	if len(actionLabel) > 0 {
 		actionLabel = fmt.Sprintf("'%s' or ", actionLabel)
 	}
@@ -3301,43 +3075,10 @@ func findActionByInput(inputQuery, actionLabel string, foundApp WorkflowApp) (st
 	//log.Printf("[INFO] System message: %s", systemMessage)
 
 	// Parses the input and returns the category and action label
-	cnt := 0
-	contentOutput := ""
-
-	for {
-		if cnt >= 5 {
-			log.Printf("[ERROR] Failed to find action in runActionAI after 5 tries")
-			return "", errors.New("AI API unavailable. Please try again later.")
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: parsedNames,
-					},
-				},
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion in runActionAI. Retrying in 3 seconds (10): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		if len(openaiResp2.Choices) > 0 {
-			contentOutput = openaiResp2.Choices[0].Message.Content
-		}
-		break
+	contentOutput, err := RunAiQuery(systemMessage, parsedNames) 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in findActionByInput: %s", err)
+		return "", err
 	}
 
 	if strings.Contains(contentOutput, "\n") {
@@ -3743,7 +3484,9 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 	}
 
 	if len(outputBody) > 0 && bodyIndex >= 0 {
-		log.Printf("\n\n\n[INFO] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
+		if debug { 
+			log.Printf("\n\n\n[INFO] Found matching body FROM MatchBodyWithInputdata(): %s\n\n", outputBody)
+		}
 		selectedAction.Parameters[bodyIndex].Value = outputBody
 	}
 
@@ -4107,9 +3850,6 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 }
 
 func MatchRequiredFieldsWithInputdata(inputdata, appname, inputAction, body string) string {
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-	cnt := 0
-
 	actionInfo := ""
 	if len(inputAction) > 1 {
 		actionInfo = fmt.Sprintf(" action '%s'", inputAction)
@@ -4118,44 +3858,10 @@ func MatchRequiredFieldsWithInputdata(inputdata, appname, inputAction, body stri
 	systemMessage := fmt.Sprintf("For the %s API%s, fill in the following fields in JSON format based on our input. If a specific input is not supplied, make a guess. Don't add fields that haven't been supplied.", appname, actionInfo)
 	log.Printf("[INFO] Required fields message: %s", systemMessage)
 
-	contentOutput := ""
-	for {
-		if cnt >= 5 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries")
-
-			return ""
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: "gpt-3.5-turbo",
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: body,
-					},
-				},
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion in runActionAI. Retrying in 3 seconds (1): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		contentOutput = openaiResp2.Choices[0].Message.Content
-		if strings.Contains(contentOutput, "success\": false") {
-			return ""
-		}
-
-		break
+	contentOutput, err := RunAiQuery(systemMessage, inputdata) 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in MatchRequiredFieldsWithInputdata: %s", err)
+		return ""
 	}
 
 	log.Printf("[INFO] Required fields output match (1): %s", contentOutput)
@@ -4340,9 +4046,6 @@ func fixInputQuery(inputQuery string, selectedAction WorkflowAppAction) string {
 }
 
 func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appContext []AppContext) string {
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-	cnt := 0
-
 	actionName = strings.ReplaceAll(actionName, "_", " ")
 	if strings.HasPrefix(actionName, "post ") {
 		actionName = strings.ReplaceAll(actionName, "post ", "")
@@ -4377,49 +4080,12 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		log.Printf("[DEBUG] Assistant: %s", assistantInfo)
 	}
 
-	// FIX: Add required fields as a list of what fields need to be set
-	contentOutput := ""
-	for {
-		if cnt >= 5 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries")
-
-			return ""
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleAssistant,
-						Content: assistantInfo,
-					},
-					//{
-					//	Role:    openai.ChatMessageRoleUser,
-					//	Content: body,
-					//},
-				},
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion in runActionAI. Retrying in 3 seconds (2): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		contentOutput = openaiResp2.Choices[0].Message.Content
-		if strings.Contains(contentOutput, "success\": false") {
-			return ""
-		}
-
-		break
+	// FIXME: This MAY not work as we used to do this with 
+	// Assistant instead of User for some reason
+	contentOutput, err := RunAiQuery(systemMessage, assistantInfo) 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in MatchBodyWithInputdata: %s", err)
+		return ""
 	}
 
 
@@ -4427,7 +4093,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	// If there are any strings that are not in contentOutput, add them to the contentOutput
 	// If there are any strings that are not in body, remove them from the contentOutput
 	// If there are any strings that are in body but not in contentOutput, add them to the contentOutput
-
 	if strings.Contains(contentOutput, ".#.") {
 		// Making sure lists are now going to .#0. instead of .#. to not break stuff
 		contentOutput = strings.Replace(contentOutput, ".#.", ".#0.", -1)
@@ -4469,18 +4134,17 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		contentOutput = sampleFields[0].Value
 	}
 
-	log.Printf("\n\nTOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(assistantInfo)+len(body))/4, len(contentOutput)/4, string(contentOutput))
+	if debug { 
+		log.Printf("\n\n[DEBUG] TOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(assistantInfo)+len(body))/4, len(contentOutput)/4, string(contentOutput))
+	}
+
 	return contentOutput
 }
 
 func HandleOutputFormatting(result, inputdata, appname string) string {
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-
 	if len(result) > 1000 {
 		result = result[0:1000]
 	}
-	cnt := 0
-
 	//systemMessage := fmt.Sprintf("Based on '%s', format the output to match what they asked for in any format they want. Specify what the format is, and output as JSON", inputdata)
 	//systemMessage := fmt.Sprintf("Based on '%s', format the output to match what they asked for in any format they want. Make it a human readable string unless otherwise specified, and respond in the same language. Make sure to mention that we used the Appname '%s'", inputdata, appname)
 	systemMessage := fmt.Sprintf("Based on '%s', format the output to match what they asked for in any format they want. Make it a human readable string in markdown format without HTML unless otherwise specified. If a url is present, add a curl command that matches the input at the bottom as a code-block.", inputdata)
@@ -4489,52 +4153,17 @@ func HandleOutputFormatting(result, inputdata, appname string) string {
 	}
 	//log.Printf("[INFO] System message for output: %s", systemMessage)
 
-	contentOutput := ""
-	for {
-		if cnt >= 5 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries")
-
-			return ""
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: result,
-					},
-				},
-				MaxTokens:   1500,
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion in output formatting. Retrying in 3 seconds (3): %s", err)
-			if strings.Contains(err.Error(), "maximum context") {
-				result = result[:1000]
-			}
-
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		contentOutput = openaiResp2.Choices[0].Message.Content
-		if strings.Contains(contentOutput, "success\": false") {
-			return ""
-		}
-
-		break
+	contentOutput, err := RunAiQuery(systemMessage, result)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in HandleOutputFormatting: %s", err)
+		return ""
 	}
 
-	//log.Printf("[INFO] To User Formatting: %s", contentOutput)
+	if strings.Contains(contentOutput, "success\": false") {
+		log.Printf("[ERROR] Failed to run AI query (2) in HandleOutputFormatting: %s", contentOutput)
+		return ""
+	}
+
 	return contentOutput
 }
 
@@ -4548,9 +4177,6 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	} else {
 		log.Printf("\n\nGot %d invalid params and additional info of length %d", len(action.InvalidParameters), len(additionalInfo))
 	}
-
-	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
-	cnt := 0
 
 	// Add all fields with value from here
 	inputBody := "{\n"
@@ -4625,40 +4251,10 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		log.Printf("[DEBUG] Input body sent: %s", inputBody)
 	}
 
-	contentOutput := ""
-	for {
-		if cnt >= 3 {
-			log.Printf("[ERROR] Failed to match JSON in runActionAI after 3 tries for self correcting")
-
-			return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
-		}
-
-		openaiResp2, err := openaiClient.CreateChatCompletion(
-			context.Background(),
-			openai.ChatCompletionRequest{
-				Model: model,
-				Messages: []openai.ChatCompletionMessage{
-					{
-						Role:    openai.ChatMessageRoleSystem,
-						Content: systemMessage,
-					},
-					{
-						Role:    openai.ChatMessageRoleUser,
-						Content: inputData,
-					},
-				},
-			},
-		)
-
-		if err != nil {
-			log.Printf("[ERROR] Failed to create chat completion in run self correcting. Retrying in 3 seconds (5): %s", err)
-			time.Sleep(3 * time.Second)
-			cnt += 1
-			continue
-		}
-
-		contentOutput = openaiResp2.Choices[0].Message.Content
-		break
+	contentOutput, err := RunAiQuery(systemMessage, inputData) 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in runActionAI: %s", err)
+		return action, additionalInfo, err
 	}
 
 	log.Printf("[INFO] Content output for fixing app: %s", contentOutput)
@@ -4666,7 +4262,7 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	// Fix the params based on the contentOuput JSON
 	// Parse output into JSOn
 	var outputJSON map[string]interface{}
-	err := json.Unmarshal([]byte(contentOutput), &outputJSON)
+	err = json.Unmarshal([]byte(contentOutput), &outputJSON)
 	if err != nil {
 		log.Printf("[ERROR] Failed to unmarshal outputJSON in action fix for app %s with action %s: %s", appname, action.Name, err)
 
@@ -5027,4 +4623,2246 @@ func init() {
 	if os.Getenv("STANDALONE") == "true" {
 		standalone = true
 	}
+
+	if len(os.Getenv("AI_MODEL")) > 0 {
+		model = os.Getenv("AI_MODEL")
+	}
+
+	if len(os.Getenv("FALLBACK_AI_MODEL")) > 0 {
+		fallbackModel = os.Getenv("FALLBACK_AI_MODEL")
+	}
+}
+
+func workerPool(jobs <-chan openai.ToolCall, results chan<- AtomicOutput, wg *sync.WaitGroup, user User, input QueryInput) {
+	defer wg.Done()
+	for toolCall := range jobs {
+		//log.Printf("[DEBUG] Running job for toolCall: %+v", toolCall)
+
+		// Your processing logic for each request goes here
+		if len(toolCall.Function.Name) == 0 {
+			log.Printf("[ERROR] No function found. Skipping.")
+
+			results <- AtomicOutput{
+				Success:    false,
+				Reason:     fmt.Sprintf("No function name was found"),
+				ToolCallID: toolCall.ID,
+			}
+			continue
+		}
+
+		functionName := toolCall.Function.Name
+		newAction := CategoryAction{
+			Query: input.Query,
+			Label: functionName,
+			OrgId: user.ActiveOrg.Id,
+		}
+
+		if len(input.AppName) > 0 {
+			log.Printf("\n\n\n[DEBUG] App name found and appending: %s\n\n\n", input.AppName)
+			newAction.AppName = input.AppName
+		}
+
+		// Making workflow based on thread
+		if len(input.WorkflowId) > 0 {
+			newAction.WorkflowId = input.WorkflowId
+		} else {
+			newAction.WorkflowId = input.ThreadId
+		}
+
+		if strings.Contains(functionName, ":") {
+			itemsplit := strings.Split(functionName, ":")
+			newAction.Category = itemsplit[0]
+			newAction.Label = itemsplit[1]
+		}
+
+		// Map toolCall.Function.Arguments into map[string]interface{}
+		// Then find what they are
+		newfields := make(map[string]interface{})
+
+		err := json.Unmarshal([]byte(toolCall.Function.Arguments), &newfields)
+		if err != nil {
+			log.Printf("[ERROR] Failed to unmarshal tool call arguments to JSON: %#v", string(toolCall.Function.Arguments))
+			results <- AtomicOutput{
+				Success:    true,
+				Reason:     fmt.Sprintf("Parsing problem in Shuffle. Raw: %s", string(toolCall.Function.Arguments)),
+				ToolCallID: toolCall.ID,
+			}
+			continue
+		}
+
+		foundApp := ""
+		dryRun := false
+		for key, value := range newfields {
+			log.Printf("[DEBUG] Fields to parse: %s - %s", key, value)
+
+			if key == "dryrun" {
+				log.Printf("\n\n\n\n\n[DEBUG] TODO: Got dryrun key\n\n\n\n\n")
+			}
+
+			// Check if it's a string or whatever
+			switch value.(type) {
+			case string:
+				if strings.ToLower(key) == "app" || strings.ToLower(key) == "app_name" || strings.ToLower(key) == "appname" {
+					foundApp = value.(string)
+				}
+
+				if strings.ToLower(key) == "action" {
+					newAction.Label = value.(string)
+				}
+
+				newAction.Fields = append(newAction.Fields, Valuereplace{
+					Key:   key,
+					Value: value.(string),
+				})
+			case float64:
+				newAction.Fields = append(newAction.Fields, Valuereplace{
+					Key:   key,
+					Value: strconv.FormatFloat(value.(float64), 'f', -1, 64),
+				})
+			case bool:
+				if key == "dryrun" {
+					dryRun = value.(bool)
+					continue
+				}
+
+				newAction.Fields = append(newAction.Fields, Valuereplace{
+					Key:   key,
+					Value: strconv.FormatBool(value.(bool)),
+				})
+			default:
+				log.Printf("[ERROR] Unknown type for autocomplete value: %s", value)
+			}
+		}
+
+		if functionName == "authenticate_app" || functionName == "discover_app" {
+			functionName = "authenticate_app"
+
+			// Check if "app" in newAction fields
+			if len(foundApp) > 0 {
+				newAction.AppName = foundApp
+			} else {
+				results <- AtomicOutput{
+					Success:    false,
+					Reason:     fmt.Sprintf("Could not find the app. Please be more specific"),
+					ToolCallID: toolCall.ID,
+				}
+				return
+			}
+		} else {
+			if len(foundApp) > 0 {
+				newAction.AppName = foundApp
+			}
+		}
+
+		// Send HTTP request to POST shuffler.io/api/v1/apps/categories with the newAction
+		newAction.DryRun = dryRun
+
+		parsedOutput, err := json.Marshal(newAction)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal newAction: %s", err)
+
+			results <- AtomicOutput{
+				Success:    false,
+				Reason:     fmt.Sprintf("Marshal action problem in Shuffle. Raw: %s", err.Error()),
+				ToolCallID: toolCall.ID,
+			}
+			continue
+		}
+
+		// Need a dryrun thing here
+		log.Printf("[DEBUG] New Action to send to category run from chat: %s", parsedOutput)
+
+		//baseUrl := "http://localhost:5002"
+		baseUrl := fmt.Sprintf("https://shuffler.io")
+		if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+			baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+		}
+
+		parsedUrl := baseUrl + "/api/v1/apps/categories/run"
+		req, err := http.NewRequest(
+			"POST",
+			parsedUrl,
+			bytes.NewBuffer(parsedOutput),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed to create new request: %s", err)
+			results <- AtomicOutput{
+				Success:    false,
+				Reason:     fmt.Sprintf("Request setup problem in Shuffle. Raw: %s", err.Error()),
+				ToolCallID: toolCall.ID,
+			}
+
+			continue
+		}
+
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+user.ApiKey)
+
+		client := &http.Client{
+			Timeout: time.Second * 60,
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed to send request categories request: %s", err)
+			results <- AtomicOutput{
+				Success:    false,
+				Reason:     fmt.Sprintf("Request problem in Shuffle. Raw: %s", err.Error()),
+				ToolCallID: toolCall.ID,
+			}
+
+			continue
+		}
+
+		log.Printf("[DEBUG] Response Status: %s", resp.Status)
+		defer resp.Body.Close()
+
+		body, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed to read response body: %s", err)
+			results <- AtomicOutput{
+				Success:    false,
+				Reason:     fmt.Sprintf("Body JSON marshal problem in Shuffle. Raw: %s", err.Error()),
+				ToolCallID: toolCall.ID,
+			}
+
+			continue
+		}
+
+		// FIXME: Should add some error handling here
+		// and notify the user properly
+		if resp.StatusCode != 200 {
+			if resp.StatusCode == 400 {
+				// Unmarshal into StructuredCategoryAction
+				// and then send back to the user
+				var structuredAction StructuredCategoryAction
+				err := json.Unmarshal(body, &structuredAction)
+				if err != nil {
+					//log.Printf("[ERROR] Failed to unmarshal structured action (4): %s", err)
+					results <- AtomicOutput{
+						Success:    false,
+						Reason:     fmt.Sprintf("Failed unmarshalling structured return action in Shuffle. Raw: %s", err.Error()),
+						ToolCallID: toolCall.ID,
+					}
+
+					continue
+				}
+
+				if len(input.ThreadId) > 0 {
+					structuredAction.ThreadId = input.ThreadId
+				}
+
+				if len(input.RunId) > 0 {
+					structuredAction.RunId = input.RunId
+				}
+
+				//log.Printf("[DEBUG] Structured action required with action: %#v", structuredAction.Action)
+				results <- AtomicOutput{
+					Success:    false,
+					Reason:     string(body),
+					ToolCallID: toolCall.ID,
+				}
+
+				continue
+			}
+
+			log.Printf("[ERROR] Failed to get 200 response from category run: %s", resp.Status)
+
+			results <- AtomicOutput{
+				Success:    false,
+				Reason:     string(body),
+				ToolCallID: toolCall.ID,
+			}
+
+			continue
+		}
+
+		log.Printf("\n\n[DEBUG] Got a 200 OK response back. Time to let OpenAI interpret it!.\n\n")
+
+		// SubmitToolOutput
+		results <- AtomicOutput{
+			Success:    true,
+			Reason:     string(body),
+			ToolCallID: toolCall.ID,
+		}
+		//results <- openai.ToolOutput{
+		//	ToolCallID: toolCall.ID,
+		//	Output: string(body),
+		//}
+	}
+}
+
+func GetCategoryLabelParameters(ctx context.Context, category string, label string) string {
+	systemMessage := fmt.Sprintf("Output as JSON")
+	userMessage := fmt.Sprintf(`I need a programmatic output for the following:
+
+Category: %s
+Action: %s
+
+Use the following format, and add fields according to what the action and the category would typically use. Add a maximum of 3 properties, minimum of 0. It doesn't need to have any required properties. Example: if the action is saying "list X", then it usually indicates an amount is required, and sometimes the ID of the parent type. "search" indicates a search query is required, etc.
+
+{
+	"name": "%s",
+	"description": "The description for the action with info about the category",
+	"parameters": {
+		"type": "object",
+		"required": ["fieldname"],
+		"properties": {
+			"fieldname": {
+				"description": "Description to detail what to fill in the field",
+				"type": "string",
+			},
+			"fieldname2": {
+				"description": "Description to detail what to fill in the field",
+				"type": "string",
+			}
+		}
+	}
+}`, category, label, label)
+	//}`, category, label, category, label)
+
+	contentOutput, err := RunAiQuery(systemMessage, userMessage)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in GetCategoryLabelParameters: %s", err)
+		return ""
+	}
+
+	contentOutput = strings.TrimSpace(contentOutput)
+
+	log.Printf("[DEBUG] Content output (get label params): %s", contentOutput)
+
+	return contentOutput
+}
+
+func ValidateLabelAvailability(category string, availableLabels []string) {
+	log.Printf("\n\n[DEBUG] Label validity checking and updating is disabled. Contact frikky@shuffler.io if you want to know why or / if this limit should be removed.\n\n")
+	return
+
+	if len(category) == 0 {
+		log.Printf("\n\n[DEBUG] No category provided. Skipping validation.\n\n")
+	}
+
+	category = strings.ToLower(category)
+	if category == "communication" {
+		log.Printf("[FIXME] Communication category casted to email for no reason")
+		category = "email"
+	}
+
+	if category == "other" {
+		log.Printf("[DEBUG] Other category to be skipped")
+		return
+	}
+
+	// Should check the model if it has these functions available or not
+	// 1. Get the assistant
+	// 2. Check which of the labels are in there
+	// 3. If they're not, run the following query for them
+	// 4. Then add the result to the assistant if possible
+	/*
+			```
+		I need a programmatic output for the following:
+
+		Category: Email
+		Action: List Messages
+
+		Use the following format, and add fields according to what the action and the category would typically use. Add a maximum of 5 fields. It doesn't need to have any required fields in all cases.
+		```
+		[{
+		   "name": "fieldname",
+		   "description": "Description to detail what to fill in the field",
+		    "type": "string",
+		    "required": false
+		  },
+		  ...
+		}]
+		```
+	*/
+
+	ctx := context.Background()
+	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
+	config.AssistantVersion = "v2"
+	openaiClient := openai.NewClientWithConfig(
+		config,
+	)
+
+	assistant, err := openaiClient.RetrieveAssistant(
+		ctx,
+		assistantId,
+	)
+
+	if err != nil || assistant.ID == "" {
+		log.Printf("[ERROR] Failed to retrieve assistant '%s': %s", assistantId, err)
+		return
+	}
+
+	if len(assistant.Tools) == 0 {
+		log.Printf("[ERROR] Assistant '%s' has no tools", assistantId)
+		return
+	}
+
+	foundLabels := []string{}
+	for _, tool := range assistant.Tools {
+		if tool.Type != "function" {
+			continue
+		}
+
+		foundCategory := ""
+		foundLabel := tool.Function.Name
+		if strings.Contains(tool.Function.Name, ":") {
+			foundCategory = strings.Split(tool.Function.Name, ":")[0]
+			foundLabel = strings.ReplaceAll(strings.ToLower(strings.Split(tool.Function.Name, ":")[1]), " ", "_")
+		}
+
+		if len(foundCategory) == 0 {
+			continue
+		}
+
+		if strings.ToLower(foundCategory) != category {
+			continue
+		}
+
+		// Look for the right label
+		for i, label := range availableLabels {
+			label = strings.ToLower(strings.ReplaceAll(label, " ", "_"))
+
+			if strings.ToLower(foundLabel) == label {
+				foundLabels = append(foundLabels, fmt.Sprintf("%s:%s", foundCategory, foundLabel))
+
+				availableLabels = append(availableLabels[:i], availableLabels[i+1:]...)
+				// Remove the label from the available labels
+				// so we can check which ones are missing
+				break
+			}
+		}
+
+		//if strings.ToLower(foundLabel) != strings.ToLower(category) {
+		//	log.Printf("[DEBUG] Wrong label '%s' in assistant '%s'", category, assistantId)
+		//}
+
+		// 	// You can pass json.RawMessage to describe the schema,
+	}
+
+	// Compare found vs not found
+	if len(availableLabels) == 0 {
+		log.Printf("[DEBUG] All labels are already available in assistant '%s'", assistantId)
+		return
+	}
+
+	// Check category + action with the query thing
+	oldLength := len(assistant.Tools)
+	for _, label := range availableLabels {
+		if len(label) == 0 {
+			continue
+		}
+
+		log.Printf("[DEBUG] Adding label '%s' to assistant '%s'", label, assistantId)
+
+		parsedParameters := GetCategoryLabelParameters(ctx, category, label)
+		if len(parsedParameters) == 0 {
+			log.Printf("[ERROR] Failed to parse parameters for category '%s' and label '%s'", category, label)
+			continue
+		}
+
+		// Look for the "description" field inside the parsed parameters
+
+		var tmpdata map[string]interface{}
+		err = json.Unmarshal([]byte(parsedParameters), &tmpdata)
+		if err != nil {
+			log.Printf("[ERROR] Failed to unmarshal parsed parameters: %s", err)
+			continue
+		}
+
+		foundDescription := ""
+		paramsFound := false
+		parsedRawmessage := json.RawMessage(parsedParameters)
+		for key, value := range tmpdata {
+			if key == "description" && value != nil {
+				valueString, ok := value.(string)
+				if ok {
+					foundDescription = valueString
+				}
+			}
+
+			if key == "parameters" {
+				paramsFound = true
+				// Make the raw data into a json.rawmessage
+				// Overwrite parsedRawmessage
+
+				properties, ok := value.(map[string]interface{})
+				if !ok {
+					log.Printf("[ERROR] Failed to parse properties")
+					continue
+				}
+
+				// Check if "type" is in there and set it to be "object"
+				for propertyKey, propertyValue := range properties {
+					//log.Printf("[DEBUG] Checking property '%s' with value '%s'", propertyKey, propertyValue)
+
+					if propertyKey == "type" {
+						_, ok := propertyValue.(string)
+						if ok {
+							properties[propertyKey] = "object"
+						}
+					}
+				}
+
+				propertiesJson, err := json.Marshal(properties)
+				if err != nil {
+					log.Printf("[ERROR] Failed to marshal properties")
+					continue
+				}
+
+				log.Printf("[DEBUG] Updating parsed raw message to: %s", propertiesJson)
+				parsedRawmessage = json.RawMessage(propertiesJson)
+			}
+		}
+
+		// Print raw message for it
+		if !paramsFound {
+			log.Printf("[ERROR] No properties field found for parsing of %s:%s!", category, label)
+			continue
+		}
+
+		if strings.ReplaceAll(strings.ToLower(label), " ", "_") == "no_label" {
+			log.Printf("[DEBUG] Skipping handler for %s:%s", category, label)
+			continue
+		}
+
+		newAssistantTool := openai.AssistantTool{
+			Type: "function",
+			Function: &openai.FunctionDefinition{
+				//Name: fmt.Sprintf("%s:%s", strings.ToLower(category), strings.ReplaceAll(strings.ToLower(label), " ", "_")),
+				Name:        fmt.Sprintf("%s", strings.ReplaceAll(strings.ToLower(label), " ", "_")),
+				Description: foundDescription,
+				Parameters:  parsedRawmessage,
+			},
+		}
+
+		assistant.Tools = append(assistant.Tools, newAssistantTool)
+	}
+
+	if len(assistant.Tools) <= oldLength {
+		log.Printf("[ERROR] Failed to add any new labels to assistant '%s'", assistantId)
+		return
+	}
+
+	if len(assistant.Tools) <= 0 {
+		log.Printf("[DEBUG] No new labels to add to assistant '%s'", assistantId)
+		return
+	}
+
+	log.Printf("[DEBUG] Updating assistant with new functions that were added!")
+	assistantRequest := openai.AssistantRequest{
+		Model:        assistant.Model,
+		Name:         assistant.Name,
+		Description:  assistant.Description,
+		Instructions: assistant.Instructions,
+		Tools:        assistant.Tools,
+		FileIDs:      assistant.FileIDs,
+		Metadata:     assistant.Metadata,
+	}
+
+	// Try to update the assistant
+	assistant, err = openaiClient.ModifyAssistant(
+		ctx,
+		assistantId,
+		assistantRequest,
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to update assistant '%s' with %d new functions: %s", assistantId, len(assistant.Tools)-oldLength, err)
+		return
+	}
+
+	log.Printf("[DEBUG] Successfully updated assistant '%s' with new functions!", assistantId)
+}
+
+func runAtomicChatRequest(ctx context.Context, user User, input QueryInput) (string, string, string, bool) {
+
+	config := openai.DefaultConfig(os.Getenv("OPENAI_API_KEY"))
+	config.AssistantVersion = "v2"
+	openaiClient := openai.NewClientWithConfig(
+		config,
+	)
+
+	cnt := 0
+
+	if len(input.AppName) > 0 {
+		newAppname := strings.ToLower(strings.ReplaceAll(input.AppName, "_", " "))
+		if !strings.Contains(strings.ToLower(input.Query), newAppname) {
+			input.Query = fmt.Sprintf("%s - Use the app %s", input.Query, newAppname)
+		}
+	}
+
+	var err error
+	thread := openai.Thread{}
+	if len(input.ThreadId) == 0 {
+		for {
+			if cnt >= 5 {
+				log.Printf("[ERROR] Failed to match Formatting in runActionAI after 5 tries (5)")
+
+				return "Timed out during thread creation. Please try again.", input.ThreadId, input.RunId, true
+			}
+
+			thread, err = openaiClient.CreateThread(
+				context.Background(),
+				openai.ThreadRequest{
+					Messages: []openai.ThreadMessage{
+						{
+							Role:    openai.ThreadMessageRoleUser,
+							Content: input.Query,
+						},
+					},
+				},
+			)
+
+			if err != nil {
+				if strings.Contains(fmt.Sprintf("%s", err), "400") {
+					log.Printf("[ERROR] Failed to create thread (1): %s", err)
+					return "Failed to make thread: " + err.Error(), input.ThreadId, input.RunId, true
+				}
+
+				log.Printf("[ERROR] Failed to create thread (1): %s", err)
+				time.Sleep(3 * time.Second)
+				cnt += 1
+				continue
+			}
+
+			//log.Printf("[DEBUG] OpenAI response: %s", thread)
+			break
+		}
+	} else {
+		thread.ID = input.ThreadId
+
+		// We only get here when there's a followup.
+		if len(input.ThreadId) > 0 && len(input.RunId) > 0 {
+			// 1. Add the latest thing they wrote to the thread
+			// 2. Run it!
+			_, err := openaiClient.CreateMessage(ctx, thread.ID, openai.MessageRequest{
+				Role:    "user",
+				Content: input.Query,
+			})
+
+			if err != nil {
+				if strings.Contains(err.Error(), "while a run") && strings.Contains(err.Error(), "is active") {
+					log.Printf("[DEBUG] Run is active. Waiting for it to finish. Run: %s", input.RunId)
+
+					if len(input.RunId) == 0 {
+						errorSplit := strings.Split(err.Error(), "while a run ")
+						if len(errorSplit) == 2 {
+							runSplit2 := strings.Split(errorSplit[1], " is active")
+							if len(runSplit2) == 2 {
+								input.RunId = runSplit2[0]
+							}
+						}
+					}
+				}
+
+				log.Printf("[ERROR] Failed to add message to thread: %s. If a run exists, this will try to continue the run anyway.", err)
+				if len(input.RunId) == 0 {
+					return "Failed to add message to thread. Please refresh and start over. Contact support@shuffler.io if this persists. Details: " + err.Error(), input.ThreadId, input.RunId, true
+				}
+			}
+
+			// FIXME: Should we reset the run so that it runs again?
+			input.RunId = ""
+		}
+
+	}
+
+	if thread.ID == "" {
+		log.Printf("[ERROR] Failed to create thread (2): %s", err)
+		return "Failed to make thread: " + err.Error(), input.ThreadId, input.RunId, true
+	}
+
+	log.Printf("[DEBUG] Thread ID: %s", thread.ID)
+	input.ThreadId = thread.ID
+
+	// FIXME: Does this need tools? As in ALL the functions?
+	// Or could we dynamically fill this in for the user based on what labels they have? This is interesting...
+	runReply := openai.Run{}
+	if len(input.RunId) == 0 {
+
+		//instructions := "Figure out what they want to do based on their input using the available functions. If they ask what you can do, list out the available functions only. Always output valid Markdown. If the status code is not less than 300, make it clear that there was a bug and the user needs to modify it. If you can't find a matching function, use the discover_intent() function and ask if it's ok to run it to find their intent. If you see a workflow ID and execution ID, add a link at the bottom in following format: https://shuffler.io/workflows/{workflow_id}?execution_id={execution_id}"
+		//instructions := fmt.Sprintf("If they ask what you can do, list out the available functions only. Always output valid Markdown. If the status code is not less than 300, make it clear that there was a bug and the user needs to modify the workflow. Output simple answers that are to the point with minimal text. If you see a workflow ID and execution ID, add a link at the bottom in following format: https://shuffler.io/workflows/{workflow_id}?execution_id={execution_id}, and don't mention anything about it otherwise. My username is %s and my organization is %s. Any function can get the parameter 'dryrun' even though it is not specified. Dryrun is used if they don't explicitly say to run the workflow.", user.Username, user.ActiveOrg.Name)
+
+		// No dryrun
+		instructions := fmt.Sprintf("If they ask what you can do, list out the available functions only. Always output valid Markdown. If the status code is not less than 300, make it clear that there was a bug and the user needs to modify the workflow. Output simple answers that are to the point with minimal text. If you see a workflow ID and execution ID, add a link at the bottom in following format: https://shuffler.io/workflows/{workflow_id}?execution_id={execution_id}, and don't mention anything about it otherwise. My username is %s and my organization is %s", user.Username, user.ActiveOrg.Name)
+
+		runReply, err = openaiClient.CreateRun(ctx, thread.ID, openai.RunRequest{
+			AssistantID:  assistantId,
+			Model:        assistantModel,
+			Instructions: instructions,
+		})
+
+		if len(runReply.ID) == 0 {
+			log.Printf("[ERROR] Failed to create run: %s", err)
+			return "Failed to create run: " + err.Error(), input.ThreadId, input.RunId, true
+		}
+
+		log.Printf("[DEBUG] Run ID: %#v", runReply.ID)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed to create run (trying to autorecover): %s", err)
+			if !strings.Contains(err.Error(), "already has an active") {
+				return "Failed to create run. Please try again. Details: " + err.Error(), input.ThreadId, input.RunId, true
+			}
+
+			if len(input.RunId) == 0 {
+				// Find it in the error message at the end
+				errorSplit := strings.Split(err.Error(), "has an active run ")
+				if len(errorSplit) == 2 {
+					runReply.ID = errorSplit[1]
+					if strings.HasSuffix(runReply.ID, ".") {
+						runReply.ID = runReply.ID[:len(runReply.ID)-1]
+					}
+				}
+			}
+		}
+
+		if len(runReply.ID) > 0 {
+			input.RunId = runReply.ID
+		}
+
+		if len(input.RunId) == 0 {
+			log.Printf("[ERROR] Failed to create or find run: %s", err)
+			return "Failed to create run (2): " + err.Error(), input.ThreadId, input.RunId, true
+		}
+	}
+
+	timeoutCnt := 0
+	runSent := false
+
+	// The data to return after the run is complete
+	returnData := ""
+	alreadySent := []string{}
+	appAuthResults := []openai.ToolOutput{}
+	for {
+		timeoutCnt += 1
+
+		runReply, err = openaiClient.RetrieveRun(ctx, input.ThreadId, input.RunId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to retrieve run: %s", err)
+			return "Failed to retrieve run. Please try again: " + err.Error(), input.ThreadId, input.RunId, true
+		}
+
+		// The current status of the fine-tuning job, which can be either validating_files, queued, running, succeeded, failed, or cancelled.
+		if runReply.Status == "failed" {
+			log.Printf("\n\n[ERROR] Run with thread %s and run %s failed unexpectedly.\n\n", input.ThreadId, input.RunId)
+			return "Automation workflow builder failed unexpectedly. Please try again.", input.ThreadId, input.RunId, true
+		} else if runReply.Status == "requires_action" {
+			//log.Printf("[DEBUG] Run requires action. Time to run action AI.")
+
+			// FIXME: Check if it's multiprocess or steps
+			// steps: "get me a ticket and send it as an email"
+			// multi: "send me 2 emails with this data"
+
+			// Right now just doing 1 worker = steps
+
+			// Create a wait group to wait for all workers to finish
+			// in case there are more jobs than one
+			numWorkers := 1
+			if len(runReply.RequiredAction.SubmitToolOutputs.ToolCalls) < numWorkers {
+				numWorkers = len(runReply.RequiredAction.SubmitToolOutputs.ToolCalls)
+			}
+
+			var wg sync.WaitGroup
+			jobs := make(chan openai.ToolCall, len(runReply.RequiredAction.SubmitToolOutputs.ToolCalls))
+			results := make(chan AtomicOutput, len(runReply.RequiredAction.SubmitToolOutputs.ToolCalls))
+
+			// Start the workers
+			finished := false
+			for i := 0; i < numWorkers; i++ {
+				wg.Add(1)
+				go workerPool(jobs, results, &wg, user, input)
+			}
+
+			go func() {
+				for _, toolCall := range runReply.RequiredAction.SubmitToolOutputs.ToolCalls {
+					jobs <- toolCall
+				}
+				close(jobs)
+			}()
+
+			go func() {
+				wg.Wait()
+				close(results)
+			}()
+
+			validationRan := false
+			output := openai.SubmitToolOutputsRequest{}
+			for result := range results {
+				if !result.Success {
+					//log.Printf("\n\n[DEBUG] Failed ToolOutput automation. Data of length %d\n\n", len(result.Reason))
+					var structuredAction StructuredCategoryAction
+					err := json.Unmarshal([]byte(result.Reason), &structuredAction)
+					if err != nil {
+						log.Printf("[ERROR] Failed to unmarshal structured action (1). This may happen if it's not structured. RAW: %#v: %s", result.Reason, err)
+					} else {
+						log.Printf("[DEBUG] Failed action is: %#v", structuredAction.Action)
+
+						if len(input.ThreadId) > 0 {
+							structuredAction.ThreadId = input.ThreadId
+						}
+
+						if len(input.RunId) > 0 {
+							structuredAction.RunId = input.RunId
+						}
+
+						returnData = result.Reason
+					}
+
+					if structuredAction.Action == "app_authentication" || structuredAction.Action == "discover_app" {
+						log.Printf("[DEBUG] APPAUTH RESULTS: %d. Returndata: %d", len(appAuthResults), len(returnData))
+						if len(structuredAction.AvailableLabels) > 0 && !validationRan {
+							validationRan = true
+
+							// Runs a label validity check & updates the assistant if needed
+							go ValidateLabelAvailability(structuredAction.Category, structuredAction.AvailableLabels)
+						}
+
+						// To not use too many tokens
+						//result.Reason = "Authentication required."
+						appAuthResults = append(appAuthResults, openai.ToolOutput{
+							ToolCallID: result.ToolCallID,
+							Output:     result.Reason,
+						})
+						continue
+					}
+				}
+
+				maxAmount := 5000
+				if len(result.Reason) > maxAmount {
+					log.Printf("[DEBUG] Truncating output from API to %d characters. Original: %d", maxAmount, len(result.Reason))
+					result.Reason = result.Reason[:maxAmount]
+				}
+
+				output.ToolOutputs = append(output.ToolOutputs, openai.ToolOutput{
+					ToolCallID: result.ToolCallID,
+					Output:     result.Reason,
+				})
+			}
+
+			// Should INTERPRET if there is more than one
+			// If there is just one, it should send back to help with auth
+			//log.Printf("\n\n\n\nAPPAUTHLENGET: %d\n\n\n", len(appAuthResults))
+			if len(appAuthResults) == 1 {
+				if !ArrayContains(alreadySent, appAuthResults[0].ToolCallID) {
+					alreadySent = append(alreadySent, appAuthResults[0].ToolCallID)
+					//appAuthResults[0].Output = "Authentication required."
+					copiedAppauth := appAuthResults[0]
+					copiedAppauth.Output = "Authentication or handling of labels"
+					output.ToolOutputs = append(output.ToolOutputs, copiedAppauth)
+				}
+			} else if len(appAuthResults) > 1 {
+				// FIXME: If in here, answering the query is more important.
+				// So instead of just sending back labels and such, we actually try to answer (by setting returnData to nothing)
+				log.Printf("[DEBUG] Multiple app auth results handler. Sending back to user.")
+
+				additionalContext := ""
+				for _, appAuthResult := range appAuthResults {
+					var structuredAction StructuredCategoryAction
+
+					tmpOutput, assertionSuccess := appAuthResult.Output.(string)
+					if !assertionSuccess {
+						// Handle the case where the assertion fails
+						log.Printf("[ERROR] Failed to assert appAuthResult.Output to []byte. This may happen if it's not structured. RAW: %#v", appAuthResult.Output)
+					}
+
+					if ArrayContains(alreadySent, appAuthResult.ToolCallID) {
+						log.Printf("[DEBUG] Skipping send of %s because it was already sent.", appAuthResult.ToolCallID)
+						if !assertionSuccess {
+							continue
+						}
+
+						// Check if it has AvailableLabels inside of it and add them to the validation
+
+						err := json.Unmarshal([]byte(tmpOutput), &structuredAction)
+						if err != nil {
+							log.Printf("[ERROR] Failed to unmarshal structured action (2). This may happen if it's not structured. RAW: %#v: %s", appAuthResult.Output, err)
+							continue
+						}
+
+						if len(input.ThreadId) > 0 {
+							structuredAction.ThreadId = input.ThreadId
+						}
+
+						if len(input.RunId) > 0 {
+							structuredAction.RunId = input.RunId
+						}
+
+						if len(structuredAction.AvailableLabels) > 0 && len(structuredAction.Apps) > 0 {
+							additionalContext += fmt.Sprintf("Available actions for %s: \n", strings.ReplaceAll(structuredAction.Apps[0].Name, "_", " "))
+							for _, label := range structuredAction.AvailableLabels {
+								additionalContext += fmt.Sprintf("- %s\n", label)
+							}
+						} else {
+							log.Printf("[DEBUG] No app or no available labels found in %s", appAuthResult.ToolCallID)
+						}
+
+						continue
+					}
+
+					err := json.Unmarshal([]byte(tmpOutput), &structuredAction)
+					if err != nil {
+						log.Printf("[ERROR] Failed to unmarshal structured action (3). This may happen if it's not structured. RAW: %#v: %s", appAuthResult.Output, err)
+						continue
+					}
+
+					alreadySent = append(alreadySent, appAuthResult.ToolCallID)
+					newOutput := ""
+					log.Printf("[DEBUG] Labels: %d, apps: %d", len(structuredAction.AvailableLabels), len(structuredAction.Apps))
+					if len(structuredAction.AvailableLabels) > 0 && len(structuredAction.Apps) > 0 {
+						newOutput = fmt.Sprintf("Disregard previous outputs. Authentication is done, so don't mention it. Use the following actions and try to make usecases connecting the different ones from each app. Focus on moving data through all mentioned systems, from a source to a destination. Show a maximum of 2 usecases, and disregard similar ones. Available triggers: \n- Schedule\n\nAvailable actions for %s: \n", strings.ReplaceAll(structuredAction.Apps[0].Name, "_", " "))
+
+						for _, label := range structuredAction.AvailableLabels {
+							newOutput += fmt.Sprintf("- %s\n", label)
+						}
+
+						newOutput += "\n\n"
+						newOutput += additionalContext
+					}
+
+					log.Printf("[DEBUG] New output: %#v. ASSERTION: %t", newOutput, assertionSuccess)
+					if len(newOutput) == 0 || !assertionSuccess {
+						output.ToolOutputs = append(output.ToolOutputs, appAuthResult)
+					} else {
+						output.ToolOutputs = append(output.ToolOutputs, openai.ToolOutput{
+							ToolCallID: appAuthResult.ToolCallID,
+							Output:     newOutput,
+						})
+
+					}
+				}
+
+				// Resetting to make sure interpreter gets used, not skipped
+				returnData = ""
+			}
+
+			finished = true
+			if len(output.ToolOutputs) > 0 {
+				finished = true
+				log.Printf("\n\n[DEBUG] Sending %d tool outputs to OpenAI", len(output.ToolOutputs))
+				updatedRun, err := openaiClient.SubmitToolOutputs(ctx, input.ThreadId, input.RunId, output)
+				if err != nil {
+					log.Printf("\n\n\n[ERROR] Failed to submit tool output: %s\n\n\n", err)
+					break
+				}
+
+				log.Printf("[DEBUG] Updated Run successfully with a response. New Run ID: %s", updatedRun.ID)
+
+				// Resetting so that it can wait for a response again
+				timeoutCnt = 0
+				finished = false
+				runSent = true
+
+				// This continue makes it so it can do multiple in a row
+				continue
+			}
+
+			if finished {
+				break
+			}
+
+		} else if runReply.Status == "completed" {
+			log.Printf("[DEBUG] Run completed. Time to verify messages.")
+			break
+		} else if runReply.Status == "queued" {
+			log.Printf("[DEBUG] Queued")
+		} else if runReply.Status == "in_progress" {
+			log.Printf("[DEBUG] In progress")
+		} else {
+			log.Printf("\n[ERROR] Unhandled status in run %s: %s\n", input.RunId, runReply.Status)
+		}
+
+		if timeoutCnt > 120 {
+
+			log.Printf("[ERROR] Failed to match Formatting in runActionAI after 5 tries (6)")
+			return "Timed out while waiting for the LLM (2 min max). Please try again.", input.ThreadId, input.RunId, true
+		}
+
+		// Polling every 1 second to make it faster
+		time.Sleep(1 * time.Second)
+	}
+
+	if len(returnData) > 0 && len(appAuthResults) < 2 {
+		log.Printf("[DEBUG] Got some returndata to fix things instead of assistant response")
+
+		var structuredAction StructuredCategoryAction
+		err := json.Unmarshal([]byte(returnData), &structuredAction)
+		if err == nil {
+			log.Printf("[DEBUG] Got structured action. Thread ID: %s, Run ID: %s", input.ThreadId, input.RunId)
+
+			structuredAction.ThreadId = input.ThreadId
+			structuredAction.RunId = input.RunId
+
+			returnData2, err := json.Marshal(structuredAction)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal structured action: %s", err)
+			} else {
+				returnData = string(returnData2)
+			}
+		}
+
+		return returnData, input.ThreadId, input.RunId, false
+	}
+
+	_ = runSent
+	log.Printf("[DEBUG] Got run ID: %s. Status: %s", runReply.ID, runReply.Status)
+
+	//messages, err := openaiClient.ListMessage(ctx, thread.ID, nil, nil, nil, nil)
+	limit := 50
+	order := ""
+	after := ""
+	before := ""
+	runID := ""
+	messages, err := openaiClient.ListMessage(ctx, thread.ID, &limit, &order, &after, &before, &runID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to list messages: %s", err)
+		return "Problem getting messages for your thread. Please reload. Details:: " + err.Error(), input.ThreadId, input.RunId, true
+	}
+
+	// List is reversed (newest first)
+	lastAssistant := ""
+	for _, message := range messages.Messages {
+		if len(message.Content) == 0 {
+			log.Printf("[DEBUG] Skipping empty message with ID: %s", message.ID)
+			continue
+		}
+
+		//log.Printf("[DEBUG] Role: %s, Message: '%s'", message.Role, message.Content[0].Text.Value)
+		if message.Role == "assistant" && len(lastAssistant) == 0 {
+			//log.Printf("[DEBUG] Assistant message: %s", message.Content[0].Text.Value)
+			lastAssistant = message.Content[0].Text.Value
+		}
+	}
+
+	log.Printf("[DEBUG] Return assistant message: %s", lastAssistant)
+	log.Printf("\n\n")
+
+	// Start getting the thread itself
+	return lastAssistant, input.ThreadId, input.RunId, true
+}
+
+func GetAtomicSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
+	log.Printf("[INFO] Getting support suggestion for query: %s", input.Query)
+
+	reply, threadId, runId, sendResp := runAtomicChatRequest(ctx, user, input)
+	if !sendResp {
+		resp.WriteHeader(400)
+		resp.Write([]byte(reply))
+		//log.Printf("[DEBUG] Returning default response defined by atomic chat")
+		return
+	}
+
+	if len(reply) == 0 {
+		resp.WriteHeader(501)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get atomic response"}`))
+		return
+	}
+
+	newResponse := AtomicOutput{
+		Success:  true,
+		ThreadId: threadId,
+		RunId:    runId,
+		Reason:   reply,
+	}
+
+	// Marshal it
+	output, err := json.Marshal(newResponse)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal response: %s", err)
+		resp.WriteHeader(501)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal response"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(output)
+}
+
+// 1. Return list of top apps matching the category if no apps match
+// 2. Make sure it actually runs the thing. Use this: api/v1/apps/categories/run
+// 3. Make it translate the input fields to the correct JSON format
+// 4. Make sure it handles auth
+// 5. Find apps based on Algolia
+// 5. Make sure bodies are filled in correctly
+// 6. Run without category/label and directly find app + action
+// 7. Auto-label actions based on available labels & action name
+// 8. Get documentation from doc URL, scrape & auto-input for each action
+// 9. Get context awareness of what to do: workflow (create,modify), app (run,return, add to workflow)...
+// 10. Continuing with context: Understand if they want to use ANY of the Shuffle API's, e.g. for listing apps, workflows, auth etc. "What actions does the x app have?" "how many?"
+// 11. e.g. for JIRA: Add a way to understand if we need more context. Sample: If we get a response that the project ID is wrong, look for an API to list projects (solve the problem), then: either ask the user which one, or just choose one.
+// 12. Add vector db and save for individual users
+// 13. Add synonyms for words. e.g. for cases: alert = incident = case = issue = ticket, search = find = query, ...
+// 14. Go check App's documentation for answers if we don't have the right info directly
+// 15. how many clicks did our website have last week
+// 16. Oauth2 autorefresh on single-actions
+// 17. Make it work without action label (1) & category (2), and do auto-tagging if it's correct
+// 18. Check for continuity. e.g. for an gmail, listing mails isn't always enough, but and requires further searching into the contents
+func runActionAI(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed to read body in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input body is not valid JSON"}`))
+		return
+	}
+
+	var input QueryInput
+	err = json.Unmarshal(body, &input)
+	if err != nil {
+		log.Printf("[WARNING] Failed to unmarshal input in runActionAI: %s", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Input data invalid"}`))
+		return
+	}
+
+	if len(input.Query) < 8 && len(input.ThreadId) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Please be more specific and write full sentences for what you want to automate."}`))
+		return
+	}
+
+	// Indicates to output an action, and the input data could be a large blob
+	if len(input.Query) > 300 && !strings.Contains(input.OutputFormat, "action") && !strings.Contains(input.OutputFormat, "formatting") {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Max input length exceeded."}`))
+		return
+	}
+
+	if len(input.Query) > 5000 {
+		log.Printf("[WARNING] Truncated input query from %d to %d characters for user %s (%s) in org %s", len(input.Query), 5000, input.UserId, input.Username, input.OrgId)
+		input.Query = input.Query[:5000]
+	}
+
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+
+	if err != nil {
+		//log.Printf("[INFO] Api authentication failed in runActionAI: %s", err)
+		// Look for execution_id & authorization in queries
+		executionId := request.URL.Query().Get("execution_id")
+		authorization := request.URL.Query().Get("authorization")
+
+		authReturnOrg := ""
+		if len(executionId) > 0 && len(authorization) > 0 {
+			exec, err := GetWorkflowExecution(ctx, executionId)
+			if err != nil {
+				log.Printf("[AUDIT] Error getting execution in ai auth: %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "You need to log in first (execution)", "action": "login"}`))
+				return
+			}
+
+			if exec.Authorization != authorization {
+				log.Printf("[AUDIT] Error mapping exec.Auth to authorization in ai auth")
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "You need to log in first (execution - 2)", "action": "login"}`))
+				return
+			}
+
+			authReturnOrg = exec.Workflow.OrgId
+
+			log.Printf("[AUDIT] AI Execution auth success for org %s", authReturnOrg)
+		} else {
+			// Check if a sync key has the same one
+			authReturn := SyncKey{}
+			if project.Environment == "cloud" { 
+				authReturn, err := HandleCloudSyncAuthentication(resp, request)
+				if err != nil || authReturn.OrgId == "" {
+					log.Printf("[AUDIT] Error in AI inference - missing api key (2): %s", err)
+					resp.WriteHeader(401)
+					resp.Write([]byte(`{"success": false, "reason": "You need to log in first (cloud sync)", "action": "login"}`))
+					return
+				}
+			} else {
+				log.Printf("[AUDIT] ONPREM: Error in AI inference - missing api key (3): %s", err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "You need to log in first (api key)", "action": "login"}`))
+				return
+			}
+
+			authReturnOrg = authReturn.OrgId
+		}
+
+		// Get org for authReturn.OrgId
+		org, err := GetOrg(ctx, authReturnOrg)
+		if err != nil {
+			log.Printf("[AUDIT] Error getting org in auth: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "You need to log in first (org)", "action": "login"}`))
+			return
+		}
+
+		for _, inneruser := range org.Users {
+			if inneruser.Role == "admin" {
+				user = inneruser
+				break
+			}
+		}
+
+		user.ActiveOrg.Id = org.Id
+		user.ActiveOrg.Name = org.Name
+	}
+
+	userAgent := request.Header.Get("User-Agent")
+	if strings.Contains(userAgent, "openai") {
+
+		ephemeralUser := request.Header.Get("Openai-Ephemeral-User-Id")
+		if len(ephemeralUser) > 0 {
+			log.Printf("Finding/Creating OPENAI EPHEMERAL USER: %s", ephemeralUser)
+
+			// Check if the user exists
+			// If not, create a new one
+			newUser, err := GetUser(ctx, ephemeralUser)
+			if err != nil || newUser.Id == "" {
+				log.Printf("[INFO] Failed to get OpenAI user in runActionAI: %s", err)
+
+				apikey := uuid.NewV4().String()
+				newUser = &User{
+					Id:       ephemeralUser,
+					Username: fmt.Sprintf("OpenAI User"),
+					ActiveOrg: OrgMini{
+						Id:   ephemeralUser,
+						Name: fmt.Sprintf("OpenAI - %s", ephemeralUser),
+					},
+					Orgs: []string{ephemeralUser},
+
+					Role:   "admin",
+					ApiKey: apikey,
+				}
+
+				newOrg := Org{
+					Id:   ephemeralUser,
+					Name: fmt.Sprintf("OpenAI Org"),
+					Users: []User{
+						{
+							Id:       newUser.Id,
+							Username: newUser.Username,
+							Role:     "admin",
+						},
+					},
+				}
+
+				err = SetOrg(ctx, newOrg, newOrg.Id)
+				if err != nil {
+					log.Printf("[INFO] Failed to set OpenAI org in runActionAI: %s", err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed to create your user org. Please try again"}`))
+					return
+				}
+
+				resp.Header().Set("Authorization", fmt.Sprintf("Bearer %s", apikey))
+				resp.Header().Set("Org-Id", fmt.Sprintf("%s", newOrg.Id))
+
+				err = SetUser(ctx, newUser, false)
+				if err != nil {
+					log.Printf("[INFO] Failed to set OpenAI user in runActionAI: %s", err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed to find your user. Please try again"}`))
+					return
+				}
+
+				//resp.WriteHeader(400)
+				//resp.Write([]byte(`{"success": false, "reason": "Failed to find your user. Please try again"}`))
+				//return
+			}
+
+			log.Printf("[INFO] Found OpenAI user %s (%s) in org %s (%s)", newUser.Username, newUser.Id, newUser.ActiveOrg.Name, newUser.ActiveOrg.Id)
+			user = *newUser
+
+		} else {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No user ID found. Please try again."}`))
+			return
+		}
+	}
+
+	log.Printf("[INFO] Running AI query of length %s for user %s in org %s (%s)", strconv.Itoa(len(input.Query)), user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id)
+	IncrementCache(ctx, user.ActiveOrg.Id, "ai_executions")
+
+	if len(input.Query) < 100 {
+		log.Printf("[DEBUG] Query from user %s (%s): '%s'", user.Username, user.Id, input.Query)
+	} else {
+		log.Printf("[DEBUG] Query from user %s (%s) of length '%d'", user.Username, user.Id, len(input.Query))
+	}
+
+	if len(input.AppId) == 0 {
+		go GetPrioritizedApps(ctx, user)
+	}
+
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[INFO] Failed to get org in runActionAI: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed find your organization. Please try again"}`))
+		return
+	}
+
+	// Preloading to put in cache to make later steps faster
+
+	// The type of response to send
+	outputFormats := []string{
+		"action",            // If you're looking for an action to put in a workflow. Also used by /api/v1/categories/run to autocomplete an app
+		"action_parameters", // To autofill parameters for an action
+		"action_tested",     // Not implemented. If you want it to run first to validate if it works
+		"formatting",        // If you want it formatted
+		"raw",               // Default - includes questions to be answered
+
+		// Tests
+		"workflow_suggestion", // For workflow suggestions (input -> how to build a workflow
+		"support",             // For support questions
+		"automic",             // For testing atomic functions with OpenAI
+	}
+
+	// "workflow",
+	// "shuffle-python",
+	outputFormat := "raw"
+	if len(input.OutputFormat) > 0 && ArrayContains(outputFormats, outputFormat) {
+		//log.Printf("[DEBUG] Output format: %s", input.OutputFormat)
+		outputFormat = input.OutputFormat
+	} else {
+		outputFormat = "raw"
+	}
+
+	// The type of input to use to understand what to do
+	contexts := []string{
+		"external API",
+		"shuffle API", // Shuffle keywords = Workflows, Apps
+		"plaintext question",
+	}
+
+	_ = contexts
+
+	// Remove items that they haven't added to app categories
+	// Translate synonyms like tickets = cases...
+	//parseCategories += fmt.Sprintf("\n\nInput: %s", input.Query)
+
+	if len(input.Id) == 0 {
+		input.Id = uuid.NewV4().String()
+	}
+
+	input.Username = user.Username
+	input.UserId = user.Id
+	input.OrgId = org.Id
+	input.TimeStarted = time.Now().Unix()
+
+	err = SetConversation(ctx, input)
+	if err != nil {
+		log.Printf("[WARNING] Failed to set conversation for query %s (1): %s", input.Query, err)
+	}
+
+	if outputFormat == "formatting" {
+		log.Printf("[INFO] Formatting query: %s. Should be formatted with the following info: %s", input.Query, input.Formatting)
+
+		response := getFormattingAIResponse(ctx, input)
+		resp.Write([]byte(response))
+		return
+	} else if outputFormat == "workflow_suggestion" {
+		getWorkflowSuggestionAIResponse(ctx, resp, user, *org, outputFormat, input)
+	} else if outputFormat == "support" {
+		getSupportSuggestionAIResponse(ctx, resp, user, *org, outputFormat, input)
+	} else if outputFormat == "atomic" {
+		GetAtomicSuggestionAIResponse(ctx, resp, user, *org, outputFormat, input)
+	} else {
+		GetActionAIResponse(ctx, resp, user, *org, outputFormat, input)
+	}
+
+	input.TimeEnded = time.Now().Unix()
+	err = SetConversation(ctx, input)
+	if err != nil {
+		log.Printf("[WARNING] Failed to set conversation for query %s (2): %s", input.Query, err)
+	}
+}
+
+func getFormattingAIResponse(ctx context.Context, input QueryInput) string {
+	if len(input.Formatting) < 15 {
+		return fmt.Sprintf(`{"success": false, "reason": "Formatting is too short. Please try again and be as descriptive as possible"}`)
+	}
+
+	contentOutput, err := RunAiQuery(input.Formatting, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in getFormattingAIResponse: %s", err)
+		return ""
+	}
+
+	if strings.Contains(contentOutput, "success\": false") {
+		log.Printf("[ERROR] Failed to run AI query in getFormattingAIResponse (2): %s", err)
+		return ""
+	}
+
+	return contentOutput
+}
+
+func getWorkflowSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
+	log.Printf("[INFO] Getting workflow suggestion for query: %s", input.Query)
+
+	reply := getWorkflowSuggestionAiResponse(ctx, input)
+	if len(reply) == 0 {
+		resp.WriteHeader(501)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get workflow suggest response"}`))
+		return
+	}
+
+	newResponse := AtomicOutput{
+		Success: true,
+		Reason:  reply,
+	}
+
+	// Marshal it
+	output, err := json.Marshal(newResponse)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal response: %s", err)
+		resp.WriteHeader(501)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal response"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(output)
+}
+
+// Todo:
+func getSupportSuggestionAIResponse(ctx context.Context, resp http.ResponseWriter, user User, org Org, outputFormat string, input QueryInput) {
+	log.Printf("[INFO] Getting support suggestion for query: %s", input.Query)
+
+	reply := runSupportRequest(ctx, input)
+	if len(reply) == 0 {
+		resp.WriteHeader(501)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get support response"}`))
+		return
+	}
+
+	newResponse := AtomicOutput{
+		Success: true,
+		Reason:  reply,
+	}
+
+	// Marshal it
+	output, err := json.Marshal(newResponse)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal response: %s", err)
+		resp.WriteHeader(501)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to marshal response"}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(output)
+}
+
+func getWorkflowSuggestionAiResponse(ctx context.Context, input QueryInput) string {
+	systemMessage := `Your job is to convert user input of a technical task into output of smaller, executable, and standalone technical tasks that can be executed by a computer based on one restriction. The one restriction is that all tasks will be executed using API-requests or Apps-actions. Thus, the output tasks should be either API-request based or App-actions based. Make sure that output tasks are specific in terms of what they do, and also generic in terms of how they do it.
+
+For the App-action based tasks, every action falls under a category of actions. The categories and their actions that you have access to are listed below. Remember you only consider the steps that can be performed from predetermined actions and mention those actions. Remember anything that cannot be done by App-action based task is an API-request based task.
+
+Predetermined actions for App-action based tasks:
+
+communication category:
+communication:list_messages
+communication:send_message
+communication:get_message
+communication:search_messages
+communication:list_attachments
+communication:get_attachment
+communication:get_contact
+
+siem category:
+siem:search
+siem:list_alerts
+siem:close_alert
+siem:get_alert
+siem:create_detection
+siem:add_to_lookup_list
+siem:isolate_endpoint
+
+eradication category:
+eradication:list_alerts
+eradication:close_alert
+eradication:get_alert
+eradication:create_detection
+eradication:block_hash
+eradication:search_hosts
+eradication:isolate_host
+eradication:unisolate_host
+eradication:trigger_host_scan
+
+cases category:
+cases:list_tickets
+cases:get_ticket
+cases:create_ticket
+cases:close_ticket
+cases:add_comment
+cases:update_ticket
+cases:search_tickets
+
+assets category:
+assets:list_assets
+assets:get_asset
+assets:search_assets
+assets:search_users
+assets:search_endpoints
+assets:search_vulnerabilities
+
+intel category:
+intel:get_ioc
+intel:search_ioc
+intel:create_ioc
+intel:update_ioc
+intel:delete_ioc
+
+iam category:
+iam:reset_password
+iam:enable_user
+iam:disable_user
+iam:get_identity
+iam:get_asset
+iam:search_identity
+
+network category:
+network:get_rules
+network:allow_ip
+network:block_ip
+
+other category:
+other:update_info
+other:get_info
+other:get_status
+other:get_version
+other:get_health
+other:get_config
+other:get_configs
+other:get_configs_by_type
+other:get_configs_by_name
+other:run_script
+
+Make sure that the output is short and crisp, in bullet points, specifies the type (API-request or App-action based), and gives small description of the task. Ignore Formatting.`
+
+	contentOutput, err := RunAiQuery(systemMessage, input.Query) 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in getWorkflowSuggestionAiResponse: %s", err)
+		return ""
+	}
+
+	return contentOutput
+}
+
+/*
+- Works (single):
+search for the last email from anna in the last week and show it to me
+Make a case in jira that says hello from fredrik
+Send a message to jim on discord that says youre stupid why did you do this??
+How many tickets did we get in the last week in jira?
+lag en ticket i jira som sier hallo paa du
+what was my last email from frikky?
+how many tickets do we have in drift?
+
+- Not working (single):
+is the ip 1.2.3.4 in our threat intel?
+how many clicks did our website have last week
+how many tickets do we have in drift?
+send an email to fredrik that says hello (gmail - worked once lol)
+
+
+- Works (multiple):
+TBD
+
+- Not working (multiple):
+*/
+
+func runSupportRequest(ctx context.Context, input QueryInput) string {
+	chatModel := os.Getenv("OPENAI_SUPPORT_MODEL")
+	if len(chatModel) == 0 {
+		chatModel = "ft:gpt-3.5-turbo-0613:shuffle::80d8lt3J"
+	}
+
+
+	sysMessage := "Introduce yourself as a support bot. Answer in less than 300 characters. Technical answers are best, with links. Make it clear that you are a bot, and that your answers are based on our documentation. If you don't have a good answer, say that you will find a human. If urls are in markdown format, make it easy to read. Focus most on the LAST question!! NEVER show a domain other than shuffler."
+
+	contentOutput, err := RunAiQuery(sysMessage, input.Query)
+	if err != nil {
+		log.Printf("[ERROR] Failed to run AI query in runActionAI: %s", err)
+		return contentOutput
+	}
+
+	return contentOutput
+}
+
+func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) (Action, error) {
+	log.Printf("\n\nAI AGENT REWRITE (first request?). PARAMS: %d\n\n", len(startNode.Parameters))
+
+	//openai "github.com/sashabaranov/go-openai"
+	// Create the OpenAI body struct
+	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions  within categories you can choose from: ask: ask for human help. singul: `
+	userMessage := ""
+
+	openaiAllowedApps := []string{"openai", "grok"}
+	runOpenaiRequest := false
+	appname := ""
+
+	memorizationEngine := "shuffle_db"
+	for _, param := range startNode.Parameters {
+		if param.Name == "app_name" {
+			appname = param.Value
+			if ArrayContains(openaiAllowedApps, strings.ToLower(param.Value)) {
+				runOpenaiRequest = true
+			}
+		}
+
+		if param.Name == "input" {
+			userMessage = param.Value
+		}
+
+		if param.Name == "action" {
+			for _, actionStr := range strings.Split(param.Value, ",") {
+				actionStr = strings.ToLower(strings.TrimSpace(actionStr))
+				if actionStr == "nothing" {
+					continue
+				}
+
+				systemMessage += fmt.Sprintf(", %s", strings.ReplaceAll(actionStr, " " , "_"))
+
+			}
+		}
+
+		if param.Name == "memory" {
+			// Handle memory injection (may use Singul?)
+		}
+
+		if param.Name == "storage" {
+			// Handle storage injection (how?)
+		}
+	}
+
+	// If the fields are edited, don't forget to edit the AgentDecision struct 
+	// FIXME: Using a different reference format as these are common to reasoning models
+	// such as: 
+	// Prompt engineering (LangChain, LlamaIndex)
+	// Web templating (Jinja2 in Flask/Django)
+	// Frontend frameworks (Handlebars)
+
+	// Will just have to make a translation system.
+	//typeOptions := []string{"ask", "singul", "workflow", "agent"}
+	typeOptions := []string{"ask", "singul"}
+	systemMessage += fmt.Sprintf(`. Available categories (default: singul): %s. If you are unsure about a decision, always ask for user input. The output should be an ordered JSON list in the format [{"i": 0, "category": "singul", "action": "action_name", "tool": "appname", "confidence": 0.95, "runs": "1", "reason": "Short reason why", "fields": [{"key": "max_results", "value": "5"}, {"key": "body", "value": "$action_name"}] WITHOUT newlines. Indexes should be the same if they should run in parallell. The confidence is between 0 and 1. Runs are how many times it should run requests (default: 1, * for all looped items). Fields can be set manually, or use previous action output by adding them in the format {{action_name}}, such as {"key": "body": "value": "{{tickets[0].fieldname}}} to get the first ticket output from a previous decision. The {{action_name}} has to match EXACTLY the action name of a previous decision.`, strings.Join(typeOptions, ", "))
+
+	systemMessage += `If you are missing information (such as emails) to make a list of decisions, just add a single decision which asks them to clarify the input better.`
+
+	//contentOutput, err := RunAiQuery(systemMessage, userMessage)
+
+	completionRequest := openai.ChatCompletionRequest{
+		//Model: "gpt-4o-mini",
+		//Model: "gpt-4o",
+		Model: "o4-mini",
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: systemMessage,
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: userMessage,
+			},
+		},
+		//Temperature: 0.95, // Adds a tiny bit of randomness
+		Temperature: 1,
+
+		// Reasoning control
+		MaxCompletionTokens: 5000, 
+		ResponseFormat: &openai.ChatCompletionResponseFormat{
+			Type: "json_object",
+		},
+		ReasoningEffort: "low",
+		Store: true,
+	}
+
+	ctx := context.Background()
+	initialAgentRequestBody, err := json.MarshalIndent(completionRequest, "", "  ")
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling input for action %s: %s", execution.ExecutionId, startNode.ID, err)
+
+		execution.Status = "ABORTED"
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (4): %s"}`, err),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, err
+	}
+
+	//go executeSpecificCloudApp(ctx, execution.ExecutionId, execution.Authorization, urls, startNode)
+	if !runOpenaiRequest {
+
+		log.Printf("[ERROR] Unhandled Singul BODY for OpenAI agent (first request): %s. AI APPNAME (can't be empty): %#v", string(initialAgentRequestBody), appname)
+
+		execution.Status = "ABORTED"
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): %s"}`, err),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, errors.New("Unhandled Singul BODY for OpenAI agent (first request)")
+	}
+	//log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
+
+	// Hardcoded for now
+	aiNode := Action{}
+	aiNode.AppID = "5d19dd82517870c68d40cacad9b5ca91"
+	aiNode.AppName = "openai"
+	aiNode.Name = "post_generate_a_chat_response"
+
+	// FIXME: Resetting auth as it should auto-pick (if possible)
+	aiNode.AuthenticationId = ""
+	aiNode.Parameters = []WorkflowAppActionParameter{
+		WorkflowAppActionParameter{
+			Name:  "url",
+			Value: "",
+		},
+		//WorkflowAppActionParameter{
+		//	Name:  "apikey",
+		//	Value: "",
+		//},
+		WorkflowAppActionParameter{
+			Name:  "body",
+			Value: string(initialAgentRequestBody),
+		},
+		WorkflowAppActionParameter{
+			Name:  "headers",
+			Value: "Content-Type: application/json\nAccept: application/json",
+		},
+	}
+
+	// To ensure we get the context of an execution properly
+	// This gives it variables to run IN CONTEXT of the current execution,
+	// meaning it has access to current variables
+	aiNode.SourceWorkflow = execution.Workflow.ID
+	aiNode.SourceExecution = execution.ExecutionId
+
+	marshalledAction, err := json.Marshal(aiNode)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling action for AI Agent (first agent request): %s", execution.ExecutionId, err)
+
+		execution.Status = "ABORTED"
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (6): %s"}`, err),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, err
+	}
+
+	// Static URL
+	//urls = []string{fmt.Sprintf("https://%s-%s.cloudfunctions.net/openai-5d19dd82517870c68d40cacad9b5ca91", location, gceProject)}
+
+	//http://localhost:5002/api/v1/apps/5d19dd82517870c68d40cacad9b5ca91/run
+	//apprunUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?delete=%s", baseUrl, secondAction.AppID, shouldDelete)
+	backendUrl := "https://shuffler.io"
+	if len(os.Getenv("BASE_URL")) > 0 {
+		backendUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	fullUrl := fmt.Sprintf("%s/api/v1/apps/%s/run?execution_id=%s&authorization=%s", backendUrl, aiNode.AppID, execution.ExecutionId, execution.Authorization)
+	client := GetExternalClient(fullUrl)
+	req, err := http.NewRequest(
+		"POST",
+		fullUrl,
+		bytes.NewBuffer([]byte(marshalledAction)),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed creating request during LLM setup: %s", err)
+
+
+		execution.Status = "ABORTED"
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (7): %s"}`, err),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, err
+	}
+
+	newresp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending request during LLM setup: %s", err)
+
+		execution.Status = "ABORTED"
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (8): %s"}`, err),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, err
+	}
+
+	// Set timestamp as soon as it's ready
+	// https://pkg.go.dev/github.com/sashabaranov/go-openai#ChatCompletionMessage
+	for messageIndex, _ := range completionRequest.Messages {
+		if len(completionRequest.Messages[messageIndex].Name) == 0 {
+			completionRequest.Messages[messageIndex].Name = string(time.Now().Unix())
+		}
+	}
+
+	defer newresp.Body.Close()
+	body, err := ioutil.ReadAll(newresp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading response from sending request for stream during SKIPPED user input: %s", err)
+
+		execution.Status = "ABORTED"
+		execution.Results = append(execution.Results, ActionResult{
+			Status: "ABORTED",
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (9): %s"}`, err),
+			Action: startNode,
+		})
+		go SetWorkflowExecution(ctx, execution, true)
+
+		return startNode, err
+	}
+
+	resultMapping := ActionResult{}
+	err = json.Unmarshal(body, &resultMapping)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling response into decisions. Response from sending AI Agent request: %d - %s", newresp.StatusCode, string(body))
+	}
+
+	resultMapping.ExecutionId = execution.ExecutionId
+	resultMapping.Authorization = execution.Authorization
+	resultMapping.Status = "WAITING"
+	resultMapping.Action = startNode
+	resultMapping.Action.Name = "agent"
+
+
+	// This exists for the single reason of tracking errors + parameters 
+	// ActionResult{} is the type we are using to build the request, while
+	// the LLM request ACTUALLY returns SingleResult{} 
+	additionalResultMapping := SingleResult{}
+	err = json.Unmarshal(body, &additionalResultMapping)
+
+	parsedAgentInput := ""
+	if err == nil {
+		// Checking for errors in the Single Action run. 
+		// They usually cause notifications to occur as well.
+		if len(additionalResultMapping.Errors) > 0 {
+			// Handle this.
+			//log.Printf("\n\n[ERROR][%s] BODY LEN: %d. Got %d errors from Agent AI subrequest", resultMapping.ExecutionId, len(body), len(additionalResultMapping.Errors))
+		}
+
+		if len(additionalResultMapping.Parameters) > 0 {
+			// FIXME: Check if the result somehow contains the input we sent in.
+			// The reason for this is to ensure we can use the return params (somehow)
+			//log.Printf("\n\n[WARNING][%s] BODY LEN: %d. Got %d params from Agent AI subrequest", resultMapping.ExecutionId, len(body), len(additionalResultMapping.Parameters))
+
+			for _, param := range additionalResultMapping.Parameters {
+				if param.Name != "body" {
+					continue
+				}
+
+				log.Printf("[DEBUG][%s] AI Agent: Found body parameter which MAY contain the right user input. LEN: %d", execution.ExecutionId, len(param.Value))
+
+				if len(param.Value) > 0 {
+					parsedAgentInput  = param.Value
+					break
+				}
+			}
+		}
+	}
+
+	// Store the completion request in datastore?
+	if len(resultMapping.Result) > 0 {
+		// 1. Map it to a Shuffle HTTP Result
+		// 2. Find the content: $ai_agent_1.body.choices.#.message.content
+		// 3. Map the content into the AgentOutput struct
+		//resultMapping.Result = openaiOutput
+		outputMap := HTTPOutput{}
+		err = json.Unmarshal([]byte(resultMapping.Result), &outputMap)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed unmarshalling response from sending request for stream during SKIPPED user input: %s. Body: %s", execution.ExecutionId, err, string(resultMapping.Result))
+
+			execution.Status = "ABORTED"
+			execution.Results = append(execution.Results, ActionResult{
+				Status: "ABORTED",
+				Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (1): %s"}`, err),
+				Action: startNode,
+			})
+			go SetWorkflowExecution(ctx, execution, true)
+
+			return startNode, err
+		}
+
+		if outputMap.Status != 200 {
+			log.Printf("[ERROR][%s] Failed to run AI agent with status code %d", execution.ExecutionId, outputMap.Status)
+			//return startNode, errors.New(fmt.Sprintf("Failed to run AI agent with status code %d", outputMap.Status))
+		}
+
+		// Parse the outputMap.Result to OpenAI response
+		choicesString := ""
+		bodyString := []byte{}
+		bodyMap, ok := outputMap.Body.(map[string]interface{})
+		if !ok {
+			log.Printf("[ERROR][%s] Failed to convert body to MAP in AI Agent response. Raw response: %s", execution.ExecutionId, string(resultMapping.Result))
+
+			choicesString = fmt.Sprintf("LLM Response Error: %s", string(resultMapping.Result))
+		} else {
+			bodyString, err = json.Marshal(bodyMap)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling body to string in AI Agent response: %s", err)
+
+				execution.Status = "ABORTED"
+				execution.Results = append(execution.Results, ActionResult{
+					Status: "ABORTED",
+					Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): %s"}`, err),
+					Action: startNode,
+				})
+				go SetWorkflowExecution(ctx, execution, true)
+
+				return startNode, err
+			}
+		}
+
+		openaiOutput := openai.ChatCompletionResponse{}
+		err = json.Unmarshal(bodyString, &openaiOutput)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed unmarshalling response from OpenAI Agent request: %s", execution.ExecutionId, err)
+		}
+
+		// Edgecase handling for LLM not being available etc
+		if len(choicesString) > 0 { 
+		} else if len(openaiOutput.Choices) == 0 {
+
+			// FIXME: This is specific to OpenAI, but may work for others :thinking:
+			newOutput := openai.ErrorResponse{}
+			err = json.Unmarshal(bodyString, &newOutput)
+			if err == nil && len(newOutput.Error.Message) > 0 {
+				choicesString = fmt.Sprintf("LLM Error: %s", newOutput.Error.Message)
+		
+				resultMapping.Status = "FAILURE" 
+			} else {
+				log.Printf("[ERROR][%s] No choices, nor error found in AI agent response. Status: %d. Raw: %s", execution.ExecutionId, outputMap.Status, bodyString)
+				resultMapping.Status = "FAILURE" 
+			}
+		} else {
+			choicesString = openaiOutput.Choices[0].Message.Content
+
+			// Handles reasoning models for Refusal control edgecases
+			// Not always sure why this is happening
+			if len(choicesString) == 0 && len(openaiOutput.Choices[0].Message.Refusal) > 0 {
+				choicesString = openaiOutput.Choices[0].Message.Refusal
+
+				if strings.HasPrefix(choicesString, "JSON") {
+					choicesString = strings.Replace(choicesString, "JSON", "", 1)
+				}
+
+				if strings.HasPrefix(choicesString, "json") {
+					choicesString = strings.Replace(choicesString, "json", "", 1)
+				}
+			}
+				
+			choicesString = strings.TrimSpace(choicesString)
+			//log.Printf("\n\n\nCONTENT: %#v\n\n\n", choicesString)
+		}
+
+		// Found random JSON issues with [{} and similar, due to LLM instability.
+		mappedDecisions := []AgentDecision{}
+		decisionString := FixContentOutput(choicesString)
+		if strings.HasPrefix(decisionString, "[") && !strings.HasSuffix(decisionString, "]") {
+			decisionString = fmt.Sprintf("%s]", decisionString)
+		}
+
+		// Set the raw response
+		if !strings.HasPrefix(decisionString, `[`) || !strings.HasSuffix(decisionString, `]`) {
+			decisionString = choicesString
+		}
+
+		errorMessage := ""
+		err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed unmarshalling decisions in AI Agent response: %s", execution.ExecutionId, err)
+
+			if len(mappedDecisions) == 0 { 
+				decisionString = strings.Replace(decisionString, `\"`, `"`, -1)
+
+				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
+				if err != nil {
+					log.Printf("[ERROR][%s] Failed unmarshalling decisions in AI Agent response (2): %s", execution.ExecutionId, err)
+					resultMapping.Status = "FAILURE"
+
+					// Updating the OUTPUT in some way to help the user a bit.
+					errorMessage = fmt.Sprintf("The output from the LLM had no decisions. See the raw decisions tring for the response. Contact support@shuffler.io if you think this is wrong.")
+				}
+			}
+		}
+
+		completionRequest.Messages = append(completionRequest.Messages, openai.ChatCompletionMessage{
+			Role: "assistant",
+			Content: string(bodyString),
+		})
+
+		// Lool, this will be fun won't it
+		/*
+		for mapIndex, _ := range mappedDecisions {
+			randomType := typeOptions[rand.Intn(len(typeOptions))]
+
+			mappedDecisions[mapIndex].RunDetails.Type = randomType
+			mappedDecisions[mapIndex].RunDetails.Status = ""
+		}
+		*/
+
+		agentOutput := AgentOutput{
+			Status:    "RUNNING",
+			Input:     userMessage,
+			Error: 	   errorMessage,
+			Decisions: mappedDecisions,
+
+			ExecutionId: execution.ExecutionId,
+			NodeId: startNode.ID,
+			StartedAt: time.Now().Unix(),
+
+			Memory: memorizationEngine,
+		}
+
+		if resultMapping.Status == "FAILURE" {
+			agentOutput.Status = "FAILURE"
+			agentOutput.CompletedAt = time.Now().Unix()
+		}
+
+		if len(mappedDecisions) == 0 {
+			agentOutput.DecisionString = decisionString
+		}
+
+		// Ensures we track them along the way
+		if len(parsedAgentInput) > 0 { 
+			agentOutput.Input = parsedAgentInput
+		}
+
+		for decisionIndex, decision := range agentOutput.Decisions {
+			// Random generate an ID that's 10 chars long
+			if len(decision.RunDetails.Id) == 0 {
+				b := make([]byte, 6)
+				_, err := rand.Read(b)
+				if err != nil {
+					log.Printf("[ERROR][%s] Failed generating random string for decision index %s-%d", execution.ExecutionId, decision.Tool, decision.I)
+				} else {
+					agentOutput.Decisions[decisionIndex].RunDetails.Id = base64.RawURLEncoding.EncodeToString(b)
+				}
+
+			}
+
+			// Send a Singul job. 
+			// Which do we use:
+			// 1. Local Singul
+			if decision.Action == "" {
+				log.Printf("[ERROR] No action found in AI agent decision")
+				continue
+			}
+
+			if decision.I != 0 {
+				continue
+			}
+
+			// Do we run the singul action directly?
+			agentOutput.Decisions[decisionIndex].RunDetails.StartedAt = time.Now().Unix()
+			agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+			go RunAgentDecisionAction(execution, agentOutput, agentOutput.Decisions[decisionIndex])
+		}
+
+		marshalledAgentOutput, err := json.Marshal(agentOutput)
+		if err != nil {
+			log.Printf("[ERROR] Failed marshalling agent output in AI Agent response: %s", err)
+			return startNode, err
+		}
+
+		resultMapping.Result = string(marshalledAgentOutput)
+
+	} else {
+		log.Printf("[ERROR] No result found in AI agent response. Status: %d. Body: %s", newresp.StatusCode, string(body))
+	}
+
+	if memorizationEngine == "shuffle_db" {
+		requestKey := fmt.Sprintf("chat_%s_%s", execution.ExecutionId, startNode.ID)
+
+		for messageIndex, _ := range completionRequest.Messages {
+			if len(completionRequest.Messages[messageIndex].Name) == 0 {
+				completionRequest.Messages[messageIndex].Name = string(time.Now().Unix())
+			}
+		}
+
+		marshalledCompletionRequest, err := json.MarshalIndent(completionRequest, "", "  ")
+
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed marshalling openai completion request: %s", execution.ExecutionId, err)
+		} else {
+			cacheData := CacheKeyData{
+				Key: requestKey,
+				Value: string(marshalledCompletionRequest),
+				Category: "agent_requests",
+
+				WorkflowId: execution.Workflow.ID,
+				ExecutionId: execution.ExecutionId,
+				Authorization: execution.Authorization,
+				OrgId: execution.ExecutionOrg,
+			}
+
+			err := SetCacheKey(ctx, cacheData) 
+			if err != nil {
+				log.Printf("[ERROR][%s] Failed updating AI requests: %s", execution.ExecutionId, err)
+			}
+		}
+	}
+
+	// 1. Map the response back
+	newResult, err := json.Marshal(resultMapping)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling response from sending request for stream during SKIPPED user input: %s", err)
+	}
+
+	// Send the stream result to /api/v1/streams
+	streamUrl := fmt.Sprintf("%s/api/v1/streams", backendUrl)
+	streamReq, err := http.NewRequest(
+		"POST",
+		streamUrl,
+		bytes.NewBuffer([]byte(newResult)),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed creating request for stream during SKIPPED user input: %s", err)
+		return startNode, err
+	}
+
+	streamResp, err := client.Do(streamReq)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending request for stream during SKIPPED user input: %s", err)
+		return startNode, err
+	}
+
+	defer streamResp.Body.Close()
+	streamBody, err := ioutil.ReadAll(streamResp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading response from sending request for stream during SKIPPED user input: %s", err)
+		return startNode, err
+	}
+
+	log.Printf("[INFO] Response from sending request for stream during SKIPPED user input: %d - %s", streamResp.StatusCode, string(streamBody))
+
+	return startNode, nil
+
+}
+
+func RunAiQuery(systemMessage, userMessage string) (string, error) {
+	cnt := 0
+	maxTokens := 5000
+	maxCharacters := 100000
+	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
+
+	if len(systemMessage) > maxCharacters {
+		systemMessage = systemMessage[:maxCharacters]
+	}
+
+	if len(userMessage) > maxCharacters {
+		log.Printf("[WARNING] User message too long. Cutting off from %d to %d characters", len(userMessage), maxCharacters)
+		userMessage = userMessage[:maxCharacters]
+	}
+	//}
+
+	chatCompletion := openai.ChatCompletionRequest{
+		Model: model,
+		Messages: []openai.ChatCompletionMessage{},
+		MaxTokens:   maxTokens,
+	}
+
+	// Too specific, but.. :)
+	if model == "o4-minii" {
+		chatCompletion.MaxTokens = 0
+		chatCompletion.MaxCompletionTokens = maxTokens
+	}
+
+	if len(systemMessage) > 0 {
+		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleSystem,
+			Content: systemMessage,
+		})
+	}
+
+	if len(userMessage) > 0 {
+		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleUser,
+			Content: userMessage,
+		})
+	}
+
+	if len(chatCompletion.Messages) == 0 {
+		return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
+	}
+
+	maxRetries := 3
+	sleepTimer := time.Duration(2)
+	contentOutput := ""
+	for {
+		if cnt >= maxRetries {
+			log.Printf("[ERROR] Failed to match JSON in runActionAI after 5 tries for openapi info")
+
+			return "", errors.New("Failed to match JSON in runActionAI after 5 tries for openapi info")
+		}
+
+		openaiResp, err := openaiClient.CreateChatCompletion(
+			context.Background(),
+			chatCompletion,
+		)
+
+		if err != nil {
+			cnt += 1
+
+			if strings.Contains(err.Error(), "not supported MaxTokens") {
+				chatCompletion.MaxTokens = 0
+				chatCompletion.MaxCompletionTokens = maxTokens
+				continue
+			} else if strings.Contains(err.Error(), "does not exist") {
+				if len(fallbackModel) == 0 {
+					return "", errors.New(fmt.Sprintf("Model '%s' does not exist and no FALLBACK_AI_MODEL set: %s", model, err))
+				}
+
+				model = fallbackModel
+				chatCompletion.Model = fallbackModel 
+				log.Printf("[DEBUG] Changed default model to %s", model)
+				continue
+			}
+
+			log.Printf("[ERROR] Failed to create AI chat completion. Retrying in 3 seconds (4): %s", err)
+			time.Sleep(sleepTimer * time.Second)
+			continue
+		}
+
+		if len(openaiResp.Choices) == 0 {
+			return "", errors.New("No choices found in OpenAI response. This should be AT LEAST 1.")
+		} 
+
+		contentOutput = openaiResp.Choices[0].Message.Content
+		if len(contentOutput) == 0 && len(openaiResp.Choices[0].Message.Refusal) > 0 {
+			// Failover to refusal
+			contentOutput = openaiResp.Choices[0].Message.Refusal
+		}
+
+		break
+	}
+
+	return contentOutput, nil
 }

@@ -2020,3 +2020,34 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		log.Printf("[ERROR][%s] Status %d for decision %s. Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, string(foundBody))
 	}
 }
+
+func HandleCloudSyncAuthentication(resp http.ResponseWriter, request *http.Request) (SyncKey, error) {
+	apikey := request.Header.Get("Authorization")
+	if len(apikey) > 0 {
+		apikey = strings.Replace(apikey, "  ", " ", -1)
+		if !strings.HasPrefix(apikey, "Bearer ") {
+			log.Printf("[WARNING] Apikey doesn't start with bearer: %s", apikey)
+			return SyncKey{}, errors.New("No bearer token for authorization header")
+		}
+
+		apikeyCheck := strings.Split(apikey, " ")
+		if len(apikeyCheck) != 2 {
+			log.Printf("[WARNING] Invalid format for apikey: %s", apikeyCheck)
+			return SyncKey{}, errors.New("Invalid format for apikey")
+		}
+
+		newApikey := apikeyCheck[1]
+		ctx := GetContext(request)
+		org, err := getSyncApikey(ctx, newApikey)
+		if err != nil {
+			log.Printf("[WARNING] Error in sync check: %s", err)
+			return SyncKey{}, errors.New(fmt.Sprintf("Error finding key: %s", err))
+		}
+
+		return SyncKey{Apikey: newApikey, OrgId: org}, nil
+	}
+
+	return SyncKey{}, errors.New("Missing authentication")
+}
+
+
