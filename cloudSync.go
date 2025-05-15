@@ -84,6 +84,21 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		return AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
 	}
 
+	normalizedAppName := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(appname, "_", " "), " ", "_")))
+	cacheKey := fmt.Sprintf("appsearch_%s", normalizedAppName)
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		if cacheData, ok := cache.([]byte); ok {
+			var cachedApp AlgoliaSearchApp
+			err = json.Unmarshal(cacheData, &cachedApp)
+			if err == nil {
+				return cachedApp, nil
+			}
+			log.Printf("[ERROR] Failed unmarshalling cached app search data in Handle algolia app search: %s", err)
+		}
+	}
+
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
 	algoliaIndex := algClient.InitIndex("appsearch")
 	appname = strings.TrimSpace(strings.ToLower(strings.Replace(appname, "_", " ", -1)))
@@ -105,6 +120,13 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if newApp == appname || newRecord.ObjectID == appname {
 			//return newRecord.ObjectID, nil
+			appData, err := json.Marshal(newRecord)
+			if err == nil {
+				SetCache(ctx, cacheKey, appData, 30)
+			} else {
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (1): %s", err)
+			}
+
 			return newRecord, nil
 		}
 	}
@@ -113,6 +135,13 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 	for _, newRecord := range newRecords {
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if strings.Contains(newApp, appname) {
+			appData, err := json.Marshal(newRecord)
+			if err == nil {
+				SetCache(ctx, cacheKey, appData, 30)
+			} else {
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+			}
+
 			return newRecord, nil
 		}
 	}
@@ -1628,7 +1657,8 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 			continue
 		}
 
-		field.Value = strings.ReplaceAll(field.Value, `{{list_tickets[0].summary}}`, `{{ list_tickets[].summary }}`)
+		// Used for testing
+		//field.Value = strings.ReplaceAll(field.Value, `{{list_tickets[0].summary}}`, `{{ list_tickets[].summary }}`)
 
 		// Regex match {{list_tickets[0].description}} and {{ list_tickets[].description }} and {{ list_tickets[:] }}
 		//re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]+\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
@@ -1640,13 +1670,14 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 
 		stringBuild := "$"
 		for _, match := range matches {
+
 			for i, matchValue := range match {
 				if i == 0 {
 					continue
 				}
 
 				if i != 1 {
-					if !strings.HasPrefix(matchValue, ".") {
+					if len(matchValue) > 0 && !strings.HasPrefix(matchValue, ".") {
 						stringBuild += "."
 					}
 				}
@@ -1686,14 +1717,12 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 			if len(match) > 1 {
 				field.Value = strings.ReplaceAll(field.Value, match[0], stringBuild)
 				fields[fieldIndex].Value = field.Value
-				log.Printf("VALUE: %#v", field.Value)
+				//log.Printf("VALUE: %#v", field.Value)
 			}
 
 			stringBuild = "$"
 		}
 	}
-		
-	os.Exit(3)
 
 	return fields
 }

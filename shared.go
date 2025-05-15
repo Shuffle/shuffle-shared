@@ -6021,9 +6021,8 @@ func diffWorkflowWrapper(parentWorkflow Workflow) Workflow {
 		newChildWorkflows = append(newChildWorkflows, childWorkflow)
 	}
 
-	childWorkflows = newChildWorkflows
-
 	newlyAdded := []string{}
+	childWorkflows = newChildWorkflows
 	if len(childWorkflows) < len(parentWorkflow.SuborgDistribution) {
 		for _, suborgId := range parentWorkflow.SuborgDistribution {
 			found := false
@@ -8134,7 +8133,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Got %d subflows saved in %s (to be saved and removed)", len(workflow.Subflows), workflow.ID)
 
 		for _, subflow := range workflow.Subflows {
-			SetWorkflow(ctx, subflow, subflow.ID)
+			go SetWorkflow(ctx, subflow, subflow.ID)
 		}
 
 		workflow.Subflows = []Workflow{}
@@ -9506,7 +9505,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", newId))
 
 	// before doing anything, verify if the parent workflow is a child workflow itself
-	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != parentWorkflowId {
+	if len(workflow.ParentWorkflowId) > 0 && len(workflow.SuborgDistribution) > 0 {
 		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere from parent org (%s) to child org (%s)", workflow.ID, workflow.Name, parentOrgId, subOrgId)
 		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
 		workflow.SuborgDistribution = []string{}
@@ -9588,17 +9587,6 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	newWf.Triggers = []Trigger{}
 
 	//log.Printf("[INFO] Generated child workflow %s (%s) for %s (%s)", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID)
-
-
-	// if len(newWf.ParentWorkflowId) > 0 {
-	// 	// check if parent workflow even exists
-	// 	_, err := GetWorkflow(ctx, newWf.ParentWorkflowId)
-	// 	if err != nil {
-	// 		log.Printf("[WARNING] Parent workflow %s doesn't exist. Can't set child workflow %s", newWf.ParentWorkflowId, newWf.ID)	
-	// 		return nil, err
-	// 	}
-	// }
-
 	// FIXME: Send a save request instead? That way
 	// propagation can keep going down.
 	// TODO: Not implemented due to recursion issues.
@@ -11604,9 +11592,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		CreatorConfig string              `json:"creator_config" datastore:"creator_config"`
 		Subscription  PaymentSubscription `json:"subscription" datastore:"subscription"`
 
-		SyncFeatures SyncFeatures `json:"sync_features" datastore:"sync_features"`
-		Billing      Billing      `json:"billing" datastore:"billing"`
-		Branding     OrgBranding  `json:"branding" datastore:"branding"`
+		SyncFeatures    SyncFeatures `json:"sync_features" datastore:"sync_features"`
+		Billing         Billing      `json:"billing" datastore:"billing"`
+		Branding        OrgBranding  `json:"branding" datastore:"branding"`
+		EditingBranding bool         `json:"editing_branding" datastore:"editing_branding"`
 	}
 
 	var tmpData ReturnData
@@ -12023,7 +12012,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.Editing = false
 	}
 
-	if project.Environment == "cloud" && (tmpData.Branding.EnableChat != org.Branding.EnableChat || tmpData.Branding.HomeUrl != org.Branding.HomeUrl || tmpData.Branding.Theme != org.Branding.Theme || tmpData.Branding.EnableChat != org.Branding.EnableChat) {
+	if project.Environment == "cloud" && tmpData.EditingBranding {
 		log.Printf("[DEBUG] Updating branding for org %s (%s)", org.Name, org.Id)
 		org.Branding = tmpData.Branding
 	}
@@ -12250,6 +12239,76 @@ func sendMailSendgrid(toEmail []string, subject, body string, emailApp bool, Bcc
 		}
 		return nil
 		//log.Printf(response.Headers)
+	}
+
+	return err
+}
+
+func sendMailSendgridV2(toEmail []string, subject string, substitutions map[string]interface{}, emailApp bool, templateID string) error {
+	log.Printf("[DEBUG] In mail sending with subject %s. TO: %s", subject, toEmail)
+
+	srequest := sendgrid.GetRequest(os.Getenv("SENDGRID_API_KEY"), "/v3/mail/send", "https://api.sendgrid.com")
+	srequest.Method = "POST"
+
+	type SendgridEmail struct {
+		Email string `json:"email"`
+	}
+
+	type SendgridPersonalization struct {
+		To                  []SendgridEmail        `json:"to"`
+		Subject             string                 `json:"subject"`
+		DynamicTemplateData map[string]interface{} `json:"dynamic_template_data,omitempty"`
+	}
+
+	type sendgridMailBody struct {
+		Personalizations []SendgridPersonalization `json:"personalizations"`
+		From             SendgridEmail             `json:"from"`
+		TemplateID       string                    `json:"template_id"`
+	}
+
+	newBody := sendgridMailBody{
+		Personalizations: []SendgridPersonalization{
+			{
+				To:                  []SendgridEmail{},
+				Subject:             subject,
+				DynamicTemplateData: substitutions,
+			},
+		},
+		From: SendgridEmail{
+			Email: "Shuffle Support <shuffle-support@shuffler.io>",
+		},
+		TemplateID: templateID,
+	}
+
+	if emailApp {
+		newBody.From.Email = "Shuffle Email App <email-app@shuffler.io>"
+	}
+
+	for _, email := range toEmail {
+		newBody.Personalizations[0].To = append(newBody.Personalizations[0].To,
+			SendgridEmail{
+				Email: strings.TrimSpace(email),
+			})
+	}
+
+	parsedBody, err := json.Marshal(newBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed to parse JSON in sendmail: %s", err)
+		return err
+	}
+
+	srequest.Body = parsedBody
+
+	response, err := sendgrid.API(srequest)
+	if err != nil {
+		log.Println(err)
+	} else {
+		if response.StatusCode >= 300 {
+			log.Printf("[DEBUG] Failed sending mail! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		} else {
+			log.Printf("[DEBUG] Successfully sent email! Statuscode: %d. Body: %s", response.StatusCode, response.Body)
+		}
+		return nil
 	}
 
 	return err
@@ -15739,7 +15798,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							}
 
 							if parentTrigger {
-								log.Printf("[DEBUG][%s] Parent %s (of child %s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
+								if debug {
+									log.Printf("[DEBUG][%s] Parent %s (of child %s) is a trigger. Continuing..", workflowExecution.ExecutionId, branch.SourceID, nodeId)
+								}
+
 								continue
 							}
 
@@ -15748,13 +15810,18 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							sourceNodeFound := false
 							for _, item := range childNodes {
 								if item == branch.SourceID {
-									log.Printf("[DEBUG][%s] Found source node %s (%s) for node %s", workflowExecution.ExecutionId, branch.SourceID, curAction.Label, nodeId)
+									if debug { 
+										log.Printf("[DEBUG][%s] Found source node %s (%s) for node %s", workflowExecution.ExecutionId, branch.SourceID, curAction.Label, nodeId)
+									}
+
 									sourceNodeFound = true
 									break
 								}
 							}
 
-							log.Printf("[DEBUG][%s] sourceNodeFound: %t for node %s", workflowExecution.ExecutionId, sourceNodeFound, nodeId)
+							if debug { 
+								log.Printf("[DEBUG][%s] sourceNodeFound: %t for node %s", workflowExecution.ExecutionId, sourceNodeFound, nodeId)
+							}
 
 							if !sourceNodeFound {
 								// FIXME: Shouldn't add skip for child nodes of these nodes. Check if this node is parent of upcoming nodes.
@@ -18377,7 +18444,15 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData.Category = ""
 	}
 
+
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
+	
+	// Check if cache already existed and if distributed
+	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
+	if err == nil {
+		tmpData.SuborgDistribution = cacheData.SuborgDistribution
+	}
+
 	err = SetCacheKey(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
@@ -18787,7 +18862,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		if len(action.ID) == 0 {
 			return workflowExecution, errors.New("No action ID provided. This is required for Action reruns to deduplicate results.")
 		}
-
 
 		if len(action.SourceExecution) == 0 {
 			return workflowExecution, errors.New("No source_execution provided")
@@ -20558,30 +20632,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
-				for _, orgID := range user.Orgs {
-					org, err := GetOrg(ctx, orgID)
-					if err != nil {
-						log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
-						continue
-					}
-
-					if len(org.Region) > 0 {
-						if ArrayContains(user.Regions, org.RegionUrl) {
-							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
-							continue
-						}
-
-						user.Regions = append(user.Regions, org.RegionUrl)
-						err = SetUser(ctx, &user, false)
-						if err != nil {
-							log.Printf("[WARNING] Failed updating user when setting region: %s", err)
-							resp.WriteHeader(401)
-							resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
-							return
-						}
-					}
-				}
-
 				err = SetUser(ctx, &user, false)
 				if err != nil {
 					log.Printf("[WARNING] Failed updating user when setting session: %s", err)
@@ -20777,30 +20827,6 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					Timestamp: time.Now().Unix(),
 				})
 
-				for _, orgID := range user.Orgs {
-					org, err := GetOrg(ctx, orgID)
-					if err != nil {
-						log.Printf("[WARNING] Failed getting org for user (prop fix): %s", err)
-						continue
-					}
-
-					if len(org.Region) > 0 {
-						if ArrayContains(user.Regions, org.RegionUrl) {
-							log.Printf("[WARNING] User %s (%s) already has region %s in org %s (%s)", user.Username, user.Id, org.Region, org.Name, org.Id)
-							continue
-						}
-
-						user.Regions = append(user.Regions, org.RegionUrl)
-						err = SetUser(ctx, &user, false)
-						if err != nil {
-							log.Printf("[WARNING] Failed updating user when setting region: %s", err)
-							resp.WriteHeader(401)
-							resp.Write([]byte(`{"success": false, "reason": "Failed user update during region storage (prop fix)"}`))
-							return
-						}
-					}
-				}
-
 				//Store users last session as new session so user don't have to go through sso again while changing org.
 				user.UsersLastSession = user.Session
 
@@ -20926,11 +20952,14 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	newUser.LoginType = "OpenID"
 	newUser.Role = role
 	newUser.Session = uuid.NewV4().String()
-	newUser.Regions = []string{"https://shuffler.io"}
 	newUser.ActiveOrg = OrgMini{
 		Name: org.Name,
 		Id:   org.Id,
 		Role: role,
+	}
+
+	if project.Environment == "cloud" {
+		newUser.Regions = []string{"https://shuffler.io"}
 	}
 
 	verifyToken := uuid.NewV4()
@@ -20971,10 +21000,8 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 
 	newUser.Session = sessionToken
 
-	if len(org.Region) > 0 {
-		if !ArrayContains(newUser.Regions, org.RegionUrl) {
-			newUser.Regions = append(newUser.Regions, org.RegionUrl)
-		}
+	if project.Environment == "cloud" && org.RegionUrl != "https://shuffler.io" {
+		newUser.Regions = append(newUser.Regions, org.RegionUrl)
 	}
 	//Store users last session as new session so user don't have to go through sso again while changing org.
 	newUser.UsersLastSession = sessionToken
@@ -26317,10 +26344,12 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 	// Check if the IP in the baseUrl is a local one
 	parsedUrl, err := url.Parse(baseUrl)
+	backendUrl := os.Getenv("BASE_URL")
+	parsedBackendUrl, err := url.Parse(backendUrl)
 	if err == nil && project.Environment != "cloud" {
 		// Check if host has shuffle- as prefix OR uses a shuffle-specific port
 		// Check until 33350 (Orborus -> Worker and Worker -> Apps)
-		if strings.HasSuffix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" {
+		if strings.HasPrefix(parsedUrl.Host, "shuffle-") || parsedUrl.Port() == "33333" || parsedUrl.Port() == "33334" || parsedUrl.Port() == "33335" || parsedUrl.Port() == "33336" || parsedUrl.Port() == "33337" || parsedUrl.Port() == "33338" || parsedUrl.Port() == "33339" || parsedUrl.Port() == "33340" || parsedUrl.Port() == "33341" || parsedUrl.Port() == "33342" || parsedUrl.Port() == "33343" || parsedUrl.Port() == "33344" || parsedUrl.Port() == "33345" || parsedUrl.Port() == "33346" || parsedUrl.Port() == "33347" || parsedUrl.Port() == "33348" || parsedUrl.Port() == "33349" || parsedUrl.Port() == "33350" || parsedBackendUrl.Host == parsedUrl.Host {
 
 			log.Printf("[INFO] Running with internal proxy for %s", parsedUrl)
 			httpProxy = os.Getenv("SHUFFLE_INTERNAL_HTTP_PROXY")
@@ -26431,90 +26460,7 @@ func GetExternalClient(baseUrl string) *http.Client {
 	return client
 }
 
-func GetAllAppCategories() []AppCategory {
-	categories := []AppCategory{
-		AppCategory{
-			Name:         "Cases",
-			Color:        "",
-			Icon:         "cases",
-			ActionLabels: []string{"Create ticket", "List tickets", "Get ticket", "Create ticket", "Close ticket", "Add comment", "Update ticket"},
-			RequiredFields: map[string][]string{
-				"Create ticket": []string{"title"},
-				"Add comment":   []string{"comment"},
-				"Lis tickets":   []string{"time_range"},
-			},
-			OptionalFields: map[string][]string{
-				"Create ticket": []string{"description"},
-			},
-		},
-		AppCategory{
-			Name:           "Communication",
-			Color:          "",
-			Icon:           "communication",
-			ActionLabels:   []string{"List Messages", "Send Message", "Get Message", "Search messages"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "SIEM",
-			Color:          "",
-			Icon:           "siem",
-			ActionLabels:   []string{"Search", "List Alerts", "Close Alert", "Create detection", "Add to lookup list"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Eradication",
-			Color:          "",
-			Icon:           "eradication",
-			ActionLabels:   []string{"List Alerts", "Close Alert", "Create detection", "Block hash", "Search Hosts", "Isolate host", "Unisolate host"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Assets",
-			Color:          "",
-			Icon:           "assets",
-			ActionLabels:   []string{"List Assets", "Get Asset", "Search Assets", "Search Users", "Search endpoints", "Search vulnerabilities"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Intel",
-			Color:          "",
-			Icon:           "intel",
-			ActionLabels:   []string{"Get IOC", "Search IOC", "Create IOC", "Update IOC", "Delete IOC"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "IAM",
-			Color:          "",
-			Icon:           "iam",
-			ActionLabels:   []string{"Reset Password", "Enable user", "Disable user", "Get Identity", "Get Asset", "Search Identity"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Network",
-			Color:          "",
-			Icon:           "network",
-			ActionLabels:   []string{"Get Rules", "Allow IP", "Block IP"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-		AppCategory{
-			Name:           "Other",
-			Color:          "",
-			Icon:           "other",
-			ActionLabels:   []string{"Update Info", "Get Info", "Get Status", "Get Version", "Get Health", "Get Config", "Get Configs", "Get Configs by type", "Get Configs by name", "Run script"},
-			RequiredFields: map[string][]string{},
-			OptionalFields: map[string][]string{},
-		},
-	}
 
-	return categories
-}
 
 // Function with the name RemoveFromArray to remove a string from a string array
 func RemoveFromArray(array []string, element string) []string {
@@ -27036,7 +26982,7 @@ func HandleActionRecommendation(resp http.ResponseWriter, request *http.Request)
 					if foundAction.Name == "" {
 						log.Printf("[ERROR] No action explainer found for category '%s'", categoryname)
 					} else {
-						log.Printf("Found action %s for category %s", foundAction.Name, categoryname)
+						log.Printf("[DEBUG] Found action %s for category %s", foundAction.Name, categoryname)
 					}
 
 					recommendation = Recommendations{

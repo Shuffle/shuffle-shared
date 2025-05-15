@@ -846,6 +846,8 @@ type OrgBranding struct {
 	GlobalUser        bool   `json:"global_user" datastore:"global_user"` // Global user is true when the user is admin of both parent org and suborg.
 	SupportEmail      string `json:"support_email" datastore:"support_email"`
 	LogoutUrl         string `json:"logout_url" datastore:"logout_url"`
+	BrandColor        string `json:"brand_color" datastore:"brand_color"`
+	BrandName         string `json:"brand_name" datastore:"brand_name"`
 }
 
 // Used within a user
@@ -3825,9 +3827,9 @@ type AppCategory struct {
 
 type SingleResult struct {
 	Success       bool           `json:"success"`
+	Result        string         `json:"result"`
 	Id            string         `json:"id"`
 	Authorization string         `json:"authorization"`
-	Result        string         `json:"result"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
 

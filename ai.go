@@ -31,6 +31,7 @@ import (
 
 //var model = "gpt-4-turbo-preview"
 //var model = "gpt-4o-mini"
+var standalone bool
 var model = "o4-mini"
 
 func GetKmsCache(ctx context.Context, auth AppAuthenticationStorage, key string) (string, error) {
@@ -366,7 +367,9 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	}
 
 	if httpOutput.Status >= 300 && httpOutput.Status != 404 {
-		log.Printf("[ERROR] Schemaless action failed with status: %d. Trying Autocorrecting feature", httpOutput.Status)
+		if debug { 
+			log.Printf("[DEBUG] Translated action failed with status: %d. Rerun Autocorrecting feature!", httpOutput.Status)
+		}
 
 		return *httpOutput, []byte{}, errors.New(fmt.Sprintf("Status: %d", httpOutput.Status))
 	}
@@ -544,8 +547,6 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 		}
 	}
 
-	log.Printf("[DEBUG] Previous Status: %d, ok: %t", status, bodyOk)
-
 	if bodyOk {
 		if val, ok := body1.(map[string]interface{}); ok {
 			// Marshal
@@ -615,11 +616,11 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 		log.Printf("\n\nGot %d invalid params and additional info of length %d", len(action.InvalidParameters), len(additionalInfo))
 
 	}
-	*/
 
 	log.Printf("[DEBUG] additionalInfo: %s", additionalInfo)
 	log.Printf("[DEBUG] outputBody: %s", outputBody)
 	log.Printf("[DEBUG] inputdata: %s", inputdata)
+	*/
 
 	additionalInfo = ""
 	openaiClient := openai.NewClient(os.Getenv("OPENAI_API_KEY"))
@@ -687,8 +688,8 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	// Append previous problems too
 	outputBodies := outputBody
 
-	log.Printf("[Critical] InputBody generated here: %s", inputBody)
-	log.Printf("[Critical] OutputBodies generated here: %s", outputBodies)
+	//log.Printf("[Critical] InputBody generated here: %s", inputBody)
+	//log.Printf("[Critical] OutputBodies generated here: %s", outputBodies)
 
 	//appendpoint := "/gmail/v1/users/{userId}/messages/send"
 	if !strings.Contains(additionalInfo, "How the API works") && len(additionalInfo) > 0 {
@@ -731,7 +732,10 @@ Given the HTTP API context for %s:
 Input JSON Payload:
 %s`, appname, status, outputBodies, inputBody)
 
-	log.Printf("[INFO] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
+	// Use this for debugging
+	if debug {
+		log.Printf("[DEBUG] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
+	}
 
 	contentOutput := ""
 	for {
@@ -774,7 +778,7 @@ Input JSON Payload:
 		break
 	}
 
-	log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
+	//log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
 
 	contentOutput = FixContentOutput(contentOutput)
 
@@ -791,8 +795,6 @@ Input JSON Payload:
 	}
 
 	if strings.Contains(contentOutput, "missing_fields") {
-		log.Printf("Missing fields found!")
-
 		successField, ok := outputJSON["success"] 
 		if ok {
 			if successField, ok := successField.(bool); ok {
@@ -902,7 +904,9 @@ func getBadOutputString(action Action, appname, inputdata, outputBody string, st
 
 	outputData := fmt.Sprintf("Fields: %s\n\nHTTP Status: %d\nHTTP error: %s", outputParams, status, outputBody)
 
-	log.Printf("[DEBUG] Skipping output formatting (bad output string)")
+	if debug { 
+		log.Printf("[DEBUG] Skipping output formatting (bad output string)")
+	}
 	//errorString := HandleOutputFormatting(string(outputData), inputdata, appname)
 
 	return outputData 
@@ -1201,11 +1205,19 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 	timeNow := time.Now().Unix()
 
 	// Check if the file already exists
-	//fileId := fmt.Sprintf("file_%s-%s-%s.json", strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
-	fileId := fmt.Sprintf("file_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
-	file, err := GetFile(ctx, fileId)
+	fileId := fmt.Sprintf("file_parameter_%s-%s-%s-%s.json", orgId, strings.ToLower(appId), strings.Replace(strings.ToLower(actionName), " ", "_", -1), strings.ToLower(paramName))
+
+	category := "app_defaults"
+	if standalone {
+		fileId = fmt.Sprintf("%s/%s", category, fileId)
+	}
+
+	file, err := GetFileSingul(ctx, fileId)
 	if err == nil && file.Status == "active" {
-		//log.Printf("[INFO] File %s already exists. NOT re-uploading", fileId)
+		if debug { 
+			log.Printf("[DEBUG] Parameter file '{root}/singul/%s' already exists. NOT re-uploading", fileId)
+		}
+
 		return nil
 	}
 
@@ -1225,27 +1237,23 @@ func UploadParameterBase(ctx context.Context, orgId, appId, actionName, paramNam
 		DownloadPath: downloadPath,
 		Subflows:     []string{},
 		StorageArea:  "local",
-		Namespace:    "app_defaults",
+		Namespace:    category,
 		Tags:         []string{"parameter base"},
 	}
 
-	err = SetFile(ctx, newFile)
+	err = SetFileSingul(ctx, newFile)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set file in uploadParameterBase: %s", err)
 		return err
 	}
 
-	log.Printf("SHOULD UPLOAD FILE TO ID %s", fileId)
-
 	// Upload to /api/v1/files/{fileId}/upload with the data from paramValue
 	parsedKey := fmt.Sprintf("%s_%s", orgId, newFile.Id)
-	fileId, err = UploadFile(ctx, &newFile, parsedKey, []byte(paramValue))
+	fileId, err = UploadFileSingul(ctx, &newFile, parsedKey, []byte(paramValue))
 	if err != nil {
 		log.Printf("[ERROR] Failed to upload file in uploadParameterBase: %s", err)
 		return err
 	}
-
-	log.Printf("UPLOADED FILE TO ID %s", fileId)
 
 	return nil
 }
@@ -1679,7 +1687,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	if project.Environment == "cloud" && !user.SupportAccess {
 		//if org.SyncFeatures.ShuffleGPT.Active && org.SyncFeatures.ShuffleGPT.Usage < org.SyncFeatures.ShuffleGPT.Limit {
 		if org.SyncFeatures.ShuffleGPT.Usage < 100 {
-			log.Printf("[AUDIT] Org %s has access to the auto feature. Allowing user %s to use it", org.Name, user.Username)
+			log.Printf("[AUDIT] Org %#v (%s) has access to the auto feature. Allowing user %s to use it", org.Name, org.Id,  user.Username)
 			org.SyncFeatures.ShuffleGPT.Usage += 1
 
 			// Managing usage (this happens elsewhere as well apparently
@@ -2177,7 +2185,7 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	}
 
 	appname = strings.Replace(appname, "_", " ", -1)
-	log.Printf("[INFO] Using app '%s' for action '%s' (1)", appname, actionName)
+	//log.Printf("[INFO] Using app '%s' for action '%s' (1)", appname, actionName)
 
 	actionLabel1, ok := output["action"]
 	if !ok && len(actionName) == 0 {
@@ -2598,7 +2606,8 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 	}
 
 	if strings.HasPrefix(outputFormat, "action") {
-		log.Printf("[INFO] Skipping execution and returning action: %s", selectedAction.Name)
+		//log.Printf("[INFO] Skipping execution and returning action: %s", selectedAction.Name)
+
 		//selectedAction.LargeImage = foundApp.LargeImage
 		selectedAction.LargeImage = ""
 		selectedAction.AppName = foundApp.Name
@@ -2777,76 +2786,6 @@ func GetActionAIResponse(ctx context.Context, resp http.ResponseWriter, user Use
 
 		cnt += 1
 	}
-
-	/*
-
-
-
-
-
-
-
-		Below here are test functions for OpenAPI3 interactions and searching
-
-
-
-
-
-
-
-
-	*/
-
-	// Check if we have all required fields
-	//for _, field := range requiredFields {
-	//	if _, ok := body[field]; !ok {
-	//		log.Printf("[ERROR] Missing required field '%s' in runActionAI", field)
-
-	/*
-		// Check the JSON for the action with example response from openapi
-		parsedApi, err := GetOpenApiDatastore(ctx, foundApp.ID)
-		if err != nil {
-			log.Printf("[WARNING] Failed to get openapi data in runActionAI: %s", err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false, "reason": "Failed to get openapi data in runActionAI"}`))
-			return
-		}
-
-		// Unmarshal parsedApi.Body into swagger
-			swagger := &openapi3.Swagger{}
-			err = json.Unmarshal([]byte(parsedApi.Body), swagger)
-			if err != nil {
-				log.Printf("[WARNING] Failed to unmarshal openapi data in runActionAI: %s", err)
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false, "reason": "Failed to unmarshal openapi data in runActionAI"}`))
-				return
-			}
-
-			foundActionName := strings.ToLower(strings.Replace(selectedAction.Name, " ", "_", -1))
-			foundActionName = GetCorrectActionName(foundActionName)
-
-			// Find the right action
-			var foundAction *openapi3.Operation
-			for _, urlItem := range swagger.Paths {
-				for _, operation := range urlItem.Operations() {
-					log.Printf("[INFO] Operation: %s - %s - %s", operation.OperationID, operation.Summary, foundActionName)
-
-					if (strings.Replace(strings.ToLower(operation.OperationID), " ", "_", -1) == foundActionName) || (strings.Replace(strings.ToLower(operation.Summary), " ", "_", -1) == foundActionName) {
-						foundAction = operation
-						break
-					}
-				}
-			}
-
-			if foundAction == nil {
-				log.Printf("[WARNING] Failed to find action %s in runActionAI", foundActionName)
-				resp.WriteHeader(500)
-				resp.Write([]byte(`{"success": false, "reason": "Failed to find action in runActionAI"}`))
-				return
-			}
-
-			log.Printf("[INFO] Found action in runActionAI (3): %s", foundAction.OperationID)
-	*/
 
 	respBody = []byte(`{"success": true}`)
 	resp.WriteHeader(200)
@@ -3664,7 +3603,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 		log.Printf("[ERROR] App %s doesn't have a valid body for action %s", appname, selectedAction.Name)
 
 	} else if len(sampleBody) > 0 {
-		log.Printf("[INFO] Sample body:\n%s\n\nGot app context with '%d' items", sampleBody, len(appContext))
+		//log.Printf("[INFO] Sample body:\n%s\n\nGot app context with '%d' items", sampleBody, len(appContext))
 
 		// Automatically filling in missing info when not available
 		for index, appContextItem := range appContext {
@@ -3739,12 +3678,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 		// FIXME: May cause weird bugs where same should be used multiple times
 		inputQuery = fixInputQuery(inputQuery, selectedAction)
 		outputBody = MatchBodyWithInputdata(inputQuery, appname, selectedAction.Name, sampleBody, newAppContext)
-		log.Printf("[INFO] Found output body to match input data (required fields): %s", outputBody)
-
-		// FIXME: Check if in the body it has skipped using e.g. ".body" and automatically fix it.
-		if len(outputBody) > 0 {
-			// Check if it has skipped using e.g. ".body"
-		}
+		//log.Printf("[INFO] Found output body to match input data (required fields): %s", outputBody)
 
 		appContext = newAppContext
 
@@ -4129,7 +4063,9 @@ func findNextAction(action Action, stepOutput []byte, additionalInfo, inputdata,
 			body = []byte(val)
 		}
 
-		log.Printf("Inside body: %s", string(body))
+		if debug { 
+			log.Printf("[DEBUG] ERROR in body handler. Status: %#v: %s", string(body), status)
+		}
 
 		// Should turn body into a string and check OpenAPI for problems if status is bad
 		if status >= 200 && status < 300 {
@@ -4422,20 +4358,26 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	}
 
 	systemMessage := fmt.Sprintf("If the User Instruction tells you what to do, do exactly what it tells you. Match the JSON body exactly and fill in relevant data from the message '%s' only IF it looks like JSON. Match output format exactly for '%s' doing '%s'. Output valid JSON if the input looks like JSON, otherwise follow the format. Do NOT remove JSON fields - instead follow the format, or add to it. Don't tell us to provide more information. If it does not look like JSON, don't force it to be JSON. DO NOT use the example provided in your response. It is strictly just an example and has not much to do with what the user would want. If you see anything starting with $ in the example, just assume it to be a variable and needs to be ALWAYS populated by you like a template based on the user provided details. User Instruction to follow exactly: '%s'", inputdata, strings.Replace(appname, "_", " ", -1), actionName, inputdata)
-	log.Printf("[DEBUG] System: %s", systemMessage)
 
-	assistantInfo := fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. This is the example body you should add to or modify '%s': \n%s\n\nSources:`, actionName, body)
+	if debug {
+		log.Printf("[DEBUG] System: %s", systemMessage)
+	}
+
+	assistantInfo := fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. Don't randomly make fields empty for no reason. Add keys and values to ensure ALL input fields are included. Below is the body you should add to or modify for API '%s' in app '%s'. \n%s`, actionName, strings.ReplaceAll(appname, "_", " "), body)
 
 	//assistantInfo := "Use JSON keys from the example responses below as additional context, and add values from it:"
 	if len(appContext) > 0 {
+		assistantInfo += "\n\nSources: "
 		for _, context := range appContext {
 			assistantInfo += fmt.Sprintf("\nsource: %s, Action: %s, Label: %s, Response: %s", context.AppName, strings.ReplaceAll(context.ActionName, "_", " "), strings.ReplaceAll(context.Label, "_", " "), context.Example)
 		}
 	}
 
-	log.Printf("[DEBUG] Assistant: %s", assistantInfo)
-	// FIX: Add required fields as a list of what fields need to be set
+	if debug { 
+		log.Printf("[DEBUG] Assistant: %s", assistantInfo)
+	}
 
+	// FIX: Add required fields as a list of what fields need to be set
 	contentOutput := ""
 	for {
 		if cnt >= 5 {
@@ -4480,7 +4422,6 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		break
 	}
 
-	log.Printf("\n\nTOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(assistantInfo)+len(body))/4, len(contentOutput)/4, string(body))
 
 	// Diff and find strings from body vs contentOutput
 	// If there are any strings that are not in contentOutput, add them to the contentOutput
@@ -4516,6 +4457,19 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		//log.Printf("[DEBUG] Autoformatted output to %s", contentOutput)
 	}
 
+	sampleFields := []Valuereplace{
+		Valuereplace{ 
+			Key: "body",
+			Value: contentOutput,
+		},
+	}
+
+	sampleFields = TranslateBadFieldFormats(sampleFields) 
+	if len(sampleFields) > 0 {
+		contentOutput = sampleFields[0].Value
+	}
+
+	log.Printf("\n\nTOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(assistantInfo)+len(body))/4, len(contentOutput)/4, string(contentOutput))
 	return contentOutput
 }
 
@@ -4666,9 +4620,10 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 
 	inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same format.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 
-	log.Printf("[INFO] INPUTDATA: %s\n\n\n", inputData)
-
-	log.Printf("[Critical] Input body sent: %s", inputBody)
+	if debug {
+		log.Printf("[DEBUG] INPUTDATA: %s\n\n\n", inputData)
+		log.Printf("[DEBUG] Input body sent: %s", inputBody)
+	}
 
 	contentOutput := ""
 	for {
@@ -4942,4 +4897,134 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 	}
 
 	return &parsedApp, nil
+}
+
+func GetSingulStandaloneFilepath() string {
+	singulFolder := os.Getenv("FILE_LOCATION") 
+	if len(singulFolder) > 0 {
+		singulFolder += "/"
+	}
+
+	singulFolder += "singul/"
+	err := os.MkdirAll(singulFolder, os.ModePerm)
+	if err != nil {
+		log.Printf("[ERROR] Error creating directory %s: %s", singulFolder, err)
+	}
+
+	return singulFolder
+}
+
+func GetFileContentSingul(ctx context.Context, file *File, resp http.ResponseWriter) ([]byte, error) {
+	if standalone {
+		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), file.Id)
+
+		// File exists, read it
+		file, err := os.Open(filepath)
+		if err != nil {
+			log.Printf("[ERROR] Problem opening Singul file '%s': %s", filepath, err)
+			return []byte{}, err
+		}
+
+		defer file.Close()
+
+		data, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Printf("[ERROR] Problem reading Singul file data for '%s': %s", filepath, err)
+			return []byte{}, err
+		}
+
+		return data, nil 
+
+		//log.Printf("\n\n\n[ERROR] GET FILE CONTENT FAILING\n\n\n")
+		//return []byte{}, errors.New(fmt.Sprintf("GetContent: Standalone mode not supported/implemented YET for file CONTENT ID '%s'", file.Id))
+	}
+
+	return GetFileContent(ctx, file, resp)
+}
+
+func SetFileSingul(ctx context.Context, file File) error {
+	if standalone {
+		//log.Printf("\n\n\n[ERROR] SET FILE FAILING. ID: %#v, Name: %#v\n\n\n", file.Id, file.Filename)
+		//return errors.New(fmt.Sprintf("SetFile: Standalone mode not supported/implemented YET for file ID '%s'", file.Id))
+		return nil
+	}
+
+	return SetFile(ctx, file)
+}
+
+func UploadFileSingul(ctx context.Context, file *File, key string, data []byte) (string, error) {
+	if standalone {
+		if len(file.Id) == 0 {
+			return "", errors.New("File ID required in the file")
+		}
+
+		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), file.Id)
+		if len(file.Namespace) > 0 && !strings.HasPrefix(file.Id, file.Namespace) {
+			if strings.HasSuffix(file.Namespace, "/") {
+				file.Namespace = strings.TrimSuffix(file.Namespace, "/")
+			}
+
+			filepath = fmt.Sprintf("%s%s/%s", GetSingulStandaloneFilepath(), file.Namespace, file.Id)
+		}
+
+		// Check if the filepath exists as folders, else make it
+		folderpath := filepath[0:strings.LastIndex(filepath, "/")]
+		_, statErr := os.Stat(folderpath)
+		if statErr != nil {
+			err := os.MkdirAll(folderpath, os.ModePerm)
+			if err != nil {
+				log.Printf("[ERROR] Error creating directory: %s", err)
+				return "", err
+			}
+		}
+
+		withFile, err := os.Create(filepath)
+		if err != nil {
+			log.Printf("[ERROR] Error creating file: %s", err)
+			return "", err
+		}
+
+		defer withFile.Close()
+		_, err = withFile.Write(data)
+		if err != nil {
+			log.Printf("[ERROR] Error writing file: %s", err)
+			return "", err
+		}
+
+		return filepath, nil
+	}
+
+	return UploadFile(ctx, file, key, data)
+}
+
+func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
+	if standalone {
+
+		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), fileId)
+		//if debug {
+		//	log.Printf("[DEBUG] Looking for file ID %s locally.\n\nFull search path: %s", fileId, filepath)
+		//}
+
+		_, statErr := os.Stat(filepath) 
+		if statErr == nil { 
+			return &File{
+				Status: "active",
+				Id:    fileId,
+				Filename: fileId,
+			}, nil
+		} 
+
+		return &File{
+			Status: "not found",
+			Id:    fileId,
+		}, errors.New(fmt.Sprintf("File not found locally for ID '%s'", fileId))
+	}
+
+	return GetFile(ctx, fileId)
+}
+
+func init() {
+	if os.Getenv("STANDALONE") == "true" {
+		standalone = true
+	}
 }
