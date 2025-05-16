@@ -439,9 +439,8 @@ func RunKmsTranslation(ctx context.Context, fullBody []byte, authConfig, paramNa
 	return foundValue, nil
 }
 
-
-
-func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string) (string, Action, error, string) {
+// Used for recursively fixing HTTP outputs that are bad
+func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata, originalAppname string, attempt ...int) (string, Action, error, string) {
 	// 1. Find the result field in json
 	// 2. Check the status code if it's a good one (<300). If it is, make the output correct based on it and add context based on output.
 	// 3. If 400-499, check for error message and self-correct. e.g. if body says something is wrong, try to fix it. If status is 415, try to add content-type header.
@@ -581,7 +580,6 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 		} else if status >= 400 {
 			// Auto-correct
 			// Auto-fix etc
-
 			log.Printf("[INFO] Trying autocorrect. See body: %s", string(body))
 
 			useApp := action.AppName
@@ -589,7 +587,13 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 				useApp = originalAppname
 			}
 
-			action, additionalInfo, err := RunSelfCorrectingRequest(action, status, additionalInfo, string(body), useApp, inputdata)
+			curAttempt := 1
+			if len(attempt) > 0 {
+				curAttempt = attempt[0]
+			}
+
+			// Body = previous requests' body
+			action, additionalInfo, err := RunSelfCorrectingRequest(action, status, additionalInfo, string(body), useApp, inputdata, curAttempt)
 			if err != nil {
 				if !strings.Contains(err.Error(), "missing_fields") { 
 					log.Printf("[ERROR] Error running self-correcting request: %s", err)
@@ -611,7 +615,19 @@ func FindNextApiStep(action Action, stepOutput []byte, additionalInfo, inputdata
 	return "", action, errors.New(getBadOutputString(action, action.AppName, inputdata, string(body), status)), additionalInfo
 }
 
-func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputBody, appname, inputdata string) (Action, string, error) {
+// Params: 
+// Action = the Action with the fields to fill in 
+// Status = status from PREVIOUS execution
+// additionalInfo = additional info from attempt to fix the request 
+// outputBody = typically the Error response from the previous REQUESTS 
+// appname = name of the app
+// inputdata = input data from the request
+
+// Returns:
+// 1. The fully filled-in action
+// 2. The additional info from the previous request
+// 3. Any error that may have occurred
+func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputBody, appname, inputdata string, attempt ...int) (Action, string, error) {
 	// Add all fields with value from here
 	additionalInfo = ""
 	inputBody := "{\n"
@@ -670,8 +686,6 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	}
 
 	// Append previous problems too
-	outputBodies := outputBody
-
 	//log.Printf("[Critical] InputBody generated here: %s", inputBody)
 	//log.Printf("[Critical] OutputBodies generated here: %s", outputBodies)
 
@@ -683,42 +697,55 @@ func RunSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	//systemMessage := fmt.Sprintf("Return all fields from the last paragraph in the same JSON format they came in. Must be valid JSON as an output.")
 	systemMessage := fmt.Sprintf(`Return all key:value pairs from the last paragraph, but with modified values to fix the HTTP error. Output must be valid JSON as an output. Don't add in any comments. Anything starting with $ is a variable and should be replaced with the correct value (Example if $helpful_function.parameter.value is present ANYWHERE in YOUR output -> This HAS to be replaced with the correct value provided by the user IF it exists at all, then make sure that you replace all values starting with $ with the correct output, else don't do anything about this).
 
-	Strict output rules to follow:
+Metadata:
+	Unique Action ID: %s. 
 
-	1. Validation Requirements:
-	   - Modify ONLY the fields directly related to the HTTP error
-	   - Use ONLY values derived from:
-		 a) Error message context
-		 b) Existing JSON structure
-		 c) Minimal necessary changes to resolve the error
-	
-	2. Strict Constraints:
-	   - NO invented values
-	   - NO external data generation
-	   - MUST use keys present in original JSON
-	   - MUST maintain original JSON structure
-	   - DON'T use older values or examples
-	
-	3. Output Format:
-	   - Provide corrected JSON
-	   - No comments. Must be valid JSON.
+Strict output rules to follow:
 
-	4. User Error Handling:
-	   - IF we are missing a value for the user to input, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. ONLY do this if the field(s) are REQUIRED, and make the fields human readable.
+1. Validation Requirements:
+   - Modify ONLY the fields directly related to the HTTP error
+   - Use ONLY values derived from:
+	 a) Error message context
+	 b) Existing JSON structure
+	 c) Minimal necessary changes to resolve the error
 
-	`)
+2. Strict Constraints:
+   - NO invented values
+   - NO external data generation
+   - MUST use keys present in original JSON
+   - MUST maintain original JSON structure
+   - DON'T use older values or examples
 
-	inputData := fmt.Sprintf(`Precise JSON Field Correction Instructions:
-Given the HTTP API context for %s:
+3. Output Format:
+   - Provide corrected JSON
+   - No comments. Must be valid JSON.
+   - Do NOT make the same output mistake twice. 
+
+4. Error Handling:
+   - First try to fix the request based on the error message and the existing content in the body and queries.
+   - You SHOULD add relevant fields to the body that are missing.
+   `, action.ID)
+
+	inputData := ""
+	if len(attempt) > 0 {
+		currentAttempt := attempt[0]
+		if currentAttempt > 4 {
+   			inputData += fmt.Sprintf(`IF we are missing a value from the user, return the format {"success": false, "missing_fields": ["field1", "field2"]} to indicate the missing fields. Do NOT do this unless it is absolutely necessary, make SURE the fields are missing. Before doing this, ensure the body and query fields are in the right format.\n\n`)
+		}
+	}
+
+	// We are using a unique Action ID here most of the time, meaning the chat will be continued.
+	inputData += fmt.Sprintf(`Precise JSON Field Correction Instructions:
+Given the HTTP API context for %s with action %s:
 - HTTP Status: %d
-- Detailed Error: %s
+- Detailed Errors: %s
 
-Input JSON Payload:
-%s`, appname, status, outputBodies, inputBody)
+Input JSON Payload (ensure VALID JSON):
+%s`, appname, action.Name, status, outputBody, inputBody)
 
 	// Use this for debugging
 	if debug {
-		log.Printf("[DEBUG] INPUTDATA:\n\n\n\n'''%s''''\n\n\n\n", inputData)
+		log.Printf("[DEBUG] SYSTEM MESSAGE: %#v\n\nINPUTDATA:\n\n\n%s\n\n\n\n", systemMessage, inputData)
 	}
 
 	contentOutput, err := RunAiQuery(systemMessage, inputData) 
@@ -727,9 +754,7 @@ Input JSON Payload:
 	}
 
 	//log.Printf("\n\nTOKENS (AUTOFIX API~): In: %d, Out: %d\n\n", (len(systemMessage)+len(inputData))/4, len(contentOutput)/4)
-
 	contentOutput = FixContentOutput(contentOutput)
-
 	if debug { 
 		log.Printf("[DEBUG] Autocorrected output: %s", contentOutput)
 	}
@@ -796,6 +821,25 @@ Input JSON Payload:
 				}
 			}
 
+			inputFields := []Valuereplace{
+				Valuereplace{
+					Key: param.Name,
+					Value: formattedVal,
+				},
+			}
+
+			responseFields := TranslateBadFieldFormats(inputFields)
+			if len(responseFields) > 0 {
+				if responseFields[0].Value != formattedVal {
+					if debug { 
+						log.Printf("[DEBUG] Changed output formatting: %s from %s to %s", param.Name, formattedVal, responseFields[0].Value)
+					}
+
+					formattedVal = responseFields[0].Value
+				}
+			}
+
+
 			// Check if value is base64 and decode if no mention of base64 previously
 			if param.Name == "body" && strings.HasSuffix(param.Value, "=") {
 				// Try to base64 decode the value
@@ -831,9 +875,7 @@ Input JSON Payload:
 
 	if !sendNewRequest {
 		// Should have a good output anyway, meaning to format the bad request
-
 		// Make errorString work in json
-
 		return action, additionalInfo, errors.New(getBadOutputString(action, appname, inputdata, outputBody, status))
 	}
 
@@ -843,6 +885,11 @@ Input JSON Payload:
 func getBadOutputString(action Action, appname, inputdata, outputBody string, status int) string {
 	outputParams := ""
 	for _, param := range action.Parameters {
+		// Ensures avoiding of printing them
+		if param.Configuration {
+			continue
+		}
+
 		if param.Name == "headers" || param.Name == "ssl_verify" || param.Name == "to_file" {
 			continue
 		}
@@ -3341,7 +3388,9 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 	apps := []WorkflowApp{}
 	newAppContext := []AppContext{}
 	if len(sampleBody) == 0 {
-		log.Printf("[ERROR] App %s doesn't have a valid body for action %s", appname, selectedAction.Name)
+		if !strings.HasPrefix(selectedAction.Name, "get") { 
+			log.Printf("[WARNING] App %s doesn't have a valid body for action %s", appname, selectedAction.Name)
+		}
 
 	} else if len(sampleBody) > 0 {
 		//log.Printf("[INFO] Sample body:\n%s\n\nGot app context with '%d' items", sampleBody, len(appContext))
@@ -3490,12 +3539,21 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 		selectedAction.Parameters[bodyIndex].Value = outputBody
 	}
 
-	if queryIndex >= 0 && bodyIndex < 0 {
-		// FIXME: Queries disabled for now due to duplicates in use
-		log.Printf("[INFO] Found matching query: %s", outputQueries)
+	//if queryIndex >= 0 && bodyIndex < 0 {
+	//if queryIndex >= 0 {
 
+	// Forces focus into the Query instead of Body for get_ requests
+	if queryIndex >= 0 && bodyIndex < 0 {
+		if debug && len(outputQueries) > 0 { 
+			log.Printf("[INFO] Found matching query: %s", outputQueries)
+		}
+
+		// This is a hack to get it to work for other fields
+		// FIXME: This should NOT run if not necessary
 		inputQuery = fixInputQuery(inputQuery, selectedAction)
-		outputQueries = MatchBodyWithInputdata(inputQuery, appname, selectedAction.Name, sampleBody, newAppContext)
+		outputQueries = MatchBodyWithInputdata(inputQuery, appname, selectedAction.Name, "shuffleFieldName=queries", newAppContext)
+
+
 
 		// Marshal, then rebuild the query string
 		var parsedBody map[string]interface{}
@@ -3505,7 +3563,7 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 			for key, value := range parsedBody {
 				// Value could NOT be string too
 				if _, ok := value.(string); !ok {
-					log.Printf("[ERROR] Found non-string value in query parse value: %s", value)
+					log.Printf("[ERROR] Found non-string value in query parse value: %#v", value)
 					continue
 				}
 
@@ -4053,6 +4111,10 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		actionName = strings.ReplaceAll(actionName, "patch ", "")
 	} else if strings.HasPrefix(actionName, "put ") {
 		actionName = strings.ReplaceAll(actionName, "put ", "")
+	} else if strings.HasPrefix(actionName, "get ") {
+		actionName = strings.ReplaceAll(actionName, "get ", "")
+	} else if strings.HasPrefix(actionName, "delete ") {
+		actionName = strings.ReplaceAll(actionName, "delete ", "")
 	}
 
 	if strings.HasPrefix(inputdata, "//") {
@@ -4060,29 +4122,46 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 		inputdata = strings.TrimSpace(inputdata)
 	}
 
-	systemMessage := fmt.Sprintf("If the User Instruction tells you what to do, do exactly what it tells you. Match the JSON body exactly and fill in relevant data from the message '%s' only IF it looks like JSON. Match output format exactly for '%s' doing '%s'. Output valid JSON if the input looks like JSON, otherwise follow the format. Do NOT remove JSON fields - instead follow the format, or add to it. Don't tell us to provide more information. If it does not look like JSON, don't force it to be JSON. DO NOT use the example provided in your response. It is strictly just an example and has not much to do with what the user would want. If you see anything starting with $ in the example, just assume it to be a variable and needs to be ALWAYS populated by you like a template based on the user provided details. User Instruction to follow exactly: '%s'", inputdata, strings.Replace(appname, "_", " ", -1), actionName, inputdata)
+	fieldName := "JSON body"
+	if strings.Contains(body, "shuffleFieldName=") {
+		fieldName = strings.Split(body, "shuffleFieldName=")[1]
+		fieldName = strings.Split(fieldName, "&")[0]
+
+		body = ""
+	}
+
+	if debug { 
+		log.Printf("[DEBUG] Translating fieldname %s", fieldName)
+	}
+
+	systemMessage := fmt.Sprintf("If the User Instruction tells you what to do, do exactly what it tells you. Match the %s field exactly and fill in relevant data from the message IF it can be JSON formatted. Match output format exactly for '%s' doing '%s'. Output valid JSON if the input looks like JSON, otherwise follow the format. Do NOT remove JSON fields - instead follow the format, or add to it. Don't tell us to provide more information. If it does not look like JSON, don't force it to be JSON. DO NOT use the example provided in your response. It is strictly just an example and has not much to do with what the user would want. If you see anything starting with $ in the example, just assume it to be a variable and needs to be ALWAYS populated by you like a template based on the user provided details. Do NOT make up random fields like app or action name. Do NOT add %s, app and action fields - just key:values. Values should ALWAYS be strings, even if they look like other types. User Instruction to follow EXACTLY: '%s'", fieldName, strings.Replace(appname, "_", " ", -1), actionName, fieldName, inputdata)
 
 	if debug {
 		log.Printf("[DEBUG] System: %s", systemMessage)
 	}
 
-	assistantInfo := fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. Don't randomly make fields empty for no reason. Add keys and values to ensure ALL input fields are included. Below is the body you should add to or modify for API '%s' in app '%s'. \n%s`, actionName, strings.ReplaceAll(appname, "_", " "), body)
+	userInfo := fmt.Sprintf("%s The API field to fill in is '%s', but do NOT add '%s', 'action' or 'app' as a keys.", inputdata, fieldName, fieldName)
+	//if len(body) > 0 {
+	if len(inputdata) > 200 {
+		fmt.Sprintf(`Use JSON keys from the sources as additional context, and add values from it in the format '{{label.key.subkey}}' if it has no list, else '{{label.key[].subkey}}'. Example: the response of label 'shuffle tools 1' is '{"name": {"firstname": "", "lastname": ""}}' and you are looking for a lastname, then you get {{shuffle_tools_1.name.lastname}}. Don't randomly make fields empty for no reason. Add keys and values to ensure ALL input fields are included.`)
 
-	//assistantInfo := "Use JSON keys from the example responses below as additional context, and add values from it:"
+		userInfo += fmt.Sprintf(`Below is the %s you should add to or modify for API '%s' in app '%s'. \n%s`, fieldName, actionName, strings.ReplaceAll(appname, "_", " "), body)
+	}
+
 	if len(appContext) > 0 {
-		assistantInfo += "\n\nSources: "
+		userInfo += "\n\nSources: "
 		for _, context := range appContext {
-			assistantInfo += fmt.Sprintf("\nsource: %s, Action: %s, Label: %s, Response: %s", context.AppName, strings.ReplaceAll(context.ActionName, "_", " "), strings.ReplaceAll(context.Label, "_", " "), context.Example)
+			userInfo += fmt.Sprintf("\nsource: %s, Action: %s, Label: %s, Response: %s", context.AppName, strings.ReplaceAll(context.ActionName, "_", " "), strings.ReplaceAll(context.Label, "_", " "), context.Example)
 		}
 	}
 
 	if debug { 
-		log.Printf("[DEBUG] Assistant: %s", assistantInfo)
+		log.Printf("[DEBUG] Userdata: %s", userInfo)
 	}
 
 	// FIXME: This MAY not work as we used to do this with 
 	// Assistant instead of User for some reason
-	contentOutput, err := RunAiQuery(systemMessage, assistantInfo) 
+	contentOutput, err := RunAiQuery(systemMessage, userInfo) 
 	if err != nil {
 		log.Printf("[ERROR] Failed to run AI query in MatchBodyWithInputdata: %s", err)
 		return ""
@@ -4135,7 +4214,7 @@ func MatchBodyWithInputdata(inputdata, appname, actionName, body string, appCont
 	}
 
 	if debug { 
-		log.Printf("\n\n[DEBUG] TOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(assistantInfo)+len(body))/4, len(contentOutput)/4, string(contentOutput))
+		log.Printf("\n\n[DEBUG] TOKENS (Inputdata~): In: %d~, Out: %d~\n\nRAW OUTPUT: %s\n\n", (len(systemMessage)+len(userInfo)+len(body))/4, len(contentOutput)/4, string(contentOutput))
 	}
 
 	return contentOutput
@@ -4247,7 +4326,7 @@ func runSelfCorrectingRequest(action Action, status int, additionalInfo, outputB
 	inputData := fmt.Sprintf("Change the fields sent to the HTTP Rest API endpoint %s for service %s to work according to the error message in the body. Learn from the error information in the paragraphs to fix the fields in the last paragraph.\n\nHTTP Status: %d\nHTTP error: %s\n\n%s\n\n%s\n\nUpdate the following fields and output as JSON in the same format.\n%s", appendpoint, appname, status, outputBodies, additionalInfo, invalidFieldsString, inputBody)
 
 	if debug {
-		log.Printf("[DEBUG] INPUTDATA: %s\n\n\n", inputData)
+		log.Printf("[DEBUG] OUTPUT FORMATTING DATA: %s\n\n\n", inputData)
 		log.Printf("[DEBUG] Input body sent: %s", inputBody)
 	}
 
@@ -4591,6 +4670,40 @@ func UploadFileSingul(ctx context.Context, file *File, key string, data []byte) 
 	}
 
 	return UploadFile(ctx, file, key, data)
+}
+
+func DeleteFileSingul(ctx context.Context, filepath string) error {
+	if standalone {
+		filepath := fmt.Sprintf("%s%s", GetSingulStandaloneFilepath(), filepath)
+		err := os.Remove(filepath)
+		if err != nil {
+			//log.Printf("[ERROR] Error deleting file: %s", err)
+			return err
+		}
+
+		//log.Printf("[DEBUG] Deleted file %s", filepath)
+		return nil
+	}
+
+	/*
+	file, err := GetFile(ctx, fileId)
+	if err != nil {
+		log.Printf("[ERROR] Error getting file: %s", err)
+		return err
+	}
+
+	err = DeleteKey(ctx, "files", fileId)
+	if err != nil {
+		log.Printf("Failed deleting file with ID %s: %s", fileId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+	*/
+
+	//return DeleteFile(ctx, fileId)
+	log.Printf("[ERROR] DeleteFileSingul() is not implemented for shuffle backend, meaning self-correcting measure may not work.")
+	return nil 
 }
 
 func GetFileSingul(ctx context.Context, fileId string) (*File, error) {
@@ -6824,26 +6937,52 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		chatCompletion.MaxCompletionTokens = maxTokens
 	}
 
-	if len(systemMessage) > 0 {
-		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleSystem,
-			Content: systemMessage,
-		})
-	}
-
-	if len(userMessage) > 0 {
-		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
-			Role:    openai.ChatMessageRoleUser,
-			Content: userMessage,
-		})
-	}
-
-	if len(chatCompletion.Messages) == 0 {
-		return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
-	}
+	// Rerun with the same chat IF POSSIBLE
+	// This makes it so that the chance of getting the right result is lower
+	ctx := context.Background()
+	cachedChatMd5 := md5.Sum([]byte(systemMessage))
+	cachedChat := fmt.Sprintf("chat-%x", cachedChatMd5)
 
 	if len(incomingRequest) > 0 {
 		chatCompletion = incomingRequest[0]
+	} else {
+		if len(systemMessage) > 0 {
+			chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleSystem,
+				Content: systemMessage,
+			})
+		}
+
+		data, err := GetCache(ctx, cachedChat)
+		if err == nil {
+			oldChat := openai.ChatCompletionRequest{}
+			cacheData := []byte(data.([]uint8))
+			err = json.Unmarshal(cacheData, &oldChat)
+			if err != nil {
+				log.Printf("[ERROR] Failed to unmarshal cached chat: %s", err)
+			}
+
+			for _, chatMessage := range oldChat.Messages {
+				if chatMessage.Role == openai.ChatMessageRoleSystem {
+					continue
+				}
+
+				chatCompletion.Messages = append(chatCompletion.Messages, chatMessage)
+			}
+		}
+
+		if len(userMessage) > 0 {
+			chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
+				Role:    openai.ChatMessageRoleUser,
+				Content: userMessage,
+			})
+		}
+
+		if len(chatCompletion.Messages) == 0 {
+			return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
+		}
+
+		log.Printf("\n\n\nGot %d messages in chat completion (%s)\n\n\n", len(chatCompletion.Messages), cachedChat)
 	}
 
 	maxRetries := 3
@@ -6895,6 +7034,25 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 		}
 
 		break
+	}
+
+	if len(contentOutput) > 0 {
+		chatCompletion.Messages = append(chatCompletion.Messages, openai.ChatCompletionMessage{
+			Role:    openai.ChatMessageRoleAssistant,
+			Content: contentOutput,
+		})
+
+		marshalledData, err := json.Marshal(chatCompletion)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal chat completion: %s", err)
+			return contentOutput, err
+		}
+
+		err = SetCache(ctx, cachedChat, marshalledData, 30)
+		if err != nil {
+			log.Printf("[ERROR] Failed to set cache for chat completion: %s", err)
+			return contentOutput, err
+		}
 	}
 
 	return contentOutput, nil
