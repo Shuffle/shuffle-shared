@@ -6932,7 +6932,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	}
 
 	// Too specific, but.. :)
-	if model == "o4-minii" {
+	if model == "o4-mini" {
 		chatCompletion.MaxTokens = 0
 		chatCompletion.MaxCompletionTokens = maxTokens
 	}
