@@ -521,8 +521,8 @@ func sendToNotificationWorkflow(ctx context.Context, notification Notification, 
 	_ = respBody 
 
 	//log.Printf("[DEBUG] Finished notification request to %s with status %d. Data: %s", executionUrl, newresp.StatusCode, string(respBody))
-	log.Printf("[DEBUG] Finished notification request to %s with status %d. If status is not 200, an error is created.", executionUrl, newresp.StatusCode)
 	if newresp.StatusCode != 200 {
+		log.Printf("[DEBUG] Finished notification request to %s with status %d. If status is not 200, an error is created.", executionUrl, newresp.StatusCode)
 		return errors.New(fmt.Sprintf("Got status code %d when sending notification for org %s", newresp.StatusCode, notification.OrgId))
 	}
 
@@ -634,6 +634,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return errors.New("No org ID provided")
 	}
 
+	// Since we use a static workflow name, this should be effective.
+	if strings.Contains(title, "Ops Dashboard Workflow") {
+		log.Printf("[INFO] Skipping create notification for health check workflow")
+		return errors.New("Health check workflow detected")
+	}
+
 	if project.Environment == "" {
 
 		auth := os.Getenv("AUTH")
@@ -736,8 +742,8 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 		if err != nil {
-			log.Printf("[WARNING] Error getting parent org %s in createOrgNotification: %s", orgId, err)
-			return err
+			log.Printf("[WARNING] Error getting parent org %s in createOrgNotification: %s. This is usually a region problem, and may cause issues with notification workflows..", orgId, err)
+			//return err
 		}
 
 		// Overwriting to make sure access rights are correct
@@ -750,11 +756,9 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 			// Checking if it's the right active org
 			// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
 			foundUser, err := GetUser(ctx, user.Id)
-			if err == nil {
-				if foundUser.ActiveOrg.Id == orgId {
-					//log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
-					selectedApikey = foundUser.ApiKey
-				}
+			if err == nil && len(foundUser.ApiKey) > 0 {
+				selectedApikey = foundUser.ApiKey
+				break
 			}
 		}
 	}
@@ -817,14 +821,14 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 
 		return nil
 	} else {
-		log.Printf("[INFO] New notification with title %#v is being made for users in org %s", title, orgId)
+		//log.Printf("[INFO] New notification with title %#v is being made for users in org %s", title, orgId)
 
 
 		// Only gonna load this after
 		// All the other personal ones are kind of irrelevant
 		err = SetNotification(ctx, mainNotification)
 		if err != nil {
-			log.Printf("[WARNING] Failed making org notification with title %#v for org %s", title, orgId)
+			log.Printf("[ERROR] Failed making org notification with title %#v for org %s", title, orgId)
 			return err
 		}
 
@@ -848,33 +852,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		selectedApikey := ""
 		for _, user := range filteredUsers {
 			if user.Role == "admin" && len(user.ApiKey) > 0 && len(selectedApikey) == 0 {
-				// Checking if it's the right active org
-				// FIXME: Should it need to be in the active org? Shouldn't matter? :thinking:
 				foundUser, err := GetUser(ctx, user.Id)
-				if err == nil {
-					if foundUser.ActiveOrg.Id == orgId {
-						log.Printf("[DEBUG] Using the apikey of user %s (%s) for notification for org %s", foundUser.Username, foundUser.Id, orgId)
-						selectedApikey = user.ApiKey
-					}
+				if err == nil && len(foundUser.ApiKey) > 0 {
+					selectedApikey = foundUser.ApiKey
+					break
 				}
 			}
-
-			//log.Printf("[DEBUG] Made notification for user %s (%s)", user.Username, user.Id)
-			// Skipping personal notifications. Making them orgwide instead
-			// FIXME: Point of personal was to make it possible to see them across
-			// orgs. But that's not really used anymore. 
-			/*
-			newNotification := mainNotification
-			newNotification.Id = uuid.NewV4().String()
-			newNotification.OrgNotificationId = generatedId
-			newNotification.UserId = user.Id
-			newNotification.Personal = true
-
-			err = SetNotification(ctx, newNotification)
-			if err != nil {
-				log.Printf("[WARNING] Failed making USER notification with title %#v for user %s in org %s", title, user.Id, orgId)
-			}
-			*/
 		}
 
 		if len(org.Defaults.NotificationWorkflow) > 0 {

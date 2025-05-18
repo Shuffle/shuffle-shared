@@ -10,20 +10,28 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
-	uuid "github.com/satori/go.uuid"
 	"github.com/Masterminds/semver"
+	"github.com/frikky/kin-openapi/openapi3"
+	uuid "github.com/satori/go.uuid"
 )
 
 type appConfig struct {
 	Success bool   `json:"success"`
 	OpenAPI string `json:"openapi"`
 	App     string `json:"app"`
+}
+
+type AppResponse struct {
+	Success bool	`json:"success"`
+	Id string		`json:"id"`
+	Details string	`json:"details"`
 }
 
 type genericResp struct {
@@ -82,11 +90,19 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		ExecutionID: "",
 	}
 
-	// 1. Get App
-	baseURL := os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	// if len(baseURL) == 0 {
-	baseURL = "https://shuffler.io"
-	// }
+	baseURL := "https://shuffler.io"
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseURL)
+		baseURL = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	if project.Environment != "cloud" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		baseURL = "http://localhost:5001"
+		if os.Getenv("BASE_URL") != "" {
+			baseURL = os.Getenv("BASE_URL")
+		}
+	}
 
 	url := baseURL + "/api/v1/apps/edaa73d40238ee60874a853dc3ccaa6f/config"
 	log.Printf("[DEBUG] Getting app with URL: %s", url)
@@ -141,6 +157,21 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, err
 	}
 
+	type OpenApiData struct {
+		Body string `json:"body"`
+		Id	string	`json:"id"`
+		Success	bool `json:"success"`
+	}
+	var openApiData OpenApiData
+
+	err = json.Unmarshal([]byte(openapiString), &openApiData)
+	if err != nil {
+		log.Printf("Error in unm %s", err)
+		return appHealth, err
+	}
+
+	openapiString = openApiData.Body
+
 	// 2.2 call /api/v1/validate_openapi
 	// with request body openapiString
 	url = baseURL + "/api/v1/validate_openapi"
@@ -167,6 +198,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed validating app in app health check: %s. The status code was: %d", err, resp.StatusCode)
+		respBodyErr, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		} else {
+			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
+		}
+
 		return appHealth, err
 	}
 
@@ -195,15 +233,35 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	log.Printf("[DEBUG] New app id: %s", id)
 
+
 	// 2.3 call /api/v1/verify_openapi POST
 	// with request body openapiString
-	// replace edaa73d40238ee60874a853dc3ccaa6f with id from above
-	newOpenapiString := strings.Replace(openapiString, "edaa73d40238ee60874a853dc3ccaa6f", id, -1)
+	// replace edaa73d40238ee60874a853dc3ccaa6f
+	// with id from above and bunch of other data to
+	// not get same app id when verified
+	data, err := openapi3.NewSwaggerLoader().LoadSwaggerFromData([]byte(openapiString))
+	jsonId := json.RawMessage(`"`+id+`"`)
+	data.ExtensionProps.Extensions["id"] = jsonId
+	data.ExtensionProps.Extensions["editing"] = json.RawMessage(`false`)
+	data.Info.Title = "Shuffle-Copy"
+	data.Info.Version = "2.0"
+
+	//	newOpenapiString := strings.Replace(openapiString, `"edaa73d40238ee60874a853dc3ccaa6f"`, `"`+id+`"`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"editing":true`, `"editing":false`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"title":"Shuffle"`, `"title":"Shuffle-Copy"`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"version":"1.0"`, `"version":"2.0"`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"tags":[{"name":"SOAR"},{"name":"Automation"},{"name":"Shuffle"}]`, `"tags":[]`, 1)
+	//	newOpenapiString = strings.Replace(newOpenapiString, `"/api/v1/apps/search"`, `"/api/v1/different/endpoint"`, 1)
+
 	url = baseURL + "/api/v1/verify_openapi"
 
-	log.Printf("[DEBUG] New openapi string: %s", newOpenapiString)
+	newOpenapi, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("[ERROR] Failed to edit app data. Did we change the specs?")
+		return appHealth, err
+	}
 
-	req, err = http.NewRequest("POST", url, bytes.NewBuffer([]byte(newOpenapiString)))
+	req, err = http.NewRequest("POST", url, bytes.NewBuffer(newOpenapi))
 	if err != nil {
 		log.Printf("[ERROR] Failed creating app check HTTP for app verify request: %s", err)
 		return appHealth, err
@@ -244,6 +302,7 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 		return appHealth, err
 	}
 
+	id = validatedResp.ID
 	// Verify that the app was created
 	// Make a request to /api/v1/apps/<id>/config
 	url = baseURL + "/api/v1/apps/" + id + "/config"
@@ -269,9 +328,15 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body) // Read response body
+	if err != nil {
+		log.Printf("[ERROR] Failed reading response body: %s", err)
+		return appHealth, err
+	}
+
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed reading app in app health check: %s. The status code was: %d", err, resp.StatusCode)
-		log.Printf("[ERROR] The response body was: %s", respBody)
+		log.Printf("[ERROR] The response body was: %s", body)
 		return appHealth, err
 	}
 
@@ -388,6 +453,13 @@ func RunOpsAppHealthCheck(apiKey string, orgId string) (AppHealth, error) {
 
 	if resp.StatusCode != 200 {
 		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
+		respBodyErr, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+		} else {
+			log.Printf("[ERROR] Ops dashboard app deleting Response: %s", respBodyErr)
+		}
+
 		return appHealth, err
 	}
 
@@ -639,25 +711,44 @@ func RunOpsHealthCheck(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] Running workflowHealthChannel goroutine")
 		workflowHealth, err := RunOpsWorkflow(apiKey, orgId, "")
 		if err != nil {
-			log.Printf("[ERROR] Failed workflow health check: %s", err)
+			if project.Environment == "cloud" {
+				log.Printf("[ERROR] Failed workflow health check: %s", err)
+			}
 		}
 
 		workflowHealthChannel <- workflowHealth
 		errorChannel <- err
 	}()
+	
+	// TODO: More testing for onprem health checks
+	if project.Environment == "cloud" {
+		openapiAppHealthChannel := make(chan AppHealth)
+		go func() {
+			appHealth, err := RunOpsAppHealthCheck(apiKey, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed running app health check: %s", err)
+			}
+	
+			openapiAppHealthChannel <- appHealth
+			errorChannel <- err
+		}()
+	
+		pythonAppHealthChannel := make(chan AppHealth)
+		go func() {
+			pythonAppHealth, err := RunOpsAppUpload(apiKey, orgId)
+			if err != nil {
+				log.Printf("[ERROR] Failed running python app health check: %s", err)
+			}
+	
+			pythonAppHealthChannel <- pythonAppHealth
+			errorChannel <- err
+		}()
+		
+		// Use channel for getting RunOpsWorkflow function results
+		platformHealth.Apps = <- openapiAppHealthChannel
+		platformHealth.PythonApps = <- pythonAppHealthChannel
+	}
 
-	// go func() {
-	// 	appHealth, err := RunOpsAppHealthCheck()
-	// 	if err != nil {
-	// 		log.Printf("[ERROR] Failed running app health check: %s", err)
-	// 		appHealthChannel <- appHealth
-	// 		return
-	// 	}
-	// 	appHealthChannel <- appHealth
-	// }()
-
-	// Use channel for getting RunOpsWorkflow function results
-	// platformHealth.Apps = <-appHealthChannel
 	platformHealth.Workflows = <-workflowHealthChannel
 	err = <-errorChannel
 
@@ -1183,20 +1274,6 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	updateOpsCache(workflowHealth)
 	timeout := time.After(5 * time.Minute)
 
-//	Removed as it was deleting the workflow before execution which
-//	was effecting the subflow
-//	if workflowHealth.Create == true {
-//		log.Printf("[DEBUG] Deleting created ops workflow")
-//		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
-//		if err != nil {
-//			log.Printf("[ERROR] Failed deleting workflow: %s", err)
-//		} else {
-//			log.Printf("[DEBUG] Deleted ops workflow successfully!")
-//			workflowHealth.Delete = true
-//			updateOpsCache(workflowHealth)
-//		}
-//	}
-
 	// 3. Check if workflow ran successfully
 	// ping /api/v1/streams/results/<execution_id> while workflowHealth.RunFinished is false
 	// if workflowHealth.RunFinished is true, return workflowHealth
@@ -1272,7 +1349,10 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 		// check if timeout
 		select {
 		case <-timeout:
-			log.Printf("[ERROR] Timeout reached for workflow health check. Returning")
+			if project.Environment == "cloud" {
+				log.Printf("[ERROR] Timeout reached for workflow health check. Returning")
+			}
+
 			workflowHealth.RunStatus = "ABANDONED_BY_HEALTHCHECK"
 
 			return workflowHealth, errors.New("Timeout reached for workflow health check")
@@ -1285,12 +1365,12 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	}
 
 	if workflowHealth.Create == true {
-		log.Printf("[DEBUG] Deleting created ops workflow")
+		//log.Printf("[DEBUG] Deleting created ops workflow")
 		err = deleteOpsWorkflow(workflowHealth, apiKey, orgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed deleting workflow: %s", err)
 		} else {
-			log.Printf("[DEBUG] Deleted ops workflow successfully!")
+			//log.Printf("[DEBUG] Deleted ops workflow successfully!")
 			workflowHealth.Delete = true
 			updateOpsCache(workflowHealth)
 		}
@@ -1304,6 +1384,279 @@ func RunOpsWorkflow(apiKey string, orgId string, cloudRunUrl string) (WorkflowHe
 	}
 
 	return workflowHealth, nil
+}
+
+func RunOpsAppUpload(apiKey string, orgId string) (AppHealth, error){
+	appHealth := AppHealth{
+		Create:      false,
+		Run:         false,
+		Delete:      false,
+		Read:        false,
+		Validate:    false,
+		AppId:       "",
+		Result:      "",
+		ExecutionID: "",
+	}
+
+	appZipUrl := "https://github.com/shuffle/python-apps/raw/refs/heads/master/shuffle-tools-copy.zip"
+
+	resp, err := http.Get(appZipUrl)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create an http request to the appZipUrl: %s", err)
+		return appHealth, errors.New("Failed creating an http request")
+	}
+	defer resp.Body.Close()
+
+	pr, pw := io.Pipe()
+	writer := multipart.NewWriter(pw)
+
+	go func() {
+		defer pw.Close()
+		defer writer.Close()
+
+		part, err := writer.CreateFormFile("shuffle_file", "app.zip")
+		if err != nil {
+			log.Printf("[ERROR] Failed to creating form field: %s", err)
+			return
+		}
+
+		_, err = io.Copy(part, resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed to stream file: %s", err)
+			return
+		}
+	}()
+
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		log.Printf("[DEBUG] Setting the baseUrl for health check to %s", baseUrl)
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+
+	if project.Environment != "cloud" {
+		log.Printf("[DEBUG] Onprem environment. Setting base url to localhost: for delete")
+		baseUrl = "http://localhost:5001"
+		if os.Getenv("BASE_URL") != "" {
+			baseUrl = os.Getenv("BASE_URL")
+		}
+	}
+
+	appHealth.Read = true
+
+	appUploadUrl := baseUrl + "/api/v1/apps/upload"
+
+	req, err := http.NewRequest("POST", appUploadUrl, pr)
+	if err != nil {
+		log.Printf("[ERROR] Failed to create http request for app upload: %s", err)
+		return appHealth, errors.New("Failed to create http request for app upload")
+	}
+
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{}
+	res, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed sending request to app upload: %s", err)
+		return appHealth, errors.New("Failed sending http request to app upload")
+	}
+
+	defer res.Body.Close()
+
+	response, err := io.ReadAll(res.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read app upload response: %s", err)
+		return appHealth, errors.New("Failed to read app upload response")
+	}
+
+	if res.StatusCode != 200{
+		log.Printf("[ERROR] Failed to upload an ops app. Response: %s", string(response))
+		return appHealth, errors.New("Failed to upload app")
+	}
+
+	var appData AppResponse
+	err = json.Unmarshal(response, &appData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal response? Did we change the response struct?")
+		return appHealth, errors.New("Failed to unmarshal response")
+	}
+
+	appHealth.Create = true
+	appHealth.AppId = appData.Id
+
+	// wait 5 second before execution
+	time.Sleep(5 * time.Second)
+
+	executeUrl := baseUrl + "/api/v1/apps/" + appData.Id + "/run"
+
+	var executeBody WorkflowAppAction
+	executeBody.AppID = appData.Id
+	executeBody.AppName = "Shuffle Tools Copy"
+	executeBody.AppVersion = "1.0.0"
+	executeBody.Name = "repeat_back_to_me"
+	executeBody.Environment = "cloud"
+	executeBody.Sharing = false
+	executeBody.Parameters = []WorkflowAppActionParameter{
+		{
+			Name: "call",
+			Value: "run the test app, hello",
+			Configuration: false,
+		},
+	}
+
+	executeBodyJSON, err := json.Marshal(executeBody)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling app run JSON data: %s", err)
+		return appHealth, errors.New("Failed marshalling app run JSON data")
+	}
+
+	req, err = http.NewRequest("POST", executeUrl, bytes.NewBuffer(executeBodyJSON))
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP for app run request: %s", err)
+		return appHealth, errors.New("Failed to create HTTP for app run")
+	}
+
+	// set the headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// send the request
+	client = &http.Client{}
+	resp, err = client.Do(req)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed sending health check app run HTTP request: %s", err)
+		return appHealth, errors.New("Failed sending HTTP request")
+	}
+
+	defer resp.Body.Close()
+
+	appExecuteData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read app execution data")
+		return appHealth, err
+	}
+
+	var executionData SingleResult
+
+	err = json.Unmarshal(appExecuteData, &executionData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to unmarshal single app result")
+		return appHealth, errors.New("Failed to unmarshal")
+	}
+
+	appHealth.Run = true
+	appHealth.ExecutionID = executionData.Id
+
+	runCount := 0
+	for executionData.Result == "" {
+		if runCount > 5 {
+			return appHealth, errors.New("Failed to get app execution result")
+		}
+
+		url := baseUrl + "/api/v1/streams/results"
+		req, err := http.NewRequest("POST", url, nil)
+		if err != nil {
+			log.Printf("[ERROR] Failed creating HTTP request: %s", err)
+			return appHealth, errors.New("Failed creating HTTP request")
+		}
+
+		// set the headers
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+		req.Header.Set("Org-Id", orgId)
+
+		// convert the body to JSON
+		reqBody := map[string]string{"execution_id": executionData.Id, "authorization": executionData.Authorization}
+		reqBodyJson, err := json.Marshal(reqBody)
+
+		// set the body
+		req.Body = ioutil.NopCloser(bytes.NewBuffer(reqBodyJson))
+
+		// send the request
+		client := &http.Client{}
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ERROR] Failed sending HTTP request: %s", err)
+			return appHealth, err
+		}
+
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			log.Printf("[ERROR] Failed checking results for the workflow: %s. The status code was: %d", err, resp.StatusCode)
+			return appHealth, err
+		}
+
+		respBody, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("[ERROR] Failed reading HTTP response body: %s", err)
+			return appHealth, err
+		}
+
+		// Unmarshal the JSON data into a Workflow instance
+		var executionResults WorkflowExecution
+		err = json.Unmarshal(respBody, &executionResults)
+
+		if err != nil {
+			log.Printf("[ERROR] Failed unmarshalling JSON data: %s", err)
+			return appHealth, err
+		}
+
+		if executionResults.Status != "EXECUTING" {
+			log.Printf("[DEBUG] Workflow Health execution Result Status: %#v for executionID: %s", executionResults.Status, executionResults.ExecutionId)
+		}
+
+		if executionResults.Status == "FINISHED" {
+			log.Printf("[DEBUG] Workflow Health exeution is finished, checking it's results")
+			executionData.Result = executionResults.Result
+			appHealth.Validate = executionResults.Workflow.Validated
+		}
+
+		time.Sleep(2 * time.Second)
+		runCount += 1
+	}
+
+	appHealth.Result = executionData.Result
+
+	// Delete the app
+	url := baseUrl + "/api/v1/apps/" + appData.Id
+
+	log.Printf("[DEBUG] Deleting app with URL %s", url)
+
+	req, err = http.NewRequest("DELETE", url, nil)
+	if err != nil {
+		log.Printf("[ERROR] Failed creating HTTP for app delete request: %s", err)
+		return appHealth, err
+	}
+
+	// set the headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	// send the request
+	client = &http.Client{}
+	resp, err = client.Do(req)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed sending health check app delete HTTP request: %s", err)
+		return appHealth, err
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed deleting app in app health check: %s. The status code was: %d", err, resp.StatusCode)
+		return appHealth, err
+	}
+
+	appHealth.Delete = true
+	return appHealth, nil
 }
 
 func RunHealthTest(resp http.ResponseWriter, req *http.Request) {
@@ -1384,7 +1737,7 @@ func InitOpsWorkflow(apiKey string, OrgId string) (string, error) {
 	if project.Environment == "cloud" {
 		// url := "https://shuffler.io/api/v1/workflows/602c7cf5-500e-4bd1-8a97-aa5bc8a554e6"
 		// url := "https://shuffler.io/api/v1/workflows/7b729319-b395-4ba3-b497-d8246da67b1c"
-		//url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
+		// url := "https://shuffler.io/api/v1/workflows/412256ca-ce62-4d20-9e55-1491548349e1"
 		url := "https://shuffler.io/api/v1/workflows/ae89a788-a26b-4866-8a0b-ce0b31d354ea"
 		req, err := http.NewRequest("GET", url, nil)
 		if err != nil {
@@ -1694,11 +2047,20 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 	newActions := []Action{}
 	allNames := []string{}
 	for _, action := range workflow.Actions {
-
 		if action.AppID == "integration" || action.AppID == "shuffle_agent" {
 			if action.IsStartNode {
 				startnodeFound = true
 			}
+
+			for _, field := range action.Parameters {
+				if (field.Name == "app_name" || field.Name == "appname") && (field.Value == "" || field.Value == "noapp") {
+					parsedError := fmt.Sprintf("Agent action %s is missing an AI app", action.Name)
+					if !ArrayContains(workflow.Errors, parsedError) {
+						workflow.Errors = append(workflow.Errors, parsedError)
+					}
+				}
+			}
+
 
 			newActions = append(newActions, action)
 			continue
@@ -2250,7 +2612,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 	//log.Printf("PRE VARIABLES")
 	for _, variable := range workflow.WorkflowVariables {
 		if len(variable.Value) == 0 {
-			log.Printf("[WARNING] Variable %s is empty!", variable.Name)
+			log.Printf("[WARNING] Health API: Workflow Variable %s is empty!", variable.Name)
 			workflow.Errors = append(workflow.Errors, fmt.Sprintf("Variable %s is empty!", variable.Name))
 		}
 	}
@@ -2717,4 +3079,306 @@ func cleanupExecutionNodes(ctx context.Context, exec WorkflowExecution) Workflow
 	}
 
 	return exec 
+}
+
+func HandleRerunExecutions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in Rerun executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during stop executions")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	if strings.ToLower(os.Getenv("SHUFFLE_DISABLE_RERUN_AND_ABORT")) == "true" {
+		//log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping.")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SHUFFLE_DISABLE_RERUN_AND_ABORT is active. Won't rerun executions."}`)))
+		return
+	}
+
+	//ctx := GetContext(request)
+	ctx := context.Background()
+	environmentName := fileId
+	if len(fileId) != 36 {
+		log.Printf("[DEBUG] Environment length %d for %s is not good for reruns. Attempting to find the actual ID for it", len(fileId), fileId)
+
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting environments to validate: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to validate environment"}`))
+			return
+		}
+
+		for _, environment := range environments {
+			if environment.Name == fileId && len(environment.Id) > 0 {
+				environmentName = fileId
+				fileId = environment.Id
+
+				break
+			}
+		}
+
+		if len(fileId) != 36 {
+			log.Printf("[WARNING] Failed getting environments to validate. New FileId: %s", fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed updating environment"}`))
+			return
+		}
+	}
+
+	// 1: Loop all workflows
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	total := 0
+	maxTotalReruns := 100
+	for _, workflow := range workflows {
+		if workflow.OrgId != user.ActiveOrg.Id {
+			//log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
+			continue
+		}
+
+		if total > maxTotalReruns {
+			log.Printf("[DEBUG] Stopping because more than %d (%d) executions are pending. Checking reruns again on next iteration", maxTotalReruns, total)
+			break
+		}
+
+		cnt, err := RerunExecution(ctx, environmentName, workflow)
+		if err != nil {
+			log.Printf("[ERROR] Failed rerunning execution for workflow %s: %s", workflow.ID, err)
+		}
+
+		total += cnt
+	}
+
+	//log.Printf("[DEBUG] RERAN %d execution(s) in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully RERAN %d executions"}`, total)))
+}
+
+// Send in deleteall=true to delete ALL executions for the environment ID
+func HandleStopExecutions(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in ABORT dangling executions: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+		if strings.Contains(fileId, "?") {
+			fileId = strings.Split(fileId, "?")[0]
+		}
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin during stop executions")
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	ctx := GetContext(request)
+	environmentName := fileId
+	if len(fileId) != 36 {
+		//log.Printf("[DEBUG] Runtime Location length %d for '%s' is not good for executions aborts. Attempting to find the actual ID for it", len(fileId), fileId)
+
+		environments, err := GetEnvironments(ctx, user.ActiveOrg.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting environments to validate: %s", err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to validate environment"}`))
+			return
+		}
+
+		for _, environment := range environments {
+			if environment.Name == fileId && len(environment.Id) > 0 {
+				environmentName = fileId
+				fileId = environment.Id
+				break
+			}
+		}
+
+		if len(fileId) != 36 {
+			log.Printf("[WARNING] Failed getting environments to validate. New FileId: %s", fileId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed updating environment"}`))
+			return
+		}
+	}
+
+	cleanAll := false
+	deleteAll, ok := request.URL.Query()["deleteall"]
+
+	if ok {
+		if deleteAll[0] == "true" {
+			cleanAll = true
+
+			log.Printf("[DEBUG] Deleting and aborting ALL executions for this environment and org %s!", user.ActiveOrg.Id)
+
+			env, err := GetEnvironment(ctx, fileId, user.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed to get environment %s for org %s", fileId, user.ActiveOrg.Id)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed to get environment %s"}`, fileId)))
+				return
+			}
+
+			if env.OrgId != user.ActiveOrg.Id {
+				log.Printf("[WARNING] %s (%s) doesn't have permission to stop all executions for environment %s", user.Username, user.Id, fileId)
+				resp.WriteHeader(401)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "You don't have permission to stop environment executions for ID %s"}`, fileId)))
+				return
+			}
+
+			// If here, it should DEFINITELY clean up all executions
+			// Runs on 10.000 workflows max
+			maxAmount := 1000
+			queueName := env.Name
+			if project.Environment == "cloud" {
+				queueName = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(env.Name, " ", "-"), "_", "-")), user.ActiveOrg.Id)
+			} else {
+				queueName = strings.ReplaceAll(env.Name, " ", "-")
+			}
+
+			for i := 0; i < 10; i++ {
+				executionRequests, err := GetWorkflowQueue(ctx, queueName, maxAmount)
+				log.Printf("[DEBUG] Got %d item(s) from queue %s to be deleted", len(executionRequests.Data), queueName)
+				if err != nil {
+					log.Printf("[WARNING] Jumping out of workflowqueue delete handler: %s", err)
+					break
+				}
+
+				if len(executionRequests.Data) == 0 {
+					//log.Printf("[DEBUG] No more executions in queue. Stopping")
+					break
+				}
+
+				ids := []string{}
+				for _, execution := range executionRequests.Data {
+					if project.Environment != "cloud" {
+						if !ArrayContains(execution.Environments, env.Name) {
+							continue
+						}
+					}
+
+					ids = append(ids, execution.ExecutionId)
+				}
+
+				log.Printf("[DEBUG] Deleting %d execution keys for org %s", len(ids), env.Name)
+
+				parsedId := fmt.Sprintf("workflowqueue-%s", queueName)
+
+				err = DeleteKeys(ctx, parsedId, ids)
+				if err != nil {
+					log.Printf("[ERROR] Failed deleting %d execution keys for org %s during force stop: %s", len(ids), env.Name, err)
+				} else {
+					log.Printf("[INFO] Deleted %d keys from org %s during force stop", len(ids), parsedId)
+				}
+
+				if len(executionRequests.Data) != maxAmount {
+					log.Printf("[DEBUG] Less than 1000 in queue. Stopping search requests")
+					break
+				}
+			}
+
+			// Delete the index entirely
+			indexName := "workflowqueue-" + queueName
+			if project.Environment == "cloud" {
+				indexName = fmt.Sprintf("workflowqueue-%s-%s", queueName, user.ActiveOrg.Id)
+			}
+
+			indexName = strings.ToLower(indexName)
+			err = DeleteDbIndex(ctx, indexName)
+			if err != nil {
+				log.Printf("[ERROR] Failed deleting index %s: %s", indexName, err)
+			}
+		}
+	}
+
+	// Fix here by allowing cleanup from UI anyway :)
+	if strings.ToLower(os.Getenv("SHUFFLE_DISABLE_RERUN_AND_ABORT")) == "true" {
+		if ok && deleteAll[0] == "true" {
+			log.Printf("[DEBUG] Allowing rerun and abort for environment %s for org %s with env set due to deleteall=true from frontend", fileId, user.ActiveOrg.Id)
+		} else {
+			//log.Printf("[AUDIT] Rerunning is disabled by the SHUFFLE_DISABLE_RERUN_AND_ABORT argument. Stopping. (abort)")
+			resp.WriteHeader(409)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "SHUFFLE_DISABLE_RERUN_AND_ABORT is active. Won't rerun executions (abort)"}`)))
+			return
+		}
+	}
+
+	// 1: Loop all workflows
+	// 2: Stop all running executions (manually abort)
+	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	total := 0
+	for _, workflow := range workflows {
+		if workflow.OrgId != user.ActiveOrg.Id {
+			log.Printf("[DEBUG] Skipping workflow for org %s (user: %s)", workflow.OrgId, user.Username)
+			continue
+		}
+
+		cnt, _ := CleanupExecutions(ctx, environmentName, workflow, cleanAll)
+		total += cnt
+	}
+
+	if total > 0 {
+		log.Printf("[DEBUG] Stopped %d executions in total for environment %s for org %s", total, fileId, user.ActiveOrg.Id)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully deleted and stopped %d executions"}`, total)))
 }

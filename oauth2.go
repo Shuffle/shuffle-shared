@@ -261,7 +261,7 @@ func GetOutlookBody(ctx context.Context, hook Hook, body []byte) string {
 			}
 
 			//parsedKey := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, file.Id)
-			_, err = uploadFile(ctx, &newFile, "", content)
+			_, err = UploadFile(ctx, &newFile, "", content)
 			if err != nil {
 				log.Printf("[WARNING] Failed uploading outlook attachment %s in message %s", attachment.ID, email.ID)
 				continue
@@ -2541,7 +2541,7 @@ func handleIndividualEmailUploads(ctx context.Context, gmailClient *http.Client,
 			}
 		}
 
-		_, err = uploadFile(ctx, &newFile, "", parsedData)
+		_, err = UploadFile(ctx, &newFile, "", parsedData)
 		if err != nil {
 			log.Printf("[ERROR] Failed uploading gmail attachment %s in message %s (1): %s", part.Body.AttachmentID, message.ID, err)
 			continue
@@ -2894,7 +2894,7 @@ func HandleGmailRouting(resp http.ResponseWriter, request *http.Request) {
 						}
 					}
 
-					_, err = uploadFile(ctx, &newFile, "", parsedData)
+					_, err = UploadFile(ctx, &newFile, "", parsedData)
 					if err != nil {
 						log.Printf("[WARNING] Failed uploading gmail attachment %s in message %s (2)", part.Body.AttachmentID, message.ID)
 						continue

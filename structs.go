@@ -634,17 +634,18 @@ type Session struct {
 }
 
 type Contact struct {
-	Firstname     string `json:"firstname"`
-	Lastname      string `json:"lastname"`
-	Title         string `json:"title"`
-	Companyname   string `json:"companyname"`
-	Phone         string `json:"phone"`
-	Email         string `json:"email"`
-	ValidateEmail string `json:"validate_email"`
-	Message       string `json:"message"`
-	DealType      string `json:"dealtype"`
-	DealCountry   string `json:"dealcountry"`
-	Category      string `json:"Category"`
+	Firstname     string   `json:"firstname"`
+	Lastname      string   `json:"lastname"`
+	Title         string   `json:"title"`
+	Companyname   string   `json:"companyname"`
+	Phone         string   `json:"phone"`
+	Email         string   `json:"email"`
+	ValidateEmail string   `json:"validate_email"`
+	Message       string   `json:"message"`
+	DealType      string   `json:"dealtype"`
+	DealCountry   string   `json:"dealcountry"`
+	Category      string   `json:"Category"`
+	Interests     []string `json:"interests"`
 }
 
 type Translator struct {
@@ -837,16 +838,31 @@ type RegionBody struct {
 	OrgId     string `json:"org_id"`
 }
 
+type OrgBranding struct {
+	EnableChat        bool   `json:"enable_chat" datastore:"enable_chat"`
+	HomeUrl           string `json:"home_url" datastore:"home_url"`
+	Theme             string `json:"theme" datastore:"theme"`
+	DocumentationLink string `json:"documentation_link" datastore:"documentation_link"`
+	GlobalUser        bool   `json:"global_user" datastore:"global_user"` // Global user is true when the user is admin of both parent org and suborg.
+	SupportEmail      string `json:"support_email" datastore:"support_email"`
+	LogoutUrl         string `json:"logout_url" datastore:"logout_url"`
+	BrandColor        string `json:"brand_color" datastore:"brand_color"`
+	BrandName         string `json:"brand_name" datastore:"brand_name"`
+}
+
 // Used within a user
 type OrgMini struct {
-	Name       string     `json:"name" datastore:"name"`
-	Id         string     `json:"id" datastore:"id"`
-	Users      []UserMini `json:"users" datastore:"users"`
-	Role       string     `json:"role" datastore:"role"`
-	CreatorOrg string     `json:"creator_org" datastore:"creator_org"`
-	Image      string     `json:"image" datastore:"image,noindex"`
-	ChildOrgs  []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
-	RegionUrl  string     `json:"region_url" datastore:"region_url"`
+	Name      string     `json:"name" datastore:"name"`
+	Id        string     `json:"id" datastore:"id"`
+	Users     []UserMini `json:"users" datastore:"users"`
+	Role      string     `json:"role" datastore:"role"`
+	ChildOrgs []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
+	RegionUrl string     `json:"region_url" datastore:"region_url"`
+
+	// Branding related
+	Image      string      `json:"image" datastore:"image,noindex"`
+	CreatorOrg string      `json:"creator_org" datastore:"creator_org"`
+	Branding   OrgBranding `json:"branding" datastore:"branding"`
 }
 
 type Priority struct {
@@ -874,8 +890,13 @@ type LeadInfo struct {
 
 	OldCustomer bool `json:"old_customer,omitempty" datastore:"old_customer"`
 	OldLead     bool `json:"old_lead,omitempty" datastore:"old_lead"`
-	TechPartner bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
-	Creator     bool `json:"creator,omitempty" datastore:"creator"`
+
+	TechPartner         bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
+	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
+	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
+	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
+
+	Creator bool `json:"creator,omitempty" datastore:"creator"`
 }
 
 type Org struct {
@@ -905,7 +926,6 @@ type Org struct {
 	Invites           []string    `json:"invites" datastore:"invites"`
 	ChildOrgs         []OrgMini   `json:"child_orgs" datastore:"child_orgs"`
 	ManagerOrgs       []OrgMini   `json:"manager_orgs" datastore:"manager_orgs"` // Multi in case more than one org should be able to control another
-	CreatorOrg        string      `json:"creator_org" datastore:"creator_org"`
 	PartnerInfo       PartnerInfo `json:"partner_info" datastore:"partner_info"`
 	SSOConfig         SSOConfig   `json:"sso_config" datastore:"sso_config"`
 	SecurityFramework Categories  `json:"security_framework" datastore:"security_framework,noindex"`
@@ -923,9 +943,11 @@ type Org struct {
 	CreatorId string `json:"creator_id" datastore:"creator_id"`
 	Disabled  bool   `json:"disabled" datastore:"disabled"`
 
-	EulaSigned   bool    `json:"eula_signed" datastore:"eula_signed"`
-	EulaSignedBy string  `json:"eula_signed_by" datastore:"eula_signed_by"`
-	Billing      Billing `json:"Billing" datastore:"Billing"`
+	EulaSigned   bool        `json:"eula_signed" datastore:"eula_signed"`
+	EulaSignedBy string      `json:"eula_signed_by" datastore:"eula_signed_by"`
+	Billing      Billing     `json:"Billing" datastore:"Billing"`
+	CreatorOrg   string      `json:"creator_org" datastore:"creator_org"`
+	Branding     OrgBranding `json:"branding" datastore:"branding"`
 }
 
 type Billing struct {
@@ -987,7 +1009,7 @@ type CacheKeyData struct {
 	OrgId         string `json:"org_id,omitempty" datastore:"OrgId"`
 	Key           string `json:"key" datastore:"Key"`
 	Value         string `json:"value" datastore:"Value,noindex"`
-	Category	  string `json:"category" datastore:"category"`
+	Category      string `json:"category" datastore:"category"`
 
 	Created int64 `json:"created" datastore:"Created"`
 	Edited  int64 `json:"edited" datastore:"Edited"`
@@ -1176,7 +1198,6 @@ type Action struct {
 	Category          string                       `json:"category" datastore:"category"`
 	ReferenceUrl      string                       `json:"reference_url" datastore:"reference_url"`
 	SubAction         bool                         `json:"sub_action" datastore:"sub_action"`
-	SourceWorkflow    string                       `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	RunMagicOutput    bool                         `json:"run_magic_output" datastore:"run_magic_output" yaml:"run_magic_output"`
 	RunMagicInput     bool                         `json:"run_magic_input" datastore:"run_magic_input" yaml:"run_magic_input"`
 	ExecutionDelay    int64                        `json:"execution_delay" yaml:"execution_delay" datastore:"execution_delay"`
@@ -1186,6 +1207,8 @@ type Action struct {
 	ParentControlled bool `json:"parent_controlled" datastore:"parent_controlled"` // If the parent workflow node exists, and shouldn't be editable by child workflow
 
 	// ParameterLocks []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
+	SourceWorkflow  string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
+	SourceExecution string `json:"source_execution" yaml:"source_execution" datastore:"source_execution"`
 }
 
 // Added environment for location to execute
@@ -1276,8 +1299,8 @@ type InputQuestion struct {
 }
 
 type FormControl struct {
-	InputMarkdown string   `json:"input_markdown" datastore:"input_markdown,noindex"`
-	OutputYields  []string `json:"output_yields" datastore:"output_yields"` // Defines the nodes that will YIELD their output to the frontend during execution
+	InputMarkdown  string   `json:"input_markdown" datastore:"input_markdown,noindex"`
+	OutputYields   []string `json:"output_yields" datastore:"output_yields"`     // Defines the nodes that will YIELD their output to the frontend during execution
 	CleanupActions []string `json:"cleanup_actions" datastore:"cleanup_actions"` // Defines the nodes that will not return any value at the end of a workflow (stored)
 
 	FormWidth int64 `json:"form_width" datastore:"form_width"`
@@ -2611,12 +2634,12 @@ type GithubAuthor struct {
 }
 
 type GithubResp struct {
-	Name         string         `json:"name"`
-	Contributors []GithubAuthor `json:"contributors"`
+	Name          string         `json:"name"`
+	Contributors  []GithubAuthor `json:"contributors"`
 	PublishedDate int64          `json:"published_date"`
-	Edited       string         `json:"edited"`
-	ReadTime     int            `json:"read_time"`
-	Link         string         `json:"link"`
+	Edited        string         `json:"edited"`
+	ReadTime      int            `json:"read_time"`
+	Link          string         `json:"link"`
 }
 
 type FileList struct {
@@ -2761,6 +2784,7 @@ type SSOConfig struct {
 	OpenIdToken         string `json:"openid_token" datastore:"openid_token"`
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
 	AutoProvision       bool   `json:"auto_provision" datastore:"auto_provision"`
+	RoleRequired        bool   `json:"role_required" datastore:"role_required"`
 }
 
 type SamlRequest struct {
@@ -3803,15 +3827,18 @@ type AppCategory struct {
 
 type SingleResult struct {
 	Success       bool           `json:"success"`
+	Result        string         `json:"result"`
 	Id            string         `json:"id"`
 	Authorization string         `json:"authorization"`
-	Result        string         `json:"result"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
+
+	Parameters []WorkflowAppActionParameter `json:"parameters"`
 }
 
 type DockerRequestCheck struct {
 	Name string `datastore:"name" json:"name" yaml:"name"`
+	Image string `datastore:"image" json:"image" yaml:"image"`
 }
 
 type Recommendations struct {
@@ -3977,40 +4004,41 @@ type AppHealth struct {
 }
 
 type WorkflowHealth struct {
-	Create             bool   `json:"create"`
-	Run                bool   `json:"run"`
-	BackendVersion	   string `json:"backend_version"`
-	RunFinished        bool   `json:"run_finished"`
+	Create         bool   `json:"create"`
+	Run            bool   `json:"run"`
+	BackendVersion string `json:"backend_version"`
+	RunFinished    bool   `json:"run_finished"`
 	// NOTE: This does not represent the actual time execution took, it includes the time took to send an API request for the exeution + get back the results for every action.
 	ExecutionTook      float64 `json:"execution_took"`
-	RunStatus          string `json:"run_status"`
-	Delete             bool   `json:"delete"`
-	ExecutionId        string `json:"execution_id"`
-	WorkflowId         string `json:"workflow_id"`
-	WorkflowValidation bool   `json:"workflow_validation"`
+	RunStatus          string  `json:"run_status"`
+	Delete             bool    `json:"delete"`
+	ExecutionId        string  `json:"execution_id"`
+	WorkflowId         string  `json:"workflow_id"`
+	WorkflowValidation bool    `json:"workflow_validation"`
 }
 
 type RegionChangeHistory struct {
-	OrgId   string `json:"org_id"`
+	OrgId       string `json:"org_id"`
 	LastAttempt int64  `json:"last_attempt"`
 }
 
 type LiveExecutionStatus struct {
-	ID 	  string `json:"id"`
-	Failed  int `json:"failed"`
-	Executing int `json:"executing"`
-	Finished int `json:"finished"`
-	Aborted int `json:"aborted"`
-	NotificationCount int `json:"notification_count"`
-	
+	ID                string `json:"id"`
+	Failed            int    `json:"failed"`
+	Executing         int    `json:"executing"`
+	Finished          int    `json:"finished"`
+	Aborted           int    `json:"aborted"`
+	NotificationCount int    `json:"notification_count"`
+
 	CreatedAt int64 `json:"created_at"`
 }
 
 type HealthCheck struct {
 	Success bool  `json:"success"`
 	Updated int64 `json:"updated"`
-	// Apps AppHealth `json:"apps"`
+	Apps AppHealth `json:"apps"`
 	Workflows WorkflowHealth `json:"workflows"`
+	PythonApps AppHealth `json:"python_apps"`
 }
 
 type HealthCheckDB struct {
@@ -4081,6 +4109,8 @@ type StructuredCategoryAction struct {
 	Apps        []WorkflowApp `json:"apps,omitempty"`
 
 	Result string `json:"result,omitempty"`
+
+	ApiDebuggerUrl string `json:"api_debugger_url,omitempty"`
 
 	AvailableLabels []string `json:"available_labels,omitempty"`
 	ThreadId        string   `json:"thread_id,omitempty"`
@@ -4226,4 +4256,76 @@ type TimeWindow struct {
 	Duration time.Duration
 	Events   []time.Time
 	mu       sync.Mutex
+}
+
+// The execution details of a decision
+type AgentDecisionRunDetails struct { 
+	Id string `json:"id" datastore:"id"`
+
+	StartedAt int64  `json:"started_at" datastore:"started_at"`
+	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
+	Type string `json:"type" datastore:"type"`
+	Status string `json:"status" datastore:"status"`
+	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
+	DebugUrl string `json:"debug_url,omitempty" datastore:"debug_url"`
+}
+
+// Each decision
+type AgentDecision struct {
+	// Predictive Agent data 
+	I          int     `json:"i" datastore:"i"`
+	Action     string  `json:"action" datastore:"action"`
+	Tool	   string  `json:"tool" datastore:"tool"`
+	Category   string  `json:"category" datastore:"category"`
+	Confidence float64 `json:"confidence" datastore:"confidence"`
+	Runs 	   string  `json:"runs" datastore:"runs"`
+	Sources    string  `json:"sources,omitempty" datastore:"sources"`
+	Fields     []Valuereplace `json:"fields" datastore:"fields"`
+	Reason     string  `json:"reason" datastore:"reason"`
+
+	// Responses
+	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
+}
+
+// The overall Agent controller
+type AgentOutput struct {
+	Status 	  string  `json:"status" datastore:"status"`
+	Input     string          `json:"input" datastore:"input"`
+	Error 	  string `json:"error,omitempty" datastore:"error"`
+	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
+
+	// For easy testing
+	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
+	// For tracking of details parent<->child 
+	StartedAt int64 `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt int64 `json:"completed_at,omitempty" datastore:"completed_at"`
+	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
+	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
+	Memory string `json:"memory,omitempty" datastore:"memory"`
+}
+
+type HTTPWrapper struct {
+	ActionName             string `json:"action_name"`
+	URL                    string `json:"url"`
+	Headers                string `json:"headers"`
+	Body                   string `json:"body"`
+	Method                 string `json:"method"`
+	RequiresAuthentication bool   `json:"requires_authentication"`
+	Oauth2Auth             bool   `json:"oauth2_auth"`
+	CurlCommand            string `json:"curl_command"`
+	Apikey                 string `json:"apikey"`
+}
+
+type appAuthStruct struct {
+	Success bool              `json:"success"`
+	Reason  string            `json:"reason"`
+	Action  string            `json:"action"`
+	Apps    []AppMini `json:"apps"`
+}
+
+type SyncKey struct {
+	Apikey    string `json:"api_key"`
+	OrgId     string `json:"org_id"`
+	SourceIP  string `json:"source_ip"`
+	CreatedAt int64  `json:"created_at"`
 }

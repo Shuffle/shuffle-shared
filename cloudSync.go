@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"net/url"
 	"context"
+	"regexp"
 	"io"
 	"encoding/json"
 	"errors"
@@ -83,6 +84,21 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		return AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
 	}
 
+	normalizedAppName := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(appname, "_", " "), " ", "_")))
+	cacheKey := fmt.Sprintf("appsearch_%s", normalizedAppName)
+
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		if cacheData, ok := cache.([]byte); ok {
+			var cachedApp AlgoliaSearchApp
+			err = json.Unmarshal(cacheData, &cachedApp)
+			if err == nil {
+				return cachedApp, nil
+			}
+			log.Printf("[ERROR] Failed unmarshalling cached app search data in Handle algolia app search: %s", err)
+		}
+	}
+
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
 	algoliaIndex := algClient.InitIndex("appsearch")
 	appname = strings.TrimSpace(strings.ToLower(strings.Replace(appname, "_", " ", -1)))
@@ -104,6 +120,13 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if newApp == appname || newRecord.ObjectID == appname {
 			//return newRecord.ObjectID, nil
+			appData, err := json.Marshal(newRecord)
+			if err == nil {
+				SetCache(ctx, cacheKey, appData, 30)
+			} else {
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (1): %s", err)
+			}
+
 			return newRecord, nil
 		}
 	}
@@ -112,6 +135,13 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 	for _, newRecord := range newRecords {
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if strings.Contains(newApp, appname) {
+			appData, err := json.Marshal(newRecord)
+			if err == nil {
+				SetCache(ctx, cacheKey, appData, 30)
+			} else {
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+			}
+
 			return newRecord, nil
 		}
 	}
@@ -602,13 +632,14 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 
 	// Allows parent & childorgs to run as much as they want. No limitations
 	if len(org.ChildOrgs) > 0 || len(org.ManagerOrgs) > 0 {
-		//log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
+		// log.Printf("[DEBUG] Execution for org '%s' (%s) is allowed due to being a child-or parent org. This is only accessible to customers. We're not force-stopping them.", org.Name, org.Id)
 		return org, nil
 	}
 
+
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
-		//log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
+		// log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
 		org.SyncFeatures.AppExecutions.Usage = info.MonthlyAppExecutions
 		if org.SyncFeatures.AppExecutions.Limit <= 10000 {
 			org.SyncFeatures.AppExecutions.Limit = 10000
@@ -634,56 +665,16 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 	return org, nil
 }
 
-func RunActionAI(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in get action AI: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	ctx := GetContext(request)
-	org, err := GetOrg(ctx, user.ActiveOrg.Id)
-	if err != nil {
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed getting the organization`)))
-		return
-	}
-
-	log.Printf("[DEBUG] Running action AI for org %s (%s). Cloud sync: %#v and %#v", org.Name, org.Id, org.CloudSyncActive, org.CloudSync)
-	if !org.CloudSync {
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Cloud sync is not active for this organization"}`)))
-		return
-	}
-
-	// For now, just redirecting
-	log.Printf("[DEBUG] Redirecting Action AI request to main site handler (shuffler.io)")
-
-	// Add api-key from the org sync
-	if org.SyncConfig.Apikey != "" {
-		request.Header.Add("Authorization", fmt.Sprintf("Bearer %s", org.SyncConfig.Apikey))
-
-		// Remove cookie header after checking if it exists
-		if request.Header.Get("Cookie") != "" {
-			request.Header.Del("Cookie")
-		}
-	}
-
-	RedirectUserRequest(resp, request)
-	return
-}
-
 func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
+	if project.Environment == "cloud" && gceProject == "shuffler" {
+		log.Printf("[ERROR] Recursive RedirectRequest for %s", req.RequestURI)
+		w.WriteHeader(400)
+		w.Write([]byte(`{"success": false, "reason": "Recursive redirect request detected"}`))
+		return
+	}
+
 	proxyScheme := "https"
 	proxyHost := fmt.Sprintf("shuffler.io")
-
 	httpClient := &http.Client{
 		Timeout: 120 * time.Second,
 	}
@@ -886,6 +877,9 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		workflow.Triggers[triggerIndex].LargeImage = ""
 		workflow.Triggers[triggerIndex].SmallImage = ""
 	}
+
+	// remove github backup info
+	workflow.BackupConfig = BackupConfig{}
 
 	// Use git to upload the workflow. 
 	workflowData, err := json.MarshalIndent(workflow, "", "  ")
@@ -1610,4 +1604,410 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 
 		}(client, request, childWorkflow)
 	}
+}
+
+
+
+// This is JUST for Singul actions with AI agents.
+// As AI Agents can have multiple types of runs, this could change every time.
+func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
+	debugUrl := ""
+	log.Printf("[DEBUG][%s] Running agent decision action %s with tool %s", execution.ExecutionId, decision.Action, decision.Tool)
+
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+
+
+	// Change timeout to be 30 seconds (just in case)
+	client := GetExternalClient(url)
+	client.Timeout = 60 * time.Second
+
+	parsedFields := TranslateBadFieldFormats(decision.Fields)
+	parsedAction := CategoryAction{
+		AppName: 	decision.Tool,
+		Label: 		decision.Action,
+
+		Fields: parsedFields,
+
+		SkipWorkflow: true, 
+	}
+
+	marshalledAction, err := json.Marshal(parsedAction)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		url,
+		bytes.NewBuffer(marshalledAction),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed creating request for agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed running agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	for key, value := range resp.Header {
+		if key != "X-Debug-Url" {
+			continue
+		}
+
+		/*
+		if !strings.HasPrefix(key, "X-") {
+			continue
+		}
+
+		// Don't care about raw response
+		if key == "X-Raw-Response-Url" || key == "X-Apprun-Url" {
+			continue
+		}
+		*/
+
+		foundValue := ""
+		for _, val := range value {
+			if len(val) > 0 {
+				foundValue = val
+				break
+			}
+		}
+
+		debugUrl = foundValue 
+		/*
+		returnHeaders = append(returnHeaders, Valuereplace{
+			Key: key,
+			Value: foundValue, 
+		})
+		*/
+	}
+
+	originalBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
+		return []byte{}, debugUrl, err
+	}
+
+	body := originalBody
+	defer resp.Body.Close()
+
+	log.Printf("\n\n\n[DEBUG][%s] Agent decision response: %s\n\n\n", execution.ExecutionId, string(body))
+	// Try to map it into SchemalessOutput and grab "RawResponse"
+	outputMapped := SchemalessOutput{}
+	err = json.Unmarshal(body, &outputMapped)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling agent decision response: %s", err)
+		return body, debugUrl, err
+	}
+
+	if val, ok := outputMapped.RawResponse.(string); ok {
+		body = []byte(val)
+	} else if val, ok := outputMapped.RawResponse.([]byte); ok {
+		body = val
+	} else if val, ok := outputMapped.RawResponse.(map[string]interface{}); ok {
+		marshalledRawResp, err := json.MarshalIndent(val, "", "  ")
+		if err != nil {
+			log.Printf("[ERROR][%s] Failed marshalling agent decision response: %s", execution.ExecutionId, err)
+		} else {
+			body = marshalledRawResp
+		}
+	} else if outputMapped.RawResponse == nil {
+		// Do nothing
+	} else {
+		log.Printf("[ERROR][%s] FAILED MAPPING RAW RESP INTERfACE. TYPE: %T\n\n\n", execution.ExecutionId, outputMapped.RawResponse)
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR][%s] Failed running agent decision with status %d: %s", execution.ExecutionId, resp.StatusCode, string(body))
+		return body, debugUrl, errors.New(fmt.Sprintf("Failed running agent decision. Status code %d", resp.StatusCode))
+	}
+
+	if outputMapped.Success == false {
+		return originalBody, debugUrl, errors.New("Failed running agent decision. Success false for Singul action")
+	}
+
+
+	/*
+	agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = string(rawResponse)
+	agentOutput.Decisions[decisionIndex].RunDetails.DebugUrl = debugUrl 
+	if err != nil {
+		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
+		agentOutput.Decisions[decisionIndex].RunDetails.Status = "FAILED"
+
+		resultMapping.Status = "FAILURE"
+		resultMapping.CompletedAt = time.Now().Unix()
+		agentOutput.CompletedAt = time.Now().Unix()
+	} else {
+		agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+	}
+	*/
+
+
+	return body, debugUrl, nil
+}
+
+
+// Runs an Agent Decision -> returns the result from it
+// FIXME: Handle types: https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=yIGaSXQYsYReR8cI-0
+// This function should handle:
+// 1. Running the decided action (user input, Singul, Workflow, Other Agent, Custom HTTP function)
+// 2. Taking the result and sending (?) it back
+// 3. Ensuring cache for an action is kept up to date
+func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput, decision AgentDecision) {
+
+	// Check if it's already ran or not
+	ctx := context.Background()
+	decisionId := fmt.Sprintf("agent-%s-%s", execution.ExecutionId, decision.RunDetails.Id)
+	cache, err := GetCache(ctx, decisionId)
+	if err == nil {
+		foundDecision := AgentDecision{}
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &foundDecision)
+		if err != nil {
+			log.Printf("[WARNING][%s] Failed agent decision unmarshal (not critical): %s", execution.ExecutionId, err) 
+		} 
+
+		if foundDecision.RunDetails.StartedAt > 0 {
+			log.Printf("[DEBUG][%s] Decision %s already has status '%s'. Returning as it's already started..", execution.ExecutionId, decision.RunDetails.Id, foundDecision.RunDetails.Status)
+			return
+		}
+	}
+
+	// Set it to this at the start
+	if decision.RunDetails.StartedAt <= 0 {
+		decision.RunDetails.StartedAt = time.Now().Unix()
+	}
+
+	decision.RunDetails.Status = "RUNNING"
+	marshalledDecision, err := json.Marshal(decision)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling decision %s", execution.ExecutionId, decision.RunDetails.Id)
+	}
+
+	go SetCache(ctx, decisionId, marshalledDecision, 60)
+
+
+	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision) 
+	decision.RunDetails.RawResponse = string(rawResponse)
+	decision.RunDetails.DebugUrl = debugUrl 
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
+		decision.RunDetails.Status = "FAILURE"
+
+		if len(decision.RunDetails.RawResponse) == 0 {
+			decision.RunDetails.RawResponse = fmt.Sprintf("Failed to start action. Raw Error: %s", err)
+		}
+	} else {
+		decision.RunDetails.Status = "FINISHED"
+	}
+
+
+	// 1. Send this back as a result for an action
+	// Then the action itself should decide if it's done or not.
+	// Would it work to send JUST this decision result? 
+	// This could start the next step(s) automatically?
+	decision.RunDetails.CompletedAt = time.Now().Unix()
+	marshalledDecision, err = json.Marshal(decision)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling completed decision %s", execution.ExecutionId, decision.RunDetails.Id)
+	}
+
+	go SetCache(ctx, decisionId, marshalledDecision, 60)
+
+	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
+	// 2. On the streams API, make sure to: 
+	//     1. Check if the execution(s) are finished 
+	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
+	//     3: Start the next steps of decisions after updates
+
+
+	baseUrl := "https://shuffler.io"
+	if os.Getenv("BASE_URL") != "" {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if os.Getenv("SHUFFLE_CLOUDRUN_URL") != "" {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	//url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+	url := fmt.Sprintf("%s/api/v1/streams", baseUrl)
+
+	log.Printf("[DEBUG][%s] Sending agent decision response %s with status %s. Node: %s. URL: %s", execution.ExecutionId, decision.RunDetails.Id, decision.RunDetails.Status, agentOutput.NodeId, url)
+
+	//?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
+	client := GetExternalClient(url)
+
+	parsedAction := ActionResult{
+		ExecutionId: 	execution.ExecutionId,
+		Authorization: 	execution.Authorization,
+
+		// Map in the node ID (action ID) and decision ID to set/continue the right result
+		Action: Action{
+			AppName: "AI Agent",
+			Label: fmt.Sprintf("Agent Decision %s", decision.RunDetails.Id),
+			ID: agentOutput.NodeId,
+		},
+		Status: fmt.Sprintf("agent_%s", decision.RunDetails.Id),
+		Result: string(marshalledDecision),
+	}
+
+	marshalledAction, err := json.Marshal(parsedAction)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	req, err := http.NewRequest(
+		"POST",
+		url,
+		bytes.NewBuffer(marshalledAction),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed agent decision request creation: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed sending agent decision result: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	foundBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
+		return 
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR][%s] Status %d for decision %s. Body: %s", execution.ExecutionId, resp.StatusCode, decision.RunDetails.Id, string(foundBody))
+	}
+}
+
+func HandleCloudSyncAuthentication(resp http.ResponseWriter, request *http.Request) (SyncKey, error) {
+	apikey := request.Header.Get("Authorization")
+	if len(apikey) > 0 {
+		apikey = strings.Replace(apikey, "  ", " ", -1)
+		if !strings.HasPrefix(apikey, "Bearer ") {
+			log.Printf("[WARNING] Apikey doesn't start with bearer: %s", apikey)
+			return SyncKey{}, errors.New("No bearer token for authorization header")
+		}
+
+		apikeyCheck := strings.Split(apikey, " ")
+		if len(apikeyCheck) != 2 {
+			log.Printf("[WARNING] Invalid format for apikey: %s", apikeyCheck)
+			return SyncKey{}, errors.New("Invalid format for apikey")
+		}
+
+		newApikey := apikeyCheck[1]
+		ctx := GetContext(request)
+		org, err := getSyncApikey(ctx, newApikey)
+		if err != nil {
+			log.Printf("[WARNING] Error in sync check: %s", err)
+			return SyncKey{}, errors.New(fmt.Sprintf("Error finding key: %s", err))
+		}
+
+		return SyncKey{Apikey: newApikey, OrgId: org}, nil
+	}
+
+	return SyncKey{}, errors.New("Missing authentication")
+}
+
+// Fixes potential decision return or reference problems: 
+// {{list_tickets}} -> $list_tickets
+// {{list_tickets[0].description}} -> $list_tickets.#0.description
+// {{ticket.description}} -> $ticket.description
+func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
+	for fieldIndex, _ := range fields {
+		field := fields[fieldIndex]
+		if !strings.Contains(field.Value, "{{") || !strings.Contains(field.Value, "}}") {
+			continue
+		}
+
+		// Used for testing
+		//field.Value = strings.ReplaceAll(field.Value, `{{list_tickets[0].summary}}`, `{{ list_tickets[].summary }}`)
+
+		// Regex match {{list_tickets[0].description}} and {{ list_tickets[].description }} and {{ list_tickets[:] }}
+		//re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]+\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
+		re := regexp.MustCompile(`{{\s*([a-zA-Z0-9_]+)(\[[0-9]*\])?(\.[a-zA-Z0-9_]+)?\s*}}`)
+		matches := re.FindAllStringSubmatch(field.Value, -1)
+		if len(matches) == 0 {
+			continue
+		}
+
+		stringBuild := "$"
+		for _, match := range matches {
+
+			for i, matchValue := range match {
+				if i == 0 {
+					continue
+				}
+
+				if i != 1 {
+					if len(matchValue) > 0 && !strings.HasPrefix(matchValue, ".") {
+						stringBuild += "."
+					}
+				}
+
+				if strings.HasPrefix(matchValue, "[") && strings.HasSuffix(matchValue, "]") {
+					// Find the formats:
+					// [] -> #
+					// [:] -> #
+					// [0] -> #0
+					// [0:1] -> #0-1
+					// [0:] -> #0-max
+					if matchValue == "[]" || matchValue == "[:]" {
+						stringBuild += "#"
+					} else if strings.Contains(matchValue, ":") {
+						parts := strings.Split(matchValue, ":")
+						if len(parts) == 2 {
+							stringBuild += fmt.Sprintf("#%s-%s", parts[0], parts[1])
+						} else {
+							stringBuild += fmt.Sprintf("#%s-max", parts[0])
+						}
+
+						stringBuild += fmt.Sprintf("#%s", matchValue)
+					} else {
+						// Remove the brackets
+						matchValue = strings.ReplaceAll(matchValue, "[", "")
+						matchValue = strings.ReplaceAll(matchValue, "]", "")
+						stringBuild += fmt.Sprintf("#%s", matchValue)
+					}
+
+					continue
+				}
+
+				stringBuild += matchValue
+			}
+
+
+			if len(match) > 1 {
+				field.Value = strings.ReplaceAll(field.Value, match[0], stringBuild)
+				fields[fieldIndex].Value = field.Value
+				//log.Printf("VALUE: %#v", field.Value)
+			}
+
+			stringBuild = "$"
+		}
+	}
+
+	return fields
 }
