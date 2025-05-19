@@ -922,6 +922,17 @@ type Partner struct {
 	Edited      int64       `json:"edited" datastore:"edited"`
 }
 
+
+type UsecaseInfo struct {
+	Title string `json:"title" datastore:"title"`
+	PublicWorkflowId string `json:"public_workflow_id" datastore:"public_workflow_id,noindex"`
+	Categories []string `json:"categories" datastore:"categories"`
+	Description string `json:"description" datastore:"description"`
+	Created int64 `json:"created" datastore:"created"`
+	Edited int64 `json:"edited" datastore:"edited"`
+	UsecaseData Workflow `json:"usecase_data" datastore:"usecase_data"`
+}
+
 type Org struct {
 	Name            string       `json:"name" datastore:"name"`
 	Description     string       `json:"description" datastore:"description"`

@@ -6080,20 +6080,6 @@ func SetPartner(ctx context.Context, partner *Partner) error {
     return err
 }
 
-func GetPartners(ctx context.Context) ([]Partner, error) {
-    nameKey := "Partners"
-    var partners []Partner
-
-    // Simple query to get all partners
-    q := datastore.NewQuery(nameKey)
-    _, err := project.Dbclient.GetAll(ctx, q, &partners)
-    if err != nil {
-        return nil, fmt.Errorf("failed to get partners: %w", err)
-    }
-
-    return partners, nil
-}
-
 func GetPartner(ctx context.Context, id string) ([]Partner, error) {
 	nameKey := "Partners"
     var partners []Partner

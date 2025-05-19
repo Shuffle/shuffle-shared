@@ -9037,10 +9037,10 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 
 // Partners controllers
 func HandleGetAllPartners(resp http.ResponseWriter, request *http.Request) {
-    cors := HandleCors(resp, request)
-    if cors {
-        return
-    }
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
 
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
@@ -9051,40 +9051,40 @@ func HandleGetAllPartners(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-    ctx := GetContext(request)
-    partners, err := GetPartners(ctx)
-    if err != nil {
-        log.Printf("[ERROR] Failed to get partners: %v", err)
-        resp.WriteHeader(http.StatusInternalServerError)
-        resp.Write([]byte(`{"success": false, "reason": "Failed to get partners"}`))
-        return
-    }
+	ctx := GetContext(request)
+	partners, err := GetPartner(ctx, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed to get partners: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get partners"}`))
+		return
+	}
 
-    // Marshal the response
-    response, err := json.Marshal(struct {
-        Success  bool      `json:"success"`
-        Partners []Partner `json:"partners"`
-    }{
-        Success:  true,
-        Partners: partners,
-    })
+	// Marshal the response
+	response, err := json.Marshal(struct {
+		Success  bool      `json:"success"`
+		Partners []Partner `json:"partners"`
+	}{
+		Success:  true,
+		Partners: partners,
+	})
 
-    if err != nil {
-        log.Printf("[ERROR] Failed to marshal partners: %v", err)
-        resp.WriteHeader(http.StatusInternalServerError)
-        resp.Write([]byte(`{"success": false, "reason": "Failed to process partners data"}`))
-        return
-    }
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal partners: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to process partners data"}`))
+		return
+	}
 
-    resp.WriteHeader(http.StatusOK)
-    resp.Write(response)
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(response)
 }
 
 func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
-    cors := HandleCors(resp, request)
-    if cors {
-        return
-    }
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
 
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
@@ -9095,56 +9095,69 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-    // Get ID from URL parameters - could be either partner ID or org ID
-	parts := strings.Split(request.URL.Path, "/")
-    if len(parts) < 4 {
-        resp.WriteHeader(http.StatusBadRequest)
-        resp.Write([]byte(`{"success": false, "reason": "Invalid URL format"}`))
-        return
-    }
+	// Get ID from URL parameters - could be either partner ID or org ID
+	var partnerId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 
-    id := parts[len(parts)-1]
-	log.Printf("[DEBUG] Getting partner with ID: %s", id)
-    if id == "" {
-        resp.WriteHeader(http.StatusBadRequest)
-        resp.Write([]byte(`{"success": false, "reason": "Missing id parameter"}`))
-        return
-    }
+		partnerId = location[4]
+		if partnerId == "" {
+			partnerId = uuid.NewV4().String()
+		}
+	}
+	log.Printf("[DEBUG] Getting partner with ID: %s", partnerId)
+	if partnerId == "" {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Missing id parameter"}`))
+		return
+	}
 
-    ctx := GetContext(request)
-    partner, err := GetPartner(ctx, id)
-    if err != nil {
-        log.Printf("[ERROR] Failed to get partner: %v", err)
-        resp.WriteHeader(http.StatusInternalServerError)
-        resp.Write([]byte(`{"success": false, "reason": "Failed to get partner"}`))
-        return
-    }
+	ctx := GetContext(request)
+	partner, err := GetPartner(ctx, partnerId)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get partner: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get partner"}`))
+		return
+	}
 
-    // Marshal the response
-    response, err := json.Marshal(struct {
-        Success bool    `json:"success"`
-        Partner Partner `json:"partner"`
-    }{
-        Success: true,
-        Partner: partner[0],
-    })
+	if len(partner) == 0 {
+		resp.WriteHeader(http.StatusNotFound)
+		resp.Write([]byte(`{"success": false, "reason": "Partner not found"}`))
+		return
+	}
 
-    if err != nil {
-        log.Printf("[ERROR] Failed to marshal partner: %v", err)
-        resp.WriteHeader(http.StatusInternalServerError)
-        resp.Write([]byte(`{"success": false, "reason": "Failed to process partner data"}`))
-        return
-    }
+	// Marshal the response
+	response, err := json.Marshal(struct {
+		Success bool    `json:"success"`
+		Partner Partner `json:"partner"`
+	}{
+		Success: true,
+		Partner: partner[0],
+	})
 
-    resp.WriteHeader(http.StatusOK)
-    resp.Write(response)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal partner: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to process partner data"}`))
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(response)
 }
 
 func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
-    if cors {
-        return
-    }
+	if cors {
+		return
+	}
 
 	if project.Environment == "cloud" {
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
@@ -9155,12 +9168,12 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-    user, err := HandleApiAuthentication(resp, request)
-    if err != nil || !user.SupportAccess {
-        resp.WriteHeader(401)
-        resp.Write([]byte(`{"success": false, "reason": "Unauthorized access"}`))
-        return
-    }
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil || !user.SupportAccess {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access"}`))
+		return
+	}
 
 	var partnerId string
 	location := strings.Split(request.URL.String(), "/")
@@ -9171,7 +9184,7 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-	
+
 		partnerId = location[4]
 		if partnerId == "" {
 			partnerId = uuid.NewV4().String()
@@ -9179,22 +9192,22 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
-    if err != nil {
-        log.Printf("[WARNING] Failed reading body: %v", err)
-        resp.WriteHeader(400)
-        resp.Write([]byte(`{"success": false}`))
-        return
-    }
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body: %v", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
 
 	var tmpData Partner
 
-    err = json.Unmarshal(body, &tmpData)
+	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-        log.Printf("[WARNING] Failed unmarshalling partner: %v", err)
-        resp.WriteHeader(400)
-        resp.Write([]byte(`{"success": false}`))
-        return
-    }
+		log.Printf("[WARNING] Failed unmarshalling partner: %v", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
 
 	ctx := GetContext(request)
 
@@ -9202,16 +9215,16 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		tmpData.OrgId = user.ActiveOrg.Id
 	}
 
-    err = SetPartner(ctx, &tmpData)
+	err = SetPartner(ctx, &tmpData)
 	if err != nil {
-        log.Printf("[WARNING] Failed publishing partner: %v", err)
-        resp.WriteHeader(500)
-        resp.Write([]byte(`{"success": false}`))
-        return
-    }
+		log.Printf("[WARNING] Failed publishing partner: %v", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
 
-    resp.WriteHeader(200)
-    resp.Write([]byte(`{"success": true, "message": "Partner published"}`))
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "message": "Partner published"}`))
 }
 
 func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
