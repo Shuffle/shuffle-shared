@@ -6381,8 +6381,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		log.Printf("[ERROR][%s] Failed to get distributed workflow environments: %s", oldWorkflow.OrgId, err)
 	}
 
-	// Check if environment is even distributed or not
-	// if not do we need to change the env?
+	// Keep the environment unchanged for the
+	// distributed workflow if the parent workflow runtime enviroment
+	// does not exist.
 	for _, action := range oldWorkflow.Actions {
 		if strings.ToLower(parentWorkflowEnvironment) == "cloud" {
 			discoveredEnvironment = parentWorkflowEnvironment
