@@ -582,6 +582,19 @@ type PersonalInfo struct {
 	Tutorials []string `datastore:"tutorials" json:"tutorials"`
 }
 
+type UserGeoInfo struct {
+	City struct {
+		Name string `datastore:"name" json:"name"`
+	} `datastore:"city" json:"city"`
+	State struct {
+		Name    string `datastore:"name" json:"name"`
+	} `datastore:"state" json:"state"`
+	Country struct {
+		Name    string `datastore:"name" json:"name"`
+		ISOCode string `datastore:"iso_code" json:"iso_code"`
+	} `datastore:"country" json:"country"`
+}
+
 type User struct {
 	Username             string        `datastore:"Username" json:"username"`
 	Password             string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -619,6 +632,8 @@ type User struct {
 	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
 	PersonalInfo PersonalInfo `datastore:"personal_info" json:"personal_info"`
 	Regions      []string     `datastore:"regions" json:"regions"`
+	
+	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
 }
 
 type EthInfo struct {
@@ -2688,6 +2703,7 @@ type HandleInfo struct {
 	HasCardAvailable    bool `json:"has_card_available,omitempty"`
 	ActivatedPayasyougo bool `json:"activated_pay_as_you_go,omitempty"`
 	Licensed            bool `json:"licensed"`
+	UserGeoInfo         UserGeoInfo   `json:"user_geo_info,omitempty"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
