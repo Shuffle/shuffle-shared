@@ -6982,7 +6982,7 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 			return "", errors.New("No messages to send to OpenAI. Pass systemmessage, usermessage")
 		}
 
-		log.Printf("\n\n\nGot %d messages in chat completion (%s)\n\n\n", len(chatCompletion.Messages), cachedChat)
+		//log.Printf("\n\n\nGot %d messages in chat completion (%s)\n\n\n", len(chatCompletion.Messages), cachedChat)
 	}
 
 	maxRetries := 3

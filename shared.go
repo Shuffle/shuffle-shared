@@ -17437,7 +17437,7 @@ func create32Hash(key string) ([]byte, error) {
 func HandleKeyEncryption(data []byte, passphrase string) ([]byte, error) {
 	key, err := create32Hash(passphrase)
 	if err != nil {
-		log.Printf("[WARNING] Failed hashing in encrypt: %s", err)
+		log.Printf("[WARNING] Skipped hashing in encrypt: %s", err)
 		return []byte{}, err
 	}
 
