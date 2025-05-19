@@ -6385,6 +6385,8 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	// distributed workflow if the parent workflow runtime enviroment
 	// does not exist.
 	for _, action := range oldWorkflow.Actions {
+		// Change all the distributed workflow to cloud if
+		// parent workflow runtime changes to cloud.
 		if strings.ToLower(parentWorkflowEnvironment) == "cloud" {
 			discoveredEnvironment = parentWorkflowEnvironment
 			break
