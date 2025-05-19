@@ -474,7 +474,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	// 	return errors.New("Cloud environment. Not deleting junk ops workflow for now")
 	// }
 
-	workflows, err := FindWorkflowByName(ctx, "SHUFFLE_INTERNAL_OPS_WORKFLOW")
+	workflows, err := FindWorkflowByName(ctx, "Ops Dashboard Workflow")
 	if err != nil {
 		//log.Printf("[DEBUG] Failed finding any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s. Is the health API initialized?", err)
 		return err
