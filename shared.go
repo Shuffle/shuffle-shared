@@ -6322,6 +6322,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 	// We create a new ID for each trigger.
 	// Older ID is stored in trigger.ReplacementForTrigger
+	ctx := context.Background()
 	nameChanged := false
 	descriptionChanged := false
 	tagsChanged := false
@@ -6375,10 +6376,29 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		}
 	}
 
+	oldWorkflowEnvs, err := GetEnvironments(ctx, oldWorkflow.OrgId)
+	if err != nil {
+		log.Printf("[ERROR][%s] Failed to get distributed workflow environments: %s", oldWorkflow.OrgId, err)
+	}
+
+	// Keep the environment unchanged for the
+	// distributed workflow if the parent workflow runtime enviroment
+	// does not exist.
 	for _, action := range oldWorkflow.Actions {
-		if action.Environment != parentWorkflowEnvironment {
+		// Change all the distributed workflow to cloud if
+		// parent workflow runtime changes to cloud.
+		if strings.ToLower(parentWorkflowEnvironment) == "cloud" {
 			discoveredEnvironment = parentWorkflowEnvironment
 			break
+		}
+
+		for _, env := range oldWorkflowEnvs {
+			if strings.ToLower(parentWorkflowEnvironment) != "cloud" && parentWorkflowEnvironment == env.Name && action.Environment != parentWorkflowEnvironment {
+				discoveredEnvironment = parentWorkflowEnvironment
+				break
+			} else {
+				discoveredEnvironment = action.Environment
+			}
 		}
 	}
 
@@ -6714,7 +6734,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 	//log.Printf("\n ===== Parent: %#v, Child: %#v =====\n Changes: c | d | m\n Action:  %d | %d | %d\n Trigger: %d | %d | %d\n Branch:  %d | %d | %d", parentWorkflow.ID, oldWorkflow.ID, len(addedActions), len(removedActions), len(updatedActions), len(addedTriggers), len(removedTriggers), len(updatedTriggers), len(addedBranches), len(removedBranches), len(updatedBranches))
 
 	// Use previous rev
-	ctx := context.Background()
 	lastParentRevision := Workflow{}
 	parentRevisions, err := ListWorkflowRevisions(ctx, parentWorkflow.ID, 2)
 	if err != nil {
