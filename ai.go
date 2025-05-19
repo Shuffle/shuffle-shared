@@ -3578,7 +3578,6 @@ func getSelectedAppParameters(ctx context.Context, user User, selectedAction Wor
 	}
 
 	if len(outputQueries) > 0 && queryIndex >= 0 {
-		log.Printf("[INFO] Found matching query: %s", outputQueries)
 		selectedAction.Parameters[queryIndex].Value = outputQueries
 	}
 
