@@ -13396,68 +13396,6 @@ func GetRequestIp(r *http.Request) string {
 
 }
 
-func GetUserLocation(ctx context.Context, ip string) (UserGeoInfo, error) {
-	geoapifyKey := os.Getenv("GEOAPIFY_KEY")
-
-	if geoapifyKey == "" {
-		return UserGeoInfo{}, errors.New("GEOAPIFY_KEY is not set")
-	}
-
-	// Reject local or invalid IPs early
-	if strings.Contains(ip, "::1") || strings.Contains(ip, "127.0.0.1") || strings.Contains(ip, "localhost") {
-		log.Printf("[DEBUG] Skipping Geoapify request : Invalid IP %s", ip)
-		return UserGeoInfo{}, errors.New("invalid ip")
-	}
-
-	cacheKey := fmt.Sprintf("geoinfo_%s", ip)
-	userGeoInfo, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		var userLocationData UserGeoInfo
-		err = json.Unmarshal(userGeoInfo.([]byte), &userLocationData)
-		if err != nil {
-			log.Printf("[ERROR] Failed to parse user location data for IP %s: %s", ip, err)
-			return UserGeoInfo{}, err
-		}
-		return userLocationData, nil
-	}
-
-	url := fmt.Sprintf("https://api.geoapify.com/v1/ipinfo?apiKey=%s&ip=%s", geoapifyKey, ip)
-	resp, err := http.Get(url)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get user location for IP %s: %s", ip, err)
-		return UserGeoInfo{}, err
-	}
-	defer resp.Body.Close()
-
-	// Handle non-200 responses
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body) // Read even if failed to get error message
-		log.Printf("[ERROR] Geoapify returned status %d for IP %s: %s", resp.StatusCode, ip, string(body))
-		return UserGeoInfo{}, errors.New("Geoapify returned status " + strconv.Itoa(resp.StatusCode))
-	}
-
-	var userLocationData UserGeoInfo
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed to read user location data for IP %s: %s", ip, err)
-		return UserGeoInfo{}, err
-	}
-
-	err = json.Unmarshal(body, &userLocationData)
-	if err != nil {
-		log.Printf("[ERROR] Failed to parse user location data for IP %s: %s", ip, err)
-		return UserGeoInfo{}, err
-	}
-
-	err = SetCache(ctx, cacheKey, []byte(body), 60)
-	if err != nil {
-		log.Printf("[ERROR] Failed to cache user location data for IP %s: %s", ip, err)
-	}
-
-	return userLocationData, nil
-}
-
-
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
