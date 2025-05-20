@@ -10186,6 +10186,86 @@ func DeleteUser(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true}`))
 }
 
+func HandleSetUserTheme(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		// Checking if it's a special region. All user-specific requests should
+		// go through shuffler.io and not subdomains
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting User request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	userInfo, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[WARNING] Api authentication failed in set user theme: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var userId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		userId = location[4]
+	}
+
+	ctx := GetContext(request)
+	userId, err := url.QueryUnescape(userId)
+	if err != nil {
+		log.Printf("[WARNING] Failed decoding user %s: %s", userId, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	// get the theme from the request body
+	var requestBody struct {
+		Theme string `json:"theme"`
+	}
+	if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+		log.Printf("[WARNING] Failed decoding request body: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed decoding request body"}`))
+		return
+	}
+
+	// check if the theme is valid
+	if requestBody.Theme != "dark" && requestBody.Theme != "light" && requestBody.Theme != "system" {
+		log.Printf("[WARNING] Invalid theme: %s", requestBody.Theme)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Invalid theme"}`))
+		return
+	}
+
+	userInfo.Theme = requestBody.Theme
+
+	// set the user theme
+	err = SetUser(ctx, &userInfo, false)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting user theme %s (%s): %s", userInfo.Username, userInfo.Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false}`)))
+		return
+	}
+
+	log.Printf("[AUDIT] User %s (%s) set their theme to %s", userInfo.Username, userInfo.Id, requestBody.Theme)
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true}`))
+}
+
 func HandleDeleteUsersAccount(resp http.ResponseWriter, request *http.Request) {
 
 	cors := HandleCors(resp, request)
@@ -11993,7 +12073,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.Editing = false
 	}
 
-	if project.Environment == "cloud" && tmpData.EditingBranding {
+	if tmpData.EditingBranding {
 		log.Printf("[DEBUG] Updating branding for org %s (%s)", org.Name, org.Id)
 		org.Branding = tmpData.Branding
 	}

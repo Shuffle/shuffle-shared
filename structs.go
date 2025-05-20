@@ -623,6 +623,7 @@ type User struct {
 	SessionLogin         bool          `datastore:"session_login" json:"session_login"`                   // Whether it's a login with session or API (used to verify access)
 	ValidatedSessionOrgs []string      `datastore:"validated_session_orgs" json:"validated_session_orgs"` // Orgs that have been used in the current session for the user
 	UsersLastSession     string        `datastore:"users_last_session" json:"users_last_session"`
+	Theme                string        `datastore:"theme" json:"theme"`
 
 	// Starting web3 integration
 	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
@@ -2700,10 +2701,11 @@ type HandleInfo struct {
 	Tutorials          []Tutorial      `json:"tutorials"`
 	OrgStatus          []string        `json:"org_status"`
 
-	HasCardAvailable    bool `json:"has_card_available,omitempty"`
-	ActivatedPayasyougo bool `json:"activated_pay_as_you_go,omitempty"`
-	Licensed            bool `json:"licensed"`
-	UserGeoInfo         UserGeoInfo   `json:"user_geo_info,omitempty"`
+	HasCardAvailable    bool        `json:"has_card_available,omitempty"`
+	ActivatedPayasyougo bool        `json:"activated_pay_as_you_go,omitempty"`
+	Licensed            bool        `json:"licensed"`
+	UserGeoInfo         UserGeoInfo `json:"user_geo_info,omitempty"`
+	Theme               string      `json:"theme"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
