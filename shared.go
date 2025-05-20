@@ -6088,144 +6088,149 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 	// So now I'm endlessly confused.
 	trigger := childTrigger
 	for paramIndex, param := range trigger.Parameters {
+		if param.Name != "startnode" && param.Name != "startnode" {
+			// Use same as action IDs are identical
+			trigger.Parameters[paramIndex].Value = param.Value
+			continue
+		}
+
+		if param.Name != "workflow" && param.Name != "subflow" {
+			continue
+		}
+
 		// since this is an added subflow, the workflow being referred
 		// is most likely not already distributed. let's do that.
-		if param.Name == "workflow" || param.Name == "subflow" {
-			//log.Printf("[DEBUG] Found subflow reference: %s", param.Value)
-			parentSubflowPointedId := param.Value
-			if len(parentSubflowPointedId) == 0 {
-				continue
-			}
-
-			if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
-				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID", parentSubflowPointedId)
-				// Point to same
-				trigger.Parameters[paramIndex].Value = childWorkflow.ID
-
-				continue
-			}
-
-			// Check if it's the same as previous revision?
-			ctx := context.Background()
-			alreadyPropagatedSubflow := ""
-			childSubflow, err := GetWorkflow(ctx, parentSubflowPointedId)
-			if err != nil {
-				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
-				continue
-			}
-
-			if childSubflow.OrgId != childWorkflow.OrgId {
-				log.Printf("[WARNING] Subflow %s is not in the same org as parent workflow %s. This means re-propagation is required (?).", parentSubflowPointedId, parentWorkflow.ID)
-			} else {
-				alreadyPropagatedSubflow = childSubflow.ID
-			}
-
-			// Parent workflow ID + Suborg ID = seed
-			if len(alreadyPropagatedSubflow) > 0 {
-				//log.Printf("[INFO] Subflow %s (%s) has already been propagated to org %s", childWorkflow.Name, parentSubflowPointedId, childWorkflow.OrgId)
-
-				// Just make sure that it now points to that workflow in the Multi-Tenant Workflow
-				trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
-
-				workflow, err := GetWorkflow(ctx, alreadyPropagatedSubflow)
-				if err != nil {
-					log.Printf("[WARNING] Failed getting propagated subflow: %s", err)
-					continue
-				}
-
-				if workflow.OrgId != childWorkflow.OrgId {
-					//log.Printf("[ERROR] Subflow %s has been propagated to %s, but it's not the same org as %s. This means re-propagation is required.", parentSubflowPointedId, childWorkflow.OrgId, childWorkflow.OrgId)
-				} else {
-					startNodeIndexToOverwrite := -1
-					currentStartNode := ""
-
-					// taking the right startnode is important
-					for startNodeIndex, startNode := range trigger.Parameters {
-						if startNode.Name == "startnode" {
-							startNodeIndexToOverwrite = startNodeIndex
-							currentStartNode = startNode.Value
-						}
-					}
-
-					if len(currentStartNode) == 0 {
-						continue
-					}
-
-					for _, action := range workflow.Actions {
-						if action.ID == currentStartNode {
-							trigger.Parameters[startNodeIndexToOverwrite].Value = action.ID
-							break
-						}
-					}
-
-					continue
-				}
-			}
-
-			// Getting the PARENT workflow
-			parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
-			if err != nil {
-				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
-				continue
-			}
-
-			// Propagates ALL the relevant ID's at once to avoid desync from goroutines
-			if !ArrayContains(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId) {
-				for _, parentTenantId := range parentWorkflow.SuborgDistribution {
-					if !ArrayContains(parentSubflowPointed.SuborgDistribution, parentTenantId) {
-						log.Printf("[DEBUG] Adding org %s to subflow %s (%s)", parentTenantId, parentSubflowPointed.Name, parentSubflowPointed.ID)
-						parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, parentTenantId)
-					}
-				}
-			}
-
-			err = SetWorkflow(ctx, *parentSubflowPointed, parentSubflowPointedId)
-			if err != nil {
-				log.Printf("[WARNING] Failed setting parent subflow: %s", err)
-				continue
-			}
-
-			log.Printf("[DEBUG] Re-propagating subflow %s (%s) to %s (%s)", parentSubflowPointed.Name, parentSubflowPointed.ID, childWorkflow.Name, childWorkflow.ID)
-
-			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
-			if err != nil {
-				log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
-
-				// This means it will point to the parent. What do we do?
-				trigger.Parameters[paramIndex].Value = ""
-
-			} else {
-				trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
-			}
-
-			startnode := ""
-			startNodeParamIndex := -1
-
-			// now handle startnode
-			for startNodeParamIndex_, param_ := range trigger.Parameters {
-				if param_.Name == "startnode" {
-					startnode = param_.Value
-					startNodeParamIndex = startNodeParamIndex_
-				}
-			}
-
-			if len(startnode) == 0 {
-				continue
-			}
-
-			// actions are always startnodes
-			// find the equivalent of the startnode in the new workflow
-			for _, action := range propagatedSubflow.Actions {
-				if action.ID == startnode {
-					trigger.Parameters[startNodeParamIndex].Value = action.ID
-					break
-				}
-			}
-
-		} else if param.Name != "startnode" && param.Name != "startnode" {
-			// just use it
-			trigger.Parameters[paramIndex].Value = param.Value
+		parentSubflowPointedId := param.Value
+		if len(parentSubflowPointedId) == 0 {
+			continue
 		}
+
+		if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
+			log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID", parentSubflowPointedId)
+			// Point to same
+			trigger.Parameters[paramIndex].Value = childWorkflow.ID
+
+			continue
+		}
+
+		// Check if it's the same as previous revision?
+		ctx := context.Background()
+		alreadyPropagatedSubflow := ""
+		childSubflow, err := GetWorkflow(ctx, parentSubflowPointedId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting parent subflow %s (1): %s", parentSubflowPointedId, err)
+			continue
+		}
+
+		if childSubflow.OrgId != childWorkflow.OrgId {
+			log.Printf("[WARNING] Subflow %s is not in the same org as parent workflow %s. This means re-propagation is required (?).", parentSubflowPointedId, parentWorkflow.ID)
+		} else {
+			alreadyPropagatedSubflow = childSubflow.ID
+		}
+
+		// childWorkflow vs childSubflow 
+
+		// Parent workflow ID + Suborg ID = seed
+		if len(alreadyPropagatedSubflow) > 0 {
+			//log.Printf("[INFO] Subflow %s (%s) has already been propagated to org %s", childWorkflow.Name, parentSubflowPointedId, childWorkflow.OrgId)
+
+			// Just make sure that it now points to that workflow in the Multi-Tenant Workflow
+			trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
+
+			workflow, err := GetWorkflow(ctx, alreadyPropagatedSubflow)
+			if err != nil {
+				log.Printf("[WARNING] Failed getting propagated subflow: %s", err)
+				continue
+			}
+
+			if workflow.OrgId != childWorkflow.OrgId {
+				//log.Printf("[ERROR] Subflow %s has been propagated to %s, but it's not the same org as %s. This means re-propagation is required.", parentSubflowPointedId, childWorkflow.OrgId, childWorkflow.OrgId)
+			} else {
+				startNodeIndexToOverwrite := -1
+				currentStartNode := ""
+
+				// taking the right startnode is important
+				for startNodeIndex, startNode := range trigger.Parameters {
+					if startNode.Name == "startnode" {
+						startNodeIndexToOverwrite = startNodeIndex
+						currentStartNode = startNode.Value
+					}
+				}
+
+				if len(currentStartNode) == 0 {
+					continue
+				}
+
+				for _, action := range workflow.Actions {
+					if action.ID == currentStartNode {
+						trigger.Parameters[startNodeIndexToOverwrite].Value = action.ID
+						break
+					}
+				}
+
+				continue
+			}
+		}
+
+		// Getting the PARENT workflow
+		parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting parent subflow %s (2): %s", parentSubflowPointedId, err)
+			continue
+		}
+
+		// Propagates ALL the relevant ID's at once to avoid desync from goroutines
+		if !ArrayContains(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId) {
+			for _, parentTenantId := range parentWorkflow.SuborgDistribution {
+				if !ArrayContains(parentSubflowPointed.SuborgDistribution, parentTenantId) {
+					log.Printf("[DEBUG] Adding org %s to subflow %s (%s)", parentTenantId, parentSubflowPointed.Name, parentSubflowPointed.ID)
+					parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, parentTenantId)
+				}
+			}
+		}
+
+		err = SetWorkflow(ctx, *parentSubflowPointed, parentSubflowPointedId)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting parent subflow: %s", err)
+			continue
+		}
+
+		log.Printf("[DEBUG] Re-propagating subflow %s (%s) to %s (%s)", parentSubflowPointed.Name, parentSubflowPointed.ID, childWorkflow.Name, childWorkflow.ID)
+
+		propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+
+			// This means it will point to the parent. What do we do?
+			trigger.Parameters[paramIndex].Value = ""
+
+		} else {
+			trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
+		}
+
+		startnode := ""
+		startNodeParamIndex := -1
+
+		// now handle startnode
+		for startNodeParamIndex_, param_ := range trigger.Parameters {
+			if param_.Name == "startnode" {
+				startnode = param_.Value
+				startNodeParamIndex = startNodeParamIndex_
+			}
+		}
+
+		if len(startnode) == 0 {
+			continue
+		}
+
+		// actions are always startnodes
+		// find the equivalent of the startnode in the new workflow
+		for _, action := range propagatedSubflow.Actions {
+			if action.ID == startnode {
+				trigger.Parameters[startNodeParamIndex].Value = action.ID
+				break
+			}
+		} 
 	}
 
 	return trigger
@@ -9521,7 +9526,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	// before doing anything, verify if the parent workflow is a child workflow itself
 	if len(workflow.ParentWorkflowId) > 0 && len(workflow.SuborgDistribution) > 0 {
 		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere from parent org (%s) to child org (%s)", workflow.ID, workflow.Name, parentOrgId, subOrgId)
-		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
+		workflow.Errors = append(workflow.Errors, fmt.Sprintf("Suborg distribution disabled automatically in child workflow %s.", workflow.Name))
 		workflow.SuborgDistribution = []string{}
 
 		err = SetWorkflow(ctx, workflow, workflow.ID)
