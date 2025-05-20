@@ -6191,9 +6191,10 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 			if err != nil {
 				log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
 
-			} else {
+				// This means it will point to the parent. What do we do?
+				trigger.Parameters[paramIndex].Value = ""
 
-				//diffWorkflows(*newChildworkflow, parentWorkflow, update)
+			} else {
 				trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
 			}
 
