@@ -5565,7 +5565,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						newAction.Position = Position{
 							X: 449.5,
-							Y: 446,
+							Y: 446.1,
 						}
 
 						newActions = append(newActions, newAction)
@@ -5609,7 +5609,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 						}
 						newAction.Position = Position{
 							X: 449.5,
-							Y: 446,
+							Y: 446.1,
 						}
 
 						newActions = append(newActions, newAction)
@@ -9854,7 +9854,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 					newAction.Position = Position{
 						X: 449.5,
-						Y: 446,
+						Y: 446.1,
 					}
 
 					workflow.Actions = append(workflow.Actions, newAction)
