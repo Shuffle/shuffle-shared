@@ -6189,7 +6189,8 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
 			if err != nil {
-				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+				log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+
 			} else {
 
 				//diffWorkflows(*newChildworkflow, parentWorkflow, update)
@@ -9479,10 +9480,29 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOrgId, subOrgId string) (*Workflow, error) {
 
+	// FIXME: This check should NOT exist as it could cause issues
+	// with same names in different orgs.
+	childOrgWorkflows, err := GetAllWorkflowsByQuery(ctx, User{
+		Role: "admin",
+		ActiveOrg: OrgMini{
+			Id: subOrgId,
+		},
+	}, 250, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed getting workflows for suborg %s: %s", subOrgId, err)
+	} else {
+		for _, foundWorkflow := range childOrgWorkflows {
+			if foundWorkflow.Name == workflow.Name {
+				log.Printf("[ERROR] Found a workflow with the same ID (%s) in suborg %s (%s).", foundWorkflow.ID, subOrgId, foundWorkflow.Name)
+				return &foundWorkflow, nil
+			}
+		}
+	}
+
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", subOrgId))
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
-	var err error
+
 	parentWorkflowId := workflow.ID
 
 	// Make a copy of the workflow, and set parent/child relationships
@@ -9572,8 +9592,11 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 	// Letting full replication occur
 	for actionIndex, _ := range newWf.Actions {
-		workflow.Actions[actionIndex].ParentControlled = true
-		workflow.Actions[actionIndex].Environment = defaultEnvironment
+		//workflow.Actions[actionIndex].ParentControlled = true
+		//workflow.Actions[actionIndex].Environment = defaultEnvironment
+
+		newWf.Actions[actionIndex].ParentControlled = true
+		newWf.Actions[actionIndex].Environment = defaultEnvironment
 	}
 
 	// Triggers are handled in the diff instead.
