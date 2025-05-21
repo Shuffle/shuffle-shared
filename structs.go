@@ -916,7 +916,9 @@ type Partner struct {
 	WebsiteUrl  string      `json:"website_url" datastore:"website_url,noindex"`
 	Expertise   []string      `json:"expertise" datastore:"expertise"`
 	Services    []string      `json:"services" datastore:"services"`
+	Solutions   []string      `json:"solutions" datastore:"solutions"`
 	PartnerType PartnerType `json:"partner_type" datastore:"partner_type"`
+	Country     string      `json:"country" datastore:"country"`
 	Region      string      `json:"region" datastore:"region"`
 	Created     int64       `json:"created" datastore:"created"`
 	Edited      int64       `json:"edited" datastore:"edited"`
