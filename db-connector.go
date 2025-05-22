@@ -5077,6 +5077,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	return nil
 }
 
+/*
 func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	session := &Session{}
 
@@ -5140,6 +5141,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 
 	return session, nil
 }
+*/
 
 // Index = Username
 func DeleteKey(ctx context.Context, entity string, value string) error {

@@ -9182,23 +9182,27 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(t.Newpassword), 8)
 	if err != nil {
-		log.Printf("New password failure for %s: %s", userInfo.Username, err)
+		log.Printf("[ERROR] New password failure for %s: %s", userInfo.Username, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 		return
 	}
 
 	foundUser.Password = string(hashedPassword)
+	cacheKey := fmt.Sprintf("session_%s", foundUser.Session)
+	DeleteCache(ctx, cacheKey)
+
+	foundUser.Session = ""
 	err = SetUser(ctx, &foundUser, true)
 	if err != nil {
-		log.Printf("Error fixing password for user %s: %s", userInfo.Username, err)
+		log.Printf("[ERROR] Problem fixing password for user %s: %s", userInfo.Username, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 		return
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Session invalidated. You need to re-login"}`)))
 }
 
 // Can check against HIBP etc?
