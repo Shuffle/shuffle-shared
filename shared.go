@@ -9115,10 +9115,10 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Current password
-	err = CheckPasswordStrength(t.Newpassword)
+	err = CheckPasswordStrength("", t.Newpassword)
 	if err != nil {
 		log.Printf("[INFO] Bad password strength: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
@@ -9203,10 +9203,27 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 // Can check against HIBP etc?
 // Removed for localhost
-func CheckPasswordStrength(password string) error {
+func CheckPasswordStrength(username, password string) error {
 	// Check password strength here
-	if len(password) < 4 {
-		return errors.New("Minimum password length is 4.")
+
+	if project.Environment == "cloud" { 
+		if len(password) < 11 {
+			return errors.New("Minimum password length is 10.")
+		}
+
+		if len(password) > 128 {
+			return errors.New("Maximum password length is 128.")
+		}
+
+		if username == password {
+			return errors.New("Username and password can't be the same.")
+		}
+
+	} else {
+		// Onprem~
+		if len(password) < 4 {
+			return errors.New("Minimum password length is 4.")
+		}
 	}
 
 	//if len(password) > 128 {
