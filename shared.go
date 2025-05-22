@@ -95,17 +95,16 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
 
-	if len(origin) > 0 {
-		resp.Header().Set("Access-Control-Allow-Origin", origin[0])
-
-		// Location testing
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://us.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://eu.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://in.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
+	if project.Environment == "cloud" {
+		resp.Header().Set("Access-Control-Allow-Origin", "https://shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://singul.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
 	} else {
-		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:4201")
+		if len(origin) > 0 {
+			resp.Header().Set("Access-Control-Allow-Origin", origin[0])
+		} else {
+			resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:4201")
+		}
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
