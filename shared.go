@@ -4979,6 +4979,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		CreatorWorkStatus  string          `json:"creator_work_status"`
 		CreatorSocial      string          `json:"creator_social"`
 		SpecializedApps    []MinimizedApps `json:"specialized_apps"`
+		Theme              string          `json:"theme"`
 	}
 
 	ctx := GetContext(request)
@@ -5386,6 +5387,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		foundUser.Orgs = append(newUserOrgs, addedOrgs...)
 
 		log.Printf("[DEBUG] New orgs for %s (%s) is len(%d)", foundUser.Username, foundUser.Id, len(foundUser.Orgs))
+	}
+
+	if len(t.Theme) > 0 && t.Theme != foundUser.Theme {
+		foundUser.Theme = t.Theme
 	}
 
 	err = SetUser(ctx, foundUser, orgUpdater)
@@ -12042,7 +12047,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.Editing = false
 	}
 
-	if project.Environment == "cloud" && tmpData.EditingBranding {
+	if tmpData.EditingBranding {
 		log.Printf("[DEBUG] Updating branding for org %s (%s)", org.Name, org.Id)
 		org.Branding = tmpData.Branding
 	}
