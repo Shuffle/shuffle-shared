@@ -384,14 +384,16 @@ type DailyStatistics struct {
 // Not directly, but being updated by org actions
 type ExecutionInfo struct {
 	// These have been configured for cache updates in db-connector.go with 5 hour (300 minutes) timeouts before dumping
-	OrgId       string `json:"org_id" datastore:"org_id"`
-	OrgName     string `json:"org_name" datastore:"org_name"`
-	LastCleared int64  `json:"last_cleared" datastore:"last_cleared"`
+	OrgId   string `json:"org_id" datastore:"org_id"`
+	OrgName string `json:"org_name" datastore:"org_name"`
+
+	LastCleared int64 `json:"last_cleared" datastore:"last_cleared"`
 
 	DailyStatistics []DailyStatistics `json:"daily_statistics" datastore:"daily_statistics"`
 	OnpremStats     []DailyStatistics `json:"onprem_stats,omitempty" datastore:"onprem_stats"`
 
 	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
+	TotalChildAppExecutions         int64 `json:"total_child_app_executions" datastore:"total_child_app_executions"`
 	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
 	TotalSubflowExecutions          int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
 	TotalWorkflowExecutions         int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
@@ -403,6 +405,7 @@ type ExecutionInfo struct {
 	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 
 	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
+	MonthlyChildAppExecutions         int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
 	MonthlyAppExecutions              int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
 	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
 	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
@@ -415,6 +418,7 @@ type ExecutionInfo struct {
 	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
+	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
 	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed,omitempty" datastore:"weekly_app_executions_failed"`
 	WeeklySubflowExecutions          int64 `json:"weekly_subflow_executions,omitempty" datastore:"weekly_subflow_executions"`
 	WeeklyWorkflowExecutions         int64 `json:"weekly_workflow_executions,omitempty" datastore:"weekly_workflow_executions"`
@@ -426,6 +430,7 @@ type ExecutionInfo struct {
 	WeeklyAIUsage                    int64 `json:"weekly_ai_executions,omitempty" datastore:"weekly_ai_executions"`
 
 	DailyAppExecutions              int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
+	DailyChildAppExecutions         int64 `json:"daily_child_app_executions" datastore:"daily_child_app_executions"`
 	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
 	DailySubflowExecutions          int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
 	DailyWorkflowExecutions         int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
@@ -437,6 +442,7 @@ type ExecutionInfo struct {
 	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
+	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`
 	HourlyAppExecutionsFailed        int64 `json:"hourly_app_executions_failed,omitempty" datastore:"hourly_app_executions_failed"`
 	HourlySubflowExecutions          int64 `json:"hourly_subflow_executions,omitempty" datastore:"hourly_subflow_executions"`
 	HourlyWorkflowExecutions         int64 `json:"hourly_workflow_executions,omitempty" datastore:"hourly_workflow_executions"`
@@ -587,7 +593,7 @@ type UserGeoInfo struct {
 		Name string `datastore:"name" json:"name"`
 	} `datastore:"city" json:"city"`
 	State struct {
-		Name    string `datastore:"name" json:"name"`
+		Name string `datastore:"name" json:"name"`
 	} `datastore:"state" json:"state"`
 	Country struct {
 		Name    string `datastore:"name" json:"name"`
@@ -633,7 +639,7 @@ type User struct {
 	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
 	PersonalInfo PersonalInfo `datastore:"personal_info" json:"personal_info"`
 	Regions      []string     `datastore:"regions" json:"regions"`
-	
+
 	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
 }
 
@@ -3855,7 +3861,7 @@ type SingleResult struct {
 }
 
 type DockerRequestCheck struct {
-	Name string `datastore:"name" json:"name" yaml:"name"`
+	Name  string `datastore:"name" json:"name" yaml:"name"`
 	Image string `datastore:"image" json:"image" yaml:"image"`
 }
 
@@ -4052,11 +4058,11 @@ type LiveExecutionStatus struct {
 }
 
 type HealthCheck struct {
-	Success bool  `json:"success"`
-	Updated int64 `json:"updated"`
-	Apps AppHealth `json:"apps"`
-	Workflows WorkflowHealth `json:"workflows"`
-	PythonApps AppHealth `json:"python_apps"`
+	Success    bool           `json:"success"`
+	Updated    int64          `json:"updated"`
+	Apps       AppHealth      `json:"apps"`
+	Workflows  WorkflowHealth `json:"workflows"`
+	PythonApps AppHealth      `json:"python_apps"`
 }
 
 type HealthCheckDB struct {
@@ -4277,29 +4283,29 @@ type TimeWindow struct {
 }
 
 // The execution details of a decision
-type AgentDecisionRunDetails struct { 
+type AgentDecisionRunDetails struct {
 	Id string `json:"id" datastore:"id"`
 
-	StartedAt int64  `json:"started_at" datastore:"started_at"`
+	StartedAt   int64  `json:"started_at" datastore:"started_at"`
 	CompletedAt int64  `json:"completed_at" datastore:"completed_at"`
-	Type string `json:"type" datastore:"type"`
-	Status string `json:"status" datastore:"status"`
+	Type        string `json:"type" datastore:"type"`
+	Status      string `json:"status" datastore:"status"`
 	RawResponse string `json:"raw_response,omitempty" datastore:"raw_response"`
-	DebugUrl string `json:"debug_url,omitempty" datastore:"debug_url"`
+	DebugUrl    string `json:"debug_url,omitempty" datastore:"debug_url"`
 }
 
 // Each decision
 type AgentDecision struct {
-	// Predictive Agent data 
-	I          int     `json:"i" datastore:"i"`
-	Action     string  `json:"action" datastore:"action"`
-	Tool	   string  `json:"tool" datastore:"tool"`
-	Category   string  `json:"category" datastore:"category"`
-	Confidence float64 `json:"confidence" datastore:"confidence"`
-	Runs 	   string  `json:"runs" datastore:"runs"`
-	Sources    string  `json:"sources,omitempty" datastore:"sources"`
+	// Predictive Agent data
+	I          int            `json:"i" datastore:"i"`
+	Action     string         `json:"action" datastore:"action"`
+	Tool       string         `json:"tool" datastore:"tool"`
+	Category   string         `json:"category" datastore:"category"`
+	Confidence float64        `json:"confidence" datastore:"confidence"`
+	Runs       string         `json:"runs" datastore:"runs"`
+	Sources    string         `json:"sources,omitempty" datastore:"sources"`
 	Fields     []Valuereplace `json:"fields" datastore:"fields"`
-	Reason     string  `json:"reason" datastore:"reason"`
+	Reason     string         `json:"reason" datastore:"reason"`
 
 	// Responses
 	RunDetails AgentDecisionRunDetails `json:"run_details" datastore:"run_details"`
@@ -4307,19 +4313,19 @@ type AgentDecision struct {
 
 // The overall Agent controller
 type AgentOutput struct {
-	Status 	  string  `json:"status" datastore:"status"`
+	Status    string          `json:"status" datastore:"status"`
 	Input     string          `json:"input" datastore:"input"`
-	Error 	  string `json:"error,omitempty" datastore:"error"`
+	Error     string          `json:"error,omitempty" datastore:"error"`
 	Decisions []AgentDecision `json:"decisions" datastore:"decisions"`
 
 	// For easy testing
 	DecisionString string `json:"decision_string,omitempty" datastore:"decision_string"`
-	// For tracking of details parent<->child 
-	StartedAt int64 `json:"started_at,omitempty" datastore:"started_at"`
-	CompletedAt int64 `json:"completed_at,omitempty" datastore:"completed_at"`
+	// For tracking of details parent<->child
+	StartedAt   int64  `json:"started_at,omitempty" datastore:"started_at"`
+	CompletedAt int64  `json:"completed_at,omitempty" datastore:"completed_at"`
 	ExecutionId string `json:"execution_id,omitempty" datastore:"execution_id"`
-	NodeId string `json:"node_id,omitempty" datastore:"node_id"`
-	Memory string `json:"memory,omitempty" datastore:"memory"`
+	NodeId      string `json:"node_id,omitempty" datastore:"node_id"`
+	Memory      string `json:"memory,omitempty" datastore:"memory"`
 }
 
 type HTTPWrapper struct {
@@ -4335,9 +4341,9 @@ type HTTPWrapper struct {
 }
 
 type appAuthStruct struct {
-	Success bool              `json:"success"`
-	Reason  string            `json:"reason"`
-	Action  string            `json:"action"`
+	Success bool      `json:"success"`
+	Reason  string    `json:"reason"`
+	Action  string    `json:"action"`
 	Apps    []AppMini `json:"apps"`
 }
 
