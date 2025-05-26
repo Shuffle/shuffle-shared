@@ -341,6 +341,64 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 	return foundUser, nil
 }
 
+func HandleAlgoliaPartnerSearch(ctx context.Context, orgId string) (AlgoliaSearchPartner, error) {
+	
+	cacheKey := fmt.Sprintf("algolia_partner_%s", orgId)
+	searchPartner := AlgoliaSearchPartner{}
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &searchPartner)
+		if err == nil {
+			return searchPartner, nil
+		}
+	}
+	
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return AlgoliaSearchPartner{}, errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("partners")
+	res, err := algoliaIndex.Search(orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia partners: %s", err)
+		return AlgoliaSearchPartner{}, err
+	}
+
+	var newRecords []AlgoliaSearchPartner
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia partners: %s", err)
+		return AlgoliaSearchPartner{}, err
+	}
+
+	foundPartner := AlgoliaSearchPartner{}
+	for _, newRecord := range newRecords {
+		if newRecord.OrgId == orgId {
+			foundPartner = newRecord
+			break
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(foundPartner)
+		if err != nil {
+			return foundPartner, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating algolia partner cache: %s", err)
+		}
+	}
+
+	return foundPartner, nil
+}
+
 func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool, isOrg bool) (string, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
@@ -442,6 +500,83 @@ func HandleAlgoliaCreatorDeletion(ctx context.Context, userId string) (error) {
 	}
 
 	return nil
+}
+
+// Partner Algolia Upload
+func HandleAlgoliaPartnerUpload(ctx context.Context, partner Partner, overwrite bool) (string, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("partners")
+	res, err := algoliaIndex.Search(partner.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia partners: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchPartner
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia partners: %s", err)
+		return "", err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == partner.Id {
+			log.Printf("[INFO] Object %s already exists in Algolia", partner.Id)
+
+			if overwrite {
+				break
+			} else {
+				return partner.Id, errors.New("Partner ID already exists!")
+			}
+		}
+	}
+
+	var partnerTypeFields []string
+	if partner.PartnerType.TechPartner {
+		partnerTypeFields = append(partnerTypeFields, "Tech Partner")
+	}
+	if partner.PartnerType.IntegrationPartner {
+		partnerTypeFields = append(partnerTypeFields, "Integration Partner")
+	}
+	if partner.PartnerType.DistributionPartner {
+		partnerTypeFields = append(partnerTypeFields, "Distribution Partner")
+	}
+	if partner.PartnerType.ServicePartner {
+		partnerTypeFields = append(partnerTypeFields, "Service Partner")
+	}
+
+	timeNow := int64(time.Now().Unix())
+	records := []AlgoliaSearchPartner{
+		AlgoliaSearchPartner{
+			ObjectID:    partner.Id,
+			SquareImage: partner.ImageUrl,
+			Name:        partner.Name,
+			Description: partner.Description,
+			PartnerType: partnerTypeFields,
+			TimeEdited:  timeNow,
+			Solutions:   partner.Solutions,
+			Country:     partner.Country,
+			Region:      partner.Region,
+			OrgId:       partner.OrgId,
+		},
+	}
+
+	_, err = algoliaIndex.SaveObjects(records)
+	if err != nil {
+		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		return "", err
+	}
+
+	log.Printf("[INFO] SUCCESSFULLY UPLOADED partner %s with ID %s TO ALGOLIA!", partner.Name, partner.Id)
+	return partner.Id, nil
 }
 
 // Shitty temorary system

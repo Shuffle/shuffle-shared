@@ -856,7 +856,8 @@ type OrgMini struct {
 	Role      string     `json:"role" datastore:"role"`
 	ChildOrgs []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
 	RegionUrl string     `json:"region_url" datastore:"region_url"`
-
+	IsPartner bool       `json:"is_partner" datastore:"is_partner"`
+	
 	// Branding related
 	Image      string      `json:"image" datastore:"image,noindex"`
 	CreatorOrg string      `json:"creator_org" datastore:"creator_org"`
@@ -1693,6 +1694,19 @@ type AlgoliaSearchCreator struct {
 	WorkStatus      string          `datastore:"work_status" json:"work_status"`
 	Url             string          `datastore:"url" json:"url"`
 	IsOrg           bool            `datastore:"is_org" json:"is_org"`
+}
+
+type AlgoliaSearchPartner struct {
+	ObjectID        string          `json:"objectID"`
+	TimeEdited      int64           `json:"time_edited"`
+	SquareImage     string          `json:"square_image"`
+	Name            string          `json:"name"`
+	Description     string          `json:"description"`
+	PartnerType     []string        `json:"partner_type"`
+	Solutions       []string        `json:"solutions"`
+	Country         string          `json:"country"`
+	Region          string          `json:"region"`
+	OrgId           string          `json:"org_id"`
 }
 
 type AlgoliaSearchWorkflow struct {

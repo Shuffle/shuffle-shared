@@ -9175,22 +9175,6 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	var partnerId string
-	location := strings.Split(request.URL.String(), "/")
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		partnerId = location[4]
-		if partnerId == "" {
-			partnerId = uuid.NewV4().String()
-		}
-	}
-
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[WARNING] Failed reading body: %v", err)
@@ -9210,6 +9194,10 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
+	
+	if len(tmpData.Id) == 0 {
+		tmpData.Id = uuid.NewV4().String()
+	}
 
 	if len(tmpData.OrgId) == 0 {
 		tmpData.OrgId = user.ActiveOrg.Id
@@ -9221,6 +9209,17 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
+	}
+
+	overwrite := false
+
+	if len(tmpData.Id) > 0 {
+		overwrite = true
+	}
+
+	_, err = HandleAlgoliaPartnerUpload(ctx, tmpData, overwrite)
+	if err != nil {
+		log.Printf("[WARNING] Failed publishing partner to Algolia: %v", err)
 	}
 
 	resp.WriteHeader(200)
