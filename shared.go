@@ -96,26 +96,43 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	resp.Header().Set("Vary", "Origin")
 
 	if project.Environment == "cloud" {
-		resp.Header().Set("Access-Control-Allow-Origin", "https://singul.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
+		allowedDomains := []string{
+			"https://shuffler.io",
+			"https://stream.shuffler.io",
 
-		// Others (:
-		resp.Header().Set("Access-Control-Allow-Origin", "https://shuffler.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "https://stream.shuffler.io")
+			"https://us.shuffler.io",
+			"https://california.shuffler.io",
 
-		resp.Header().Set("Access-Control-Allow-Origin", "https://us.shuffler.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "https://california.shuffler.io")
+			"https://eu.shuffler.io",
+			"https://frankfurt.shuffler.io",
 
-		resp.Header().Set("Access-Control-Allow-Origin", "https://eu.shuffler.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "https://frankfurt.shuffler.io")
+			"https://ca.shuffler.io",
+			"https://canada.shuffler.io",
 
-		resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "https://canada.shuffler.io")
+			"https://au.shuffler.io",
 
-		resp.Header().Set("Access-Control-Allow-Origin", "https://au.shuffler.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "https://jp.shuffler.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "https://br.shuffler.io")
-		resp.Header().Set("Access-Control-Allow-Origin", "https://in.shuffler.io")
+			"https://jp.shuffler.io",
+			"https://br.shuffler.io",
+			"https://in.shuffler.io",
+
+			"https://singul.io",
+			"http://localhost:3002",
+		}
+
+		if len(origin) > 0 {
+			// Check if the origin is in the allowed domains
+			allowed := false
+			for _, domain := range allowedDomains {
+				if origin[0] == domain {
+					allowed = true
+					break
+				}
+			}
+
+			if allowed {
+				resp.Header().Set("Access-Control-Allow-Origin", origin[0])
+			}
+		}
 
 	} else {
 		if len(origin) > 0 {
