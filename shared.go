@@ -96,9 +96,27 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	resp.Header().Set("Vary", "Origin")
 
 	if project.Environment == "cloud" {
-		resp.Header().Set("Access-Control-Allow-Origin", "https://shuffler.io")
 		resp.Header().Set("Access-Control-Allow-Origin", "https://singul.io")
 		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
+
+		// Others (:
+		resp.Header().Set("Access-Control-Allow-Origin", "https://shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://stream.shuffler.io")
+
+		resp.Header().Set("Access-Control-Allow-Origin", "https://us.shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://california.shuffler.io")
+
+		resp.Header().Set("Access-Control-Allow-Origin", "https://eu.shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://frankfurt.shuffler.io")
+
+		resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://canada.shuffler.io")
+
+		resp.Header().Set("Access-Control-Allow-Origin", "https://au.shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://jp.shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://br.shuffler.io")
+		resp.Header().Set("Access-Control-Allow-Origin", "https://in.shuffler.io")
+
 	} else {
 		if len(origin) > 0 {
 			resp.Header().Set("Access-Control-Allow-Origin", origin[0])
@@ -182,7 +200,7 @@ func isLoop(arg string) bool {
 	return false
 }
 
-func constructSessionCookie(value string, expires time.Time) *http.Cookie {
+func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	c := http.Cookie{
 		Name:     "session_token",
 		Value:    value,
@@ -211,7 +229,7 @@ func constructSessionCookie(value string, expires time.Time) *http.Cookie {
 }
 
 func constructSessionDeleteCookie() *http.Cookie {
-	c := constructSessionCookie("", time.Time{})
+	c := ConstructSessionCookie("", time.Time{})
 	c.MaxAge = -1
 	return c
 }
@@ -457,7 +475,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] User session exists - resetting session")
 			expiration := time.Now().Add(3600 * time.Second)
 
-			newCookie := constructSessionCookie(user.Session, expiration)
+			newCookie := ConstructSessionCookie(user.Session, expiration)
 
 			http.SetCookie(resp, newCookie)
 
@@ -508,7 +526,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
 			sessionToken := uuid.NewV4().String()
 			expiration := time.Now().Add(3600 * time.Second)
-			newCookie := constructSessionCookie(sessionToken, expiration)
+			newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 			// Does it not set both?
 			http.SetCookie(resp, newCookie)
@@ -11143,7 +11161,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	expiration := time.Now().Add(3600 * time.Second)
 
-	newCookie := constructSessionCookie(user.Session, expiration)
+	newCookie := ConstructSessionCookie(user.Session, expiration)
 	http.SetCookie(resp, newCookie)
 
 	newCookie.Name = "__session"
@@ -13248,7 +13266,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Id == app.Owner || user.ActiveOrg.Id == app.ReferenceOrg || ArrayContains(app.Contributors, user.Id) {
 
-		log.Printf("[DEBUG] Got app %s with user %s (%s) in org %s", app.ID, user.Username, user.Id, user.ActiveOrg.Id)
+		log.Printf("[AUDIT] Got app %s (%s) with user %s (%s) in org %s", app.Name, app.ID, user.Username, user.Id, user.ActiveOrg.Id)
 
 	} else {
 		if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
@@ -14059,7 +14077,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
 
-		newCookie := constructSessionCookie(userdata.Session, expiration)
+		newCookie := ConstructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -14107,7 +14125,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		sessionToken := uuid.NewV4().String()
 		expiration := time.Now().Add(3600 * time.Second)
-		newCookie := constructSessionCookie(sessionToken, expiration)
+		newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 		// Does it not set both?
 		http.SetCookie(resp, newCookie)
@@ -20633,7 +20651,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
 
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20651,7 +20669,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20807,7 +20825,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20825,7 +20843,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20990,7 +21008,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
 
-	newCookie := constructSessionCookie(sessionToken, expiration)
+	newCookie := ConstructSessionCookie(sessionToken, expiration)
 	http.SetCookie(resp, newCookie)
 
 	newCookie.Name = "__session"
@@ -21303,7 +21321,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating (1)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21326,7 +21344,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21431,7 +21449,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21453,7 +21471,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21562,7 +21580,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	if len(newUser.Session) == 0 {
 		log.Printf("[INFO] User does NOT have session - creating - (3)")
 		sessionToken := uuid.NewV4().String()
-		newCookie := constructSessionCookie(sessionToken, expiration)
+		newCookie := ConstructSessionCookie(sessionToken, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -21586,9 +21604,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		//Store user's last session so don't have to go through sso again while changing org.
 		newUser.UsersLastSession = sessionToken
 	} else {
-		log.Printf("[INFO] user have session resetting session and cookies for user: %v - (3)", userName)
+		log.Printf("[INFO] User has session - resetting session and cookies for user: %v - (3)", userName)
 		sessionToken := newUser.Session
-		newCookie := constructSessionCookie(sessionToken, expiration)
+		newCookie := ConstructSessionCookie(sessionToken, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"

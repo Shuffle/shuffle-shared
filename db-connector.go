@@ -3559,14 +3559,12 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
-	nameKey := "Organizations"
-
 	if id == "public" {
-		return &Org{}, errors.New("'public' org is used for single action without being logged in. Not relevant.")
+		return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
 	}
 
+	nameKey := "Organizations"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-
 	curOrg := &Org{}
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -3617,6 +3615,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				err = nil
 			} else {
 				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
+				//orgErr = err
 				return &Org{}, err
 			}
 		}
@@ -3625,7 +3624,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	// How does this happen?
 	if len(curOrg.Id) == 0 {
 		curOrg.Id = id
-		return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
+		//return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
 	newUsers := []User{}
@@ -3716,10 +3715,16 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 
 		if setOrg {
-			log.Printf("[INFO] UPDATING ORG %s!!", curOrg.Id)
+			log.Printf("[INFO] AUTO UPDATING ORG %s!!", curOrg.Id)
 			SetOrg(ctx, *curOrg, curOrg.Id)
 		}
 	}
+
+	/*
+	if orgErr {
+		return curOrg, orgErr
+	}
+	*/
 
 	return curOrg, nil
 }
@@ -4155,7 +4160,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			}
 
 			if len(orgUsers) > 0 {
-				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", len(data.Users), len(orgUsers))
+				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
 				data.Users = orgUsers
 			}
 		}
