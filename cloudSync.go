@@ -579,6 +579,69 @@ func HandleAlgoliaPartnerUpload(ctx context.Context, partner Partner, overwrite 
 	return partner.Id, nil
 }
 
+// Usecase Algolia Upload
+func HandleAlgoliaUsecaseUpload(ctx context.Context, usecase UsecaseInfo, overwrite bool) (string, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("usecases")
+	res, err := algoliaIndex.Search(usecase.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia usecases: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchUsecase
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia partners: %s", err)
+		return "", err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == usecase.Id {
+			log.Printf("[INFO] Object %s already exists in Algolia", usecase.Id)
+
+			if overwrite {
+				break
+			} else {
+				return usecase.Id, errors.New("Partner ID already exists!")
+			}
+		}
+	}
+
+	timeNow := int64(time.Now().Unix())
+	records := []AlgoliaSearchUsecase{
+		AlgoliaSearchUsecase{
+			ObjectID:           usecase.Id,
+			PartnerName:        usecase.CompanyInfo.Name,
+			PartnerId:          usecase.CompanyInfo.Id,
+			Name:               usecase.MainContent.Title,
+			Description:        usecase.MainContent.Description,
+			Categories:         usecase.MainContent.Categories,
+			SourceAppType:      usecase.MainContent.SourceAppType,
+			DestinationAppType: usecase.MainContent.DestinationAppType,
+			PublicWorkflowID:   usecase.MainContent.PublicWorkflowID,
+			TimeEdited:         timeNow,
+		},
+	}
+
+	_, err = algoliaIndex.SaveObjects(records)
+	if err != nil {
+		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		return "", err
+	}
+
+	log.Printf("[INFO] SUCCESSFULLY UPLOADED partner %s with ID %s TO ALGOLIA!", usecase.MainContent.Title, usecase.Id)
+	return usecase.Id, nil
+}
+
 // Shitty temorary system
 // Adding schedule to run over with another algorithm
 // as well as this one, as to increase priority based on popularity:

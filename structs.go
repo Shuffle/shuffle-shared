@@ -857,7 +857,7 @@ type OrgMini struct {
 	ChildOrgs []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
 	RegionUrl string     `json:"region_url" datastore:"region_url"`
 	IsPartner bool       `json:"is_partner" datastore:"is_partner"`
-	
+
 	// Branding related
 	Image      string      `json:"image" datastore:"image,noindex"`
 	CreatorOrg string      `json:"creator_org" datastore:"creator_org"`
@@ -907,33 +907,48 @@ type PartnerType struct {
 }
 
 type Partner struct {
-	Id          string      `json:"id" datastore:"id"`
-	Name        string      `json:"name" datastore:"name"`
-	Description string      `json:"description" datastore:"description"`
-	OrgId       string      `json:"org_id" datastore:"org_id"`
-	ImageUrl    string      `json:"image_url" datastore:"image_url,noindex"`
+	Id                string      `json:"id" datastore:"id"`
+	Name              string      `json:"name" datastore:"name"`
+	Description       string      `json:"description" datastore:"description"`
+	OrgId             string      `json:"org_id" datastore:"org_id"`
+	ImageUrl          string      `json:"image_url" datastore:"image_url,noindex"`
 	LandscapeImageUrl string      `json:"landscape_image_url" datastore:"landscape_image_url,noindex"`
-	ArticleUrl  string      `json:"article_url" datastore:"article_url,noindex"`
-	WebsiteUrl  string      `json:"website_url" datastore:"website_url,noindex"`
-	Expertise   []string      `json:"expertise" datastore:"expertise"`
-	Services    []string      `json:"services" datastore:"services"`
-	Solutions   []string      `json:"solutions" datastore:"solutions"`
-	PartnerType PartnerType `json:"partner_type" datastore:"partner_type"`
-	Country     string      `json:"country" datastore:"country"`
-	Region      string      `json:"region" datastore:"region"`
-	Created     int64       `json:"created" datastore:"created"`
-	Edited      int64       `json:"edited" datastore:"edited"`
+	ArticleUrl        string      `json:"article_url" datastore:"article_url,noindex"`
+	WebsiteUrl        string      `json:"website_url" datastore:"website_url,noindex"`
+	Usecases          []string    `json:"usecases" datastore:"usecases"`
+	Expertise         []string    `json:"expertise" datastore:"expertise"`
+	Services          []string    `json:"services" datastore:"services"`
+	Solutions         []string    `json:"solutions" datastore:"solutions"`
+	PartnerType       PartnerType `json:"partner_type" datastore:"partner_type"`
+	Country           string      `json:"country" datastore:"country"`
+	Region            string      `json:"region" datastore:"region"`
+	Created           int64       `json:"created" datastore:"created"`
+	Edited            int64       `json:"edited" datastore:"edited"`
 }
 
-
 type UsecaseInfo struct {
-	Title string `json:"title" datastore:"title"`
-	PublicWorkflowId string `json:"public_workflow_id" datastore:"public_workflow_id,noindex"`
-	Categories []string `json:"categories" datastore:"categories"`
-	Description string `json:"description" datastore:"description"`
-	Created int64 `json:"created" datastore:"created"`
-	Edited int64 `json:"edited" datastore:"edited"`
-	UsecaseData Workflow `json:"usecase_data" datastore:"usecase_data"`
+	Id          string `json:"id" datastore:"id"`
+	CompanyInfo struct {
+		Name string `datastore:"name" json:"name"`
+		Id   string `datastore:"id" json:"id"`
+	} `datastore:"companyInfo" json:"companyInfo"`
+	MainContent struct {
+		Title              string   `datastore:"title" json:"title"`
+		Description        string   `datastore:"description" json:"description"`
+		Categories         []string `datastore:"categories" json:"categories"`
+		PublicWorkflowID   string   `datastore:"PublicWorkflowIDx" json:"publicWorkflowId"`
+		SourceAppType      string   `datastore:"sourceAppType" json:"sourceAppType"`
+		DestinationAppType string   `datastore:"destinationAppType" json:"destinationAppType"`
+	} `datastore:"mainContent" json:"mainContent"`
+	Navigation struct {
+		Items []struct {
+			Name    string   `datastore:"name" json:"name"`
+			Content []string `datastore:"content" json:"content"`
+		} `datastore:"items" json:"items"`
+	} `datastore:"navigation" json:"navigation"`
+	Published bool  `datastore:"published" json:"published"`
+	Edited    int64 `datastore:"edited" json:"edited"`
+	Created   int64 `datastore:"created" json:"created"`
 }
 
 type Org struct {
@@ -1697,16 +1712,30 @@ type AlgoliaSearchCreator struct {
 }
 
 type AlgoliaSearchPartner struct {
-	ObjectID        string          `json:"objectID"`
-	TimeEdited      int64           `json:"time_edited"`
-	SquareImage     string          `json:"square_image"`
-	Name            string          `json:"name"`
-	Description     string          `json:"description"`
-	PartnerType     []string        `json:"partner_type"`
-	Solutions       []string        `json:"solutions"`
-	Country         string          `json:"country"`
-	Region          string          `json:"region"`
-	OrgId           string          `json:"org_id"`
+	ObjectID    string   `json:"objectID"`
+	TimeEdited  int64    `json:"time_edited"`
+	SquareImage string   `json:"square_image"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	PartnerType []string `json:"partner_type"`
+	Solutions   []string `json:"solutions"`
+	Country     string   `json:"country"`
+	Region      string   `json:"region"`
+	OrgId       string   `json:"org_id"`
+}
+
+type AlgoliaSearchUsecase struct {
+	ObjectID           string   `json:"objectID"`
+	PartnerName        string   `json:"partner_name"`
+	PartnerId          string   `json:"partner_image"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	Categories         []string `json:"categories"`
+	PublicWorkflowID   string   `json:"public_workflow_id"`
+	SourceAppType      string   `json:"source_app_type"`
+	DestinationAppType string   `json:"destination_app_type"`
+	Published          bool     `json:"published"`
+	TimeEdited         int64    `json:"time_edited"`
 }
 
 type AlgoliaSearchWorkflow struct {

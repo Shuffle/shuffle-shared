@@ -9052,7 +9052,7 @@ func HandleGetAllPartners(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	partners, err := GetPartner(ctx, "")
+	partners, err := GetPartner(ctx, "", "")
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partners: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -9099,27 +9099,15 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 	var partnerId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
-		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		partnerId = location[4]
-		if partnerId == "" {
-			partnerId = uuid.NewV4().String()
+		if len(location) > 4 {
+			partnerId = location[4]
 		}
 	}
 	log.Printf("[DEBUG] Getting partner with ID: %s", partnerId)
-	if partnerId == "" {
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Missing id parameter"}`))
-		return
-	}
 
 	ctx := GetContext(request)
-	partner, err := GetPartner(ctx, partnerId)
+	orgId := request.Header.Get("Org-Id")
+	partner, err := GetPartner(ctx, partnerId, orgId)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partner: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -9169,10 +9157,23 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	user, err := HandleApiAuthentication(resp, request)
-	if err != nil || !user.SupportAccess {
+	if err != nil {
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access"}`))
 		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+
+	var Id string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		Id = location[4]
 	}
 
 	body, err := ioutil.ReadAll(request.Body)
@@ -9194,21 +9195,10 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	
-	if len(tmpData.Id) == 0 {
-		tmpData.Id = uuid.NewV4().String()
-	}
+
 
 	if len(tmpData.OrgId) == 0 {
 		tmpData.OrgId = user.ActiveOrg.Id
-	}
-
-	err = SetPartner(ctx, &tmpData)
-	if err != nil {
-		log.Printf("[WARNING] Failed publishing partner: %v", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
 	}
 
 	overwrite := false
@@ -9217,9 +9207,21 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		overwrite = true
 	}
 
+	if len(tmpData.Id) == 0 || len(Id) == 0 {
+		tmpData.Id = uuid.NewV4().String()
+	}
+
 	_, err = HandleAlgoliaPartnerUpload(ctx, tmpData, overwrite)
 	if err != nil {
 		log.Printf("[WARNING] Failed publishing partner to Algolia: %v", err)
+	}
+
+	err = SetPartner(ctx, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed publishing partner: %v", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
 
 	resp.WriteHeader(200)
@@ -25197,6 +25199,193 @@ func HandleGetUsecase(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write(newjson)
+}
+
+// New Usecases functions
+func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access"}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin to publish usecase: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var Id string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		Id = location[4]
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body: %v", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	var tmpData UsecaseInfo
+
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling partner: %v", err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	if len(tmpData.CompanyInfo.Id) == 0 {
+		log.Printf("[WARNING] No partner ID provided for usecase %s", tmpData.CompanyInfo.Name)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No company ID provided"}`))
+		return
+	}
+
+	partners, err := GetPartner(ctx, tmpData.CompanyInfo.Id, "")
+	if err != nil || len(partners) == 0 {
+		log.Printf("[WARNING] Partner %v doesn't exist.", partners)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding partner"}`))
+		return
+	}
+
+	partner := partners[0]
+
+	overwrite := false
+
+	if len(tmpData.Id) > 0 {
+		overwrite = true
+	}
+	
+	if len(tmpData.Id) == 0 || len(Id) == 0 {
+		tmpData.Id = uuid.NewV4().String()
+	}
+
+	_, err = HandleAlgoliaUsecaseUpload(ctx, tmpData, overwrite)
+	if err != nil {
+		log.Printf("[WARNING] Failed publishing usecase to Algolia: %v", err)
+	}
+
+	err = SetUsecaseNew(ctx, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed publishing usecase: %v", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(partner.Usecases) == 0 {
+		partner.Usecases = []string{}
+	}
+	
+	// Check if the usecase is already in the partner's usecases
+	found := false
+	for _, usecase := range partner.Usecases {
+		if usecase == tmpData.Id {
+			found = true
+			log.Printf("[DEBUG] Usecase %s already exists in partner %s's usecases", tmpData.Id, partner.Id)
+			break
+		}
+	}
+
+	if !found {
+		partner.Usecases = append(partner.Usecases, tmpData.Id)
+
+		err = SetPartner(ctx, &partner)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting partner %s with usecase %s: %v", partner.Id, tmpData.Id, err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		log.Printf("[DEBUG] Added usecase %s to partner %s's usecases", tmpData.Id, partner.Id)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "message": "Usecase published", "usecaseId": "` + tmpData.Id + `"}`))
+	return
+}
+
+func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// if project.Environment == "cloud" {
+	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+	// 		log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+	// 		RedirectUserRequest(resp, request)
+	// 		return
+	// 	}
+	// }
+
+	var Id string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 3 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		if location[4] == "all" {
+			Id = ""
+		} else {
+			Id = location[4]
+		}
+	}
+
+	ctx := GetContext(request)
+	usecases, err := GetUsecaseNew(ctx, Id)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get usecases: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get usecases"}`))
+		return
+	}
+
+	// Marshal the response
+	response, err := json.Marshal(struct {
+		Success  bool      `json:"success"`
+		Usecases []UsecaseInfo `json:"usecases"`
+	}{
+		Success:  true,
+		Usecases: usecases,
+	})
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal usecases: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to process usecase data"}`))
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(response)
 }
 
 func GetBackendexecution(ctx context.Context, executionId, authorization string) (WorkflowExecution, error) {

@@ -6080,31 +6080,36 @@ func SetPartner(ctx context.Context, partner *Partner) error {
     return err
 }
 
-func GetPartner(ctx context.Context, id string) ([]Partner, error) {
+func GetPartner(ctx context.Context, id string, orgId string) ([]Partner, error) {
 	nameKey := "Partners"
     var partners []Partner
 
-    if id == "" {
-        // Get all partners
-        q := datastore.NewQuery(nameKey)
-        _, err := project.Dbclient.GetAll(ctx, q, &partners)
-        if err != nil {
-            return nil, fmt.Errorf("failed to get partners: %w", err)
-        }
-        return partners, nil
-    }
+    // if id == "" {
+    //     // Get all partners
+    //     q := datastore.NewQuery(nameKey)
+    //     _, err := project.Dbclient.GetAll(ctx, q, &partners)
+    //     if err != nil {
+    //         return nil, fmt.Errorf("failed to get partners: %w", err)
+    //     }
+    //     return partners, nil
+    // }
 
-    // Try to get by partner ID first
-    k := datastore.NameKey(nameKey, id, nil)
-    partner := &Partner{}
-    err := project.Dbclient.Get(ctx, k, partner)
-    if err == nil {
-        return []Partner{*partner}, nil
-    }
+	
+	if orgId == "" {
+		log.Printf("[DEBUG] Getting partner by partnerId %s", id)
+		// Try to get by partner ID first
+		k := datastore.NameKey(nameKey, id, nil)
+		partner := &Partner{}
+		err := project.Dbclient.Get(ctx, k, partner)
+		if err == nil {
+			return []Partner{*partner}, nil
+		}
+	}
 
     // If not found by ID, try to find by org_id
-    q := datastore.NewQuery(nameKey).Filter("org_id =", id)
-    _, err = project.Dbclient.GetAll(ctx, q, &partners)
+	log.Printf("[DEBUG] Getting partner by orgId %s", orgId)
+    q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
+    _, err := project.Dbclient.GetAll(ctx, q, &partners)
     if err != nil {
         return nil, fmt.Errorf("failed to get partner by org_id: %w", err)
     }
@@ -13208,6 +13213,82 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 
 	return usecase, nil
 
+}
+
+func SetUsecaseNew(ctx context.Context, usecase *UsecaseInfo) error {
+	var err error
+	nameKey := "Usecases"
+
+	timeNow := int64(time.Now().Unix())
+
+    // Set created time for new usecase
+    if usecase.Created == 0 {
+        usecase.Created = timeNow
+    }
+    // Always update edited time
+    usecase.Edited = timeNow
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(usecase)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in setUsecase: %s", err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, usecase.Id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, usecase.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, usecase); err != nil {
+			log.Printf("[WARNING] Error adding usecase: %s", err)
+			return err
+		}
+	}
+
+	// if project.CacheDb {
+	// 	cacheKey := fmt.Sprintf("%s_%s", nameKey, usecase.Id)
+	// 	err = SetCache(ctx, cacheKey, data, 1)
+	// 	if err != nil {
+	// 		log.Printf("[WARNING] Failed setting cache for setusecase: %s", err)
+	// 	}
+	// }
+
+	return nil
+}
+
+func GetUsecaseNew(ctx context.Context, id string) ([]UsecaseInfo, error) {
+    nameKey := "Usecases"
+    var usecases []UsecaseInfo
+
+    if id == "" {
+        // Get all usecases
+        q := datastore.NewQuery(nameKey)
+        _, err := project.Dbclient.GetAll(ctx, q, &usecases)
+        if err != nil {
+            return nil, fmt.Errorf("failed to get usecases: %w", err)
+        }
+        return usecases, nil
+    }
+
+    // Try to get by usecase ID first
+    k := datastore.NameKey(nameKey, id, nil)
+    usecase := &UsecaseInfo{}
+    err := project.Dbclient.Get(ctx, k, usecase)
+    if err == nil {
+        return []UsecaseInfo{*usecase}, nil
+    }
+
+    // If not found by ID, try to find by partnerId
+    q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", id)
+    _, err = project.Dbclient.GetAll(ctx, q, &usecases)
+    if err != nil {
+        return nil, fmt.Errorf("failed to get usecases by company ID: %w", err)
+    }
+
+    return usecases, nil
 }
 
 func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
