@@ -95,17 +95,51 @@ func HandleCors(resp http.ResponseWriter, request *http.Request) bool {
 	origin := request.Header["Origin"]
 	resp.Header().Set("Vary", "Origin")
 
-	if len(origin) > 0 {
-		resp.Header().Set("Access-Control-Allow-Origin", origin[0])
+	if project.Environment == "cloud" {
+		allowedDomains := []string{
+			"https://shuffler.io",
+			"https://stream.shuffler.io",
 
-		// Location testing
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://ca.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://us.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://eu.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "https://in.shuffler.io")
-		//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:3002")
+			"https://us.shuffler.io",
+			"https://california.shuffler.io",
+
+			"https://eu.shuffler.io",
+			"https://frankfurt.shuffler.io",
+
+			"https://ca.shuffler.io",
+			"https://canada.shuffler.io",
+
+			"https://au.shuffler.io",
+
+			"https://jp.shuffler.io",
+			"https://br.shuffler.io",
+			"https://in.shuffler.io",
+
+			"https://singul.io",
+			"http://localhost:3002",
+		}
+
+		if len(origin) > 0 {
+			// Check if the origin is in the allowed domains
+			allowed := false
+			for _, domain := range allowedDomains {
+				if origin[0] == domain {
+					allowed = true
+					break
+				}
+			}
+
+			if allowed {
+				resp.Header().Set("Access-Control-Allow-Origin", origin[0])
+			}
+		}
+
 	} else {
-		resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:4201")
+		if len(origin) > 0 {
+			resp.Header().Set("Access-Control-Allow-Origin", origin[0])
+		} else {
+			resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:4201")
+		}
 	}
 
 	//resp.Header().Set("Access-Control-Allow-Origin", "http://localhost:8000")
@@ -183,7 +217,7 @@ func isLoop(arg string) bool {
 	return false
 }
 
-func constructSessionCookie(value string, expires time.Time) *http.Cookie {
+func ConstructSessionCookie(value string, expires time.Time) *http.Cookie {
 	c := http.Cookie{
 		Name:     "session_token",
 		Value:    value,
@@ -212,7 +246,7 @@ func constructSessionCookie(value string, expires time.Time) *http.Cookie {
 }
 
 func constructSessionDeleteCookie() *http.Cookie {
-	c := constructSessionCookie("", time.Time{})
+	c := ConstructSessionCookie("", time.Time{})
 	c.MaxAge = -1
 	return c
 }
@@ -458,7 +492,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] User session exists - resetting session")
 			expiration := time.Now().Add(3600 * time.Second)
 
-			newCookie := constructSessionCookie(user.Session, expiration)
+			newCookie := ConstructSessionCookie(user.Session, expiration)
 
 			http.SetCookie(resp, newCookie)
 
@@ -509,7 +543,7 @@ func HandleSet2fa(resp http.ResponseWriter, request *http.Request) {
 			log.Printf("[INFO] User session for %s (%s) is empty - create one!", user.Username, user.Id)
 			sessionToken := uuid.NewV4().String()
 			expiration := time.Now().Add(3600 * time.Second)
-			newCookie := constructSessionCookie(sessionToken, expiration)
+			newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 			// Does it not set both?
 			http.SetCookie(resp, newCookie)
@@ -4980,6 +5014,7 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		CreatorWorkStatus  string          `json:"creator_work_status"`
 		CreatorSocial      string          `json:"creator_social"`
 		SpecializedApps    []MinimizedApps `json:"specialized_apps"`
+		Theme              string          `json:"theme"`
 	}
 
 	ctx := GetContext(request)
@@ -5389,6 +5424,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] New orgs for %s (%s) is len(%d)", foundUser.Username, foundUser.Id, len(foundUser.Orgs))
 	}
 
+	if len(t.Theme) > 0 && t.Theme != foundUser.Theme {
+		foundUser.Theme = t.Theme
+	}
+
 	err = SetUser(ctx, foundUser, orgUpdater)
 	if err != nil {
 		log.Printf("[WARNING] Error patching user %s: %s", foundUser.Username, err)
@@ -5565,7 +5604,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 						newAction.Position = Position{
 							X: 449.5,
-							Y: 446,
+							Y: 446.1,
 						}
 
 						newActions = append(newActions, newAction)
@@ -5609,7 +5648,7 @@ func SetNewWorkflow(resp http.ResponseWriter, request *http.Request) {
 						}
 						newAction.Position = Position{
 							X: 449.5,
-							Y: 446,
+							Y: 446.1,
 						}
 
 						newActions = append(newActions, newAction)
@@ -6088,140 +6127,148 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 	// So now I'm endlessly confused.
 	trigger := childTrigger
 	for paramIndex, param := range trigger.Parameters {
+		if param.Name != "startnode" && param.Name != "startnode" {
+			// Use same as action IDs are identical
+			trigger.Parameters[paramIndex].Value = param.Value
+			continue
+		}
+
+		if param.Name != "workflow" && param.Name != "subflow" {
+			continue
+		}
+
 		// since this is an added subflow, the workflow being referred
 		// is most likely not already distributed. let's do that.
-		if param.Name == "workflow" || param.Name == "subflow" {
-			//log.Printf("[DEBUG] Found subflow reference: %s", param.Value)
-			parentSubflowPointedId := param.Value
-			if len(parentSubflowPointedId) == 0 {
-				continue
-			}
+		parentSubflowPointedId := param.Value
+		if len(parentSubflowPointedId) == 0 {
+			continue
+		}
 
-			if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
-				log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID", parentSubflowPointedId)
-				// Point to same
-				trigger.Parameters[paramIndex].Value = childWorkflow.ID
+		if parentSubflowPointedId == parentWorkflow.ID || parentSubflowPointedId == childWorkflow.ID {
+			log.Printf("[DEBUG] Not distributing workflow '%s' as it's the same as the parent workflow ID", parentSubflowPointedId)
+			// Point to same
+			trigger.Parameters[paramIndex].Value = childWorkflow.ID
 
-				continue
-			}
+			continue
+		}
 
-			// Check if it's the same as previous revision?
-			ctx := context.Background()
-			alreadyPropagatedSubflow := ""
-			childSubflow, err := GetWorkflow(ctx, parentSubflowPointedId)
+		// Check if it's the same as previous revision?
+		ctx := context.Background()
+		alreadyPropagatedSubflow := ""
+		childSubflow, err := GetWorkflow(ctx, parentSubflowPointedId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting parent subflow %s (1): %s", parentSubflowPointedId, err)
+			continue
+		}
+
+		if childSubflow.OrgId != childWorkflow.OrgId {
+			log.Printf("[WARNING] Subflow %s is not in the same org as parent workflow %s. This means re-propagation is required (?).", parentSubflowPointedId, parentWorkflow.ID)
+		} else {
+			alreadyPropagatedSubflow = childSubflow.ID
+		}
+
+		// childWorkflow vs childSubflow
+
+		// Parent workflow ID + Suborg ID = seed
+		if len(alreadyPropagatedSubflow) > 0 {
+			//log.Printf("[INFO] Subflow %s (%s) has already been propagated to org %s", childWorkflow.Name, parentSubflowPointedId, childWorkflow.OrgId)
+
+			// Just make sure that it now points to that workflow in the Multi-Tenant Workflow
+			trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
+
+			workflow, err := GetWorkflow(ctx, alreadyPropagatedSubflow)
 			if err != nil {
-				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
+				log.Printf("[WARNING] Failed getting propagated subflow: %s", err)
 				continue
 			}
 
-			if childSubflow.OrgId != childWorkflow.OrgId {
-				log.Printf("[WARNING] Subflow %s is not in the same org as parent workflow %s. This means re-propagation is required (?).", parentSubflowPointedId, parentWorkflow.ID)
+			if workflow.OrgId != childWorkflow.OrgId {
+				//log.Printf("[ERROR] Subflow %s has been propagated to %s, but it's not the same org as %s. This means re-propagation is required.", parentSubflowPointedId, childWorkflow.OrgId, childWorkflow.OrgId)
 			} else {
-				alreadyPropagatedSubflow = childSubflow.ID
-			}
+				startNodeIndexToOverwrite := -1
+				currentStartNode := ""
 
-			// Parent workflow ID + Suborg ID = seed
-			if len(alreadyPropagatedSubflow) > 0 {
-				//log.Printf("[INFO] Subflow %s (%s) has already been propagated to org %s", childWorkflow.Name, parentSubflowPointedId, childWorkflow.OrgId)
+				// taking the right startnode is important
+				for startNodeIndex, startNode := range trigger.Parameters {
+					if startNode.Name == "startnode" {
+						startNodeIndexToOverwrite = startNodeIndex
+						currentStartNode = startNode.Value
+					}
+				}
 
-				// Just make sure that it now points to that workflow in the Multi-Tenant Workflow
-				trigger.Parameters[paramIndex].Value = alreadyPropagatedSubflow
-
-				workflow, err := GetWorkflow(ctx, alreadyPropagatedSubflow)
-				if err != nil {
-					log.Printf("[WARNING] Failed getting propagated subflow: %s", err)
+				if len(currentStartNode) == 0 {
 					continue
 				}
 
-				if workflow.OrgId != childWorkflow.OrgId {
-					//log.Printf("[ERROR] Subflow %s has been propagated to %s, but it's not the same org as %s. This means re-propagation is required.", parentSubflowPointedId, childWorkflow.OrgId, childWorkflow.OrgId)
-				} else {
-					startNodeIndexToOverwrite := -1
-					currentStartNode := ""
-
-					// taking the right startnode is important
-					for startNodeIndex, startNode := range trigger.Parameters {
-						if startNode.Name == "startnode" {
-							startNodeIndexToOverwrite = startNodeIndex
-							currentStartNode = startNode.Value
-						}
+				for _, action := range workflow.Actions {
+					if action.ID == currentStartNode {
+						trigger.Parameters[startNodeIndexToOverwrite].Value = action.ID
+						break
 					}
-
-					if len(currentStartNode) == 0 {
-						continue
-					}
-
-					for _, action := range workflow.Actions {
-						if action.ID == currentStartNode {
-							trigger.Parameters[startNodeIndexToOverwrite].Value = action.ID
-							break
-						}
-					}
-
-					continue
 				}
-			}
 
-			// Getting the PARENT workflow
-			parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
-			if err != nil {
-				log.Printf("[WARNING] Failed getting parent subflow: %s", err)
 				continue
 			}
+		}
 
-			// Propagates ALL the relevant ID's at once to avoid desync from goroutines
-			if !ArrayContains(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId) {
-				for _, parentTenantId := range parentWorkflow.SuborgDistribution {
-					if !ArrayContains(parentSubflowPointed.SuborgDistribution, parentTenantId) {
-						log.Printf("[DEBUG] Adding org %s to subflow %s (%s)", parentTenantId, parentSubflowPointed.Name, parentSubflowPointed.ID)
-						parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, parentTenantId)
-					}
+		// Getting the PARENT workflow
+		parentSubflowPointed, err := GetWorkflow(ctx, parentSubflowPointedId)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting parent subflow %s (2): %s", parentSubflowPointedId, err)
+			continue
+		}
+
+		// Propagates ALL the relevant ID's at once to avoid desync from goroutines
+		if !ArrayContains(parentSubflowPointed.SuborgDistribution, childWorkflow.OrgId) {
+			for _, parentTenantId := range parentWorkflow.SuborgDistribution {
+				if !ArrayContains(parentSubflowPointed.SuborgDistribution, parentTenantId) {
+					log.Printf("[DEBUG] Adding org %s to subflow %s (%s)", parentTenantId, parentSubflowPointed.Name, parentSubflowPointed.ID)
+					parentSubflowPointed.SuborgDistribution = append(parentSubflowPointed.SuborgDistribution, parentTenantId)
 				}
 			}
+		}
 
-			err = SetWorkflow(ctx, *parentSubflowPointed, parentSubflowPointedId)
-			if err != nil {
-				log.Printf("[WARNING] Failed setting parent subflow: %s", err)
-				continue
+		err = SetWorkflow(ctx, *parentSubflowPointed, parentSubflowPointedId)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting parent subflow: %s", err)
+			continue
+		}
+
+		log.Printf("[DEBUG] Re-propagating subflow %s (%s) to %s (%s)", parentSubflowPointed.Name, parentSubflowPointed.ID, childWorkflow.Name, childWorkflow.ID)
+
+		propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
+		if err != nil {
+			log.Printf("[ERROR] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+
+			// This means it will point to the parent. What do we do?
+			trigger.Parameters[paramIndex].Value = ""
+
+		} else {
+			trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
+		}
+
+		startnode := ""
+		startNodeParamIndex := -1
+
+		// now handle startnode
+		for startNodeParamIndex_, param_ := range trigger.Parameters {
+			if param_.Name == "startnode" {
+				startnode = param_.Value
+				startNodeParamIndex = startNodeParamIndex_
 			}
+		}
 
-			log.Printf("[DEBUG] Re-propagating subflow %s (%s) to %s (%s)", parentSubflowPointed.Name, parentSubflowPointed.ID, childWorkflow.Name, childWorkflow.ID)
+		if len(startnode) == 0 {
+			continue
+		}
 
-			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
-			if err != nil {
-				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)	
-			} else {
-				//diffWorkflows(*newChildworkflow, parentWorkflow, update)
-				trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
+		// actions are always startnodes
+		// find the equivalent of the startnode in the new workflow
+		for _, action := range propagatedSubflow.Actions {
+			if action.ID == startnode {
+				trigger.Parameters[startNodeParamIndex].Value = action.ID
+				break
 			}
-
-			startnode := ""
-			startNodeParamIndex := -1
-
-			// now handle startnode
-			for startNodeParamIndex_, param_ := range trigger.Parameters {
-				if param_.Name == "startnode" {
-					startnode = param_.Value
-					startNodeParamIndex = startNodeParamIndex_
-				}
-			}
-
-			if len(startnode) == 0 {
-				continue
-			}
-
-			// actions are always startnodes
-			// find the equivalent of the startnode in the new workflow
-			for _, action := range propagatedSubflow.Actions {
-				if action.ID == startnode {
-					trigger.Parameters[startNodeParamIndex].Value = action.ID
-					break
-				}
-			}
-
-		} else if param.Name != "startnode" && param.Name != "startnode" {
-			// just use it
-			trigger.Parameters[paramIndex].Value = param.Value
 		}
 	}
 
@@ -8102,8 +8149,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		newsuborgs = append(newsuborgs, suborg)
 	}
 
-	workflow.SuborgDistribution = newsuborgs
+	// This is an autofixer for variables in actions
+	for i, _ := range workflow.Actions {
+		workflow.Actions[i].SourceExecution = ""
+		workflow.Actions[i].SourceWorkflow = ""
+	}
 
+	workflow.SuborgDistribution = newsuborgs
 	if len(workflow.SuborgDistribution) != len(tmpworkflow.SuborgDistribution) {
 		log.Printf("[AUDIT] Suborg distribution changed by user %s (%s) for workflow %s (%s) in org %s (%s). Clearing cache for suborgs.", user.Username, user.Id, workflow.Name, workflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
@@ -8360,6 +8412,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				workflow.PreviouslySaved = true
 			}
 		}
+
+		workflow.UpdatedBy = ""
+		workflow.Errors = []string{}
+		workflow.Validation = TypeValidation{}
 	}
 
 	if len(newActions) > 1 {
@@ -9107,10 +9163,10 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Current password
-	err = CheckPasswordStrength(t.Newpassword)
+	err = CheckPasswordStrength("", t.Newpassword)
 	if err != nil {
 		log.Printf("[INFO] Bad password strength: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
 		return
 	}
@@ -9174,31 +9230,52 @@ func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
 
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(t.Newpassword), 8)
 	if err != nil {
-		log.Printf("New password failure for %s: %s", userInfo.Username, err)
+		log.Printf("[ERROR] New password failure for %s: %s", userInfo.Username, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 		return
 	}
 
 	foundUser.Password = string(hashedPassword)
+	cacheKey := fmt.Sprintf("session_%s", foundUser.Session)
+	DeleteCache(ctx, cacheKey)
+
+	foundUser.Session = ""
 	err = SetUser(ctx, &foundUser, true)
 	if err != nil {
-		log.Printf("Error fixing password for user %s: %s", userInfo.Username, err)
+		log.Printf("[ERROR] Problem fixing password for user %s: %s", userInfo.Username, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Username and/or password is incorrect"}`))
 		return
 	}
 
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Session invalidated. You need to re-login"}`)))
 }
 
 // Can check against HIBP etc?
 // Removed for localhost
-func CheckPasswordStrength(password string) error {
+func CheckPasswordStrength(username, password string) error {
 	// Check password strength here
-	if len(password) < 4 {
-		return errors.New("Minimum password length is 4.")
+
+	if project.Environment == "cloud" {
+		if len(password) < 11 {
+			return errors.New("Minimum password length is 10.")
+		}
+
+		if len(password) > 128 {
+			return errors.New("Maximum password length is 128.")
+		}
+
+		if username == password {
+			return errors.New("Username and password can't be the same.")
+		}
+
+	} else {
+		// Onprem~
+		if len(password) < 4 {
+			return errors.New("Minimum password length is 4.")
+		}
 	}
 
 	//if len(password) > 128 {
@@ -9477,10 +9554,29 @@ func DuplicateWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOrgId, subOrgId string) (*Workflow, error) {
 
+	// FIXME: This check should NOT exist as it could cause issues
+	// with same names in different orgs.
+	childOrgWorkflows, err := GetAllWorkflowsByQuery(ctx, User{
+		Role: "admin",
+		ActiveOrg: OrgMini{
+			Id: subOrgId,
+		},
+	}, 250, "")
+	if err != nil {
+		log.Printf("[ERROR] Failed getting workflows for suborg %s: %s", subOrgId, err)
+	} else {
+		for _, foundWorkflow := range childOrgWorkflows {
+			if foundWorkflow.Name == workflow.Name {
+				log.Printf("[ERROR] Found a workflow with the same ID (%s) in suborg %s (%s).", foundWorkflow.ID, subOrgId, foundWorkflow.Name)
+				return &foundWorkflow, nil
+			}
+		}
+	}
+
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", workflow.OrgId))
 	DeleteCache(ctx, fmt.Sprintf("%s_workflows", subOrgId))
 	DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", workflow.ID))
-	var err error
+
 	parentWorkflowId := workflow.ID
 
 	// Make a copy of the workflow, and set parent/child relationships
@@ -9498,7 +9594,7 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 	// before doing anything, verify if the parent workflow is a child workflow itself
 	if len(workflow.ParentWorkflowId) > 0 && len(workflow.SuborgDistribution) > 0 {
 		log.Printf("[ERROR] Disabled suborg distribution for child workflow %s (%s). This usually only happens due to an ID bug somewhere from parent org (%s) to child org (%s)", workflow.ID, workflow.Name, parentOrgId, subOrgId)
-		workflow.Errors = append(workflow.Errors, "Suborg distribution disabled automatically in child workflow %s.", workflow.Name)
+		workflow.Errors = append(workflow.Errors, fmt.Sprintf("Suborg distribution disabled automatically in child workflow %s.", workflow.Name))
 		workflow.SuborgDistribution = []string{}
 
 		err = SetWorkflow(ctx, workflow, workflow.ID)
@@ -9570,8 +9666,11 @@ func GenerateWorkflowFromParent(ctx context.Context, workflow Workflow, parentOr
 
 	// Letting full replication occur
 	for actionIndex, _ := range newWf.Actions {
-		workflow.Actions[actionIndex].ParentControlled = true
-		workflow.Actions[actionIndex].Environment = defaultEnvironment
+		//workflow.Actions[actionIndex].ParentControlled = true
+		//workflow.Actions[actionIndex].Environment = defaultEnvironment
+
+		newWf.Actions[actionIndex].ParentControlled = true
+		newWf.Actions[actionIndex].Environment = defaultEnvironment
 	}
 
 	// Triggers are handled in the diff instead.
@@ -9852,7 +9951,7 @@ func GetSpecificWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 					newAction.Position = Position{
 						X: 449.5,
-						Y: 446,
+						Y: 446.1,
 					}
 
 					workflow.Actions = append(workflow.Actions, newAction)
@@ -11088,7 +11187,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	expiration := time.Now().Add(3600 * time.Second)
 
-	newCookie := constructSessionCookie(user.Session, expiration)
+	newCookie := ConstructSessionCookie(user.Session, expiration)
 	http.SetCookie(resp, newCookie)
 
 	newCookie.Name = "__session"
@@ -11430,7 +11529,7 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 	log.Printf("[INFO] User %s SUCCESSFULLY ADDED child org %s (%s) for parent %s (%s)", user.Username, newOrg.Name, newOrg.Id, parentOrg.Name, parentOrg.Id)
 	resp.WriteHeader(200)
-	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Successfully created new sub-org"}`)))
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "id": "%s", "reason": "Successfully created new sub-org"}`, newOrg.Id)))
 
 }
 
@@ -11991,7 +12090,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		org.SyncFeatures.Editing = false
 	}
 
-	if project.Environment == "cloud" && tmpData.EditingBranding {
+	if tmpData.EditingBranding {
 		log.Printf("[DEBUG] Updating branding for org %s (%s)", org.Name, org.Id)
 		org.Branding = tmpData.Branding
 	}
@@ -13193,7 +13292,7 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Id == app.Owner || user.ActiveOrg.Id == app.ReferenceOrg || ArrayContains(app.Contributors, user.Id) {
 
-		log.Printf("[DEBUG] Got app %s with user %s (%s) in org %s", app.ID, user.Username, user.Id, user.ActiveOrg.Id)
+		log.Printf("[AUDIT] Got app %s (%s) with user %s (%s) in org %s", app.Name, app.ID, user.Username, user.Id, user.ActiveOrg.Id)
 
 	} else {
 		if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
@@ -13421,8 +13520,8 @@ func GetUserLocation(ctx context.Context, ip string) (UserGeoInfo, error) {
 	}
 
 	// Reject local or invalid IPs early
-	if strings.Contains(ip, "::1") || strings.Contains(ip, "127.0.0.1") || strings.Contains(ip, "localhost") {
-		log.Printf("[DEBUG] Skipping Geoapify request : Invalid IP %s", ip)
+	if strings.Contains(ip, "::1") || strings.Contains(ip, "127.0.0.1") || strings.Contains(ip, "localhost") || strings.Contains(ip, "[") || strings.Contains(ip, "]") {
+		//log.Printf("[DEBUG] Skipping Geoapify request : Invalid IP %s", ip)
 		return UserGeoInfo{}, errors.New("invalid ip")
 	}
 
@@ -14004,7 +14103,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
 
-		newCookie := constructSessionCookie(userdata.Session, expiration)
+		newCookie := ConstructSessionCookie(userdata.Session, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -14052,7 +14151,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 		sessionToken := uuid.NewV4().String()
 		expiration := time.Now().Add(3600 * time.Second)
-		newCookie := constructSessionCookie(sessionToken, expiration)
+		newCookie := ConstructSessionCookie(sessionToken, expiration)
 
 		// Does it not set both?
 		http.SetCookie(resp, newCookie)
@@ -20578,7 +20677,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 					log.Printf("[INFO] User does NOT have session - creating - (1)")
 					sessionToken := uuid.NewV4().String()
 
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20596,7 +20695,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20752,7 +20851,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20770,7 +20869,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -20935,7 +21034,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] User does NOT have session - creating")
 	sessionToken := uuid.NewV4().String()
 
-	newCookie := constructSessionCookie(sessionToken, expiration)
+	newCookie := ConstructSessionCookie(sessionToken, expiration)
 	http.SetCookie(resp, newCookie)
 
 	newCookie.Name = "__session"
@@ -21248,7 +21347,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating (1)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21271,7 +21370,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (1)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21376,7 +21475,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				if len(user.Session) == 0 {
 					log.Printf("[INFO] User does NOT have session - creating - (2)")
 					sessionToken := uuid.NewV4().String()
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21398,7 +21497,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 				} else {
 					log.Printf("[INFO] user have session resetting session and cookies for user: %v - (2)", userName)
 					sessionToken := user.Session
-					newCookie := constructSessionCookie(sessionToken, expiration)
+					newCookie := ConstructSessionCookie(sessionToken, expiration)
 					http.SetCookie(resp, newCookie)
 
 					newCookie.Name = "__session"
@@ -21507,7 +21606,7 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 	if len(newUser.Session) == 0 {
 		log.Printf("[INFO] User does NOT have session - creating - (3)")
 		sessionToken := uuid.NewV4().String()
-		newCookie := constructSessionCookie(sessionToken, expiration)
+		newCookie := ConstructSessionCookie(sessionToken, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -21531,9 +21630,9 @@ func HandleSSO(resp http.ResponseWriter, request *http.Request) {
 		//Store user's last session so don't have to go through sso again while changing org.
 		newUser.UsersLastSession = sessionToken
 	} else {
-		log.Printf("[INFO] user have session resetting session and cookies for user: %v - (3)", userName)
+		log.Printf("[INFO] User has session - resetting session and cookies for user: %v - (3)", userName)
 		sessionToken := newUser.Session
-		newCookie := constructSessionCookie(sessionToken, expiration)
+		newCookie := ConstructSessionCookie(sessionToken, expiration)
 		http.SetCookie(resp, newCookie)
 
 		newCookie.Name = "__session"
@@ -24375,7 +24474,7 @@ func GetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Error getting org: %s", err)
+		log.Printf("[ERROR] Error getting org %s for user %s (%s): %s", user.ActiveOrg.Id, user.Username, user.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -24384,7 +24483,7 @@ func GetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	newjson, err := json.Marshal(org.SecurityFramework)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get security framework: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking framework. Contact us to get it fixed."}`)))
 		return
 	}
@@ -28943,6 +29042,411 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(body)
 }
 
+// Checks & validates workflow based on last few runs~
+func GetWorkflowValidation(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Removed check here as it may be a public workflow
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var fileId string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		fileId = location[4]
+	}
+
+	if strings.Contains(fileId, "?") {
+		fileId = strings.Split(fileId, "?")[0]
+	}
+
+	if len(fileId) != 36 {
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
+		return
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, fileId)
+	if err != nil {
+		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
+		return
+	}
+
+	// Check workflow.Sharing == private / public / org  too
+	if user.Id != workflow.Owner || len(user.Id) == 0 {
+		// Added org-reader as the user should be able to read everything in an org
+		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
+		if workflow.OrgId == user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow revisions)", user.Username, workflow.ID)
+
+			// Only for Read-Only. No executions or impersonations.
+		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
+			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
+
+		} else {
+			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow revisions). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	}
+
+	// FIXME: Check last 10 executions + notifications if they
+	// Make sure it adds subflows as well and highlights failing apps
+
+	// Access is granted -> get revisions
+	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
+	resp.WriteHeader(500)
+}
+func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s in private training", GetRequestIp(request))
+		resp.WriteHeader(http.StatusTooManyRequests)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+		log.Printf("[DEBUG] Redirecting training request to main site handler (shuffler.io). Project: %s", gceProject)
+		RedirectUserRequest(resp, request)
+		return
+	}
+
+	User, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in private training: %s", userErr)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	type TrainingData struct {
+		OrgId    string `json:"org_id" datastore:"org_id"`
+		Training string `json:"trainingMembers" datastore:"trainingMembers"`
+		Message  string `json:"message" datastore:"message"`
+	}
+
+	var tmpData TrainingData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling test: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(tmpData.OrgId) == 0 || len(tmpData.Training) == 0 {
+		log.Printf("[WARNING] Missing org_id or training in private training request")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Missing org_id or training"}`))
+		return
+	}
+
+	//Get user org
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[ERROR] Failed getting org %s: %s", tmpData.OrgId, err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	email := []string{User.Username}
+	Subject := "Thank you for your private training request"
+	Message := fmt.Sprintf("Hi there, Thank you for submitting request for shuffle private training. This is confirmation that we have received your private training request. You have requested a private training for %v members. We will get back to you shortly. <br> <br> Best Regards <br>Shuffle Team", tmpData.Training)
+
+	err = sendMailSendgrid(email, Subject, Message, false, []string{})
+	if err != nil {
+		log.Printf("[ERROR] Failed sending mail: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	//Send mail to the shuffle support
+	email = []string{"support@shuffler.io"}
+	Subject = fmt.Sprintf("Private training request")
+	Message = fmt.Sprintf("Private training request : <br>Org id: %v <br> Org Name: %v  <br>Username: %v <br> Training Members: %v <br>Customer: %v <br> Message: %v", org.Id, org.Name, User.Username, tmpData.Training, org.LeadInfo.Customer, tmpData.Message)
+
+	err = sendMailSendgrid(email, Subject, Message, false, []string{})
+	if err != nil {
+		log.Printf("[ERROR] Failed sending mail: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	log.Printf("[INFO] Private training request from %s for %s members. Message: %s", org.Org, tmpData.Training, tmpData.Message)
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true}`))
+}
+
+// An API to ONLY return PUBLIC forms for an org
+// A public form = Workflow with "sharing": form
+func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	err := ValidateRequestOverload(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Request overload for IP %s Get Org Forms", GetRequestIp(request))
+		resp.WriteHeader(429)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
+		return
+	}
+
+	var orgId string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+
+		orgId = location[4]
+	}
+
+	if strings.Contains(orgId, "?") {
+		orgId = strings.Split(orgId, "?")[0]
+	}
+
+	validAuth := false
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting forms: %s. Allowing anyway", err)
+	} else {
+		if len(user.Id) > 0 && len(user.Username) > 0 {
+			if user.ActiveOrg.Id == orgId {
+				validAuth = true
+			}
+		}
+	}
+
+	if len(orgId) < 36 || len(orgId) > 36 {
+		log.Printf("[WARNING] Bad ID '%s' of length %d when getting forms is not valid", orgId, len(orgId))
+
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org ID when getting forms is not valid"}`))
+		return
+	}
+
+	// Load the org to see if it wants them public or not
+	ctx := GetContext(request)
+	org, err := GetOrg(ctx, orgId)
+	if err != nil {
+		log.Printf("[WARNING] Org %s doesn't exist.", orgId)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding org"}`))
+		return
+	}
+
+	log.Printf("[INFO] Getting forms for org %s (%s)", org.Name, org.Id)
+
+	// Prevent cache steals in any way
+	randomUserId := uuid.NewV4().String()
+
+	randomUser := User{
+		Id: randomUserId,
+		ActiveOrg: OrgMini{
+			Id:   orgId,
+			Name: org.Name,
+		},
+	}
+
+	if validAuth {
+		randomUser = user
+	}
+
+	workflows, err := GetAllWorkflowsByQuery(ctx, randomUser, 50, "")
+	if err != nil {
+		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", randomUser.Username, err)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if len(workflows) == 0 {
+		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
+		resp.WriteHeader(200)
+		resp.Write([]byte("[]"))
+		return
+	}
+
+	relevantForms := []Workflow{}
+	for _, workflow := range workflows {
+		if validAuth {
+			if len(workflow.InputQuestions) == 0 && len(workflow.FormControl.InputMarkdown) == 0 {
+				continue
+			}
+
+			if workflow.Sharing == "form" {
+				relevantForms = append(relevantForms, workflow)
+				continue
+			}
+
+		} else {
+			if workflow.Sharing != "form" {
+				continue
+			}
+
+			// Overwrite to remove anything unecessary for most locations
+			workflow = Workflow{
+				Name:           workflow.Name,
+				ID:             workflow.ID,
+				Owner:          workflow.Owner,
+				OrgId:          workflow.OrgId,
+				FormControl:    workflow.FormControl,
+				Sharing:        workflow.Sharing,
+				Description:    workflow.Description,
+				InputQuestions: workflow.InputQuestions,
+			}
+		}
+
+		relevantForms = append(relevantForms, workflow)
+	}
+
+	if len(relevantForms) == 0 {
+		log.Printf("[INFO] No forms found for user '%s' (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
+		resp.WriteHeader(200)
+		resp.Write([]byte("[]"))
+		return
+	}
+
+	log.Printf("[INFO] Found %d forms for org %s (%s)", len(relevantForms), randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
+
+	body, err := json.Marshal(relevantForms)
+	if err != nil {
+		log.Printf("[WARNING] Failed form GET marshalling: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(body)
+}
+
+func SendDeleteWorkflowRequest(childWorkflow Workflow, request *http.Request) error {
+	log.Printf("[INFO] Attempting to delete child workflow %s", childWorkflow.ID)
+
+	// Send a Delete request to the workflows
+	baseUrl := "https://shuffler.io"
+	if len(os.Getenv("BASE_URL")) > 0 {
+		baseUrl = os.Getenv("BASE_URL")
+	}
+
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
+		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s", baseUrl, childWorkflow.ID)
+	client := GetExternalClient(baseUrl)
+
+	req, err := http.NewRequest(
+		"DELETE",
+		fullUrl,
+		nil,
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, err)
+		return err
+	}
+
+	// Look for Authorization
+	for key, values := range request.Header {
+		if len(values) > 0 {
+			req.Header.Add(key, values[0])
+		}
+	}
+
+	// Cookies
+	for _, cookie := range request.Cookies() {
+		req.AddCookie(cookie)
+	}
+
+	// Ensure it points correctly, and that you can only delete the ones you have access to
+	if len(childWorkflow.OrgId) > 0 {
+		req.Header.Add("Org-Id", childWorkflow.OrgId)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, err)
+		return err
+	}
+
+	if resp.StatusCode != 200 {
+		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, resp.Status)
+		return fmt.Errorf("Failed to delete child workflow %s: %s", childWorkflow.ID, resp.Status)
+	}
+
+	log.Printf("[INFO] Deleted child workflow %s. Resp: %s", childWorkflow.ID, string(resp.Status))
+
+	return nil
+}
+
+func NewTimeWindow(duration time.Duration) *TimeWindow {
+	return &TimeWindow{
+		Duration: duration,
+		Events:   []time.Time{},
+	}
+}
+
+func (tw *TimeWindow) AddEvent(event time.Time) {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	tw.Events = append(tw.Events, event)
+	tw.cleanOldEvents(event)
+}
+
+func (tw *TimeWindow) CountEvents(now time.Time) int {
+	tw.mu.Lock()
+	defer tw.mu.Unlock()
+	tw.cleanOldEvents(now)
+	return len(tw.Events)
+}
+
+func (tw *TimeWindow) cleanOldEvents(now time.Time) {
+	cutoff := now.Add(-tw.Duration)
+	for len(tw.Events) > 0 && tw.Events[0].Before(cutoff) {
+		tw.Events = tw.Events[1:]
+	}
+}
+
 // Updates statuses in relevant areas according to what happened in the workflow run
 func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *WorkflowExecution {
 
@@ -28973,6 +29477,16 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 
 		return exec
 	}
+
+	amountFinished := 0
+	for _, res := range exec.Results {
+		if res.Status != "SKIPPED" {
+			amountFinished += 1
+		}
+	}
+
+	log.Printf("RESULTS TO ADD: %#v", amountFinished)
+	IncrementCache(ctx, exec.ExecutionOrg, "app_executions", amountFinished)
 
 	go RunCacheCleanup(ctx, *exec)
 	go RunIOCFinder(ctx, *exec)
@@ -29420,409 +29934,4 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	//log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to '%s'\n\n", exec.ExecutionId, len(workflow.Validation.Errors), marshalledValidation)
 
 	return exec
-}
-
-// Checks & validates workflow based on last few runs~
-func GetWorkflowValidation(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	// Removed check here as it may be a public workflow
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in getting specific workflow: %s. Continuing because it may be public.", err)
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-	var fileId string
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		fileId = location[4]
-	}
-
-	if strings.Contains(fileId, "?") {
-		fileId = strings.Split(fileId, "?")[0]
-	}
-
-	if len(fileId) != 36 {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow ID when getting workflow is not valid"}`))
-		return
-	}
-
-	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, fileId)
-	if err != nil {
-		log.Printf("[WARNING] Workflow %s doesn't exist.", fileId)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed finding workflow"}`))
-		return
-	}
-
-	// Check workflow.Sharing == private / public / org  too
-	if user.Id != workflow.Owner || len(user.Id) == 0 {
-		// Added org-reader as the user should be able to read everything in an org
-		//if workflow.OrgId == user.ActiveOrg.Id && (user.Role == "admin" || user.Role == "org-reader") {
-		if workflow.OrgId == user.ActiveOrg.Id {
-			log.Printf("[AUDIT] User %s is accessing workflow %s as admin (get workflow revisions)", user.Username, workflow.ID)
-
-			// Only for Read-Only. No executions or impersonations.
-		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access workflow revisions for %s", user.Username, workflow.ID)
-
-		} else {
-			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get workflow revisions). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	}
-
-	// FIXME: Check last 10 executions + notifications if they
-	// Make sure it adds subflows as well and highlights failing apps
-
-	// Access is granted -> get revisions
-	resp.Write([]byte(`{"success": false, "reason": "Not implemented"}`))
-	resp.WriteHeader(500)
-}
-func HandleUserPrivateTraining(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	err := ValidateRequestOverload(resp, request)
-	if err != nil {
-		log.Printf("[INFO] Request overload for IP %s in private training", GetRequestIp(request))
-		resp.WriteHeader(http.StatusTooManyRequests)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
-		return
-	}
-
-	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-		log.Printf("[DEBUG] Redirecting training request to main site handler (shuffler.io). Project: %s", gceProject)
-		RedirectUserRequest(resp, request)
-		return
-	}
-
-	User, userErr := HandleApiAuthentication(resp, request)
-	if userErr != nil {
-		log.Printf("[AUDIT] Api authentication failed in private training: %s", userErr)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
-		return
-	}
-
-	type TrainingData struct {
-		OrgId    string `json:"org_id" datastore:"org_id"`
-		Training string `json:"trainingMembers" datastore:"trainingMembers"`
-		Message  string `json:"message" datastore:"message"`
-	}
-
-	var tmpData TrainingData
-	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling test: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if len(tmpData.OrgId) == 0 || len(tmpData.Training) == 0 {
-		log.Printf("[WARNING] Missing org_id or training in private training request")
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Missing org_id or training"}`))
-		return
-	}
-
-	//Get user org
-	ctx := GetContext(request)
-	org, err := GetOrg(ctx, tmpData.OrgId)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting org %s: %s", tmpData.OrgId, err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	email := []string{User.Username}
-	Subject := "Thank you for your private training request"
-	Message := fmt.Sprintf("Hi there, Thank you for submitting request for shuffle private training. This is confirmation that we have received your private training request. You have requested a private training for %v members. We will get back to you shortly. <br> <br> Best Regards <br>Shuffle Team", tmpData.Training)
-
-	err = sendMailSendgrid(email, Subject, Message, false, []string{})
-	if err != nil {
-		log.Printf("[ERROR] Failed sending mail: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	//Send mail to the shuffle support
-	email = []string{"support@shuffler.io"}
-	Subject = fmt.Sprintf("Private training request")
-	Message = fmt.Sprintf("Private training request : <br>Org id: %v <br> Org Name: %v  <br>Username: %v <br> Training Members: %v <br>Customer: %v <br> Message: %v", org.Id, org.Name, User.Username, tmpData.Training, org.LeadInfo.Customer, tmpData.Message)
-
-	err = sendMailSendgrid(email, Subject, Message, false, []string{})
-	if err != nil {
-		log.Printf("[ERROR] Failed sending mail: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	log.Printf("[INFO] Private training request from %s for %s members. Message: %s", org.Org, tmpData.Training, tmpData.Message)
-	resp.WriteHeader(http.StatusOK)
-	resp.Write([]byte(`{"success": true}`))
-}
-
-// An API to ONLY return PUBLIC forms for an org
-// A public form = Workflow with "sharing": form
-func HandleGetOrgForms(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	err := ValidateRequestOverload(resp, request)
-	if err != nil {
-		log.Printf("[INFO] Request overload for IP %s Get Org Forms", GetRequestIp(request))
-		resp.WriteHeader(429)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Too many requests"}`)))
-		return
-	}
-
-	var orgId string
-	location := strings.Split(request.URL.String(), "/")
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		orgId = location[4]
-	}
-
-	if strings.Contains(orgId, "?") {
-		orgId = strings.Split(orgId, "?")[0]
-	}
-
-	validAuth := false
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[AUDIT] Api authentication failed in getting forms: %s. Allowing anyway", err)
-	} else {
-		if len(user.Id) > 0 && len(user.Username) > 0 {
-			if user.ActiveOrg.Id == orgId {
-				validAuth = true
-			}
-		}
-	}
-
-	if len(orgId) < 36 || len(orgId) > 36 {
-		log.Printf("[WARNING] Bad ID '%s' of length %d when getting forms is not valid", orgId, len(orgId))
-
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Org ID when getting forms is not valid"}`))
-		return
-	}
-
-	// Load the org to see if it wants them public or not
-	ctx := GetContext(request)
-	org, err := GetOrg(ctx, orgId)
-	if err != nil {
-		log.Printf("[WARNING] Org %s doesn't exist.", orgId)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Failed finding org"}`))
-		return
-	}
-
-	log.Printf("[INFO] Getting forms for org %s (%s)", org.Name, org.Id)
-
-	// Prevent cache steals in any way
-	randomUserId := uuid.NewV4().String()
-
-	randomUser := User{
-		Id: randomUserId,
-		ActiveOrg: OrgMini{
-			Id:   orgId,
-			Name: org.Name,
-		},
-	}
-
-	if validAuth {
-		randomUser = user
-	}
-
-	workflows, err := GetAllWorkflowsByQuery(ctx, randomUser, 50, "")
-	if err != nil {
-		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", randomUser.Username, err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	if len(workflows) == 0 {
-		log.Printf("[INFO] No workflows found for user %s (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
-		resp.WriteHeader(200)
-		resp.Write([]byte("[]"))
-		return
-	}
-
-	relevantForms := []Workflow{}
-	for _, workflow := range workflows {
-		if validAuth {
-			if len(workflow.InputQuestions) == 0 && len(workflow.FormControl.InputMarkdown) == 0 {
-				continue
-			}
-
-			if workflow.Sharing == "form" {
-				relevantForms = append(relevantForms, workflow)
-				continue
-			}
-
-		} else {
-			if workflow.Sharing != "form" {
-				continue
-			}
-
-			// Overwrite to remove anything unecessary for most locations
-			workflow = Workflow{
-				Name:           workflow.Name,
-				ID:             workflow.ID,
-				Owner:          workflow.Owner,
-				OrgId:          workflow.OrgId,
-				FormControl:    workflow.FormControl,
-				Sharing:        workflow.Sharing,
-				Description:    workflow.Description,
-				InputQuestions: workflow.InputQuestions,
-			}
-		}
-
-		relevantForms = append(relevantForms, workflow)
-	}
-
-	if len(relevantForms) == 0 {
-		log.Printf("[INFO] No forms found for user '%s' (%s) in org %s (%s)", randomUser.Username, randomUser.Id, randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
-		resp.WriteHeader(200)
-		resp.Write([]byte("[]"))
-		return
-	}
-
-	log.Printf("[INFO] Found %d forms for org %s (%s)", len(relevantForms), randomUser.ActiveOrg.Name, randomUser.ActiveOrg.Id)
-
-	body, err := json.Marshal(relevantForms)
-	if err != nil {
-		log.Printf("[WARNING] Failed form GET marshalling: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write(body)
-}
-
-func SendDeleteWorkflowRequest(childWorkflow Workflow, request *http.Request) error {
-	log.Printf("[INFO] Attempting to delete child workflow %s", childWorkflow.ID)
-
-	// Send a Delete request to the workflows
-	baseUrl := "https://shuffler.io"
-	if len(os.Getenv("BASE_URL")) > 0 {
-		baseUrl = os.Getenv("BASE_URL")
-	}
-
-	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 {
-		baseUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
-	}
-
-	fullUrl := fmt.Sprintf("%s/api/v1/workflows/%s", baseUrl, childWorkflow.ID)
-	client := GetExternalClient(baseUrl)
-
-	req, err := http.NewRequest(
-		"DELETE",
-		fullUrl,
-		nil,
-	)
-
-	if err != nil {
-		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, err)
-		return err
-	}
-
-	// Look for Authorization
-	for key, values := range request.Header {
-		if len(values) > 0 {
-			req.Header.Add(key, values[0])
-		}
-	}
-
-	// Cookies
-	for _, cookie := range request.Cookies() {
-		req.AddCookie(cookie)
-	}
-
-	// Ensure it points correctly, and that you can only delete the ones you have access to
-	if len(childWorkflow.OrgId) > 0 {
-		req.Header.Add("Org-Id", childWorkflow.OrgId)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, err)
-		return err
-	}
-
-	if resp.StatusCode != 200 {
-		log.Printf("[ERROR] Failed to delete child workflow %s: %s", childWorkflow.ID, resp.Status)
-		return fmt.Errorf("Failed to delete child workflow %s: %s", childWorkflow.ID, resp.Status)
-	}
-
-	log.Printf("[INFO] Deleted child workflow %s. Resp: %s", childWorkflow.ID, string(resp.Status))
-
-	return nil
-}
-
-func NewTimeWindow(duration time.Duration) *TimeWindow {
-	return &TimeWindow{
-		Duration: duration,
-		Events:   []time.Time{},
-	}
-}
-
-func (tw *TimeWindow) AddEvent(event time.Time) {
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	tw.Events = append(tw.Events, event)
-	tw.cleanOldEvents(event)
-}
-
-func (tw *TimeWindow) CountEvents(now time.Time) int {
-	tw.mu.Lock()
-	defer tw.mu.Unlock()
-	tw.cleanOldEvents(now)
-	return len(tw.Events)
-}
-
-func (tw *TimeWindow) cleanOldEvents(now time.Time) {
-	cutoff := now.Add(-tw.Duration)
-	for len(tw.Events) > 0 && tw.Events[0].Before(cutoff) {
-		tw.Events = tw.Events[1:]
-	}
 }
