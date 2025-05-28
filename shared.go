@@ -8149,8 +8149,13 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		newsuborgs = append(newsuborgs, suborg)
 	}
 
-	workflow.SuborgDistribution = newsuborgs
+	// This is an autofixer for variables in actions
+	for i, _ := range workflow.Actions {
+		workflow.Actions[i].SourceExecution = ""
+		workflow.Actions[i].SourceWorkflow = ""
+	}
 
+	workflow.SuborgDistribution = newsuborgs
 	if len(workflow.SuborgDistribution) != len(tmpworkflow.SuborgDistribution) {
 		log.Printf("[AUDIT] Suborg distribution changed by user %s (%s) for workflow %s (%s) in org %s (%s). Clearing cache for suborgs.", user.Username, user.Id, workflow.Name, workflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
 
@@ -8407,6 +8412,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 				workflow.PreviouslySaved = true
 			}
 		}
+
+		workflow.UpdatedBy = ""
+		workflow.Errors = []string{}
+		workflow.Validation = TypeValidation{}
 	}
 
 	if len(newActions) > 1 {
@@ -24465,7 +24474,7 @@ func GetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, user.ActiveOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Error getting org: %s", err)
+		log.Printf("[ERROR] Error getting org %s for user %s (%s): %s", user.ActiveOrg.Id, user.Username, user.Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -24474,7 +24483,7 @@ func GetFrameworkConfiguration(resp http.ResponseWriter, request *http.Request) 
 	newjson, err := json.Marshal(org.SecurityFramework)
 	if err != nil {
 		log.Printf("[ERROR] Failed marshal in get security framework: %s", err)
-		resp.WriteHeader(401)
+		resp.WriteHeader(400)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Failed unpacking framework. Contact us to get it fixed."}`)))
 		return
 	}
