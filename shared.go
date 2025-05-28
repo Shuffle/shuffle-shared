@@ -6189,9 +6189,8 @@ func subflowDistributionWrapper(parentWorkflow Workflow, childWorkflow Workflow,
 
 			propagatedSubflow, err := GenerateWorkflowFromParent(ctx, *parentSubflowPointed, parentSubflowPointed.OrgId, childWorkflow.OrgId)
 			if err != nil {
-				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)
+				log.Printf("[WARNING] Failed to generate child workflow %s (%s) for %s (%s): %s [subflowDistributionWrapper]", childWorkflow.Name, childWorkflow.ID, parentWorkflow.Name, parentWorkflow.ID, err)	
 			} else {
-
 				//diffWorkflows(*newChildworkflow, parentWorkflow, update)
 				trigger.Parameters[paramIndex].Value = propagatedSubflow.ID
 			}
@@ -7204,7 +7203,6 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 							Running: true,
 							Status:  "running",
 						}
-
 
 						err = SetHook(ctx, hook)
 						if err != nil {
@@ -13476,7 +13474,6 @@ func GetUserLocation(ctx context.Context, ip string) (UserGeoInfo, error) {
 	return userLocationData, nil
 }
 
-
 func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -15128,7 +15125,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 		SetCache(ctx, cacheKey, []byte("1"), 1)
 	}
 
-	//log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status) 
+	//log.Printf("[INFO][%s] Sending self-request for Agent Result '%s'. Status: %s", workflowExecution.ExecutionId, actionResult.Action.ID, status)
 	fixedActionResult := AgentOutput{}
 	err = json.Unmarshal([]byte(actionResult.Result), &fixedActionResult)
 	if err == nil && fixedActionResult.Status != "" {
@@ -15157,7 +15154,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	actionResult.Authorization = workflowExecution.Authorization
 	actionResult.Status = status
 	actionResult.CompletedAt = time.Now().Unix()
-	
+
 	baseUrl := fmt.Sprintf("https://shuffler.io")
 	if len(os.Getenv("BASE_URL")) > 0 {
 		baseUrl = os.Getenv("BASE_URL")
@@ -15169,7 +15166,7 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 
 	marshalledResult, err := json.Marshal(actionResult)
 	if err != nil {
-		log.Printf("[ERROR][%s] Failed marshalling failure request for agent: %s", workflowExecution.ExecutionId, err) 
+		log.Printf("[ERROR][%s] Failed marshalling failure request for agent: %s", workflowExecution.ExecutionId, err)
 		return err
 	}
 
@@ -15203,13 +15200,12 @@ func sendAgentActionSelfRequest(status string, workflowExecution WorkflowExecuti
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent: %s", workflowExecution.ExecutionId, status, string(body)) 
+		log.Printf("[ERROR][%s] Failed sending self-request with '%s' for agent: %s", workflowExecution.ExecutionId, status, string(body))
 		return errors.New(fmt.Sprintf("No result in %s request for agent", status))
 	}
 
 	return nil
 }
-
 
 // Handles the recursiveness of a stream result sent to the backend with an Agent Decision
 func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, actionResult ActionResult) (*WorkflowExecution, bool, error) {
@@ -15257,12 +15253,12 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// 1. Get the current result for the action
 	// 2. Find the decision in there
 	decisionIdResultIndex := -1 // Index of the item in the decision list
-	decisionIndex := -1 		// Assigned index to it by LLM
+	decisionIndex := -1         // Assigned index to it by LLM
 	for resultDecisionIndex, resultDecision := range mappedResult.Decisions {
 		if resultDecision.RunDetails.Id == decisionId {
-			//log.Printf("[DEBUG][%s] Current decision (%s) status is '%s'", workflowExecution.ExecutionId, resultDecision.RunDetails.Id, resultDecision.RunDetails.Status) 
+			//log.Printf("[DEBUG][%s] Current decision (%s) status is '%s'", workflowExecution.ExecutionId, resultDecision.RunDetails.Id, resultDecision.RunDetails.Status)
 
-			decisionIdResultIndex = resultDecisionIndex 
+			decisionIdResultIndex = resultDecisionIndex
 			decisionIndex = resultDecision.I
 			break
 		}
@@ -15288,7 +15284,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 	// Find next action
 	allFinishedDecisions := []string{}
 	for decisionId, curDecision := range mappedResult.Decisions {
-		if curDecision.RunDetails.Status == "FINISHED" { 
+		if curDecision.RunDetails.Status == "FINISHED" {
 			allFinishedDecisions = append(allFinishedDecisions, curDecision.RunDetails.Id)
 		}
 
@@ -15297,7 +15293,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 
 		foundDecisions := []AgentDecision{}
-		parentIndex := curDecision.I-1
+		parentIndex := curDecision.I - 1
 		for _, subDecision := range mappedResult.Decisions {
 			if subDecision.I == parentIndex {
 				foundDecisions = append(foundDecisions, subDecision)
@@ -15314,11 +15310,11 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 			if foundDecision.RunDetails.Status == "RUNNING" {
 				continue
 			} else if foundDecision.RunDetails.Status == "FAILED" {
-				failedDecisions = append(failedDecisions, foundDecision.RunDetails.Id)		
+				failedDecisions = append(failedDecisions, foundDecision.RunDetails.Id)
 			} else if foundDecision.RunDetails.Status == "FINISHED" {
-				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)	
+				finishedDecisions = append(finishedDecisions, foundDecision.RunDetails.Id)
 			} else {
-				log.Printf("[ERROR][%s] No handler for run status %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Status) 
+				log.Printf("[ERROR][%s] No handler for run status %s", workflowExecution.ExecutionId, foundDecision.RunDetails.Status)
 			}
 		}
 
@@ -15328,13 +15324,13 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 
 			go sendAgentActionSelfRequest("FAILURE", workflowExecution, workflowExecution.Results[foundActionResultIndex])
 			break
-		} 
+		}
 
 		if len(foundDecisions) == len(finishedDecisions) {
 			mappedResult.Decisions[decisionId].RunDetails.Status = "RUNNING"
 			mappedResult.Decisions[decisionId].RunDetails.StartedAt = time.Now().Unix()
-			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision) 
-		} 
+			go RunAgentDecisionAction(workflowExecution, mappedResult, curDecision)
+		}
 	}
 
 	//log.Printf("[DEBUG] TOTAL AGENT DECISIONS: %#v, FINISHED DECISIONS: %#v", len(mappedResult.Decisions), len(allFinishedDecisions))
@@ -15349,11 +15345,11 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
 
 		ctx := context.Background()
-		agentRequestMemory, err := GetCacheKey(ctx, requestKey, "agent_requests") 
+		agentRequestMemory, err := GetCacheKey(ctx, requestKey, "agent_requests")
 		if err != nil {
-			log.Printf("[ERROR][%s] Failed to find request memory for updates", actionResult.ExecutionId) 
+			log.Printf("[ERROR][%s] Failed to find request memory for updates", actionResult.ExecutionId)
 		} else {
-			if len(agentRequestMemory.Value) > 0 { 
+			if len(agentRequestMemory.Value) > 0 {
 				log.Printf("[DEBUG] Found cache memory in shuffle datastore: \n\n%s", agentRequestMemory.Value)
 			} else {
 				log.Printf("[DEBUG] No agent cache memory for key %s", requestKey)
@@ -15830,7 +15826,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 							sourceNodeFound := false
 							for _, item := range childNodes {
 								if item == branch.SourceID {
-									if debug { 
+									if debug {
 										log.Printf("[DEBUG][%s] Found source node %s (%s) for node %s", workflowExecution.ExecutionId, branch.SourceID, curAction.Label, nodeId)
 									}
 
@@ -15839,7 +15835,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 								}
 							}
 
-							if debug { 
+							if debug {
 								log.Printf("[DEBUG][%s] sourceNodeFound: %t for node %s", workflowExecution.ExecutionId, sourceNodeFound, nodeId)
 							}
 
@@ -18464,9 +18460,8 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 		tmpData.Category = ""
 	}
 
-
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
-	
+
 	// Check if cache already existed and if distributed
 	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
 	if err == nil {
@@ -18950,11 +18945,11 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		}
 
 		for _, variable := range oldExec.Workflow.ExecutionVariables {
-			workflowExecution.Workflow.ExecutionVariables = append(workflowExecution.Workflow.ExecutionVariables , variable)
+			workflowExecution.Workflow.ExecutionVariables = append(workflowExecution.Workflow.ExecutionVariables, variable)
 		}
 
 		for _, variable := range oldExec.ExecutionVariables {
-			workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables , variable)
+			workflowExecution.ExecutionVariables = append(workflowExecution.ExecutionVariables, variable)
 		}
 
 		workflowExecution.Results = newResults
@@ -18971,7 +18966,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.Workflow.Actions = []Action{action}
 
 		// Special handled for Decision reruns in AI Agents
-		// 1. Find the decision & reset cache 
+		// 1. Find the decision & reset cache
 		// 2. Update the execution itself to not have the relevant data
 		if len(decisionId) > 0 {
 			log.Printf("[DEBUG][%s] Handling Single action rerun for AI Agent decision. DecisionID: %#v", oldExec.ExecutionId, decisionId)
@@ -19023,10 +19018,9 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			// Resets the action cache to ensure reruns happen
 
 			// 1. Update db & cache etc.
-			// 2. Force rerun the decision 
+			// 2. Force rerun the decision
 			oldExec.CompletedAt = 0
 			oldExec.Status = "EXECUTING"
-
 
 			// Action reset (in the workflow)
 			SetCache(ctx, fmt.Sprintf("%s_%s_result", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID), marshalledResult, 60)
@@ -19040,17 +19034,16 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_ABORTED", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
 			go DeleteCache(ctx, fmt.Sprintf("agent_request_%s_%s_FAILURE", oldExec.ExecutionId, oldExec.Results[foundResultIndex].Action.ID))
 
-
 			// Execution reset
 			executionCacheKey := fmt.Sprintf("workflowexecution_%s", oldExec.ExecutionId)
 			DeleteCache(ctx, executionCacheKey)
-			marshalledTotalResult, err := json.Marshal(oldExec) 
+			marshalledTotalResult, err := json.Marshal(oldExec)
 			if err == nil {
 				SetCache(ctx, executionCacheKey, marshalledTotalResult, 30)
 			}
 			SetWorkflowExecution(ctx, *oldExec, true)
 
-			go RunAgentDecisionAction(*oldExec, mappedOutput, mappedOutput.Decisions[foundDecisionIndex]) 
+			go RunAgentDecisionAction(*oldExec, mappedOutput, mappedOutput.Decisions[foundDecisionIndex])
 
 			// FIXME: This is to ensure hadnling of the EXACT SAME decision happens.
 			return workflowExecution, errors.New(fmt.Sprintf("Successfully started rerun of decision %s. This will replace the current result.", decisionId))
@@ -19073,7 +19066,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		workflowExecution.OrgId = user.ActiveOrg.Id
 	}
 
-	if len(workflowExecution.ExecutionSource) == 0 || workflowExecution.ExecutionSource == "default" { 
+	if len(workflowExecution.ExecutionSource) == 0 || workflowExecution.ExecutionSource == "default" {
 		workflowExecution.ExecutionSource = "single_action"
 	}
 
@@ -19154,7 +19147,6 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 			if len(newExecution.Results[relevantIndex].Result) > 0 || newExecution.Results[relevantIndex].Status == "SUCCESS" {
 				returnBody.Result = newExecution.Results[relevantIndex].Result
 
-
 				if len(newExecution.Results[relevantIndex].Action.Parameters) > 0 {
 					for _, param := range newExecution.Results[relevantIndex].Action.Parameters {
 						// Remove auth just in case
@@ -19167,13 +19159,12 @@ func HandleRetValidation(ctx context.Context, workflowExecution WorkflowExecutio
 						} else {
 
 							if !ArrayContains(addedParams, param.Name) {
-								returnBody.Parameters = append(returnBody.Parameters, param) 
+								returnBody.Parameters = append(returnBody.Parameters, param)
 								addedParams = append(addedParams, param.Name)
 							}
 						}
 					}
 				}
-
 
 				// FIXME: This is a custom fix for single action custom runs.
 				// Wait for validation to have ran
@@ -23980,7 +23971,6 @@ func GetAuthentication(ctx context.Context, workflowExecution WorkflowExecution,
 	return action, workflowExecution
 }
 
-
 func executeAuthgroupSubflow(workflowExecution WorkflowExecution, authgroup AppAuthenticationGroup, apikey string) error {
 	if len(apikey) == 0 {
 		log.Printf("[ERROR] No admin API key found to handle subflow execution")
@@ -26347,8 +26337,6 @@ func GetExternalClient(baseUrl string) *http.Client {
 
 	return client
 }
-
-
 
 // Function with the name RemoveFromArray to remove a string from a string array
 func RemoveFromArray(array []string, element string) []string {
@@ -29838,5 +29826,3 @@ func (tw *TimeWindow) cleanOldEvents(now time.Time) {
 		tw.Events = tw.Events[1:]
 	}
 }
-
-

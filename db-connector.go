@@ -4757,7 +4757,7 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	if updateOrg {
 		SetOrg(ctx, org, org.Id)
 	}
-	return &org
+	return &org	
 }
 
 func propagateOrg(org Org, reverse bool) error {
@@ -12369,6 +12369,69 @@ func GetOrgMoveCache(ctx context.Context, orgId string) (RegionChangeHistory, er
 	}
 
 	return attempt, err
+}
+
+func GetSingulStatByExecutionId(ctx context.Context, executionId string) (SingulStats, error) {
+	nameKey := "singul_stats"
+
+	var stats SingulStats
+	if project.DbType == "opensearch" {
+		return SingulStats{}, errors.New("GetSingulStatByExecutionId not implemented for opensearch")
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("execution_id =", executionId).Limit(1)
+		_, err := project.Dbclient.GetAll(ctx, query, &stats)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting SingulStatByExecutionId: %s", err)
+			return SingulStats{}, err
+		}
+	}
+
+	return stats, nil
+}
+
+func GetSingulStats(ctx context.Context) ([]SingulStats, error) {
+	nameKey := "singul_stats"
+
+	if project.DbType == "opensearch" {
+		return []SingulStats{}, errors.New("GetSingulStats not implemented for opensearch")
+	} else {
+		query := datastore.NewQuery(nameKey).Limit(1000).Order("-created_at")
+		var stats []SingulStats
+		_, err := project.Dbclient.GetAll(ctx, query, &stats)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting SingulStats: %s", err)
+			return []SingulStats{}, err
+		}
+
+		if len(stats) == 0 {
+			return []SingulStats{}, nil
+		}
+
+		return stats, nil
+	}
+
+	return []SingulStats{}, errors.New("GetSingulStats not implemented for this database type")
+}
+
+func SetSingulStats(ctx context.Context, stats SingulStats) error {
+	nameKey := "singul_stats"
+
+	if project.DbType == "opensearch" {
+		// not implemented yet
+		return errors.New("SetSingulStats not implemented for opensearch")
+	} else {
+		if stats.Id == "" {
+			stats.Id = uuid.NewV4().String()
+		}
+
+		key := datastore.NameKey(nameKey, strings.ToLower(stats.Id), nil)
+		if _, err := project.Dbclient.Put(ctx, key, &stats); err != nil {
+			log.Printf("[WARNING] Error adding SingulStats: %s", err)
+			return err
+		}
+	}
+
+	return nil
 }
 
 func SetOrgMoveCache(ctx context.Context, orgId string) error {

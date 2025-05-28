@@ -1147,6 +1147,24 @@ type Variable struct {
 	Value       string `json:"value" datastore:"value,noindex"`
 }
 
+type SingulResult struct {
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Output  string `json:"output"`
+	RawResponse interface{} `json:"raw_response"`
+}
+
+type SingulStats struct {
+	Id      string `json:"id"`
+
+	Failed   bool  `json:"failed"`
+	Result   string `json:"result"`
+	ExecutionId string `json:"execution_id"`
+	WorkflowId  string `json:"workflow_id"`
+	NotificationWorkflow bool `json:"notification_workflow"`
+	OrgId  string `json:"org_id"`
+}
+
 type WorkflowExecution struct {
 	Type                string         `json:"type" datastore:"type"`
 	Status              string         `json:"status" datastore:"status"`
