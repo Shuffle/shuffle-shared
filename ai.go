@@ -1245,6 +1245,8 @@ func FixContentOutput(contentOutput string) string {
 }
 
 func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp, WorkflowAppAction) {
+	standalone := os.Getenv("STANDALONE") == "true"
+
 	if len(app.ID) == 0 || len(app.Name) == 0 {
 		log.Printf("[ERROR] No app ID or name found in AutofixAppLabels")
 		return app, WorkflowAppAction{}
@@ -1505,7 +1507,8 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	}
 
 	// FIXME: Add the label to the OpenAPI action as well?
-	if updatedIndex >= 0 {
+	// 0x0elliot: Would we want to do this through an API on standalone?
+	if updatedIndex >= 0 && !standalone {
 		err := SetWorkflowAppDatastore(context.Background(), app, app.ID)
 		if err != nil {
 			log.Printf("[WARNING] Failed to set app datastore in AutofixAppLabels for app %s (%s): %s", app.Name, app.ID, err)
