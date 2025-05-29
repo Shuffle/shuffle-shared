@@ -9107,7 +9107,7 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	orgId := request.Header.Get("Org-Id")
-	partner, err := GetPartner(ctx, partnerId, orgId)
+	partners, err := GetPartner(ctx, partnerId, orgId)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partner: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -9115,11 +9115,26 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(partner) == 0 {
+	if len(partners) == 0 {
 		resp.WriteHeader(http.StatusNotFound)
 		resp.Write([]byte(`{"success": false, "reason": "Partner not found"}`))
 		return
 	}
+
+	// Example improvement for handling multiple partners
+	if len(partners) > 1 {
+		log.Printf("[WARNING] Multiple partners found with ID: %s, using the first one", partnerId)
+	}
+
+	partner := partners[0]
+
+	if len(partner.Id) == 0 {
+		log.Printf("[ERROR] Partner ID is empty for partner: %v", partner)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Partner ID is empty"}`))
+		return
+	}
+
 
 	// Marshal the response
 	response, err := json.Marshal(struct {
@@ -9127,7 +9142,7 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		Partner Partner `json:"partner"`
 	}{
 		Success: true,
-		Partner: partner[0],
+		Partner: partner,
 	})
 
 	if err != nil {
@@ -9205,10 +9220,65 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 
 	if len(tmpData.Id) > 0 {
 		overwrite = true
+
+		// Get existing partner to check if name has changed
+		existingPartners, err := GetPartner(ctx, tmpData.Id, "")
+		if err == nil && len(existingPartners) > 0 {
+			existingPartner := existingPartners[0]
+
+			// Check if partner name has changed
+			if existingPartner.Name != tmpData.Name && len(existingPartner.Usecases) > 0 {
+				log.Printf("[INFO] Partner name changed from '%s' to '%s'. Updating usecases...", existingPartner.Name, tmpData.Name)
+
+				// Update all usecases associated with this partner
+				for _, usecaseId := range existingPartner.Usecases {
+					usecases, err := GetUsecaseNew(ctx, usecaseId, true)
+					if err != nil || len(usecases) == 0 {
+						log.Printf("[WARNING] Failed to get usecase %s: %v", usecaseId, err)
+						continue
+					}
+
+					usecase := usecases[0]
+
+					// Update company name in the usecase if it matches the partner ID
+					if usecase.CompanyInfo.Id == existingPartner.Id {
+						usecase.CompanyInfo.Name = tmpData.Name
+
+						// Update usecase in Algolia
+						_, err = HandleAlgoliaUsecaseUpload(ctx, usecase, true)
+						if err != nil {
+							log.Printf("[WARNING] Failed to update usecase %s in Algolia: %v", usecase.Id, err)
+						}
+
+						// Update usecase in database
+						err = SetUsecaseNew(ctx, &usecase)
+						if err != nil {
+							log.Printf("[WARNING] Failed to update usecase %s in database: %v", usecase.Id, err)
+						} else {
+							log.Printf("[INFO] Successfully updated usecase %s with new partner name", usecase.Id)
+						}
+					}
+				}
+			}
+		}
 	}
 
-	if len(tmpData.Id) == 0 || len(Id) == 0 {
+	// Add validation for required fields
+	if len(tmpData.Name) == 0 {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Partner name is required"}`))
+		return
+	}
+
+	// Fix the ID assignment logic
+	if len(tmpData.Id) == 0 {
 		tmpData.Id = uuid.NewV4().String()
+	} else if tmpData.Id != Id && len(Id) > 0 {
+		// Handle mismatch between URL ID and body ID
+		log.Printf("[WARNING] ID mismatch: URL ID %s vs Body ID %s", Id, tmpData.Id)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "ID mismatch between URL and request body"}`))
+		return
 	}
 
 	_, err = HandleAlgoliaPartnerUpload(ctx, tmpData, overwrite)
@@ -25246,13 +25316,20 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling partner: %v", err)
+		log.Printf("[WARNING] Failed unmarshalling usecase: %v", err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
 	ctx := GetContext(request)
+
+	// Add validation for required fields
+	if len(tmpData.MainContent.Title) == 0 {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Usecase name is required"}`))
+		return
+	}
 
 	if len(tmpData.CompanyInfo.Id) == 0 {
 		log.Printf("[WARNING] No partner ID provided for usecase %s", tmpData.CompanyInfo.Name)
@@ -25276,9 +25353,15 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 	if len(tmpData.Id) > 0 {
 		overwrite = true
 	}
-	
-	if len(tmpData.Id) == 0 || len(Id) == 0 {
+
+	if len(tmpData.Id) == 0 {
 		tmpData.Id = uuid.NewV4().String()
+	} else if tmpData.Id != Id && len(Id) > 0 {
+		// Handle mismatch between URL ID and body ID
+		log.Printf("[WARNING] ID mismatch: URL ID %s vs Body ID %s", Id, tmpData.Id)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "ID mismatch between URL and request body"}`))
+		return
 	}
 
 	_, err = HandleAlgoliaUsecaseUpload(ctx, tmpData, overwrite)
@@ -25360,7 +25443,12 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	usecases, err := GetUsecaseNew(ctx, Id)
+	isUsecaseId := true
+	if location[3] == "partners" {
+		isUsecaseId = false
+	}
+	
+	usecases, err := GetUsecaseNew(ctx, Id, isUsecaseId)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get usecases: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -25370,7 +25458,7 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 
 	// Marshal the response
 	response, err := json.Marshal(struct {
-		Success  bool      `json:"success"`
+		Success  bool          `json:"success"`
 		Usecases []UsecaseInfo `json:"usecases"`
 	}{
 		Success:  true,

@@ -1727,7 +1727,7 @@ type AlgoliaSearchPartner struct {
 type AlgoliaSearchUsecase struct {
 	ObjectID           string   `json:"objectID"`
 	PartnerName        string   `json:"partner_name"`
-	PartnerId          string   `json:"partner_image"`
+	PartnerId          string   `json:"partner_id"`
 	Name               string   `json:"name"`
 	Description        string   `json:"description"`
 	Categories         []string `json:"categories"`
