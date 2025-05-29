@@ -25420,14 +25420,14 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// if project.Environment == "cloud" {
-	// 	gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-	// 	if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-	// 		log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
-	// 		RedirectUserRequest(resp, request)
-	// 		return
-	// 	}
-	// }
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
 
 	var Id string
 	location := strings.Split(request.URL.String(), "/")
