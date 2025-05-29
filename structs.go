@@ -457,7 +457,8 @@ type ExecutionInfo struct {
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
 	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
 
-	Additions []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
+	Additions             []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
+	LastMonthlyResetMonth int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
 }
 
 type AdditionalUseConfig struct {
