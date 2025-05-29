@@ -1169,6 +1169,9 @@ type SingulStats struct {
 	ExecutionId string `json:"execution_id"`
 	WorkflowId  string `json:"workflow_id"`
 	NotificationWorkflow bool `json:"notification_workflow"`
+
+	IsGeneratedNotificationWorkflow bool `json:"is_generated_notification_workflow"`
+
 	OrgId  string `json:"org_id"`
 }
 
