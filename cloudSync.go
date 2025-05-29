@@ -78,6 +78,8 @@ func executeCloudAction(action CloudSyncJob, apikey string) error {
 
 func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchApp, error) {
 
+	cacheTimer := int32(300)
+
 	normalizedAppName := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(appname, "_", " "), " ", "_")))
 	cacheKey := fmt.Sprintf("appsearch_%s", normalizedAppName)
 
@@ -104,7 +106,7 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 	}
 
 	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
-		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		log.Printf("[ERROR] ALGOLIA_CLIENT and ALGOLIA_SECRET/ALGOLIA_SECRET not defined (app discovery)")
 		return AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
 	}
 
@@ -119,9 +121,9 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 
 		appData, err := json.Marshal(returnApp)
 		if err == nil {
-			SetCache(ctx, cacheKey, appData, 30)
+			SetCache(ctx, cacheKey, appData, cacheTimer)
 		} else {
-			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (3): %s", err)
 		}
 
 		return returnApp, err
@@ -133,9 +135,9 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		log.Printf("[WARNING] Failed unmarshaling from Algolia: %s", err)
 		appData, err := json.Marshal(returnApp)
 		if err == nil {
-			SetCache(ctx, cacheKey, appData, 30)
+			SetCache(ctx, cacheKey, appData, cacheTimer)
 		} else {
-			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (4): %s", err)
 		}
 
 		return returnApp, err
@@ -147,9 +149,9 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 			//return newRecord.ObjectID, nil
 			appData, err := json.Marshal(newRecord)
 			if err == nil {
-				SetCache(ctx, cacheKey, appData, 30)
+				SetCache(ctx, cacheKey, appData, cacheTimer)
 			} else {
-				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (1): %s", err)
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (5): %s", err)
 			}
 
 			return newRecord, nil
@@ -162,13 +164,20 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		if strings.Contains(newApp, appname) {
 			appData, err := json.Marshal(newRecord)
 			if err == nil {
-				SetCache(ctx, cacheKey, appData, 30)
+				SetCache(ctx, cacheKey, appData, cacheTimer)
 			} else {
-				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+				log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (6): %s", err)
 			}
 
 			return newRecord, nil
 		}
+	}
+
+	appData, err := json.Marshal(returnApp)
+	if err == nil {
+		SetCache(ctx, cacheKey, appData, cacheTimer)
+	} else {
+		log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (7): %s", err)
 	}
 
 	return returnApp, nil
@@ -284,7 +293,7 @@ func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]Algolia
 		if err == nil {
 			SetCache(ctx, cacheKey, appData, 30)
 		} else {
-			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (8): %s", err)
 		}
 
 		return returnApps, err
@@ -299,7 +308,7 @@ func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]Algolia
 		if err == nil {
 			SetCache(ctx, cacheKey, appData, 30)
 		} else {
-			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (9): %s", err)
 		}
 
 		return returnApps, err
@@ -315,7 +324,7 @@ func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]Algolia
 	if err == nil {
 		SetCache(ctx, cacheKey, appData, 30)
 	} else {
-		log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+		log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (10): %s", err)
 	}
 
 	return returnApps, nil
