@@ -77,12 +77,6 @@ func executeCloudAction(action CloudSyncJob, apikey string) error {
 }
 
 func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchApp, error) {
-	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
-	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
-	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
-		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
-		return AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
-	}
 
 	normalizedAppName := strings.TrimSpace(strings.ToLower(strings.ReplaceAll(strings.ReplaceAll(appname, "_", " "), " ", "_")))
 	cacheKey := fmt.Sprintf("appsearch_%s", normalizedAppName)
@@ -95,27 +89,58 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 			if err == nil {
 				return cachedApp, nil
 			}
+
 			log.Printf("[ERROR] Failed unmarshalling cached app search data in Handle algolia app search: %s", err)
 		}
 	}
+
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+
+	// Fallback to default Algolia keys
+	if len(algoliaSecret) == 0 {
+		algoliaClient = "JNSS5CFDZZ"
+		algoliaSecret = os.Getenv("ALGOLIA_PUBLICKEY")
+	}
+
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
+	}
+
+	returnApp := AlgoliaSearchApp{}
 
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
 	algoliaIndex := algClient.InitIndex("appsearch")
 	appname = strings.TrimSpace(strings.ToLower(strings.Replace(appname, "_", " ", -1)))
 	res, err := algoliaIndex.Search(appname)
 	if err != nil {
-		log.Printf("[WARNING] Failed searching Algolia: %s", err)
-		return AlgoliaSearchApp{}, err
+		log.Printf("[ERROR] Failed searching Algolia (%s): %s", appname, err)
+
+		appData, err := json.Marshal(returnApp)
+		if err == nil {
+			SetCache(ctx, cacheKey, appData, 30)
+		} else {
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+		}
+
+		return returnApp, err
 	}
 
 	var newRecords []AlgoliaSearchApp
 	err = res.UnmarshalHits(&newRecords)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshaling from Algolia: %s", err)
-		return AlgoliaSearchApp{}, err
+		appData, err := json.Marshal(returnApp)
+		if err == nil {
+			SetCache(ctx, cacheKey, appData, 30)
+		} else {
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+		}
+
+		return returnApp, err
 	}
 
-	//log.Printf("[INFO] Algolia hits for '%s': %d", appname, len(newRecords))
 	for _, newRecord := range newRecords {
 		newApp := strings.TrimSpace(strings.ToLower(strings.Replace(newRecord.Name, "_", " ", -1)))
 		if newApp == appname || newRecord.ObjectID == appname {
@@ -146,7 +171,7 @@ func HandleAlgoliaAppSearch(ctx context.Context, appname string) (AlgoliaSearchA
 		}
 	}
 
-	return AlgoliaSearchApp{}, nil
+	return returnApp, nil
 }
 
 func HandleAlgoliaWorkflowSearchByApp(ctx context.Context, appname string) ([]AlgoliaSearchWorkflow, error) {
@@ -220,8 +245,27 @@ func HandleAlgoliaWorkflowSearchByUser(ctx context.Context, userId string) ([]Al
 }
 
 func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]AlgoliaSearchApp, error) {
+	cacheKey := fmt.Sprintf("appsearch_user_%s", userId)
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		if cacheData, ok := cache.([]byte); ok {
+			var cachedApp []AlgoliaSearchApp
+			err = json.Unmarshal(cacheData, &cachedApp)
+			if err == nil {
+				return cachedApp, nil
+			}
+
+			log.Printf("[ERROR] Failed unmarshalling cached app search data in Handle algolia app search for user (%s): %s", cacheKey, err)
+		}
+	}
+
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaSecret) == 0 {
+		algoliaClient = "JNSS5CFDZZ"
+		algoliaSecret = os.Getenv("ALGOLIA_PUBLICKEY")
+	}
+
 	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
 		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
 		return []AlgoliaSearchApp{}, errors.New("Algolia keys not defined")
@@ -230,30 +274,51 @@ func HandleAlgoliaAppSearchByUser(ctx context.Context, userId string) ([]Algolia
 	algClient := search.NewClient(algoliaClient, algoliaSecret)
 	algoliaIndex := algClient.InitIndex("appsearch")
 
+	returnApps := []AlgoliaSearchApp{}
 	appSearch := fmt.Sprintf("%s", userId)
 	res, err := algoliaIndex.Search(appSearch)
 	if err != nil {
-		log.Printf("[WARNING] Failed app searching Algolia for creators: %s", err)
-		return []AlgoliaSearchApp{}, err
+		log.Printf("[ERROR] Failed app searching Algolia for creators (%s): %s", appSearch, err)
+
+		appData, err := json.Marshal(returnApps)
+		if err == nil {
+			SetCache(ctx, cacheKey, appData, 30)
+		} else {
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+		}
+
+		return returnApps, err
 	}
 
 	var newRecords []AlgoliaSearchApp
 	err = res.UnmarshalHits(&newRecords)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshaling from Algolia with app creators: %s", err)
-		return []AlgoliaSearchApp{}, err
-	}
-	//log.Printf("[INFO] Algolia hits for %s: %d", appSearch, len(newRecords))
+		log.Printf("[ERROR] Failed unmarshaling from Algolia with app creators: %s", err)
 
-	allRecords := []AlgoliaSearchApp{}
+		appData, err := json.Marshal(returnApps)
+		if err == nil {
+			SetCache(ctx, cacheKey, appData, 30)
+		} else {
+			log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+		}
+
+		return returnApps, err
+	}
+
 	for _, newRecord := range newRecords {
 		newAppName := strings.TrimSpace(strings.Replace(newRecord.Name, "_", " ", -1))
 		newRecord.Name = newAppName
-		allRecords = append(allRecords, newRecord)
-
+		returnApps = append(returnApps, newRecord)
 	}
 
-	return allRecords, nil
+	appData, err := json.Marshal(returnApps)
+	if err == nil {
+		SetCache(ctx, cacheKey, appData, 30)
+	} else {
+		log.Printf("[ERROR] Failed to marshal Algolia result in handle aloglia search (2): %s", err)
+	}
+
+	return returnApps, nil
 }
 
 func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSearchCreator, error) {
@@ -292,7 +357,7 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 	algoliaIndex := algClient.InitIndex("creators")
 	res, err := algoliaIndex.Search(username)
 	if err != nil {
-		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		log.Printf("[ERROR] Failed searching Algolia creators (%s): %s", username, err)
 		return searchCreator, err
 	}
 
@@ -319,7 +384,7 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 			algoliaIndex := algClient.InitIndex("workflows")
 			res, err := algoliaIndex.Search(username)
 			if err != nil {
-				log.Printf("[WARNING] Failed searching Algolia creator workflow: %s", err)
+				log.Printf("[ERROR] Failed searching Algolia creator workflow (%s): %s", username, err)
 				return searchCreator, err
 			}
 
@@ -382,7 +447,7 @@ func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool, 
 	algoliaIndex := algClient.InitIndex("creators")
 	res, err := algoliaIndex.Search(user.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		log.Printf("[ERROR] Failed searching Algolia creators (%s): %s", user.Id, err)
 		return "", err
 	}
 
@@ -439,7 +504,7 @@ func HandleAlgoliaCreatorDeletion(ctx context.Context, userId string) (error) {
 	algoliaIndex := algClient.InitIndex("creators")
 	res, err := algoliaIndex.Search(userId)
 	if err != nil {
-		log.Printf("[WARNING] Failed searching Algolia creators: %s", err)
+		log.Printf("[ERROR] Failed searching Algolia creators (%s): %s", userId, err)
 		return err
 	}
 
@@ -522,7 +587,7 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 	//res, err := algoliaIndex.Search("%s", api.ID)
 	res, err := algoliaIndex.Search(workflow.ID)
 	if err != nil {
-		log.Printf("[WARNING] Failed searching Algolia: %s", err)
+		log.Printf("[ERROR] Failed searching Algolia (%s): %s", workflow.ID, err)
 		return "", err
 	}
 

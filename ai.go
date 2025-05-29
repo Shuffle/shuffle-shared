@@ -25,7 +25,6 @@ import (
 	openai "github.com/sashabaranov/go-openai"
 	option "google.golang.org/api/option"
 	"google.golang.org/api/customsearch/v1"
-	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
 
 	"github.com/frikky/schemaless"
 	"github.com/frikky/kin-openapi/openapi3"
@@ -4444,45 +4443,14 @@ func GetSingulApp(sourcepath, appname string) (*WorkflowApp, error) {
 			return returnApp, err
 		}
 	} else {
-		algoliaPublicKey := os.Getenv("ALGOLIA_PUBLICKEY")
-		if len(algoliaPublicKey) == 0 {
-			return returnApp, errors.New("Algolia public key not set")
-		}
-
-		algoliaAppId := "JNSS5CFDZZ"
-		algoliaclient := search.NewClient(algoliaAppId, algoliaPublicKey)
-
-		index := algoliaclient.InitIndex("appsearch")
-		res, err := index.Search(appname)
-		if err != nil {
-			log.Printf("[ERROR] Error searching for app in Algolia index: %s", err)
-			return returnApp, err
-		}
 
 		appId := ""
-		for _, hit := range res.Hits {
-			checkObjectId := false
-			if name, ok := hit["appname"]; ok {
-				if !strings.Contains(strings.ToLower(name.(string)), searchname) {
-					checkObjectId = true 
-				}
-			}
-
-			if val, ok := hit["objectID"]; ok {
-				if checkObjectId {
-					if objectId, ok := val.(string); ok {
-						if objectId != searchname {
-							continue
-						}
-					} else {
-						continue
-					}
-				}
-
-				appId = val.(string)
-				break
-			} else {
-				log.Printf("[ERROR] App not found in Algolia index: %s", appname)
+		foundApp, err := HandleAlgoliaAppSearch(context.Background(), appname) 
+		if err != nil {
+			log.Printf("[ERROR] Error handling Algolia app search: %s", err)
+		} else {
+			if len(foundApp.ObjectID) > 0 {
+				appId = foundApp.ObjectID
 			}
 		}
 

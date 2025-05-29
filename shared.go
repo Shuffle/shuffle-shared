@@ -29478,14 +29478,16 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 		return exec
 	}
 
+	// FIXME: This is missing SKIPPED nodes that actually do run
+	// and may want to be counted due to checking conditions
 	amountFinished := 0
 	for _, res := range exec.Results {
 		if res.Status != "SKIPPED" {
 			amountFinished += 1
+			continue
 		}
 	}
 
-	log.Printf("RESULTS TO ADD: %#v", amountFinished)
 	IncrementCache(ctx, exec.ExecutionOrg, "app_executions", amountFinished)
 
 	go RunCacheCleanup(ctx, *exec)
