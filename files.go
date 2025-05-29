@@ -444,8 +444,8 @@ func LoadStandardFromGithub(client *github.Client, owner, repo, path, filename s
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &files)
-			if err == nil {
-				//return files, nil
+			if err == nil && len(files) > 0 {
+				return files, nil
 			}
 		}
 	} 
@@ -539,7 +539,7 @@ func HandleGetFileNamespace(resp http.ResponseWriter, request *http.Request) {
 		user.Username = "Execution File API"
 	}
 
-	if len(user.Username) > 0 { 
+	if len(user.Username) > 0 && len(user.Id) > 0 { 
 		log.Printf("[AUDIT] User '%s' (%s) is trying to get files from namespace %#v", user.Username, user.Id, namespace)
 	}
 
@@ -1467,7 +1467,9 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 	outputFiles, err := FindSimilarFile(ctx, md5, file.OrgId)
 	if len(outputFiles) > 0 {
 		outputFile := outputFiles[0]
-		log.Printf("[INFO] Already found a file with the same Md5 '%s' for org '%s' in ID: %s. Referencing same location.", md5, file.OrgId, outputFile.Id)
+		if debug { 
+			log.Printf("[DEBUG] Already found a file with the same Md5 '%s' for org '%s' in ID: %s. Referencing same location.", md5, file.OrgId, outputFile.Id)
+		}
 
 		file.Encrypted = outputFile.Encrypted
 		file.FileSize = outputFile.FileSize
@@ -1488,7 +1490,7 @@ func UploadFile(ctx context.Context, file *File, encryptionKey string, contents 
 
 		if len(encryptionKey) > 0 {
 			newContents := contents
-			newFileValue, err := handleKeyEncryption(contents, encryptionKey)
+			newFileValue, err := HandleKeyEncryption(contents, encryptionKey)
 			if err != nil {
 				log.Printf("[ERROR] Failed encrypting file to be stored correctly: %s", err)
 				newContents = contents
@@ -1652,7 +1654,9 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		curfile.WorkflowId = "global"
 		// PS: Not a security issue.
 		// Files are global anyway, but the workflow_id is used to identify origin
-		log.Printf("[INFO] Uploading filename %s for org %s as global file in namespace '%s'.", curfile.Filename, curfile.OrgId, curfile.Namespace)
+		if debug { 
+			log.Printf("[DEBUG] Uploading filename %s for org %s as global file in namespace '%s'.", curfile.Filename, curfile.OrgId, curfile.Namespace)
+		}
 	} else {
 		// Try to get the org and workflow in case they don't exist
 		workflow, err = GetWorkflow(ctx, curfile.WorkflowId)
@@ -1811,7 +1815,9 @@ func HandleCreateFile(resp http.ResponseWriter, request *http.Request) {
 		resp.Write([]byte(`{"success": false, "reason": "Failed setting file reference"}`))
 		return
 	} else {
-		log.Printf("[INFO] Created file %s with namespace %#v", newFile.DownloadPath, newFile.Namespace)
+		if debug { 
+			log.Printf("[DEBUG] Created file %s with namespace %#v", newFile.DownloadPath, newFile.Namespace)
+		}
 	}
 
 	resp.WriteHeader(200)

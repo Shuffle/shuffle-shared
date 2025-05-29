@@ -384,14 +384,16 @@ type DailyStatistics struct {
 // Not directly, but being updated by org actions
 type ExecutionInfo struct {
 	// These have been configured for cache updates in db-connector.go with 5 hour (300 minutes) timeouts before dumping
-	OrgId       string `json:"org_id" datastore:"org_id"`
-	OrgName     string `json:"org_name" datastore:"org_name"`
-	LastCleared int64  `json:"last_cleared" datastore:"last_cleared"`
+	OrgId   string `json:"org_id" datastore:"org_id"`
+	OrgName string `json:"org_name" datastore:"org_name"`
+
+	LastCleared int64 `json:"last_cleared" datastore:"last_cleared"`
 
 	DailyStatistics []DailyStatistics `json:"daily_statistics" datastore:"daily_statistics"`
 	OnpremStats     []DailyStatistics `json:"onprem_stats,omitempty" datastore:"onprem_stats"`
 
 	TotalAppExecutions              int64 `json:"total_app_executions" datastore:"total_app_executions"`
+	TotalChildAppExecutions         int64 `json:"total_child_app_executions" datastore:"total_child_app_executions"`
 	TotalAppExecutionsFailed        int64 `json:"total_app_executions_failed" datastore:"total_app_executions_failed"`
 	TotalSubflowExecutions          int64 `json:"total_subflow_executions" datastore:"total_subflow_executions"`
 	TotalWorkflowExecutions         int64 `json:"total_workflow_executions" datastore:"total_workflow_executions"`
@@ -403,6 +405,7 @@ type ExecutionInfo struct {
 	TotalAIUsage                    int64 `json:"total_ai_executions" datastore:"total_ai_executions"`
 
 	MonthlyApiUsage                   int64 `json:"monthly_api_usage,omitempty" datastore:"monthly_api_usage"`
+	MonthlyChildAppExecutions         int64 `json:"monthly_child_app_executions,omitempty" datastore:"monthly_child_app_executions"`
 	MonthlyAppExecutions              int64 `json:"monthly_app_executions,omitempty" datastore:"monthly_app_executions"`
 	MonthlyAppExecutionsFailed        int64 `json:"monthly_app_executions_failed,omitempty" datastore:"monthly_app_executions_failed"`
 	MonthlySubflowExecutions          int64 `json:"monthly_subflow_executions,omitempty" datastore:"monthly_subflow_executions"`
@@ -415,6 +418,7 @@ type ExecutionInfo struct {
 	MonthlyAIUsage                    int64 `json:"monthly_ai_executions,omitempty" datastore:"monthly_ai_executions"`
 
 	WeeklyAppExecutions              int64 `json:"weekly_app_executions,omitempty" datastore:"weekly_app_executions"`
+	WeeklyChildAppExecutions         int64 `json:"weekly_child_app_executions,omitempty" datastore:"weekly_child_app_executions"`
 	WeeklyAppExecutionsFailed        int64 `json:"weekly_app_executions_failed,omitempty" datastore:"weekly_app_executions_failed"`
 	WeeklySubflowExecutions          int64 `json:"weekly_subflow_executions,omitempty" datastore:"weekly_subflow_executions"`
 	WeeklyWorkflowExecutions         int64 `json:"weekly_workflow_executions,omitempty" datastore:"weekly_workflow_executions"`
@@ -426,6 +430,7 @@ type ExecutionInfo struct {
 	WeeklyAIUsage                    int64 `json:"weekly_ai_executions,omitempty" datastore:"weekly_ai_executions"`
 
 	DailyAppExecutions              int64 `json:"daily_app_executions" datastore:"daily_app_executions"`
+	DailyChildAppExecutions         int64 `json:"daily_child_app_executions" datastore:"daily_child_app_executions"`
 	DailyAppExecutionsFailed        int64 `json:"daily_app_executions_failed" datastore:"daily_app_executions_failed"`
 	DailySubflowExecutions          int64 `json:"daily_subflow_executions" datastore:"daily_subflow_executions"`
 	DailyWorkflowExecutions         int64 `json:"daily_workflow_executions" datastore:"daily_workflow_executions"`
@@ -437,6 +442,7 @@ type ExecutionInfo struct {
 	DailyAIUsage                    int64 `json:"daily_ai_executions" datastore:"daily_ai_executions"`
 
 	HourlyAppExecutions              int64 `json:"hourly_app_executions,omitempty" datastore:"hourly_app_executions"`
+	HourlyChildAppExecutions         int64 `json:"hourly_child_app_executions,omitempty" datastore:"hourly_child_app_executions"`
 	HourlyAppExecutionsFailed        int64 `json:"hourly_app_executions_failed,omitempty" datastore:"hourly_app_executions_failed"`
 	HourlySubflowExecutions          int64 `json:"hourly_subflow_executions,omitempty" datastore:"hourly_subflow_executions"`
 	HourlyWorkflowExecutions         int64 `json:"hourly_workflow_executions,omitempty" datastore:"hourly_workflow_executions"`
@@ -582,6 +588,19 @@ type PersonalInfo struct {
 	Tutorials []string `datastore:"tutorials" json:"tutorials"`
 }
 
+type UserGeoInfo struct {
+	City struct {
+		Name string `datastore:"name" json:"name"`
+	} `datastore:"city" json:"city"`
+	State struct {
+		Name string `datastore:"name" json:"name"`
+	} `datastore:"state" json:"state"`
+	Country struct {
+		Name    string `datastore:"name" json:"name"`
+		ISOCode string `datastore:"iso_code" json:"iso_code"`
+	} `datastore:"country" json:"country"`
+}
+
 type User struct {
 	Username             string        `datastore:"Username" json:"username"`
 	Password             string        `datastore:"password,noindex" password:"password,omitempty"`
@@ -610,6 +629,7 @@ type User struct {
 	SessionLogin         bool          `datastore:"session_login" json:"session_login"`                   // Whether it's a login with session or API (used to verify access)
 	ValidatedSessionOrgs []string      `datastore:"validated_session_orgs" json:"validated_session_orgs"` // Orgs that have been used in the current session for the user
 	UsersLastSession     string        `datastore:"users_last_session" json:"users_last_session"`
+	Theme                string        `datastore:"theme" json:"theme"`
 
 	// Starting web3 integration
 	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
@@ -619,6 +639,8 @@ type User struct {
 	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
 	PersonalInfo PersonalInfo `datastore:"personal_info" json:"personal_info"`
 	Regions      []string     `datastore:"regions" json:"regions"`
+
+	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
 }
 
 type EthInfo struct {
@@ -846,6 +868,8 @@ type OrgBranding struct {
 	GlobalUser        bool   `json:"global_user" datastore:"global_user"` // Global user is true when the user is admin of both parent org and suborg.
 	SupportEmail      string `json:"support_email" datastore:"support_email"`
 	LogoutUrl         string `json:"logout_url" datastore:"logout_url"`
+	BrandColor        string `json:"brand_color" datastore:"brand_color"`
+	BrandName         string `json:"brand_name" datastore:"brand_name"`
 }
 
 // Used within a user
@@ -1182,6 +1206,27 @@ type Variable struct {
 	ID          string `json:"id" datastore:"id"`
 	Name        string `json:"name" datastore:"name"`
 	Value       string `json:"value" datastore:"value,noindex"`
+}
+
+type SingulResult struct {
+	Success bool   `json:"success"`
+	Action  string `json:"action"`
+	Output  string `json:"output"`
+	RawResponse interface{} `json:"raw_response"`
+}
+
+type SingulStats struct {
+	Id      string `json:"id"`
+
+	Failed   bool  `json:"failed"`
+	Result   string `json:"result"`
+	ExecutionId string `json:"execution_id"`
+	WorkflowId  string `json:"workflow_id"`
+	NotificationWorkflow bool `json:"notification_workflow"`
+
+	IsGeneratedNotificationWorkflow bool `json:"is_generated_notification_workflow"`
+
+	OrgId  string `json:"org_id"`
 }
 
 type WorkflowExecution struct {
@@ -2764,9 +2809,11 @@ type HandleInfo struct {
 	Tutorials          []Tutorial      `json:"tutorials"`
 	OrgStatus          []string        `json:"org_status"`
 
-	HasCardAvailable    bool `json:"has_card_available,omitempty"`
-	ActivatedPayasyougo bool `json:"activated_pay_as_you_go,omitempty"`
-	Licensed            bool `json:"licensed"`
+	HasCardAvailable    bool        `json:"has_card_available,omitempty"`
+	ActivatedPayasyougo bool        `json:"activated_pay_as_you_go,omitempty"`
+	Licensed            bool        `json:"licensed"`
+	UserGeoInfo         UserGeoInfo `json:"user_geo_info,omitempty"`
+	Theme               string      `json:"theme"`
 }
 
 //Cookies      []SessionCookie `json:"session_cookie"`
@@ -3906,9 +3953,9 @@ type AppCategory struct {
 
 type SingleResult struct {
 	Success       bool           `json:"success"`
+	Result        string         `json:"result"`
 	Id            string         `json:"id"`
 	Authorization string         `json:"authorization"`
-	Result        string         `json:"result"`
 	Errors        []string       `json:"errors"`
 	Validation    TypeValidation `json:"validation"`
 
@@ -4396,8 +4443,15 @@ type HTTPWrapper struct {
 }
 
 type appAuthStruct struct {
-	Success bool              `json:"success"`
-	Reason  string            `json:"reason"`
-	Action  string            `json:"action"`
+	Success bool      `json:"success"`
+	Reason  string    `json:"reason"`
+	Action  string    `json:"action"`
 	Apps    []AppMini `json:"apps"`
+}
+
+type SyncKey struct {
+	Apikey    string `json:"api_key"`
+	OrgId     string `json:"org_id"`
+	SourceIP  string `json:"source_ip"`
+	CreatedAt int64  `json:"created_at"`
 }

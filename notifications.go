@@ -634,6 +634,12 @@ func CreateOrgNotification(ctx context.Context, title, description, referenceUrl
 		return errors.New("No org ID provided")
 	}
 
+	// Since we use a static workflow name, this should be effective.
+	if strings.Contains(title, "Ops Dashboard Workflow") {
+		log.Printf("[INFO] Skipping create notification for health check workflow")
+		return errors.New("Health check workflow detected")
+	}
+
 	if project.Environment == "" {
 
 		auth := os.Getenv("AUTH")
@@ -944,18 +950,16 @@ func HandleCreateNotification(resp http.ResponseWriter, request *http.Request) {
 		}
 
 		if len(orgId) > 0 && len(environment) > 0 && len(apikey) > 0 {
-			log.Printf("[DEBUG] HANDLING ENVIRONMENT AUTH")
-
 			authHeaderParts := strings.Split(apikey, " ")
 			if len(authHeaderParts) != 2 {
-				log.Printf("[INFO] Invalid authorization header in create notification api")
+				log.Printf("[WARNING] Invalid authorization header in create notification api")
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return
 			}
 
 			if authHeaderParts[0] != "Bearer" {
-				log.Printf("[INFO] Invalid authorization header in create notification api")
+				log.Printf("[WARNING] Invalid authorization header in create notification api")
 				resp.WriteHeader(401)
 				resp.Write([]byte(`{"success": false}`))
 				return

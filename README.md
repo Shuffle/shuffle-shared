@@ -1,6 +1,8 @@
 # Shuffle-shared
 A repository containing structures and commonly used functions between different deployments on Shuffle. Here to ensure consistency and not re-making the same functions multiple places.
 
+[![Shuffle repositories](https://github.com/user-attachments/assets/856f5faa-991c-47f5-9dd5-44e711b7d437)](https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=ywpMQJ555sxggEpj-0)
+
 ### Sample areas
 - [Shuffle backend (APIs)](https://github.com/Shuffle/Shuffle/tree/main/backend/go-app) (open source)
 - [Shuffle orborus (hybrid job-handler)](https://github.com/Shuffle/Shuffle/tree/main/functions/onprem/orborus) (open source)

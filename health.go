@@ -474,7 +474,7 @@ func deleteJunkOpsWorkflow(ctx context.Context, workflowHealth WorkflowHealth) e
 	// 	return errors.New("Cloud environment. Not deleting junk ops workflow for now")
 	// }
 
-	workflows, err := FindWorkflowByName(ctx, "SHUFFLE_INTERNAL_OPS_WORKFLOW")
+	workflows, err := FindWorkflowByName(ctx, "Ops Dashboard Workflow")
 	if err != nil {
 		//log.Printf("[DEBUG] Failed finding any workflow named SHUFFLE_INTERNAL_OPS_WORKFLOW: %s. Is the health API initialized?", err)
 		return err
@@ -2067,6 +2067,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 		}
 
 		if action.SourceWorkflow != workflow.ID && len(action.SourceWorkflow) > 0 {
+			log.Printf("[DEBUG] Removing action %s with ID %s from workflow %s because it belongs to another workflow (?): %s", action.Name, action.ID, workflow.ID, action.SourceWorkflow)
 			continue
 		}
 
@@ -2260,7 +2261,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 			if org.Id == "" {
 				org, err = GetOrg(ctx, user.ActiveOrg.Id)
 				if err != nil {
-					log.Printf("[WARNING] Failed getting org: %s", err)
+					log.Printf("[ERROR] Failed getting org %s for user %s (%s): %s", user.ActiveOrg.Id, user.Username, user.Id, err)
 					continue
 				}
 			}

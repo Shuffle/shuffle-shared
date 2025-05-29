@@ -49,12 +49,7 @@ var propagateToken = os.Getenv("SHUFFLE_PROPAGATE_TOKEN")
 
 var maxCacheSize = 1020000
 
-var dbInterval = 0x20
-// var dbInterval = 0x1
-//var dbInterval = 500
-
 // Dumps data from cache to DB for every {dbInterval} action (tried 5, 10, 25)
-
 type ShuffleStorage struct {
 	GceProject    string
 	Dbclient      datastore.Client
@@ -77,261 +72,6 @@ func GetESIndexPrefix(index string) string {
 		return fmt.Sprintf("%s_%s", prefix, index)
 	}
 	return index
-}
-
-// 1. Check list if there is a record for yesterday
-// 2. If there isn't, set it and clear out the daily records
-// Also: can we dump a list of apps that run? Maybe a list of them?
-func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
-	timeYesterday := time.Now().AddDate(0, 0, -1)
-	timeYesterdayFormatted := timeYesterday.Format("2006-12-02")
-
-	for _, day := range executionInfo.DailyStatistics {
-
-		// Check if the day.Date is the same as yesterday and return if it is
-		if day.Date.Format("2006-12-02") == timeYesterdayFormatted {
-			//log.Printf("[DEBUG] Daily stats already updated for %s. Data: %#v", day.Date, day)
-			return executionInfo
-		}
-	}
-
-	log.Printf("[DEBUG] Daily stats not updated for %s in org %s today. Only have %d stats so far - running update.", timeYesterday, executionInfo.OrgId, len(executionInfo.DailyStatistics))
-	// If we get here, we need to update the daily stats
-	newDay := DailyStatistics{
-		Date:                       timeYesterday,
-		AppExecutions:              executionInfo.DailyAppExecutions,
-		AppExecutionsFailed:        executionInfo.DailyAppExecutionsFailed,
-		SubflowExecutions:          executionInfo.DailySubflowExecutions,
-		WorkflowExecutions:         executionInfo.DailyWorkflowExecutions,
-		WorkflowExecutionsFinished: executionInfo.DailyWorkflowExecutionsFinished,
-		WorkflowExecutionsFailed:   executionInfo.DailyWorkflowExecutionsFailed,
-		OrgSyncActions:             executionInfo.DailyOrgSyncActions,
-		CloudExecutions:            executionInfo.DailyCloudExecutions,
-		OnpremExecutions:           executionInfo.DailyOnpremExecutions,
-		AIUsage:                    executionInfo.DailyAIUsage,
-
-		ApiUsage: executionInfo.DailyApiUsage,
-
-		Additions: executionInfo.Additions,
-	}
-
-	executionInfo.DailyStatistics = append(executionInfo.DailyStatistics, newDay)
-
-	// Reset daily
-	executionInfo.DailyAppExecutions = 0
-	executionInfo.DailyAppExecutionsFailed = 0
-	executionInfo.DailySubflowExecutions = 0
-	executionInfo.DailyWorkflowExecutions = 0
-	executionInfo.DailyWorkflowExecutionsFinished = 0
-	executionInfo.DailyWorkflowExecutionsFailed = 0
-	executionInfo.DailyOrgSyncActions = 0
-	executionInfo.DailyCloudExecutions = 0
-	executionInfo.DailyOnpremExecutions = 0
-	executionInfo.DailyApiUsage = 0
-	executionInfo.DailyAIUsage = 0
-
-	// Cleaning up old stuff we don't use for now
-	executionInfo.HourlyAppExecutions = 0
-	executionInfo.HourlyAppExecutionsFailed = 0
-	executionInfo.HourlySubflowExecutions = 0
-	executionInfo.HourlyWorkflowExecutions = 0
-	executionInfo.HourlyWorkflowExecutionsFinished = 0
-	executionInfo.HourlyWorkflowExecutionsFailed = 0
-	executionInfo.HourlyOrgSyncActions = 0
-	executionInfo.HourlyCloudExecutions = 0
-	executionInfo.HourlyOnpremExecutions = 0
-
-	// Weekly
-	executionInfo.WeeklyAppExecutions = 0
-	executionInfo.WeeklyAppExecutionsFailed = 0
-	executionInfo.WeeklySubflowExecutions = 0
-	executionInfo.WeeklyWorkflowExecutions = 0
-	executionInfo.WeeklyWorkflowExecutionsFinished = 0
-	executionInfo.WeeklyWorkflowExecutionsFailed = 0
-	executionInfo.WeeklyOrgSyncActions = 0
-	executionInfo.WeeklyCloudExecutions = 0
-	executionInfo.WeeklyOnpremExecutions = 0
-
-	for additionIndex, _ := range executionInfo.Additions {
-		executionInfo.Additions[additionIndex].DailyValue = 0
-	}
-
-	return executionInfo
-}
-
-func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment uint) *ExecutionInfo {
-
-	appendCustom := false
-	if dataType == "app_executions" || strings.HasPrefix(dataType, "app_executions") {
-		orgStatistics.TotalAppExecutions += int64(increment)
-		orgStatistics.MonthlyAppExecutions += int64(increment)
-		orgStatistics.WeeklyAppExecutions += int64(increment)
-		orgStatistics.DailyAppExecutions += int64(increment)
-		orgStatistics.HourlyAppExecutions += int64(increment)
-
-		if dataType != "app_executions" {
-			appendCustom = true
-		}
-
-	} else if dataType == "workflow_executions" {
-		orgStatistics.TotalWorkflowExecutions += int64(increment)
-		orgStatistics.MonthlyWorkflowExecutions += int64(increment)
-		orgStatistics.WeeklyWorkflowExecutions += int64(increment)
-		orgStatistics.DailyWorkflowExecutions += int64(increment)
-		orgStatistics.HourlyWorkflowExecutions += int64(increment)
-
-	} else if dataType == "workflow_executions_finished" {
-		orgStatistics.TotalWorkflowExecutionsFinished += int64(increment)
-		orgStatistics.MonthlyWorkflowExecutionsFinished += int64(increment)
-		orgStatistics.WeeklyWorkflowExecutionsFinished += int64(increment)
-		orgStatistics.DailyWorkflowExecutionsFinished += int64(increment)
-		orgStatistics.HourlyWorkflowExecutionsFinished += int64(increment)
-
-	} else if dataType == "workflow_executions_failed" {
-		orgStatistics.TotalWorkflowExecutionsFailed += int64(increment)
-		orgStatistics.MonthlyWorkflowExecutionsFailed += int64(increment)
-		orgStatistics.WeeklyWorkflowExecutionsFailed += int64(increment)
-		orgStatistics.DailyWorkflowExecutionsFailed += int64(increment)
-		orgStatistics.HourlyWorkflowExecutionsFailed += int64(increment)
-
-	} else if dataType == "app_executions_failed" {
-		orgStatistics.TotalAppExecutionsFailed += int64(increment)
-		orgStatistics.MonthlyAppExecutionsFailed += int64(increment)
-		orgStatistics.WeeklyAppExecutionsFailed += int64(increment)
-		orgStatistics.DailyAppExecutionsFailed += int64(increment)
-		orgStatistics.HourlyAppExecutionsFailed += int64(increment)
-
-	} else if dataType == "subflow_executions" {
-		orgStatistics.TotalSubflowExecutions += int64(increment)
-		orgStatistics.MonthlySubflowExecutions += int64(increment)
-		orgStatistics.WeeklySubflowExecutions += int64(increment)
-		orgStatistics.DailySubflowExecutions += int64(increment)
-		orgStatistics.HourlySubflowExecutions += int64(increment)
-
-	} else if dataType == "org_sync_actions" {
-		orgStatistics.TotalOrgSyncActions += int64(increment)
-		orgStatistics.MonthlyOrgSyncActions += int64(increment)
-		orgStatistics.WeeklyOrgSyncActions += int64(increment)
-		orgStatistics.DailyOrgSyncActions += int64(increment)
-		orgStatistics.HourlyOrgSyncActions += int64(increment)
-
-	} else if dataType == "workflow_executions_cloud" {
-		orgStatistics.TotalCloudExecutions += int64(increment)
-		orgStatistics.MonthlyCloudExecutions += int64(increment)
-		orgStatistics.WeeklyCloudExecutions += int64(increment)
-		orgStatistics.DailyCloudExecutions += int64(increment)
-		orgStatistics.HourlyCloudExecutions += int64(increment)
-
-	} else if dataType == "workflow_executions_onprem" {
-		orgStatistics.TotalOnpremExecutions += int64(increment)
-		orgStatistics.MonthlyOnpremExecutions += int64(increment)
-		orgStatistics.WeeklyOnpremExecutions += int64(increment)
-		orgStatistics.DailyOnpremExecutions += int64(increment)
-		orgStatistics.HourlyOnpremExecutions += int64(increment)
-	} else if dataType == "api_usage" {
-		orgStatistics.TotalApiUsage += int64(increment)
-		orgStatistics.MonthlyApiUsage += int64(increment)
-		orgStatistics.DailyApiUsage += int64(increment)
-	} else if dataType == "ai_executions" {
-		orgStatistics.TotalAIUsage += int64(increment)
-		orgStatistics.MonthlyAIUsage += int64(increment)
-		orgStatistics.DailyAIUsage += int64(increment)
-	} else {
-		//log.Printf("\n\n[ERROR] Unknown data type in stats increment for org %s: %s. Appending to custom list.\n\n", orgStatistics.OrgId, dataType)
-		appendCustom = true
-	}
-
-	if appendCustom {
-		//log.Printf("[DEBUG] Appending custom data type %s for org %s", dataType, orgStatistics.OrgId)
-
-		found := false
-		for additionIndex, addition := range orgStatistics.Additions {
-			if addition.Key != dataType {
-				continue
-			}
-
-			found = true
-			amount := int64(increment)
-
-			orgStatistics.Additions[additionIndex].Value += amount
-			orgStatistics.Additions[additionIndex].DailyValue += amount
-
-			break
-		}
-
-		if !found {
-			orgStatistics.Additions = append(orgStatistics.Additions, AdditionalUseConfig{
-				Key:        dataType,
-				Value:      int64(increment),
-				DailyValue: int64(increment),
-			})
-		}
-	}
-
-	//send mail if the app runs more than the set threshold limit
-	ctx := context.Background()
-	orgId := orgStatistics.OrgId
-
-	//Unmarshal the org details
-	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
-	orgData, err := GetCache(ctx, cacheKey)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting org in increment: %s", err)
-		return orgStatistics
-	}
-
-	var org *Org
-	orgBytes, ok := orgData.([]byte)
-	if !ok {
-		log.Printf("[ERROR] Unexpected data type in cache for org details")
-		return orgStatistics
-	}
-
-	org = new(Org)
-	err = json.Unmarshal(orgBytes, org)
-	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling org in increment: %s", err)
-		return orgStatistics
-	}
-
-	//send mail if the app runs more than the set threshold limit
-	emailSend := false
-	if len(org.Id) > 0 {
-		for index, AlertThreshold := range org.Billing.AlertThreshold {
-			if int64(AlertThreshold.Count) < orgStatistics.MonthlyAppExecutions && AlertThreshold.Email_send == false {
-				for _, user := range org.Users {
-					if user.Role == "admin" {
-						var BccAddress []string
-						if int64(AlertThreshold.Count) >= 5000 || int64(AlertThreshold.Count) >= 10000 && AlertThreshold.Email_send == false {
-							BccAddress = []string{"support@shuffler.io", "jay@shuffler.io"}
-						}
-
-						mailbody := Mailcheck{
-							Targets: []string{user.Username},
-							Subject: "You have reached the threshold limit of app executions",
-							Body:    fmt.Sprintf("You have reached the threshold limit of %v percent Or %v app executions run. Please login to shuffle and check it.", AlertThreshold.Percentage, AlertThreshold.Count),
-						}
-						err = sendMailSendgrid(mailbody.Targets, mailbody.Subject, mailbody.Body, false, BccAddress)
-						if err != nil {
-							log.Printf("[ERROR] Failed sending alert mail in increment: %s", err)
-						} else {
-							emailSend = true
-						}
-					}
-				}
-				if emailSend {
-					org.Billing.AlertThreshold[index].Email_send = true
-					err = SetOrg(ctx, *org, orgId)
-					if err != nil {
-						log.Printf("[ERROR] Failed setting org in increment: %s", err)
-						return orgStatistics
-					}
-					log.Printf("[DEBUG] Successfully sent alert mail for org %s", orgId)
-				}
-			}
-		}
-	}
-	return orgStatistics
 }
 
 func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error {
@@ -391,535 +131,6 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	}
 
 	return nil
-}
-
-func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...int) error {
-
-	nameKey := "org_statistics"
-	orgStatistics := &ExecutionInfo{}
-
-	dbDumpInterval := uint(dbInterval)
-	if len(amount) > 0 {
-		if amount[0] > 0 {
-			dbDumpInterval = uint(amount[0])
-		}
-	}
-
-	// Get the org
-	tmpOrgDetail, err := GetOrg(ctx, orgId)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting org in increment: %s", err)
-		return err
-	}
-
-	cacheKey := fmt.Sprintf("OrgDetails_%s", orgId)
-
-	if tmpOrgDetail.Id != "" {
-		data, err := json.Marshal(tmpOrgDetail)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err
-		}
-		err = SetCache(ctx, cacheKey, data, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
-		}
-	}
-
-	concurrentTxn := false
-	errMsg := ""
-
-	if project.DbType == "opensearch" {
-		// Get it from opensearch (may be prone to more issues at scale (thousands/second) due to no transactional locking)
-
-		id := strings.ToLower(orgId)
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
-		if err != nil {
-			log.Printf("[WARNING] Error in org STATS get: %s", err)
-			return err
-		}
-
-		defer res.Body.Close()
-		respBody, bodyErr := ioutil.ReadAll(res.Body)
-		if err != nil || bodyErr != nil || res.StatusCode >= 300 {
-			log.Printf("[WARNING] Failed getting org STATS body: %s. Resp: %d. Body err: %s", err, res.StatusCode, bodyErr)
-
-			// Init the org stats if it doesn't exist
-			if res.StatusCode == 404 {
-				orgStatistics.OrgId = orgId
-				orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-				orgStatistics = handleDailyCacheUpdate(orgStatistics)
-
-				marshalledData, err := json.Marshal(orgStatistics)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling org STATS body: %s", err)
-				} else {
-					err := indexEs(ctx, nameKey, id, marshalledData)
-					if err != nil {
-						log.Printf("[ERROR] Failed indexing org STATS body: %s", err)
-					} else {
-						log.Printf("[DEBUG] Indexed org STATS body for %s", orgId)
-					}
-				}
-			}
-
-			return err
-		}
-
-		orgStatsWrapper := &ExecutionInfoWrapper{}
-		err = json.Unmarshal(respBody, &orgStatsWrapper)
-		if err != nil {
-			log.Printf("[ERROR] Failed unmarshalling org STATS body: %s", err)
-			return err
-		}
-
-		orgStatistics = &orgStatsWrapper.Source
-		if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
-			org, err := GetOrg(ctx, orgId)
-			if err == nil {
-				orgStatistics.OrgName = org.Name
-			}
-
-			orgStatistics.OrgId = orgId
-		}
-
-		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-		orgStatistics = handleDailyCacheUpdate(orgStatistics)
-
-		// Set the data back in the database
-		marshalledData, err := json.Marshal(orgStatistics)
-		if err != nil {
-			log.Printf("[ERROR] Failed marshalling org STATS body (2): %s", err)
-			return err
-		}
-
-		err = indexEs(ctx, nameKey, id, marshalledData)
-		if err != nil {
-			log.Printf("[ERROR] Failed indexing org STATS body (2): %s", err)
-		}
-
-		//log.Printf("[DEBUG] Incremented org stats for %s", orgId)
-	} else {
-		tx, err := project.Dbclient.NewTransaction(ctx)
-		if err != nil {
-			log.Printf("[WARNING] Error in cache dump: %s", err)
-			return err
-		}
-
-		key := datastore.NameKey(nameKey, strings.ToLower(orgId), nil)
-		if err := tx.Get(key, orgStatistics); err != nil {
-
-			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
-				log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
-			} else {
-				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
-				tx.Rollback()
-				return err
-			}
-		}
-
-		if orgStatistics.OrgName == "" || orgStatistics.OrgName == orgStatistics.OrgId {
-			org, err := GetOrg(ctx, orgId)
-			if err == nil {
-				orgStatistics.OrgName = org.Name
-			}
-
-			orgStatistics.OrgId = orgId
-		}
-
-		orgStatistics = HandleIncrement(dataType, orgStatistics, dbDumpInterval)
-		orgStatistics = handleDailyCacheUpdate(orgStatistics)
-
-		if _, err := tx.Put(key, orgStatistics); err != nil {
-			log.Printf("[WARNING] Failed setting stats: %s", err)
-			tx.Rollback()
-			return err
-		}
-
-		if _, err = tx.Commit(); err != nil {
-			log.Printf("[ERROR] Failed commiting stats: %s", err)
-			if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
-				concurrentTxn = true
-				errMsg = fmt.Sprintf("%s", err)
-			}
-		}
-	}
-
-	// Could use cache for everything, really
-	if project.CacheDb {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
-		data, err := json.Marshal(orgStatistics)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling in set org stats: %s", err)
-			return err
-		}
-
-		err = SetCache(ctx, cacheKey, data, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting cache for org stats '%s': %s", cacheKey, err)
-		}
-	}
-
-	if concurrentTxn {
-		return errors.New(errMsg)
-	}
-
-	return nil
-}
-
-// Rudementary caching system. WILL go wrong at times without sharding.
-// It's only good for the user in cloud, hence wont bother for a while
-// Optional input is the amount to increment
-func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) {
-	// Check if environment is worker and skip
-	if project.Environment == "worker" {
-		//log.Printf("[DEBUG] Skipping cache increment for worker with datatype %s", dataType)
-		return
-	}
-
-	dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
-
-	incrementAmount := 1
-	if len(amount) > 0 {
-		if amount[0] > 0 {
-			incrementAmount = amount[0]
-		}
-	}
-
-	// Dump to disk every 0x19
-	// 1. Get the existing value
-	// 2. Update it
-	dbDumpInterval := uint8(dbInterval)
-	key := fmt.Sprintf("cache_%s_%s", orgId, dataType)
-	if len(memcached) > 0 {
-		appendForQuickDump := false
-		if !ArrayContains(PredictableDataTypes, dataType) {
-			appendForQuickDump = true
-		}
-
-		if appendForQuickDump {
-			// check if the cache already key is indexed in memcache
-			keyItems, err := mc.Get("stat_cache_keys_" + orgId)
-			if err == gomemcache.ErrCacheMiss {
-				keyItem := []string{key}
-				data, err := json.Marshal(keyItem)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-				} else {
-					// dump it to memcache
-					item := &gomemcache.Item{
-						Key:        "stat_cache_keys_" + orgId,
-						Value:      data,
-						Expiration: 86400 * 30,
-					}
-
-					if err := mc.Set(item); err != nil {
-						log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-					} else {
-						// log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
-					}
-				}
-			} else {
-				dumpedItems := []string{}
-				err = json.Unmarshal(keyItems.Value, &dumpedItems)
-				if err != nil {
-					log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
-				} else {
-					if !ArrayContains(dumpedItems, key) {
-						dumpedItems = append(dumpedItems, key)
-						data, err := json.Marshal(dumpedItems)
-						if err != nil {
-							log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-						} else {
-							// dump it to memcache
-							item := &gomemcache.Item{
-								Key:        "stat_cache_keys_" + orgId,
-								Value:      data,
-								Expiration: 86400 * 30,
-							}
-
-							if err := mc.Set(item); err != nil {
-								log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-							} else {
-								// log.Printf("[DEBUG] Set cache index key for (1) %s", orgId)
-							}
-						}
-					}
-				}
-			}
-		}
-
-		item, err := mc.Get(key)
-		if err == gomemcache.ErrCacheMiss {
-			incrementItem := IncrementInCache{
-				Amount:    uint64(incrementAmount),
-				CreatedAt: time.Now().Unix(),
-			}
-
-			data, err := json.Marshal(incrementItem)
-			if err != nil {
-				log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-				return
-			}
-
-			item := &gomemcache.Item{
-				Key:        key,
-				Value:      data,
-				Expiration: 86400 * 30,
-			}
-
-			if err := mc.Set(item); err != nil {
-				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-			}
-
-		} else if err != nil {
-			log.Printf("[ERROR] Failed increment memcache err: %s", err)
-		} else {
-			if item == nil || item.Value == nil {
-				incrementItem := IncrementInCache{
-					Amount:    uint64(incrementAmount),
-					CreatedAt: time.Now().Unix(),
-				}
-
-				data, err := json.Marshal(incrementItem)
-				if err != nil {
-					log.Printf("[DEBUG] Failed marshalling increment item for cache: %s", err)
-					return
-				}
-
-				item = &gomemcache.Item{
-					Key:        key,
-					Value:      data,
-					Expiration: 86400 * 30,
-				}
-
-				// log.Printf("[ERROR] Value in DB is nil for cache %s.", dataType)
-			}
-
-			if len(item.Value) == 1 {
-				// case to use if the cache that was present before
-				// the new changes that introduced the struct to the increment system.
-				// log.Printf("[DEBUG] This is from the older system. num: %+v", item.Value)
-
-				// num := uint64(item.Value[0])
-				// num += uint64(incrementAmount)
-
-				// log.Printf("[DEBUG] new num: %d", num)
-
-				// there is some bug here. i would much rather lose the data here.
-				num := uint64(incrementAmount)
-
-				incrementItem := IncrementInCache{
-					Amount:    num,
-					CreatedAt: time.Now().Unix(),
-				}
-
-				data, err := json.Marshal(incrementItem)
-				if err != nil {
-					log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-					return
-				}
-
-				item := &gomemcache.Item{
-					Key:        key,
-					Value:      data,
-					Expiration: 86400 * 30,
-				}
-
-				if err := mc.Set(item); err != nil {
-					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-					return
-				}
-			} else if len(item.Value) > 0 {
-				var incrementedItemInCache IncrementInCache
-
-				err := json.Unmarshal(item.Value, &incrementedItemInCache)
-				if err != nil {
-					log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
-					return
-				}
-
-				num := incrementedItemInCache.Amount
-				// num += byte(incrementAmount)
-				num += uint64(incrementAmount)
-				//num += []byte{2}
-
-				incrementedItemInCache.Amount = num
-
-				// log.Printf("[DEBUG] time.Now().Unix() (%d) - incrementedItemInCache.CreatedAt (%d) = %d", time.Now().Unix(), incrementedItemInCache.CreatedAt, time.Now().Unix()-incrementedItemInCache.CreatedAt)
-
-				// if num >= dbDumpInterval {
-				// if the cache was created more than a day ago
-
-				// make it a random number between
-				// (10-60 seconds)
-				randomSeconds := (rand.Intn(50) + 10) * 5 // to make the number longer
-
-				if time.Now().Unix()-incrementedItemInCache.CreatedAt > int64(randomSeconds) && incrementedItemInCache.Amount > uint64(dbInterval) {
-					// Memcache dump first to keep the counter going for other executions
-					oldNum := num
-					num = 0
-
-					incrementedItemInCache.Amount = num
-					incrementedItemInCache.CreatedAt = time.Now().Unix()
-
-					// log.Printf("[DEBUG] Dumping cache item with key %s which was created at %s is was %d", key, incrementedItemInCache.CreatedAt, oldNum)
-
-					data, err := json.Marshal(incrementedItemInCache)
-					if err != nil {
-						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-						return
-					}
-
-					// an issue here is that it isn't necessary that num is dbDumpInterval
-					err = IncrementCacheDump(ctx, orgId, dataType, int(oldNum))
-					if err != nil {
-						log.Printf("[ERROR] Failed dumping cache for key (1) %s: %s", key, err)
-						if strings.Contains(fmt.Sprintf("%s", err), "concurrent transaction") {
-							// log.Printf("[ERROR] Concurrent transaction in cache dump: %s. Storing in cache (%s) instead with new amount: %d", err, key, oldNum)
-							incrementedItemInCache.Amount = oldNum
-
-							data, err := json.Marshal(incrementedItemInCache)
-							if err != nil {
-								log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-							}
-
-							item := &gomemcache.Item{
-								Key:        key,
-								Value:      data,
-								Expiration: 86400 * 30,
-							}
-
-							if err := mc.Set(item); err != nil {
-								log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
-							}
-						} else {
-							log.Printf("[ERROR] Failed dumping cache for key %s: %s", key, err)
-						}
-					} else {
-						item := &gomemcache.Item{
-							Key:        key,
-							Value:      data,
-							Expiration: 86400 * 30,
-						}
-						if err := mc.Set(item); err != nil {
-							log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
-						}
-					}
-
-				} else {
-					//log.Printf("NOT Dumping!")
-					// this case got apparently overwritten unnecessarily 3 times out of 20.
-					// data gets more lost here due to cache overwrites.
-
-					// add a random sleep of a few miliseconds here
-					randomSleep := rand.Intn(50) + 10
-					time.Sleep(time.Duration(randomSleep) * time.Millisecond)
-
-					// read again and check if it's already not dumped
-					item, err := mc.Get(key)
-					if err != nil {
-						log.Printf("[ERROR] Failed getting cache item for key %s: %s", key, err)
-						return
-					}
-
-					incrementedItemInCache = IncrementInCache{}
-					err = json.Unmarshal(item.Value, &incrementedItemInCache)
-					if err != nil {
-						log.Printf("[ERROR] Failed unmarshalling item in cache: %s", err)
-						incrementedItemInCache.Amount = num
-						incrementedItemInCache.CreatedAt = time.Now().Unix()
-					}
-
-					// this means there will be an overwrite!
-					if incrementedItemInCache.Amount == num {
-						// better to update the cache again instead of losing the data
-						incrementedItemInCache.Amount += uint64(incrementAmount)
-					} else if num > incrementedItemInCache.Amount {
-						// we bow to the higher number we have
-						incrementedItemInCache.Amount = num
-					} else if incrementedItemInCache.Amount > num {
-						// this means, a bunch of stats were added in the meantime
-						// bow to the higher number and just increment again
-						incrementedItemInCache.Amount += uint64(incrementAmount)
-					}
-
-					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount)
-					// log.Printf("[DEBUG] Cache item with key %s which was created at %d is now %d. While num we updated was %d", key, incrementedItemInCache.CreatedAt, incrementedItemInCache.Amount, num)
-
-					data, err := json.Marshal(incrementedItemInCache)
-					if err != nil {
-						log.Printf("[ERROR] Failed marshalling increment item for cache: %s", err)
-					}
-
-					item = &gomemcache.Item{
-						Key:        key,
-						Value:      data,
-						Expiration: 86400 * 30,
-					}
-
-					if err := mc.Set(item); err != nil {
-						log.Printf("[ERROR] Failed setting inner memcache for key %s: %s", orgId, err)
-					}
-				}
-			} else {
-				// let's keep this here for now
-				// log.Printf("[ERROR] Length of value in cache key %s is less than 1: %d", key, len(item.Value))
-			}
-		}
-
-	} else {
-		// Get the cache, but use requestCache instead of memcache
-		//log.Printf("[DEBUG] Incrementing cache for %s with amount %d", key, incrementAmount)
-		foundItem := 1
-		item, err := GetCache(ctx, key)
-		if err != nil {
-			if incrementAmount > int(dbDumpInterval) {
-				foundItem = incrementAmount
-
-				err = SetCache(ctx, key, []byte(fmt.Sprintf("0")), 86400)
-			} else {
-				err = SetCache(ctx, key, []byte(fmt.Sprintf("%d", incrementAmount)), 86400)
-				if err != nil {
-					log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-				}
-			}
-
-			//log.Printf("[DEBUG] Increment cache miss for %s", key)
-		} else {
-			// make item into a number
-
-			if item == nil {
-				log.Printf("[ERROR] Value in DB is nil for cache %s. Setting to 1", dataType)
-			} else {
-				// Parse out int from []uint8 with marshal
-				foundData := []byte(item.([]uint8))
-				foundItem, err = strconv.Atoi(string(foundData))
-				if err != nil {
-					log.Printf("[ERROR] Failed converting item to int: %s", err)
-					foundItem = incrementAmount
-				} else {
-					foundItem += incrementAmount
-				}
-			}
-		}
-
-		if foundItem >= int(dbDumpInterval) {
-			// Memcache dump first to keep the counter going for other executions
-			go SetCache(ctx, key, []byte("0"), 86400)
-			IncrementCacheDump(ctx, orgId, dataType, foundItem)
-
-			//log.Printf("[DEBUG] Dumping cache for %s with amount %d", key, foundItem)
-		} else {
-			// Set cacheo
-			err = SetCache(ctx, key, []byte(strconv.Itoa(foundItem)), 86400)
-			if err != nil {
-				log.Printf("[ERROR] Failed setting increment cache for key %s: %s", orgId, err)
-			}
-		}
-
-		return
-	}
 }
 
 // Cache handlers
@@ -1426,8 +637,8 @@ func SetWorkflowExecution(ctx context.Context, workflowExecution WorkflowExecuti
 }
 
 func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afterTimestamp int, limit int, mode string) ([]LiveExecutionStatus, error) {
-    nameKey := "live_execution_status"
-    liveExecs := []LiveExecutionStatus{}
+	nameKey := "live_execution_status"
+	liveExecs := []LiveExecutionStatus{}
 
 	modes := []string{"1h", "7h", "1d", "7d"}
 	if !ArrayContains(modes, mode) {
@@ -1459,134 +670,134 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
 		}
 	}
 
-    if project.DbType == "opensearch" {
-        var buf bytes.Buffer
-        query := map[string]interface{}{
-            "sort": map[string]interface{}{
-                "created_at": map[string]interface{}{
-                    "order": "desc",
-                },
-            },
-        }
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"sort": map[string]interface{}{
+				"created_at": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+		}
 
-        if limit != 0 {
-            query["size"] = limit
-        }
+		if limit != 0 {
+			query["size"] = limit
+		}
 
-        if beforeTimestamp > 0 || afterTimestamp > 0 {
-            query["query"] = map[string]interface{}{
-                "bool": map[string]interface{}{
-                    "must": []map[string]interface{}{},
-                },
-            }
-        }
+		if beforeTimestamp > 0 || afterTimestamp > 0 {
+			query["query"] = map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{},
+				},
+			}
+		}
 
-        if beforeTimestamp > 0 {
-            query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
-                query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
-                map[string]interface{}{
-                    "range": map[string]interface{}{
-                        "created_at": map[string]interface{}{
-                            "gt": beforeTimestamp,
-                        },
-                    },
-                },
-            )
-        }
+		if beforeTimestamp > 0 {
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+				map[string]interface{}{
+					"range": map[string]interface{}{
+						"created_at": map[string]interface{}{
+							"gt": beforeTimestamp,
+						},
+					},
+				},
+			)
+		}
 
-        if afterTimestamp > 0 {
-            query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
-                query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
-                map[string]interface{}{
-                    "range": map[string]interface{}{
-                        "created_at": map[string]interface{}{
-                            "lt": afterTimestamp,
-                        },
-                    },
-                },
-            )
-        }
+		if afterTimestamp > 0 {
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = append(
+				query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"].([]map[string]interface{}),
+				map[string]interface{}{
+					"range": map[string]interface{}{
+						"created_at": map[string]interface{}{
+							"lt": afterTimestamp,
+						},
+					},
+				},
+			)
+		}
 
-        if err := json.NewEncoder(&buf).Encode(query); err != nil {
-            log.Printf("[WARNING] Error encoding live execution status query: %s", err)
-            return liveExecs, err
-        }
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding live execution status query: %s", err)
+			return liveExecs, err
+		}
 
-        res, err := project.Es.Search(
-            project.Es.Search.WithContext(ctx),
-            project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
-            project.Es.Search.WithBody(&buf),
-            project.Es.Search.WithTrackTotalHits(true),
-        )
-        if err != nil {
-            log.Printf("[ERROR] Error getting response from Opensearch (get live execution status): %s", err)
-            return liveExecs, err
-        }
-        defer res.Body.Close()
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get live execution status): %s", err)
+			return liveExecs, err
+		}
+		defer res.Body.Close()
 
-        if res.StatusCode != 200 && res.StatusCode != 201 {
-            return liveExecs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
-        }
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return liveExecs, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
 
-        if res.IsError() {
-            var e map[string]interface{}
-            if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
-                log.Printf("[WARNING] Error parsing the response body: %s", err)
-                return liveExecs, err
-            } else {
-                log.Printf("[%s] %s: %s",
-                    res.Status(),
-                    e["error"].(map[string]interface{})["type"],
-                    e["error"].(map[string]interface{})["reason"],
-                )
-            }
-        }
+		if res.IsError() {
+			var e map[string]interface{}
+			if err := json.NewDecoder(res.Body).Decode(&e); err != nil {
+				log.Printf("[WARNING] Error parsing the response body: %s", err)
+				return liveExecs, err
+			} else {
+				log.Printf("[%s] %s: %s",
+					res.Status(),
+					e["error"].(map[string]interface{})["type"],
+					e["error"].(map[string]interface{})["reason"],
+				)
+			}
+		}
 
-        respBody, err := ioutil.ReadAll(res.Body)
-        if err != nil {
-            return liveExecs, err
-        }
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return liveExecs, err
+		}
 
-        wrapped := struct {
-            Hits struct {
-                Hits []struct {
-                    Source LiveExecutionStatus `json:"_source"`
-                } `json:"hits"`
-            } `json:"hits"`
-        }{}
-        
-        err = json.Unmarshal(respBody, &wrapped)
-        if err != nil {
-            return liveExecs, err
-        }
+		wrapped := struct {
+			Hits struct {
+				Hits []struct {
+					Source LiveExecutionStatus `json:"_source"`
+				} `json:"hits"`
+			} `json:"hits"`
+		}{}
 
-        for _, hit := range wrapped.Hits.Hits {
-            liveExecs = append(liveExecs, hit.Source)
-        }
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return liveExecs, err
+		}
 
-    } else {
-        q := datastore.NewQuery(nameKey)
+		for _, hit := range wrapped.Hits.Hits {
+			liveExecs = append(liveExecs, hit.Source)
+		}
 
-        if beforeTimestamp != 0 {
-            q = q.Filter("CreatedAt <", beforeTimestamp)
-        }
+	} else {
+		q := datastore.NewQuery(nameKey)
 
-        if afterTimestamp != 0 {
-            q = q.Filter("CreatedAt >", afterTimestamp)
-        }
+		if beforeTimestamp != 0 {
+			q = q.Filter("CreatedAt <", beforeTimestamp)
+		}
 
-        if limit != 0 {
-            q = q.Limit(limit)
-        }
+		if afterTimestamp != 0 {
+			q = q.Filter("CreatedAt >", afterTimestamp)
+		}
 
-        q = q.Order("-CreatedAt")
+		if limit != 0 {
+			q = q.Limit(limit)
+		}
 
-        _, err := project.Dbclient.GetAll(ctx, q, &liveExecs)
-        if err != nil {
-            log.Printf("[WARNING] Error getting live execution status: %s", err)
-            return liveExecs, err
-        }
-    }
+		q = q.Order("-CreatedAt")
+
+		_, err := project.Dbclient.GetAll(ctx, q, &liveExecs)
+		if err != nil {
+			log.Printf("[WARNING] Error getting live execution status: %s", err)
+			return liveExecs, err
+		}
+	}
 
 	if mode != "" {
 		cacheKey := fmt.Sprintf("%s-%s", nameKey, mode)
@@ -1614,36 +825,36 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
 		}
 	}
 
-    return liveExecs, nil
+	return liveExecs, nil
 }
 
 func SetLiveWorkflowExecutionData(ctx context.Context, liveExec LiveExecutionStatus) error {
-    nameKey := "live_execution_status"
-    // Generate random ID if not already set
-    if liveExec.ID == "" {
-        liveExec.ID = uuid.NewV4().String()
-    }
+	nameKey := "live_execution_status"
+	// Generate random ID if not already set
+	if liveExec.ID == "" {
+		liveExec.ID = uuid.NewV4().String()
+	}
 
-    data, err := json.Marshal(liveExec)
-    if err != nil {
-        log.Printf("[WARNING] Failed marshalling in set live workflow execution data: %s", err)
-        return nil
-    }
+	data, err := json.Marshal(liveExec)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in set live workflow execution data: %s", err)
+		return nil
+	}
 
-    if project.DbType == "opensearch" {
-        err = indexEs(ctx, nameKey, liveExec.ID, data)
-        if err != nil {
-            return err
-        }
-    } else {
-        key := datastore.NameKey(nameKey, liveExec.ID, nil)
-        if _, err := project.Dbclient.Put(ctx, key, &liveExec); err != nil {
-            log.Printf("[WARNING] Error adding live workflow execution data: %s", err)
-            return err
-        }
-    }
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, liveExec.ID, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, liveExec.ID, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &liveExec); err != nil {
+			log.Printf("[WARNING] Error adding live workflow execution data: %s", err)
+			return err
+		}
+	}
 
-    return nil
+	return nil
 }
 
 // Initializes an execution's extra variables
@@ -1935,7 +1146,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 	dbsave := false
 	workflowExecution.Workflow.Image = ""
 
-	// FIXME: May be a problem here with setting it at all times~ 
+	// FIXME: May be a problem here with setting it at all times~
 	//if workflowExecution.Status != "EXECUTING" {
 	validation, err := GetExecutionValidation(ctx, workflowExecution.ExecutionId)
 	if err == nil {
@@ -2027,7 +1238,7 @@ func Fixexecution(ctx context.Context, workflowExecution WorkflowExecution) (Wor
 					workflowExecution.Results[resultIndex].Status = "SUCCESS"
 
 					go sendAgentActionSelfRequest("SUCCESS", workflowExecution, workflowExecution.Results[resultIndex])
-				} 
+				}
 
 				if decisionsUpdated {
 					marshalledResult, err := json.Marshal(mappedOutput)
@@ -2397,7 +1608,6 @@ func GetWorkflowExecution(ctx context.Context, id string) (*WorkflowExecution, e
 		if err == nil {
 			cacheData := []byte(cache.([]uint8))
 			err = json.Unmarshal(cacheData, &workflowExecution)
-
 
 			if err == nil || len(workflowExecution.ExecutionId) > 0 {
 				//log.Printf("[DEBUG] Checking individual execution cache with %d results", len(workflowExecution.Results))
@@ -3606,7 +2816,7 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				}
 
 				if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
-					healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+					healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow)
 					if err != nil {
 						if !strings.Contains(err.Error(), "Org ID not set") {
 							log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
@@ -3713,13 +2923,13 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 
 	if len(skipHealth) == 0 || (len(skipHealth) > 0 && !skipHealth[0]) {
 
-		healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow) 
+		healthWorkflow, _, err := GetStaticWorkflowHealth(ctx, *workflow)
 		if err != nil {
 			if !strings.Contains(err.Error(), "Org ID not set") {
 				log.Printf("[ERROR] Failed getting static workflow health for workflow %s: %s (2)", workflow.ID, err)
 			}
 		} else {
-			workflow = &healthWorkflow 
+			workflow = &healthWorkflow
 		}
 	} else {
 		//log.Printf("[DEBUG] Skipping healthcheck during exec.")
@@ -3852,6 +3062,11 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	nameKey := "workflow"
 	if project.DbType == "opensearch" {
 		var buf bytes.Buffer
+		// increased the maxAmount for onprem user on May 15th
+		if maxAmount <= 250 {
+			maxAmount = 600
+		}
+
 		query := map[string]interface{}{
 			"size": maxAmount,
 			"query": map[string]interface{}{
@@ -4344,14 +3559,12 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 // ListBooks returns a list of books, ordered by title.
 // Handles org grabbing and user / org migrations
 func GetOrg(ctx context.Context, id string) (*Org, error) {
-	nameKey := "Organizations"
-
 	if id == "public" {
-		return &Org{}, errors.New("'public' org is used for single action without being logged in. Not relevant.")
+		return &Org{}, errors.New("'public' org is used for Singul action without being logged in. Not relevant.")
 	}
 
+	nameKey := "Organizations"
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-
 	curOrg := &Org{}
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)
@@ -4402,6 +3615,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 				err = nil
 			} else {
 				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
+				//orgErr = err
 				return &Org{}, err
 			}
 		}
@@ -4410,7 +3624,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	// How does this happen?
 	if len(curOrg.Id) == 0 {
 		curOrg.Id = id
-		return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
+		//return curOrg, errors.New(fmt.Sprintf("Couldn't find org with ID '%s'", curOrg.Id))
 	}
 
 	newUsers := []User{}
@@ -4501,10 +3715,16 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		}
 
 		if setOrg {
-			log.Printf("[INFO] UPDATING ORG %s!!", curOrg.Id)
+			log.Printf("[INFO] AUTO UPDATING ORG %s!!", curOrg.Id)
 			SetOrg(ctx, *curOrg, curOrg.Id)
 		}
 	}
+
+	/*
+	if orgErr {
+		return curOrg, orgErr
+	}
+	*/
 
 	return curOrg, nil
 }
@@ -4741,7 +3961,7 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	if updateOrg {
 		SetOrg(ctx, org, org.Id)
 	}
-	return &org
+	return &org	
 }
 
 func propagateOrg(org Org, reverse bool) error {
@@ -4940,7 +4160,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			}
 
 			if len(orgUsers) > 0 {
-				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", len(data.Users), len(orgUsers))
+				log.Printf("[ERROR] Found 0 users for org %d. Autocorrected it to %d (reloaded). FIX: Why did the org LOSE users?", data.Id, len(orgUsers))
 				data.Users = orgUsers
 			}
 		}
@@ -5061,6 +4281,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	return nil
 }
 
+/*
 func GetSession(ctx context.Context, thissession string) (*Session, error) {
 	session := &Session{}
 
@@ -5124,6 +4345,7 @@ func GetSession(ctx context.Context, thissession string) (*Session, error) {
 
 	return session, nil
 }
+*/
 
 // Index = Username
 func DeleteKey(ctx context.Context, entity string, value string) error {
@@ -5948,7 +5170,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 		if err != nil {
 			return err
 		}
-	} else {		
+	} else {
 		if len(user.Regions) == 1 {
 			if user.Regions[0] != "https://shuffler.io" {
 				user.Regions = append(user.Regions, "https://shuffler.io")
@@ -6635,7 +5857,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		return allApps, nil
 	}
 
-	if user.Username != "HealthWorkflowFunction" { 
+	if user.Username != "HealthWorkflowFunction" {
 		//log.Printf("[AUDIT] Getting apps for user '%s' with active org %s", user.Username, user.ActiveOrg.Id)
 	}
 
@@ -6956,7 +6178,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		keyLists := [][]*datastore.Key{}
 		// Split into 10 each
 		for i := 0; i < len(allKeys); i += 5 {
-			end := i + 5 
+			end := i + 5
 			if end > len(allKeys) {
 				end = len(allKeys)
 			}
@@ -8638,7 +7860,7 @@ func ListWorkflowRevisions(ctx context.Context, originalId string, amount int) (
 					}
 				}
 
-				iterCount++;
+				iterCount++
 				workflows = append(workflows, innerWorkflow)
 				if iterCount >= amount {
 					break
@@ -8965,8 +8187,8 @@ func SetWorkflow(ctx context.Context, workflow Workflow, id string, optionalEdit
 	if len(workflow.Validation.SubflowApps) > 0 {
 		for index, _ := range workflow.Validation.SubflowApps {
 			// Stops infinite recursion issue for self-contained subflows in export
-			if len(workflow.Validation.SubflowApps[index].Type) > 20 { 
-				workflow.Validation.SubflowApps[index].Type = workflow.Validation.SubflowApps[index].Type[:20]+"_app"
+			if len(workflow.Validation.SubflowApps[index].Type) > 20 {
+				workflow.Validation.SubflowApps[index].Type = workflow.Validation.SubflowApps[index].Type[:20] + "_app"
 			}
 		}
 	}
@@ -9112,7 +8334,7 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 			//}
 
 			parsedKey := fmt.Sprintf("%s_%d_%s_%s", workflowappauth.OrgId, workflowappauth.Created, workflowappauth.Label, field.Key)
-			newKey, err := handleKeyEncryption([]byte(field.Value), parsedKey)
+			newKey, err := HandleKeyEncryption([]byte(field.Value), parsedKey)
 			if err != nil {
 				//log.Printf("[WARNING] Failed encrypting key '%s': %s", field.Key, err)
 				setEncrypted = false
@@ -10155,7 +9377,7 @@ func SetAutofixAppLabelsCache(ctx context.Context, app WorkflowApp, appAction Wo
 		}
 	}
 
-	return errors.New("No cache found") 
+	return errors.New("No cache found")
 }
 
 func SetNotification(ctx context.Context, notification Notification) error {
@@ -11352,7 +10574,7 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 }
 
 func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExecution, int, error) {
-    mappedExecutions := make(map[string][]WorkflowExecution)
+	mappedExecutions := make(map[string][]WorkflowExecution)
 
 	index := "workflowexecution"
 	var executions []WorkflowExecution
@@ -11360,8 +10582,8 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 	// FIXME: Sorting doesn't seem to work...
 	//StartedAt          int64          `json:"started_at" datastore:"started_at"`
 	var query *datastore.Query
-	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-60).Order("-started_at").Limit(100000)	
-	
+	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-60).Order("-started_at").Limit(100000)
+
 	max := 100000
 	cursorStr := ""
 	for {
@@ -11445,7 +10667,7 @@ func GetUnfinishedExecutionsCron(ctx context.Context) (map[string][]WorkflowExec
 		mappedExecutions[execution.Status] = append(mappedExecutions[execution.Status], execution)
 	}
 
-	// now, make a COUNT query for the number of notifications 
+	// now, make a COUNT query for the number of notifications
 	query = datastore.NewQuery(index).Filter("started_at >", time.Now().Unix()-60)
 	notificationCount, err := project.Dbclient.Count(ctx, query)
 	if err != nil {
@@ -12473,15 +11695,78 @@ func GetOrgMoveCache(ctx context.Context, orgId string) (RegionChangeHistory, er
 	return attempt, err
 }
 
+func GetSingulStatByExecutionId(ctx context.Context, executionId string) (SingulStats, error) {
+	nameKey := "singul_stats"
+
+	var stats SingulStats
+	if project.DbType == "opensearch" {
+		return SingulStats{}, errors.New("GetSingulStatByExecutionId not implemented for opensearch")
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("execution_id =", executionId).Limit(1)
+		_, err := project.Dbclient.GetAll(ctx, query, &stats)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting SingulStatByExecutionId: %s", err)
+			return SingulStats{}, err
+		}
+	}
+
+	return stats, nil
+}
+
+func GetSingulStats(ctx context.Context) ([]SingulStats, error) {
+	nameKey := "singul_stats"
+
+	if project.DbType == "opensearch" {
+		return []SingulStats{}, errors.New("GetSingulStats not implemented for opensearch")
+	} else {
+		query := datastore.NewQuery(nameKey).Limit(1000).Order("-created_at")
+		var stats []SingulStats
+		_, err := project.Dbclient.GetAll(ctx, query, &stats)
+		if err != nil {
+			log.Printf("[WARNING] Failed getting SingulStats: %s", err)
+			return []SingulStats{}, err
+		}
+
+		if len(stats) == 0 {
+			return []SingulStats{}, nil
+		}
+
+		return stats, nil
+	}
+
+	return []SingulStats{}, errors.New("GetSingulStats not implemented for this database type")
+}
+
+func SetSingulStats(ctx context.Context, stats SingulStats) error {
+	nameKey := "singul_stats"
+
+	if project.DbType == "opensearch" {
+		// not implemented yet
+		return errors.New("SetSingulStats not implemented for opensearch")
+	} else {
+		if stats.Id == "" {
+			stats.Id = uuid.NewV4().String()
+		}
+
+		key := datastore.NameKey(nameKey, strings.ToLower(stats.Id), nil)
+		if _, err := project.Dbclient.Put(ctx, key, &stats); err != nil {
+			log.Printf("[WARNING] Error adding SingulStats: %s", err)
+			return err
+		}
+	}
+
+	return nil
+}
+
 func SetOrgMoveCache(ctx context.Context, orgId string) error {
 	nameKey := "org_move_cache_" + orgId
 	timeNow := int64(time.Now().Unix())
 
 	attempt := RegionChangeHistory{
-		OrgId: orgId,
-		LastAttempt:  timeNow,
+		OrgId:       orgId,
+		LastAttempt: timeNow,
 	}
-	
+
 	if project.CacheDb {
 		attemptByte, err := json.Marshal(attempt)
 		if err != nil {
@@ -14030,7 +13315,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 	//log.Printf("\n\nVALIDATING FINISHED. STATUS: %s. Action: %d, Results: %d\n", workflowExecution.Status, len(workflowExecution.Workflow.Actions), len(workflowExecution.Results))
 
 	// Validates RERUN of single actions  (new 2025)
-	// Identified by: 
+	// Identified by:
 	// 1. Predefined result from previous exec
 	// 2. Only ONE action
 	// 3. Every predefined result having result.Action.Category == "rerun"
@@ -14039,7 +13324,7 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 		found := false
 		for _, result := range workflowExecution.Results {
 			if result.Action.Category == "rerun" {
-				rerunFound = true 
+				rerunFound = true
 			}
 
 			// Find if the result for the single action exists or not
@@ -14130,10 +13415,9 @@ func ValidateFinished(ctx context.Context, extra int, workflowExecution Workflow
 
 			// Validate text vs previous executions
 			//RunTextClassifier(ctx, workflowExecution)
-
-			if rerunFound { 
+			if rerunFound {
 				return true
-			} 
+			}
 
 			comparisonTime := workflowExecution.CompletedAt - workflowExecution.StartedAt
 
@@ -14897,8 +14181,8 @@ func DeleteDbIndex(ctx context.Context, index string) error {
 		// Send the Delete By Query request
 		query := `{"query": {"match_all": {}}}`
 		res, err := project.Es.DeleteByQuery(
-			[]string{index},                              // Index name
-			bytes.NewReader([]byte(query)),         // Query body
+			[]string{index},                // Index name
+			bytes.NewReader([]byte(query)), // Query body
 			project.Es.DeleteByQuery.WithContext(ctx),
 			project.Es.DeleteByQuery.WithPretty(), // Pretty print response
 		)
@@ -15034,4 +14318,129 @@ func GetOrgAuth(ctx context.Context, session string) (User, error) {
 
 	// If found, return a sample admin user
 	return User{}, nil
+}
+
+// Returns the orgid related to the key
+func GetSyncApikeyByOrg(ctx context.Context, orgId string) (string, error) {
+	nameKey := "SyncKey"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+	newstring := []string{}
+	var syncKeys []SyncKey
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %s", cacheData)
+		err = json.Unmarshal(cacheData, &syncKeys)
+		if err == nil {
+			for _, item := range syncKeys {
+				newstring = append(newstring, item.Apikey)
+			}
+
+			return strings.Join(newstring, ","), nil
+		}
+	} else {
+		//log.Printf("[INFO] Failed getting cache for synckeys: %s", err)
+	}
+
+	dbclient, err := GetDatastoreClient(ctx, gceProject)
+	if err != nil {
+		log.Println(err)
+		return "", err
+	}
+
+	q := datastore.NewQuery(nameKey).Filter("OrgId =", orgId)
+	_, err = dbclient.GetAll(ctx, q, &syncKeys)
+	if err != nil && len(syncKeys) == 0 {
+		log.Printf("[WARNING] Error getting cloudsync apikeys: %s", err)
+		return "", err
+	}
+
+	returnData := ""
+	if len(syncKeys) == 1 {
+		returnData = syncKeys[0].Apikey
+	} else {
+		log.Printf("[WARNING] Error: Found %d synckeys for org %s. Should be one..? Returning with comma.", len(syncKeys), orgId)
+
+		for _, item := range syncKeys {
+			newstring = append(newstring, item.Apikey)
+		}
+
+		returnData = strings.Join(newstring, ",")
+	}
+
+	data, err := json.Marshal(syncKeys)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in getSynckeys: %s", err)
+		return returnData, nil
+	}
+
+	err = SetCache(ctx, cacheKey, data, 30)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for getSynckeys: %s", err)
+	}
+
+	return returnData, nil
+	//errors.New(fmt.Sprintf("Found %d keys for org %s", len(syncKeys), orgId))
+}
+
+// Returns the orgid related to the key
+func getSyncApikey(ctx context.Context, apikey string) (string, error) {
+	nameKey := "SyncKey"
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, apikey)
+
+	synckey := &SyncKey{}
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		//log.Printf("CACHEDATA: %s", cacheData)
+		err = json.Unmarshal(cacheData, &synckey)
+		if err == nil {
+			//log.Printf("[INFO] Successfully got cache for synckey with orgid %s", synckey.OrgId)
+			return synckey.OrgId, nil
+		}
+	} else {
+		log.Printf("[INFO] Failed getting cache for syncKEY: %s", err)
+	}
+
+	dbclient, err := GetDatastoreClient(ctx, gceProject)
+	if err != nil {
+		log.Println(err)
+		return "", err
+	}
+
+	key := datastore.NameKey(nameKey, apikey, nil)
+	if err := dbclient.Get(ctx, key, synckey); err != nil {
+		return "", err
+	}
+
+	data, err := json.Marshal(synckey)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in getSynckeys: %s", err)
+		return synckey.OrgId, nil
+	}
+
+	err = SetCache(ctx, cacheKey, data, 30)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting cache for getSynckeys: %s", err)
+	}
+
+	return synckey.OrgId, nil
+}
+
+func SetSyncApikey(ctx context.Context, synckey *SyncKey) error {
+	// clear session_token and API_token for user
+	dbclient, err := GetDatastoreClient(ctx, gceProject)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	synckey.CreatedAt = time.Now().Unix()
+
+	k := datastore.NameKey("SyncKey", synckey.Apikey, nil)
+	if _, err := dbclient.Put(ctx, k, synckey); err != nil {
+		return err
+	}
+
+	return nil
 }
