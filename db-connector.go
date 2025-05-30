@@ -5280,6 +5280,124 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 	return nil
 }
 
+// Partners functions
+func SetPartner(ctx context.Context, partner *Partner) error {
+    if partner == nil {
+        return errors.New("partner cannot be nil")
+    }
+
+    nameKey := "Partners"
+    timeNow := int64(time.Now().Unix())
+
+    // Set created time for new partners
+    if partner.Created == 0 {
+        partner.Created = timeNow
+    }
+    // Always update edited time
+    partner.Edited = timeNow
+
+    // Create datastore key and save
+    k := datastore.NameKey(nameKey, partner.Id, nil)
+    _, err := project.Dbclient.Put(ctx, k, partner)
+    if err != nil {
+        return err
+    }
+
+    // Update cache
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, partner.Id)
+		orgCacheKey := fmt.Sprintf("%s_org_%s", nameKey, partner.OrgId)
+		partnerData, err := json.Marshal(partner)
+		if err == nil {
+			SetCache(ctx, cacheKey, partnerData, 30)
+			SetCache(ctx, orgCacheKey, partnerData, 30)
+		}
+	}
+
+    return nil
+}
+
+func GetPartner(ctx context.Context, id string, orgId string) ([]Partner, error) {
+    nameKey := "Partners"
+    var partners []Partner
+
+    if id != "" && orgId == "" {
+        log.Printf("[DEBUG] Getting partner by partnerId %s", id)
+        
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		if project.CacheDb {
+			// Try to get from cache first
+			cachedData, err := GetCache(ctx, cacheKey)
+			if err == nil && cachedData != nil {
+				// Cache hit
+				partnerBytes, ok := cachedData.([]byte)
+				if ok {
+					partner := &Partner{}
+					err = json.Unmarshal(partnerBytes, partner)
+					if err == nil {
+						return []Partner{*partner}, nil
+					}
+				}
+			}
+		}
+        
+        // Cache miss or error, get from datastore
+        k := datastore.NameKey(nameKey, id, nil)
+        partner := &Partner{}
+        err := project.Dbclient.Get(ctx, k, partner)
+		if project.CacheDb {
+			if err == nil {
+				// Cache the result
+				partnerData, err := json.Marshal(partner)
+				if err == nil {
+					SetCache(ctx, cacheKey, partnerData, 30)
+				}
+				return []Partner{*partner}, nil
+			}
+		}
+    }
+
+    // If not found by ID or looking up by org_id
+    if orgId != "" {
+        log.Printf("[DEBUG] Getting partner by orgId %s", orgId)
+        
+        // Try to get from cache first
+        cacheKey := fmt.Sprintf("%s_org_%s", nameKey, orgId)
+		if project.CacheDb {
+			cachedData, err := GetCache(ctx, cacheKey)
+			if err == nil && cachedData != nil {
+				// Cache hit
+				partnersBytes, ok := cachedData.([]byte)
+				if ok {
+					err = json.Unmarshal(partnersBytes, &partners)
+					if err == nil {
+						return partners, nil
+					}
+				}
+			}
+		}
+        
+        // Cache miss or error, get from datastore
+        q := datastore.NewQuery(nameKey).Filter("org_id =", orgId)
+        _, err := project.Dbclient.GetAll(ctx, q, &partners)
+        if err != nil {
+            return nil, fmt.Errorf("failed to get partner by org_id: %w", err)
+        }
+        
+		if project.CacheDb {
+			// Cache the results
+			if len(partners) > 0 {
+				partnersData, err := json.Marshal(partners)
+				if err == nil {
+					SetCache(ctx, cacheKey, partnersData, 30)
+				}
+			}
+		}
+    }
+
+    return partners, nil
+}
+
 func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
 	// FIXME - this doesn't work
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
@@ -12439,6 +12557,131 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 
 	return usecase, nil
 
+}
+
+func SetUsecaseNew(ctx context.Context, usecase *UsecaseInfo) error {
+    if usecase == nil {
+        return errors.New("usecase cannot be nil")
+    }
+
+    nameKey := "Usecases"
+    timeNow := int64(time.Now().Unix())
+
+    // Set created time for new usecase
+    if usecase.Created == 0 {
+        usecase.Created = timeNow
+    }
+    // Always update edited time
+    usecase.Edited = timeNow
+
+    // Marshal data for storage and caching
+    data, err := json.Marshal(usecase)
+    if err != nil {
+        log.Printf("[WARNING] Failed marshalling in SetUsecaseNew: %s", err)
+        return nil
+    }
+
+    // Store in database based on type
+    if project.DbType == "opensearch" {
+        err = indexEs(ctx, nameKey, usecase.Id, data)
+        if err != nil {
+            log.Printf("[ERROR] Failed indexing usecase in OpenSearch: %s", err)
+            return err
+        }
+    } else {
+        key := datastore.NameKey(nameKey, usecase.Id, nil)
+        if _, err := project.Dbclient.Put(ctx, key, usecase); err != nil {
+            log.Printf("[ERROR] Error adding usecase: %s", err)
+            return err
+        }
+    }
+
+    // Update cache
+    if project.CacheDb {
+        // Cache the usecase by ID
+        cacheKey := fmt.Sprintf("%s_%s", nameKey, usecase.Id)
+		partnerCacheKey := fmt.Sprintf("%s_%s", nameKey, usecase.CompanyInfo.Id)
+		SetCache(ctx, partnerCacheKey, data, 30)
+        SetCache(ctx, cacheKey, data, 30)
+    }
+
+    return nil
+}
+
+func GetUsecaseNew(ctx context.Context, id string, usecaseId bool) ([]UsecaseInfo, error) {
+    nameKey := "Usecases"
+    var usecases []UsecaseInfo
+
+    if usecaseId {
+        // Try to get from cache first - by usecase ID
+        if project.CacheDb {
+            cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+            cacheData, err := GetCache(ctx, cacheKey)
+            if err == nil {
+                // Cache hit
+                var usecase UsecaseInfo
+                cacheBytes, ok := cacheData.([]byte)
+                if ok {
+                    err = json.Unmarshal(cacheBytes, &usecase)
+                    if err == nil {
+                        return []UsecaseInfo{usecase}, nil
+                    }
+                }
+            }
+        }
+
+        // Try to get by usecase ID first
+        k := datastore.NameKey(nameKey, id, nil)
+        usecase := &UsecaseInfo{}
+        err := project.Dbclient.Get(ctx, k, usecase)
+        if err == nil {
+            // Cache the result
+            if project.CacheDb {
+                data, err := json.Marshal(usecase)
+                if err == nil {
+                    cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+                    SetCache(ctx, cacheKey, data, 30)
+                }
+            }
+            return []UsecaseInfo{*usecase}, nil
+        }
+    }
+
+    // Try to get from cache - by partner ID
+    if project.CacheDb {
+        cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+        cacheData, err := GetCache(ctx, cacheKey)
+        if err == nil {
+            // Cache hit
+            var cachedUsecases []UsecaseInfo
+            cacheBytes, ok := cacheData.([]byte)
+            if ok {
+                err = json.Unmarshal(cacheBytes, &cachedUsecases)
+                if err == nil {
+                    return cachedUsecases, nil
+                }
+            }
+        }
+    }
+
+    // If not found by ID, try to find by partnerId
+    q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", id)
+    _, err := project.Dbclient.GetAll(ctx, q, &usecases)
+    if err != nil {
+        log.Printf("[ERROR] Failed to get usecases by company ID: %s", err)
+        return nil, fmt.Errorf("failed to get usecases by company ID: %w", err)
+    }
+
+    // Cache the partner ID results
+    if project.CacheDb && len(usecases) > 0 {
+        data, err := json.Marshal(usecases)
+        if err == nil {
+            cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+            SetCache(ctx, cacheKey, data, 30)
+        }
+    }
+
+    return usecases, nil
 }
 
 func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
