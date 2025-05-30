@@ -826,9 +826,11 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
 				log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
 			} else {
-				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
-				tx.Rollback()
-				return err
+				if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					log.Printf("[ERROR] Failed getting stats in increment: %s", err)
+					tx.Rollback()
+					return err
+				}
 			}
 		}
 
@@ -1319,6 +1321,25 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 
 	for additionIndex, _ := range executionInfo.Additions {
 		executionInfo.Additions[additionIndex].DailyValue = 0
+	}
+
+	now := time.Now()
+	currentMonth := int(now.Month())
+	if executionInfo.LastMonthlyResetMonth != currentMonth {
+		log.Printf("[DEBUG] Resetting monthly stats for org %s on %s", executionInfo.OrgId, now.Format("2006-01-02"))
+
+		executionInfo.MonthlyAppExecutions = 0
+		executionInfo.MonthlyAppExecutionsFailed = 0
+		executionInfo.MonthlySubflowExecutions = 0
+		executionInfo.MonthlyWorkflowExecutions = 0
+		executionInfo.MonthlyWorkflowExecutionsFinished = 0
+		executionInfo.MonthlyWorkflowExecutionsFailed = 0
+		executionInfo.MonthlyOrgSyncActions = 0
+		executionInfo.MonthlyCloudExecutions = 0
+		executionInfo.MonthlyOnpremExecutions = 0
+		executionInfo.MonthlyApiUsage = 0
+		executionInfo.MonthlyAIUsage = 0
+		executionInfo.LastMonthlyResetMonth = currentMonth
 	}
 
 	return executionInfo
