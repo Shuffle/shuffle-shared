@@ -90,7 +90,9 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	}
 
 	if len(newDaily) < len(stats.OnpremStats) {
-		log.Printf("[INFO] Deduped %d stats for org %s", len(stats.OnpremStats)-len(newDaily), id)
+		if debug { 
+			log.Printf("[DEBUG] Deduped %d stats for org %s", len(stats.OnpremStats)-len(newDaily), id)
+		}
 	}
 
 	stats.OnpremStats = newDaily
@@ -368,7 +370,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-					log.Printf("[WARNING] Failed setting cache for key '%s' with data size %d (2): %s", name, len(data), err)
+					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", name, len(data), err)
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
 				}
@@ -2746,7 +2748,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 	} else {
 		// Cloud database
-		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(1000)
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(200)
 
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
@@ -5185,7 +5187,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 
 		if len(user.Regions) > 1 {
 			go func() {
-				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+				log.Printf("[INFO] Propagating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
 				err = propagateUser(*user, false)
 				if err != nil {
 					log.Printf("[ERROR] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
