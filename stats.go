@@ -20,11 +20,15 @@ import (
 	"github.com/satori/go.uuid"
 )
 
-var dbInterval = 0x20
+// FIXME: There is some issue when going past 0x9 (>0xA) with how 
+// cache is being counted locally
+//var dbInterval = 0x20
+var dbInterval = 0x9
 
 // var dbInterval = 0x4
 var PredictableDataTypes = []string{
 	"app_executions",
+	"childorg_app_executions",
 	"workflow_executions",
 	"workflow_executions_finished",
 	"workflow_executions_failed",
@@ -1234,8 +1238,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 			//log.Printf("[DEBUG] Dumping cache for %s with amount %d", key, foundItem)
 		} else {
 			// Set cache
-			//setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
 			//setCacheValue := []byte(strconv.FormatInt(int64(foundItem), 16))
+			//setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
+
+			// FIXME: Something is wrong here past 0x9 :O
 			setCacheValue := []byte(fmt.Sprintf("%x", foundItem))
 			err = SetCache(ctx, key, setCacheValue, 86400)
 			if err != nil {
