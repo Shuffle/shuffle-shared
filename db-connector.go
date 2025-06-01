@@ -3009,6 +3009,17 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		}
 	}
 
+	for dailyStatIndex, _ := range stats.DailyStatistics {
+		for additionIndex, _ := range stats.DailyStatistics[dailyStatIndex].Additions {
+			stats.DailyStatistics[dailyStatIndex].Additions[additionIndex].Date = stats.DailyStatistics[dailyStatIndex].Date
+		}
+	}
+
+	// Sort stats.DailyStatistics by date. It's time.Time
+	sort.Slice(stats.DailyStatistics, func(i, j int) bool {
+		return stats.DailyStatistics[i].Date.Before(stats.DailyStatistics[j].Date)
+	})
+
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for stats %s", cacheKey)
 		data, err := json.Marshal(stats)

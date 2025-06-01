@@ -377,8 +377,20 @@ func BuildStructure(swagger *openapi3.Swagger, curHash string) (string, error) {
 
 	err := CopyFile(fmt.Sprintf("%sbaseline/Dockerfile", subpath), fmt.Sprintf("%s/%s", appPath, "Dockerfile"))
 	if err != nil {
-		log.Println("Failed to move Dockerfile")
+		log.Println("[ERROR] Failed to move Dockerfile")
 		return appPath, err
+	}
+
+	parsedAppPath := fmt.Sprintf("%s/%s", appPath, "requirements.txt")
+	requirements := GetAppRequirements()
+	if len(requirements) > 0 {
+		// Write it to the file just so that it's ready
+		err = ioutil.WriteFile(parsedAppPath, []byte(requirements), 0644)
+		if err != nil {
+			log.Printf("[ERROR] Failed to write requirements.txt during app build: %s", err)
+		} else {
+			return appPath, nil
+		}
 	}
 
 	err = CopyFile(fmt.Sprintf("%sbaseline/requirements.txt", subpath), fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
@@ -1941,7 +1953,7 @@ class %s(AppBase):
 if __name__ == "__main__":
     %s.run()
 `
-	
+
 	// From old when we actually used asyncio (:
 	//#asyncio.run(%s.run(), debug=True)
 	return baseString
@@ -4118,7 +4130,7 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 
 		} else {
 			err := errors.New(fmt.Sprintf("Invalid image appname format: %s", version.Name))
-			return "", "", "", err 
+			return "", "", "", err
 		}
 	}
 

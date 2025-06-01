@@ -364,6 +364,7 @@ type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
 	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions         int64 `json:"child_app_executions" datastore:"child_app_executions"`
 	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
 	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
 	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
