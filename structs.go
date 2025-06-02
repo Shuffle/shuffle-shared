@@ -2830,6 +2830,7 @@ type SSOConfig struct {
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
 	AutoProvision       bool   `json:"auto_provision" datastore:"auto_provision"`
 	RoleRequired        bool   `json:"role_required" datastore:"role_required"`
+	SkipSSOForAdmins    bool   `json:"skip_sso_for_admins" datastore:"skip_sso_for_admins"`
 }
 
 type SamlRequest struct {
