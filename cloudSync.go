@@ -714,7 +714,7 @@ func HandleAlgoliaUsecaseUpload(ctx context.Context, usecase UsecaseInfo, overwr
 			if overwrite {
 				break
 			} else {
-				return usecase.Id, errors.New("Partner ID already exists!")
+				return usecase.Id, errors.New("Usecase ID already exists!")
 			}
 		}
 	}

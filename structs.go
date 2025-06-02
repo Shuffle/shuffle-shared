@@ -960,7 +960,7 @@ type UsecaseInfo struct {
 		Title              string   `datastore:"title" json:"title"`
 		Description        string   `datastore:"description" json:"description"`
 		Categories         []string `datastore:"categories" json:"categories"`
-		PublicWorkflowID   string   `datastore:"PublicWorkflowIDx" json:"publicWorkflowId"`
+		PublicWorkflowID   string   `datastore:"PublicWorkflowId" json:"publicWorkflowId"`
 		SourceAppType      string   `datastore:"sourceAppType" json:"sourceAppType"`
 		DestinationAppType string   `datastore:"destinationAppType" json:"destinationAppType"`
 	} `datastore:"mainContent" json:"mainContent"`
