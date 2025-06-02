@@ -78,10 +78,25 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	nameKey := "org_statistics"
 
 	// dedup based on date
-	allDates := []string{}
+	if stats.OrgId == "" {
+		_, err := GetOrgStatistics(ctx, id)
+		if err == nil {
+			log.Printf("[ERROR] Org statistics already exists for org %s, skipping initialization with user stats.", id)
+			return nil
+		}
 
+		log.Printf("[WARNING] Initializing org stats for org %s as org ID wasn't set", id)
+		stats.OrgId = id
+	}
+
+	allDates := []string{}
 	newDaily := []DailyStatistics{}
 	for _, stat := range stats.OnpremStats {
+		if stat.Date.IsZero() {
+			continue
+		}
+
+		stat.Date = stat.Date.UTC()
 		statdate := stat.Date.Format("2006-12-30")
 		if !ArrayContains(allDates, statdate) {
 			newDaily = append(newDaily, stat)
@@ -3245,7 +3260,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
-			log.Printf("[INFO] Appending workflows (ADMIN + suborg distribution) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
+			if debug { 
+				log.Printf("[DEBUG] Appending workflows (ADMIN + suborg distribution) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
+			}
 		}
 
 	} else {

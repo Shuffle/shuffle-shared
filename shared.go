@@ -8670,8 +8670,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Errors:  workflow.Errors,
 	}
 
-	// Really don't know why this was happening
-	log.Printf("[INFO] Saved new version of workflow '%s' (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
+	if !strings.Contains(strings.ToLower(workflow.Name), "ops dashboard") { 
+		log.Printf("[INFO] Saved new version of workflow '%s' (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
+	}
+
 	resp.WriteHeader(200)
 	newBody, err := json.Marshal(returndata)
 	if err != nil {

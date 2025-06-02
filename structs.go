@@ -211,6 +211,8 @@ type WorkflowApp struct {
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
 
 	ReferenceInfo struct {
+		OnpremBackup bool     `json:"onprem_backup" datastore:"onprem_backup"`
+
 		IsPartner        bool     `json:"is_partner" datastore:"is_partner"`
 		PartnerContacts  string   `json:"partner_contacts" datastore:"partner_contacts"`
 		DocumentationUrl string   `json:"documentation_url" datastore:"documentation_url"`
@@ -1425,6 +1427,8 @@ type Workflow struct {
 }
 
 type BackupConfig struct {
+	OnpremBackup bool   `json:"onprem_backup" datastore:"onprem_backup"`
+
 	UploadRepo     string `json:"upload_repo" datastore:"upload_repo"`
 	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
 	UploadUsername string `json:"upload_username" datastore:"upload_username"`
