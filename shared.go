@@ -9149,7 +9149,6 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 			partnerId = location[4]
 		}
 	}
-	log.Printf("[DEBUG] Getting partner with ID: %s", partnerId)
 
 	ctx := GetContext(request)
 	orgId := request.Header.Get("Org-Id")
@@ -9274,7 +9273,6 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 
 			// Check if partner name has changed
 			if existingPartner.Name != tmpData.Name && len(existingPartner.Usecases) > 0 {
-				log.Printf("[INFO] Partner name changed from '%s' to '%s'. Updating usecases...", existingPartner.Name, tmpData.Name)
 
 				// Update all usecases associated with this partner
 				for _, usecaseId := range existingPartner.Usecases {
@@ -9300,8 +9298,6 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 						err = SetUsecaseNew(ctx, &usecase)
 						if err != nil {
 							log.Printf("[WARNING] Failed to update usecase %s in database: %v", usecase.Id, err)
-						} else {
-							log.Printf("[INFO] Successfully updated usecase %s with new partner name", usecase.Id)
 						}
 					}
 				}
@@ -25478,6 +25474,138 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(response)
+}
+
+func HandleDeleteUsecase(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in delete usecase: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User isn't admin to delete usecase: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(409)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
+		return
+	}
+
+	location := strings.Split(request.URL.String(), "/")
+	var Id string
+	if location[1] == "api" {
+		if len(location) <= 4 {
+			log.Printf("[ERROR] Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		Id = location[4]
+	}
+
+	ctx := GetContext(request)
+	usecases, err := GetUsecaseNew(ctx, Id, true)
+	if err != nil || len(usecases) == 0 {
+		log.Printf("[ERROR] Failed getting usecase %s: %s", Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting usecase"}`))
+		return
+	}
+
+	usecase := usecases[0]
+
+	if len(usecase.Id) == 0 {
+		log.Printf("[ERROR] Usecase %s not found", Id)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Usecase not found"}`))
+		return
+	}
+
+	if len(usecase.CompanyInfo.Id) == 0 {
+		log.Printf("[WARNING] No partner ID provided for usecase %s", usecase.CompanyInfo.Name)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No company ID provided"}`))
+		return
+	}
+
+	partners, err := GetPartner(ctx, usecase.CompanyInfo.Id, "")
+	if err != nil || len(partners) == 0 {
+		log.Printf("[WARNING] Partner %v doesn't exist.", partners)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed finding partner"}`))
+		return
+	}
+
+	partner := partners[0]
+
+	// Check if the usecase is in the partner's usecases
+	found := false
+
+	for i, usecaseId := range partner.Usecases {
+		if usecaseId == usecase.Id {
+			found = true
+			// Remove the usecase from the partner's usecases
+			partner.Usecases = append(partner.Usecases[:i], partner.Usecases[i+1:]...)
+			log.Printf("[DEBUG] Removed usecase %s from partner %s's usecases", usecase.Id, partner.Id)
+			break
+		}
+	}
+
+	if !found {
+		log.Printf("[DEBUG] Usecase %s not found in partner %s's usecases", usecase.Id, partner.Id)
+		resp.WriteHeader(404)
+		resp.Write([]byte(`{"success": false, "reason": "Usecase not found in partner's usecases"}`))
+		return
+	}
+
+	// Update the partner with the modified usecases
+	err = SetPartner(ctx, &partner)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting partner %s with usecase %s: %v", partner.Id, usecase.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed updating partner with usecase deletion"}`))
+		return
+	}
+
+	// Remove usecase from Algolia
+	err = HandleAlgoliaUsecaseDeletion(ctx, usecase.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed deleting usecase from Algolia: %v", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed deleting usecase from Algolia"}`))
+		return
+	}
+
+	// Delete usecase from database
+	nameKey := "Usecases"
+	DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, usecase.CompanyInfo.Id))
+	err = DeleteKey(ctx, nameKey, usecase.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed deleting usecase: %v", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed deleting usecase"}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Successfully deleted usecase %s", usecase.Id)
+	resp.WriteHeader(200)
+	resp.Write([]byte(`{"success": true, "message": "Usecase deleted successfully"}`))
+	return
 }
 
 func GetBackendexecution(ctx context.Context, executionId, authorization string) (WorkflowExecution, error) {

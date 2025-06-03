@@ -746,6 +746,53 @@ func HandleAlgoliaUsecaseUpload(ctx context.Context, usecase UsecaseInfo, overwr
 	return usecase.Id, nil
 }
 
+// Usecase deletion
+func HandleAlgoliaUsecaseDeletion(ctx context.Context, usecaseId string) error {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("usecases")
+	res, err := algoliaIndex.Search(usecaseId)
+	if err != nil {
+		log.Printf("[ERROR] Failed searching Algolia creators (%s): %s", usecaseId, err)
+		return err
+	}
+
+	var newRecords []AlgoliaSearchUsecase
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia creators: %s", err)
+		return err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	foundItem := AlgoliaSearchUsecase{}
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == usecaseId {
+			foundItem = newRecord
+			break
+		}
+	}
+
+	// Should delete it?
+	if len(foundItem.ObjectID) > 0 {
+		_, err = algoliaIndex.DeleteObject(foundItem.ObjectID)
+		if err != nil {
+			log.Printf("[WARNING] Algolia Usecase delete problem: %s", err)
+			return err
+		}
+
+		log.Printf("[INFO] Successfully removed usecase %s with ID %s FROM ALGOLIA!", foundItem.Name, usecaseId)
+	}
+
+	return nil
+}
+
 // Shitty temorary system
 // Adding schedule to run over with another algorithm
 // as well as this one, as to increase priority based on popularity:
