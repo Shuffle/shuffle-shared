@@ -12578,7 +12578,7 @@ func SetUsecaseNew(ctx context.Context, usecase *UsecaseInfo) error {
     data, err := json.Marshal(usecase)
     if err != nil {
         log.Printf("[WARNING] Failed marshalling in SetUsecaseNew: %s", err)
-        return nil
+        return err
     }
 
     // Store in database based on type
