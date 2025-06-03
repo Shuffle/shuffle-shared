@@ -25278,6 +25278,15 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
 	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		resp.WriteHeader(401)
