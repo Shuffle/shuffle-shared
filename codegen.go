@@ -258,7 +258,7 @@ func GetAppbase() ([]byte, []byte, error) {
 
 	appbaseData, err := ioutil.ReadFile(appbase)
 	if err != nil {
-		// FIXME: Use an older commit of the file
+		// FIXME: Use an older commit of the file?
 		githubUrl := "https://raw.githubusercontent.com/Shuffle/app_sdk/refs/heads/main/shuffle_sdk/shuffle_sdk.py"
 		content, err := getGithubFile(githubUrl)
 		return content, []byte{}, err
@@ -284,7 +284,7 @@ func GetAppbaseGCP(ctx context.Context, client *storage.Client, bucketName strin
 		attrs, err := reference.Attrs(ctx)
 		if err == nil {
 			if attrs.Updated.Before(time.Now().AddDate(0, -1, 0)) {
-				log.Printf("[DEBUG] App base is older than 1 month on github. Offloading to direct github ref")
+				log.Printf("[WARNING] App base is older than 1 month on github. Offloading to direct github ref")
 			} else {
 				loadFromGithub = false
 			}
@@ -348,7 +348,20 @@ func BuildStructureGCP(ctx context.Context, client *storage.Client, identifier, 
 	basePath := "generated_apps"
 	//identifier := fmt.Sprintf("%s-%s", swagger.Info.Title, curHash)
 	appPath := fmt.Sprintf("%s/%s", basePath, identifier)
-	fileNames := []string{"Dockerfile", "requirements.txt"}
+	//fileNames := []string{"Dockerfile", "requirements.txt"}
+	//fileNames := []string{"Dockerfile", "requirements.txt"}
+	fileNames := []string{"Dockerfile"}
+	requirements := GetAppRequirements()
+	if len(requirements) > 0 {
+
+		// Write the requirements text to the file just so that it's ready
+		dst := client.Bucket(bucketName).Object(fmt.Sprintf("%s/%s", appPath, "requirements.txt"))
+		if _, err := dst.NewWriter(ctx).Write([]byte(requirements)); err != nil {
+			log.Printf("[ERROR] Failed to write requirements.txt during app build: %s", err)
+			fileNames = append(fileNames, "requirements.txt")
+		}
+	}
+
 	for _, file := range fileNames {
 		src := client.Bucket(bucketName).Object(fmt.Sprintf("%s/baseline/%s", basePath, file))
 		dst := client.Bucket(bucketName).Object(fmt.Sprintf("%s/%s", appPath, file))

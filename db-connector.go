@@ -4586,7 +4586,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 				return *api, nil
 			}
 
-			log.Printf("[ERROR] Some OpenAPI  refissue for ID '%s': %s", id, err)
+			log.Printf("[ERROR] Some OpenAPI refissue for ID '%s': %s", id, err)
 
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
@@ -5323,6 +5323,10 @@ func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 }
 
 func fixUserOrg(ctx context.Context, user *User) *User {
+	// Made it background due to potential timeouts if this is 
+	// used in API calls
+	ctx = context.Background()
+
 	found := false
 	for _, id := range user.Orgs {
 		if user.ActiveOrg.Id == id {
@@ -5349,32 +5353,34 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 			continue
 		}
 
-		org, err := GetOrg(ctx, orgId)
-		if err != nil {
-			log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
-			continue
-		}
-
-		orgIndex := 0
-		userFound := false
-		for index, orgUser := range org.Users {
-			if orgUser.Id == user.Id {
-				orgIndex = index
-				userFound = true
-				break
+		go func(orgId string) {
+			org, err := GetOrg(ctx, orgId)
+			if err != nil {
+				log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				return
 			}
-		}
 
-		if userFound {
-			org.Users[orgIndex] = innerUser
-		} else {
-			org.Users = append(org.Users, innerUser)
-		}
+			orgIndex := 0
+			userFound := false
+			for index, orgUser := range org.Users {
+				if orgUser.Id == user.Id {
+					orgIndex = index
+					userFound = true
+					break
+				}
+			}
 
-		err = SetOrg(ctx, *org, org.Id)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org %s (2)", orgId)
-		}
+			if userFound {
+				org.Users[orgIndex] = innerUser
+			} else {
+				org.Users = append(org.Users, innerUser)
+			}
+
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org %s (2)", orgId)
+			}
+		}(orgId)
 	}
 
 	return user
