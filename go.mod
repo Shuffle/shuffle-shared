@@ -1,8 +1,6 @@
 module github.com/shuffle/shuffle-shared
 
-go 1.23.0
-
-toolchain go1.23.1
+go 1.24.0
 
 //replace github.com/frikky/kin-openapi => ../kin-openapi
 //replace github.com/shuffle/opensearch-go => ../opensearch-go
@@ -75,7 +73,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.7.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
-	github.com/go-jose/go-jose/v4 v4.0.4 // indirect
+	github.com/go-jose/go-jose/v4 v4.0.5 // indirect
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
