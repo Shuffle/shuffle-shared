@@ -3463,7 +3463,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just here to verify that the user is logged in
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in validate swagger: %s", err)
 		resp.WriteHeader(401)
@@ -3484,29 +3484,35 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 		id = location[4]
 	}
 
-	/*
-		if len(id) != 32 {
-			log.Printf("Missing parts of API in request!")
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	*/
-	//_, err = GetApp(ctx, id)
-	//if err == nil {
-	//}
-
-	// FIXME - FIX AUTH WITH APP
-	ctx := GetContext(request)
-	parsedApi, err := GetOpenApiDatastore(ctx, id)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting OpenAPI: %s", err)
-		resp.WriteHeader(401)
+	if len(id) != 32 {
+		log.Printf("Missing parts of API in request!")
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	log.Printf("[INFO] API LENGTH GET: %d, ID: %s", len(parsedApi.Body), id)
+	ctx := GetContext(request)
+	parsedApi, openapiErr := GetOpenApiDatastore(ctx, id)
+	if openapiErr != nil {
+		log.Printf("[ERROR] Failed getting OpenAPI %s: %s", id, err)
+	}
+
+	app, err := GetApp(ctx, id, user, false)
+	if err == nil || len(app.ID) > 0 {
+		log.Printf("[AUDIT] Found app %s (%s) for OpenAPI. Checking for user %s (%s) in org %s (%s) to access", app.Name, id, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		if !app.Public && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+		// Try cross region loading? 
+		//if openapiLoad != nil {
+		//}
+	}
+
+	log.Printf("[INFO] OpenAPI Get length: %d, ID: %s", len(parsedApi.Body), id)
 
 	parsedApi.Success = true
 	data, err := json.Marshal(parsedApi)
@@ -15470,8 +15476,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	//log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
-	//os.Exit(3)
 	return &workflowExecution, true, nil
 }
 

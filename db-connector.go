@@ -4314,6 +4314,10 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org '%s': %s", cacheKey, err)
 		}
+
+		for _, user := range data.Users {
+			DeleteCache(ctx, fmt.Sprintf("user_orgs_%s", user.Id))
+		}
 	}
 
 	return nil
@@ -6132,10 +6136,18 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 
 		parentOrg := &Org{}
+		if len(org.CreatorOrg) > 0 && len(org.ManagerOrgs) == 0 {
+			org.ManagerOrgs = []OrgMini{
+				OrgMini{
+					Id: org.CreatorOrg,
+				},
+			}
+		}
+		
 		if len(org.ManagerOrgs) > 0 {
 			parentOrg, err = GetOrg(ctx, org.ManagerOrgs[0].Id)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting parent org %s during app load verification: %s", org.ManagerOrgs[0], err)
+				log.Printf("[ERROR] Failed getting parent org %s during app load verification: %s", org.ManagerOrgs[0].Id, err)
 			}
 		}
 
@@ -9336,10 +9348,12 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
+	/*
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
 	DeleteCache(ctx, cacheKey)
 	cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
 	DeleteCache(ctx, cacheKey)
+	*/
 
 	return nil
 }
@@ -9645,7 +9659,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			} else if strings.Contains(fmt.Sprintf("%s", err), "no matching index found") || strings.Contains(fmt.Sprintf("%s", err), "not ready to serve") {
 				log.Printf("[ERROR] Failed loading notifications based on index: %s", err)
 
-				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(200)
+				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(199)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
@@ -9664,7 +9678,10 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		// Set it low, because Notifications are very often being set 
+		// in certain cases. This means lowering this, will increase cache util
+		// while not clearing it on every SetNotification()
+		err = SetCache(ctx, cacheKey, data, 5)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification cache: %s", err)
 		}
