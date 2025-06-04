@@ -78,10 +78,25 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	nameKey := "org_statistics"
 
 	// dedup based on date
-	allDates := []string{}
+	if stats.OrgId == "" {
+		_, err := GetOrgStatistics(ctx, id)
+		if err == nil {
+			log.Printf("[ERROR] Org statistics already exists for org %s, skipping initialization with user stats.", id)
+			return nil
+		}
 
+		log.Printf("[WARNING] Initializing org stats for org %s as org ID wasn't set", id)
+		stats.OrgId = id
+	}
+
+	allDates := []string{}
 	newDaily := []DailyStatistics{}
 	for _, stat := range stats.OnpremStats {
+		if stat.Date.IsZero() {
+			continue
+		}
+
+		stat.Date = stat.Date.UTC()
 		statdate := stat.Date.Format("2006-12-30")
 		if !ArrayContains(allDates, statdate) {
 			newDaily = append(newDaily, stat)
@@ -90,7 +105,9 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	}
 
 	if len(newDaily) < len(stats.OnpremStats) {
-		log.Printf("[INFO] Deduped %d stats for org %s", len(stats.OnpremStats)-len(newDaily), id)
+		if debug { 
+			log.Printf("[DEBUG] Deduped %d stats for org %s", len(stats.OnpremStats)-len(newDaily), id)
+		}
 	}
 
 	stats.OnpremStats = newDaily
@@ -368,7 +385,7 @@ func SetCache(ctx context.Context, name string, data []byte, expiration int32) e
 
 			if err != nil {
 				if !strings.Contains(fmt.Sprintf("%s", err), "App Engine context") {
-					log.Printf("[WARNING] Failed setting cache for key '%s' with data size %d (2): %s", name, len(data), err)
+					log.Printf("[ERROR] Failed setting memcache for key '%s' with data size %d (2): %s", name, len(data), err)
 				} else {
 					log.Printf("[ERROR] Something bad with App Engine context for memcache (key: %s): %s", name, err)
 				}
@@ -2746,7 +2763,7 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 		}
 	} else {
 		// Cloud database
-		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(1000)
+		query := datastore.NewQuery(nameKey).Filter("creator_org =", orgId).Limit(200)
 
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
@@ -3007,6 +3024,17 @@ func GetOrgStatistics(ctx context.Context, orgId string) (*ExecutionInfo, error)
 		}
 	}
 
+	for dailyStatIndex, _ := range stats.DailyStatistics {
+		for additionIndex, _ := range stats.DailyStatistics[dailyStatIndex].Additions {
+			stats.DailyStatistics[dailyStatIndex].Additions[additionIndex].Date = stats.DailyStatistics[dailyStatIndex].Date
+		}
+	}
+
+	// Sort stats.DailyStatistics by date. It's time.Time
+	sort.Slice(stats.DailyStatistics, func(i, j int) bool {
+		return stats.DailyStatistics[i].Date.Before(stats.DailyStatistics[j].Date)
+	})
+
 	if project.CacheDb {
 		//log.Printf("[DEBUG] Setting cache for stats %s", cacheKey)
 		data, err := json.Marshal(stats)
@@ -3232,7 +3260,9 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
-			log.Printf("[INFO] Appending workflows (ADMIN + suborg distribution) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
+			if debug { 
+				log.Printf("[DEBUG] Appending workflows (ADMIN + suborg distribution) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
+			}
 		}
 
 	} else {
@@ -4556,7 +4586,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 				return *api, nil
 			}
 
-			log.Printf("[ERROR] Some OpenAPI  refissue for ID '%s': %s", id, err)
+			log.Printf("[ERROR] Some OpenAPI refissue for ID '%s': %s", id, err)
 
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
@@ -5185,7 +5215,7 @@ func SetUser(ctx context.Context, user *User, updateOrg bool) error {
 
 		if len(user.Regions) > 1 {
 			go func() {
-				log.Printf("[INFO] Updating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
+				log.Printf("[INFO] Propagating user %s in org %s (%s) with region %#v", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, user.Regions)
 				err = propagateUser(*user, false)
 				if err != nil {
 					log.Printf("[ERROR] Failed propagating user %s (%s) with region %#v: %s", user.Username, user.Id, user.Regions, err)
@@ -5293,6 +5323,10 @@ func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 }
 
 func fixUserOrg(ctx context.Context, user *User) *User {
+	// Made it background due to potential timeouts if this is 
+	// used in API calls
+	ctx = context.Background()
+
 	found := false
 	for _, id := range user.Orgs {
 		if user.ActiveOrg.Id == id {
@@ -5319,32 +5353,34 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 			continue
 		}
 
-		org, err := GetOrg(ctx, orgId)
-		if err != nil {
-			log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
-			continue
-		}
-
-		orgIndex := 0
-		userFound := false
-		for index, orgUser := range org.Users {
-			if orgUser.Id == user.Id {
-				orgIndex = index
-				userFound = true
-				break
+		go func(orgId string) {
+			org, err := GetOrg(ctx, orgId)
+			if err != nil {
+				log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				return
 			}
-		}
 
-		if userFound {
-			org.Users[orgIndex] = innerUser
-		} else {
-			org.Users = append(org.Users, innerUser)
-		}
+			orgIndex := 0
+			userFound := false
+			for index, orgUser := range org.Users {
+				if orgUser.Id == user.Id {
+					orgIndex = index
+					userFound = true
+					break
+				}
+			}
 
-		err = SetOrg(ctx, *org, org.Id)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org %s (2)", orgId)
-		}
+			if userFound {
+				org.Users[orgIndex] = innerUser
+			} else {
+				org.Users = append(org.Users, innerUser)
+			}
+
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org %s (2)", orgId)
+			}
+		}(orgId)
 	}
 
 	return user
@@ -5459,7 +5495,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			parentAuths, err := GetAllWorkflowAppAuth(ctx, parentOrg.Id)
 			if err == nil {
 				for _, parentAuth := range parentAuths {
-					if !parentAuth.SuborgDistributed {
+					if !parentAuth.SuborgDistributed && !ArrayContains(parentAuth.SuborgDistribution, orgId) {
 						continue
 					}
 

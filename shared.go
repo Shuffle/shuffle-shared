@@ -964,7 +964,10 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	// Check if orgauth is expired
 	if org.OrgAuth.Expires.Before(time.Now()) {
-		log.Printf("[DEBUG] Refreshing org token for %s (%s)", org.Name, org.Id)
+		if debug {
+			log.Printf("[DEBUG] Refreshing org token for %s (%s)", org.Name, org.Id)
+		}
+
 		org.OrgAuth.Token = uuid.NewV4().String()
 		org.OrgAuth.Expires = time.Now().AddDate(0, 0, 1)
 
@@ -1175,6 +1178,7 @@ func HandleGetOrg(resp http.ResponseWriter, request *http.Request) {
 
 	for suborg := range ch {
 		if suborg.CreatorOrg == org.Id {
+			suborg.Image = ""
 			org.ChildOrgs = append(org.ChildOrgs, suborg)
 		}
 	}
@@ -4359,8 +4363,9 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type configAuth struct {
-		Id     string `json:"id"`
-		Action string `json:"action"`
+		Id             string   `json:"id"`
+		Action         string   `json:"action"`
+		SelectedSuborg []string `json:"selected_suborgs"`
 	}
 
 	var config configAuth
@@ -4422,10 +4427,12 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if auth.SuborgDistributed {
+		if len(config.SelectedSuborg) == 0 {
+			auth.SuborgDistribution = []string{}
 			auth.SuborgDistributed = false
 		} else {
-			auth.SuborgDistributed = true
+			auth.SuborgDistribution = config.SelectedSuborg
+			auth.SuborgDistributed = false
 		}
 
 		err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
@@ -8666,8 +8673,10 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Errors:  workflow.Errors,
 	}
 
-	// Really don't know why this was happening
-	log.Printf("[INFO] Saved new version of workflow '%s' (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
+	if !strings.Contains(strings.ToLower(workflow.Name), "ops dashboard") { 
+		log.Printf("[INFO] Saved new version of workflow '%s' (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
+	}
+
 	resp.WriteHeader(200)
 	newBody, err := json.Marshal(returndata)
 	if err != nil {
@@ -11431,6 +11440,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
+
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating parent org %s: %s", newOrg.Id, err)
@@ -13452,7 +13463,10 @@ func GetRequestIp(r *http.Request) string {
 		// The client's IP is usually the first one.
 		stringSplit := strings.Split(forwardedFor, ",")
 		if len(stringSplit) > 1 {
-			log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s. Returning first.", forwardedFor)
+			if debug { 
+				log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s. Returning first.", forwardedFor)
+			}
+
 			return stringSplit[0]
 		} else {
 			return forwardedFor
@@ -14812,7 +14826,7 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 			newCacheKey := fmt.Sprintf("%s_%s_sinkholed_result", executionParent, parentNode)
 			cacheData, err := GetCache(ctx, newCacheKey)
 			if err != nil {
-				log.Printf("[ERROR] Failed setting cache for subflow action result %s (4): %s", subflowExecutionId, err)
+				log.Printf("[ERROR] Failed Getting sinkholed cache for subflow action result %s (4): %s", subflowExecutionId, err)
 			} else {
 
 				mappedData, ok := cacheData.([]byte)
@@ -15673,7 +15687,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		// This is finicky, but it's the easiest fix for this
 
 		if setExecutionVariable(actionResult) {
-			log.Printf("[DEBUG][%s] Updating exec variable '%s' with new value from node '%s' of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, actionResult.Action.Label, len(actionResult.Result))
+			if debug { 
+				log.Printf("[DEBUG][%s] Updating exec variable '%s' with new value from node '%s' of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, actionResult.Action.Label, len(actionResult.Result))
+			}
 
 			if len(workflowExecution.Results) > 0 {
 				// Should this be used?
@@ -16060,7 +16076,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			// FIXME: Debug logs necessary to understand how workflows finish?
-			log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
+			if debug { 
+				log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
+			}
+
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -22738,7 +22757,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 	}
 
 	if !startnodeFound {
-		log.Printf("[ERROR] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
+		log.Printf("[ERROR][%s] Couldn't find startnode %s among %d actions in workflow '%s'. Remapping to %s", workflowExecution.ExecutionId, workflowExecution.Start, len(workflowExecution.Workflow.Actions), workflowExecution.Workflow.ID, newStartnode)
 
 		if len(newStartnode) > 0 {
 			workflowExecution.Start = newStartnode
@@ -22833,7 +22852,9 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							workflowExecution.Workflow.Actions[workflowExecutionIndex].Parameters[paramKey].Value = backupApikey
 						}
 
-						log.Printf("[DEBUG] Replaced apikey for %s with %s", param.Name, action.Parameters[paramKey].Value)
+						if debug { 
+							log.Printf("[DEBUG] Replaced apikey for %s with %s", param.Name, action.Parameters[paramKey].Value)
+						}
 
 						break
 					}
@@ -28396,7 +28417,9 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request, am
 
 	//log.Printf("\n\n\nIP: %s\n\n\n", foundIP)
 	if foundIP == "" || foundIP == "127.0.0.1" || foundIP == "::1" || foundIP == "[::1]" {
-		log.Printf("[DEBUG] Skipping request overload check for IP: %s", foundIP)
+		if debug { 
+			log.Printf("[DEBUG] Skipping request overload check for IP: %s", foundIP)
+		}
 		return nil
 	}
 
