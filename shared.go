@@ -11440,6 +11440,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
+
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating parent org %s: %s", newOrg.Id, err)
