@@ -5495,7 +5495,7 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 			parentAuths, err := GetAllWorkflowAppAuth(ctx, parentOrg.Id)
 			if err == nil {
 				for _, parentAuth := range parentAuths {
-					if !parentAuth.SuborgDistributed {
+					if !parentAuth.SuborgDistributed && !ArrayContains(parentAuth.SuborgDistribution, orgId) {
 						continue
 					}
 

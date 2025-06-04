@@ -4363,8 +4363,9 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	type configAuth struct {
-		Id     string `json:"id"`
-		Action string `json:"action"`
+		Id             string   `json:"id"`
+		Action         string   `json:"action"`
+		SelectedSuborg []string `json:"selected_suborgs"`
 	}
 
 	var config configAuth
@@ -4426,10 +4427,12 @@ func SetAuthenticationConfig(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		if auth.SuborgDistributed {
+		if len(config.SelectedSuborg) == 0 {
+			auth.SuborgDistribution = []string{}
 			auth.SuborgDistributed = false
 		} else {
-			auth.SuborgDistributed = true
+			auth.SuborgDistribution = config.SelectedSuborg
+			auth.SuborgDistributed = false
 		}
 
 		err = SetWorkflowAppAuthDatastore(ctx, *auth, auth.Id)
@@ -11437,6 +11440,8 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 	})
 
 	DeleteCache(ctx, fmt.Sprintf("%s_childorgs", parentOrg.Id))
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
+
 	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed updating parent org %s: %s", newOrg.Id, err)
