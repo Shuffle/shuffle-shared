@@ -1340,6 +1340,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 		log.Printf("[DEBUG] Resetting monthly stats for org %s on %s", executionInfo.OrgId, now.Format("2006-01-02"))
 
 		executionInfo.MonthlyAppExecutions = 0
+		executionInfo.MonthlyChildAppExecutions = 0
 		executionInfo.MonthlyAppExecutionsFailed = 0
 		executionInfo.MonthlySubflowExecutions = 0
 		executionInfo.MonthlyWorkflowExecutions = 0
