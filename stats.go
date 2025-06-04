@@ -737,7 +737,17 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		return err
 	}
 
-	if len(tmpOrgDetail.ManagerOrgs) > 0 && dataType == "app_executions" || dataType == "app_runs" {
+	// Ensuring we at least have one.
+	if len(tmpOrgDetail.ManagerOrgs) == 0 && len(tmpOrgDetail.CreatorOrg) > 0 {
+		tmpOrgDetail.ManagerOrgs = append(tmpOrgDetail.ManagerOrgs, OrgMini{
+			Id: tmpOrgDetail.CreatorOrg,
+		})
+	}
+
+	// FIXME: Can look for childorg_app_executions here as well which
+	// would make tracking app runs at scale recursively work
+	// The problem is... recursion (:
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "app_executions" || dataType == "app_runs") {
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_app_executions", int(dbDumpInterval))

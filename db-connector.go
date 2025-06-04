@@ -4216,6 +4216,14 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 	}
 
+	if len(data.ManagerOrgs) == 0 && len(data.CreatorOrg) > 0 {
+		data.ManagerOrgs = []OrgMini{
+			OrgMini{
+				Id:   data.CreatorOrg,
+			},
+		}
+	}
+
 	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
 	if data.Created == 0 {
