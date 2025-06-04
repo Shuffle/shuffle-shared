@@ -181,6 +181,7 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 		log.Printf("Packing failed to create zip file from bucket: %v", err)
 		return filename, err
 	}
+
 	if _, err := fmt.Fprintln(zipFile, requirements); err != nil {
 		return filename, err
 	}
@@ -191,13 +192,6 @@ func StreamZipdata(ctx context.Context, identifier, pythoncode, requirements, bu
 		return filename, err
 	}
 
-	//src := client.Bucket(bucketName).Object(fmt.Sprintf("%s/baseline/%s", basePath, file))
-	//dst := client.Bucket(bucketName).Object(fmt.Sprintf("%s/%s", appPath, file))
-	//if _, err := dst.CopierFrom(src).Run(ctx); err != nil {
-	//	return "", err
-	//}
-
-	//log.Printf("Finished upload")
 	return filename, nil
 }
 
@@ -4165,7 +4159,9 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 		baseAppname = newstring[0 : len(newstring)-5]
 	}
 
-	log.Printf("%#v - BASEAPPNAME: %#v, %#v", appname, baseAppname, appnameSplit2)
+	if debug { 
+		log.Printf("%#v - BASEAPPNAME: %#v, %#v", appname, baseAppname, appnameSplit2)
+	}
 
 	// Check if baseAppname ends with _<md5> and if so, remove it
 	if len(appId) > 0 {
