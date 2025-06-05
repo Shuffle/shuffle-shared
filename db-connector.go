@@ -3272,11 +3272,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			return workflows, errors.New("No active org to find workflows for found")
 		}
 
+		//log.Printf("\n\n\nLooking for workflows for org %s with user %s (%s)\n\n\n", user.ActiveOrg.Id, user.Username, user.Id)
+
 		cursorStr := ""
 		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
 		for {
 			it := project.Dbclient.Run(ctx, query)
-
 			if len(workflows) >= maxAmount {
 				break
 			}
@@ -3297,10 +3298,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
+					log.Printf("skip public")
 					continue
 				}
 
 				if innerWorkflow.Hidden {
+					log.Printf("skip hidden")
 					continue
 				}
 
@@ -3334,6 +3337,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
 				if cursorStr == nextStr {
+					//log.Printf("skip cursor")
 					break
 				}
 
@@ -3342,6 +3346,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			}
 		}
 	}
+
+	//log.Printf("Found %d workflows for user %s (%s) in org %s", len(workflows), user.Username, user.Id, user.ActiveOrg.Id)
 
 	if len(workflows) > maxAmount {
 		workflows = workflows[:maxAmount]
