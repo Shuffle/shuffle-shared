@@ -5946,9 +5946,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						}
 					}
 
-					//log.Printf("[DEBUG] Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
-					//publicApps = append(publicApps, innerApp)
-					//publicApps, innerApp = fixAppAppend(allApps, innerApp)
 					allApps, innerApp = fixAppAppend(allApps, innerApp)
 
 				}
