@@ -11298,6 +11298,9 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 		DeleteCache(ctx, fmt.Sprintf("%s_childorgs", inneruser.ActiveOrg.Id))
 	}
 
+	// Delete parent org cache as well from the org region
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
+
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
 	if project.Environment == "cloud" {
