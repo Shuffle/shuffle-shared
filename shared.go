@@ -5986,7 +5986,7 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 
 	if newAction.AppID != oldAction.AppID {
 		if debug { 
-			log.Printf("[DEBUG] ACTIONID CHANGED: %s (%#v) vs %s (%#v)", newAction.Name, newAction.AppID, oldAction.Name, oldAction.AppID)
+			log.Printf("[DEBUG] APPID CHANGED: %s (%#v) vs %s (%#v)", newAction.Name, newAction.AppID, oldAction.Name, oldAction.AppID)
 		}
 
 		changes = append(changes, "app_id")
@@ -6535,7 +6535,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(parentAction, oldAction)
 			if changed || len(changeType) > 0 {
-				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
+				if debug { 
+					log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
+				}
 				updatedActions = append(updatedActions, parentAction)
 			}
 		}
@@ -8136,7 +8138,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if fileId != workflow.ID {
-		log.Printf("[WARNING] Path and request ID are not matching in workflow save: %s != %s.", fileId, workflow.ID)
+		log.Printf("[ERROR] Path and request ID are NOT matching in workflow save: %s != %s. URL: %s", fileId, workflow.ID, request.URL.String())
 		resp.WriteHeader(400)
 		//resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
 		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching. Export and re-import this workflow for use in your region."}`))

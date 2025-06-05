@@ -3272,98 +3272,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			return workflows, errors.New("No active org to find workflows for found")
 		}
 
-		//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
-
-		/*
-		cursorStr := ""
-		query := datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
-
-		cnt := 0
-		maxIter := 1000
-		for {
-			cnt += 1
-			if cnt > maxIter {
-				log.Printf("[ERROR] Too many iterations in suborg workflow iterator")
-				break
-			}
-
-			it := project.Dbclient.Run(ctx, query)
-
-			if len(workflows) >= maxAmount {
-				break
-			}
-
-			for {
-				innerWorkflow := Workflow{}
-				_, err = it.Next(&innerWorkflow)
-				//log.Printf("[DEBUG] SUBFLOW: %#v", innerWorkflow.ID)
-
-				if err != nil {
-					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-
-						if !strings.Contains(fmt.Sprintf("%s", err), "input_markdown") {
-							log.Printf("[ERROR] Error in workflow loading. Migrating workflow query outputs to new workflow handler (6): %s", err)
-						}
-					} else if strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
-						break
-					} else {
-						log.Printf("[ERROR] Error in suborg workflow iterator: %s", err)
-						break
-					}
-				}
-
-				//log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
-
-				if innerWorkflow.Public {
-					continue
-				}
-
-				if innerWorkflow.Hidden {
-					continue
-				}
-
-				found := false
-				for _, loopedWorkflow := range workflows {
-					if loopedWorkflow.ID == innerWorkflow.ID {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					workflows = append(workflows, innerWorkflow)
-				}
-
-				if len(workflows) >= maxAmount {
-					break
-				}
-			}
-
-			// FIXME: Handle nil?
-			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching suborg workflows: %v", err)
-				break
-			}
-
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("[ERROR] Problem with cursor: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					break
-				}
-
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
-			}
-		}
-		*/
-
-		log.Printf("SUBORG DISTRIBUTED: Found %d workflows for suborg distribution in org %s", len(workflows), user.ActiveOrg.Id)
-
 		cursorStr := ""
 		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
 		for {
@@ -3434,8 +3342,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			}
 		}
 	}
-
-	log.Printf("TOTAL POST SUBORG DISTRIBUTION: Found %d workflows for org %s", len(workflows), user.ActiveOrg.Id)
 
 	if len(workflows) > maxAmount {
 		workflows = workflows[:maxAmount]
@@ -6017,6 +5923,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					}
 
 					// Special fix for other regions for these reserved apps
+					if innerApp.Public == false {
+						continue
+					}
+
+					/*
 					if innerApp.Public == false && innerApp.Sharing == false && gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 						if ArrayContains(importantApps, innerApp.Name) {
 							innerApp.Public = true
@@ -6026,6 +5937,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 							continue
 						}
 					}
+					*/
 
 					if len(innerApp.Actions) == 0 {
 						foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
@@ -10363,6 +10275,7 @@ func GetEnvironmentCount() (int, error) {
 	return count, nil
 }
 
+// Used for onprem validation of workflow -> user -> org mapping
 func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 	index := "workflow"
 
@@ -10431,15 +10344,8 @@ func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 			workflows = append(workflows, hit.Source)
 		}
 		return workflows, nil
-	} else {
-		// implementation for different db
-		q := datastore.NewQuery(index).Limit(50)
+	} 
 
-		_, err := project.Dbclient.GetAll(ctx, q, &workflows)
-		if err != nil {
-			return []Workflow{}, err
-		}
-	}
 	return workflows, nil
 }
 
