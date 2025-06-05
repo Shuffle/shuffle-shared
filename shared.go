@@ -18582,9 +18582,9 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
-
+	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	// Check if cache already existed and if distributed
-	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
+	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
 	if err == nil {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
 	}
