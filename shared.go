@@ -11140,13 +11140,14 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 						log.Printf("[DEBUG] User %s (%s) is admin in parent org %s (%s) and can skip SSO", user.Username, user.Id, parentOrg.Name, parentOrg.Id)
 						// Skip SSO for admin in suborgs
 						skipSSO = true
+						break
 					}
 				}
 			}
 		}
 
 		if skipSSO {
-			log.Printf("[DEBUG] User %s (%s) is skipping SSO for suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+			log.Printf("[AUDIT] User %s (%s) is skipping SSO for suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
 		} else {
 			baseSSOUrl := org.SSOConfig.SSOEntrypoint
 			redirectKey := "SSO_REDIRECT"
@@ -11159,9 +11160,9 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 			if !strings.HasPrefix(baseSSOUrl, "http") {
 				log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
-				//resp.WriteHeader(401)
-				//resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
-				//return
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
+				return
 			} else {
 				// Check if the user has other orgs that can be swapped to - if so SWAP
 				log.Printf("[DEBUG] Change org: Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
@@ -11876,11 +11877,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	//Update mfa required value
 	if tmpData.MFARequired != org.MFARequired {
-		log.Printf("[DEBUG] Setting MFA required to %t for org %s (%s)", tmpData.MFARequired, org.Name, org.Id)
+		log.Printf("[AUDIT] Setting MFA required to %t for org %s (%s)", tmpData.MFARequired, org.Name, org.Id)
 		org.MFARequired = tmpData.MFARequired
 	}
 	if tmpData.Editing == "sso_config" {
-		log.Printf("[DEBUG] Editing SSO config for org %s (%s)", org.Name, org.Id)
+		log.Printf("[AUDIT] Editing SSO config for org %s (%s)", org.Name, org.Id)
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
