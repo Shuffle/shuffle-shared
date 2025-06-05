@@ -1,40 +1,45 @@
 package shuffle
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
-	"time"
 	"sort"
-	"errors"
-	"strings"
-	"context"
 	"strconv"
+	"strings"
+	"time"
 
-	"net/http"
-	"math/rand"
-	"io/ioutil"
 	"encoding/json"
+	"io/ioutil"
+	"math/rand"
+	"net/http"
 
-	"github.com/satori/go.uuid"
 	"cloud.google.com/go/datastore"
 	gomemcache "github.com/bradfitz/gomemcache/memcache"
+	"github.com/satori/go.uuid"
 )
 
-var dbInterval = 0x20
-//var dbInterval = 0x4
+// FIXME: There is some issue when going past 0x9 (>0xA) with how 
+// cache is being counted locally
+//var dbInterval = 0x20
+var dbInterval = 0x9
+
+// var dbInterval = 0x4
 var PredictableDataTypes = []string{
-    "app_executions",
-    "workflow_executions",
-    "workflow_executions_finished",
-    "workflow_executions_failed",
-    "app_executions_failed",
+	"app_executions",
+	"childorg_app_executions",
+	"workflow_executions",
+	"workflow_executions_finished",
+	"workflow_executions_failed",
+	"app_executions_failed",
 	"app_executions_cloud",
-    "subflow_executions",
-    "org_sync_actions",
-    "workflow_executions_cloud",
-    "workflow_executions_onprem",
-    "api_usage",
-    "ai_executions",
+	"subflow_executions",
+	"org_sync_actions",
+	"workflow_executions_cloud",
+	"workflow_executions_onprem",
+	"api_usage",
+	"ai_executions",
 }
 
 func HandleGetWidget(resp http.ResponseWriter, request *http.Request) {
@@ -376,10 +381,10 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 	log.Printf("[INFO] Should get stats for key %s for the last %d days", statsKey, statDays)
 
 	totalEntires := 0
-	totalValue := 0 
+	totalValue := 0
 	statEntries := []AdditionalUseConfig{}
 	info.DailyStatistics = append(info.DailyStatistics, DailyStatistics{
-		Date: time.Now(),
+		Date:      time.Now(),
 		Additions: info.Additions,
 	})
 
@@ -388,7 +393,7 @@ func GetSpecificStats(resp http.ResponseWriter, request *http.Request) {
 		// Check if the date is more than statDays ago
 		shouldAppend := true
 		if daily.Date.Before(time.Now().AddDate(0, 0, -statDays)) {
-			shouldAppend = false 
+			shouldAppend = false
 		}
 
 		for _, addition := range daily.Additions {
@@ -500,7 +505,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	var statsKey string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
-		// Just falling back 
+		// Just falling back
 		if len(location) <= 4 {
 		} else {
 			orgId = location[4]
@@ -562,7 +567,7 @@ func HandleGetStatistics(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Sideload app runs, workflow runs and subflow runs (just in case)
-	// This makes numbers accurate even when less than  dbDumpInterval 
+	// This makes numbers accurate even when less than  dbDumpInterval
 	key := fmt.Sprintf("cache_%s_app_executions", orgId)
 	cacheItem, err := GetCache(ctx, key)
 	if err == nil {
@@ -732,7 +737,17 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 		return err
 	}
 
-	if len(tmpOrgDetail.ManagerOrgs) > 0 && dataType == "app_executions" || dataType == "app_runs" {
+	// Ensuring we at least have one.
+	if len(tmpOrgDetail.ManagerOrgs) == 0 && len(tmpOrgDetail.CreatorOrg) > 0 {
+		tmpOrgDetail.ManagerOrgs = append(tmpOrgDetail.ManagerOrgs, OrgMini{
+			Id: tmpOrgDetail.CreatorOrg,
+		})
+	}
+
+	// FIXME: Can look for childorg_app_executions here as well which
+	// would make tracking app runs at scale recursively work
+	// The problem is... recursion (:
+	if len(tmpOrgDetail.ManagerOrgs) > 0 && (dataType == "app_executions" || dataType == "app_runs") {
 		for _, managerOrg := range tmpOrgDetail.ManagerOrgs {
 			if len(managerOrg.Id) == 36 {
 				IncrementCache(ctx, managerOrg.Id, "childorg_app_executions", int(dbDumpInterval))
@@ -826,9 +841,11 @@ func IncrementCacheDump(ctx context.Context, orgId, dataType string, amount ...i
 			if strings.Contains(fmt.Sprintf("%s", err), "no such entity") {
 				log.Printf("[DEBUG] Continuing by creating entity for org %s", orgId)
 			} else {
-				log.Printf("[ERROR] Failed getting stats in increment: %s", err)
-				tx.Rollback()
-				return err
+				if !strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
+					log.Printf("[ERROR] Failed getting stats in increment: %s", err)
+					tx.Rollback()
+					return err
+				}
 			}
 		}
 
@@ -892,7 +909,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 	}
 
 	if len(orgId) != 36 {
-		log.Printf("[ERROR] Increment Stats with bad OrgId %s for type %s", orgId, dataType)
+		log.Printf("[ERROR] Increment Stats with bad OrgId '%s' for type '%s'", orgId, dataType)
 		return
 	}
 
@@ -1214,7 +1231,7 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 				foundData := item.([]uint8)
 				foundItem, err = strconv.Atoi(string(foundData))
 				if err != nil {
-					log.Printf("[ERROR] Failed converting item to int: %s", err)
+					log.Printf("[ERROR] Stat tracking fail: Failed converting item to int: %s. Datatype: %s", err, dataType)
 					foundItem = incrementAmount
 					//foundItem = foundData
 				} else {
@@ -1231,8 +1248,10 @@ func IncrementCache(ctx context.Context, orgId, dataType string, amount ...int) 
 			//log.Printf("[DEBUG] Dumping cache for %s with amount %d", key, foundItem)
 		} else {
 			// Set cache
-			//setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
 			//setCacheValue := []byte(strconv.FormatInt(int64(foundItem), 16))
+			//setCacheValue := []byte(fmt.Sprintf("%d", foundItem))
+
+			// FIXME: Something is wrong here past 0x9 :O
 			setCacheValue := []byte(fmt.Sprintf("%x", foundItem))
 			err = SetCache(ctx, key, setCacheValue, 86400)
 			if err != nil {
@@ -1265,6 +1284,7 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	newDay := DailyStatistics{
 		Date:                       timeYesterday,
 		AppExecutions:              executionInfo.DailyAppExecutions,
+		ChildAppExecutions:         executionInfo.DailyChildAppExecutions,
 		AppExecutionsFailed:        executionInfo.DailyAppExecutionsFailed,
 		SubflowExecutions:          executionInfo.DailySubflowExecutions,
 		WorkflowExecutions:         executionInfo.DailyWorkflowExecutions,
@@ -1282,8 +1302,21 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 
 	executionInfo.DailyStatistics = append(executionInfo.DailyStatistics, newDay)
 
+	// Cleaning up old stuff we don't use for now
+	executionInfo.HourlyAppExecutions = 0
+	executionInfo.HourlyChildAppExecutions = 0
+	executionInfo.HourlyAppExecutionsFailed = 0
+	executionInfo.HourlySubflowExecutions = 0
+	executionInfo.HourlyWorkflowExecutions = 0
+	executionInfo.HourlyWorkflowExecutionsFinished = 0
+	executionInfo.HourlyWorkflowExecutionsFailed = 0
+	executionInfo.HourlyOrgSyncActions = 0
+	executionInfo.HourlyCloudExecutions = 0
+	executionInfo.HourlyOnpremExecutions = 0
+
 	// Reset daily
 	executionInfo.DailyAppExecutions = 0
+	executionInfo.DailyChildAppExecutions = 0
 	executionInfo.DailyAppExecutionsFailed = 0
 	executionInfo.DailySubflowExecutions = 0
 	executionInfo.DailyWorkflowExecutions = 0
@@ -1295,19 +1328,9 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.DailyApiUsage = 0
 	executionInfo.DailyAIUsage = 0
 
-	// Cleaning up old stuff we don't use for now
-	executionInfo.HourlyAppExecutions = 0
-	executionInfo.HourlyAppExecutionsFailed = 0
-	executionInfo.HourlySubflowExecutions = 0
-	executionInfo.HourlyWorkflowExecutions = 0
-	executionInfo.HourlyWorkflowExecutionsFinished = 0
-	executionInfo.HourlyWorkflowExecutionsFailed = 0
-	executionInfo.HourlyOrgSyncActions = 0
-	executionInfo.HourlyCloudExecutions = 0
-	executionInfo.HourlyOnpremExecutions = 0
-
 	// Weekly
 	executionInfo.WeeklyAppExecutions = 0
+	executionInfo.WeeklyChildAppExecutions = 0
 	executionInfo.WeeklyAppExecutionsFailed = 0
 	executionInfo.WeeklySubflowExecutions = 0
 	executionInfo.WeeklyWorkflowExecutions = 0
@@ -1319,6 +1342,26 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 
 	for additionIndex, _ := range executionInfo.Additions {
 		executionInfo.Additions[additionIndex].DailyValue = 0
+	}
+
+	now := time.Now()
+	currentMonth := int(now.Month())
+	if executionInfo.LastMonthlyResetMonth != currentMonth {
+		log.Printf("[DEBUG] Resetting monthly stats for org %s on %s", executionInfo.OrgId, now.Format("2006-01-02"))
+
+		executionInfo.MonthlyAppExecutions = 0
+		executionInfo.MonthlyChildAppExecutions = 0
+		executionInfo.MonthlyAppExecutionsFailed = 0
+		executionInfo.MonthlySubflowExecutions = 0
+		executionInfo.MonthlyWorkflowExecutions = 0
+		executionInfo.MonthlyWorkflowExecutionsFinished = 0
+		executionInfo.MonthlyWorkflowExecutionsFailed = 0
+		executionInfo.MonthlyOrgSyncActions = 0
+		executionInfo.MonthlyCloudExecutions = 0
+		executionInfo.MonthlyOnpremExecutions = 0
+		executionInfo.MonthlyApiUsage = 0
+		executionInfo.MonthlyAIUsage = 0
+		executionInfo.LastMonthlyResetMonth = currentMonth
 	}
 
 	return executionInfo
@@ -1437,6 +1480,8 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 				Key:        dataType,
 				Value:      int64(increment),
 				DailyValue: int64(increment),
+
+				//Date: 0,
 			})
 		}
 	}

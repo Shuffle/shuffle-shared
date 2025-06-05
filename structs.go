@@ -211,6 +211,8 @@ type WorkflowApp struct {
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
 
 	ReferenceInfo struct {
+		OnpremBackup bool     `json:"onprem_backup" datastore:"onprem_backup"`
+
 		IsPartner        bool     `json:"is_partner" datastore:"is_partner"`
 		PartnerContacts  string   `json:"partner_contacts" datastore:"partner_contacts"`
 		DocumentationUrl string   `json:"documentation_url" datastore:"documentation_url"`
@@ -364,6 +366,7 @@ type DailyStatistics struct {
 	Date time.Time `json:"date" datastore:"date"`
 
 	AppExecutions              int64 `json:"app_executions" datastore:"app_executions"`
+	ChildAppExecutions         int64 `json:"child_app_executions" datastore:"child_app_executions"`
 	AppExecutionsFailed        int64 `json:"app_executions_failed" datastore:"app_executions_failed"`
 	SubflowExecutions          int64 `json:"subflow_executions" datastore:"subflow_executions"`
 	WorkflowExecutions         int64 `json:"workflow_executions" datastore:"workflow_executions"`
@@ -457,7 +460,8 @@ type ExecutionInfo struct {
 	TotalApiUsage int64 `json:"total_api_usage" datastore:"total_api_usage"`
 	DailyApiUsage int64 `json:"daily_api_usage" datastore:"daily_api_usage"`
 
-	Additions []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
+	Additions             []AdditionalUseConfig `json:"additions,omitempty" datastore:"additions"`
+	LastMonthlyResetMonth int                   `json:"last_monthly_reset_month" datastore:"last_monthly_reset_month"`
 }
 
 type AdditionalUseConfig struct {
@@ -1423,6 +1427,8 @@ type Workflow struct {
 }
 
 type BackupConfig struct {
+	OnpremBackup bool   `json:"onprem_backup" datastore:"onprem_backup"`
+
 	UploadRepo     string `json:"upload_repo" datastore:"upload_repo"`
 	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
 	UploadUsername string `json:"upload_username" datastore:"upload_username"`
@@ -1632,8 +1638,9 @@ type AppAuthenticationStorage struct {
 	ReferenceWorkflow string                `json:"reference_workflow" datastore:"reference_workflow"`
 	AutoDistribute    bool                  `json:"auto_distribute" datastore:"auto_distribute"`
 
-	Environment       string `json:"environment" datastore:"environment"`               // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
-	SuborgDistributed bool   `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
+	Environment        string   `json:"environment" datastore:"environment"`               // In case an auth should ALWAYS be mapped to an environment. Can help out with Oauth2 refresh (e.g. running partially on cloud and partially onprem), as well as for KMS. For now ONLY KMS has a frontend.
+	SuborgDistributed  bool     `json:"suborg_distributed" datastore:"suborg_distributed"` // Decides if it's distributed to suborgs or not
+	SuborgDistribution []string `json:"suborg_distribution" datastore:"suborg_distribution"`
 
 	Validation TypeValidation `json:"validation" datastore:"validation"`
 }
