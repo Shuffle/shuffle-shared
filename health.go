@@ -2834,6 +2834,9 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 				// Check to see if the action is valid
 				if curappaction.Name != action.Name {
 					//log.Printf("[ERROR] Action '%s' in app %s doesn't exist. Workflow: %s (%s)", action.Name, curapp.Name, workflow.Name, workflow.ID)
+
+					//log.Printf("APPID: %s, APPNAME: %s, ACTION: %s", action.AppID, action.AppName, action.Name)
+
 					// Reserved names
 					if action.Name != "router" {
 						thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)

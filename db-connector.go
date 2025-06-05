@@ -3273,6 +3273,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		}
 
 		//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		/*
 		cursorStr := ""
 		query := datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
 
@@ -3358,9 +3360,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				query = query.Start(nextCursor)
 			}
 		}
+		*/
 
-		query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
-		cursorStr = ""
+		log.Printf("SUBORG DISTRIBUTED: Found %d workflows for suborg distribution in org %s", len(workflows), user.ActiveOrg.Id)
+
+		cursorStr := ""
+		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
 		for {
 			it := project.Dbclient.Run(ctx, query)
 
@@ -3429,6 +3434,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			}
 		}
 	}
+
+	log.Printf("TOTAL POST SUBORG DISTRIBUTION: Found %d workflows for org %s", len(workflows), user.ActiveOrg.Id)
 
 	if len(workflows) > maxAmount {
 		workflows = workflows[:maxAmount]

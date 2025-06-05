@@ -5985,6 +5985,10 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	}
 
 	if newAction.AppID != oldAction.AppID {
+		if debug { 
+			log.Printf("[DEBUG] ACTIONID CHANGED: %s (%#v) vs %s (%#v)", newAction.Name, newAction.AppID, oldAction.Name, oldAction.AppID)
+		}
+
 		changes = append(changes, "app_id")
 	}
 
@@ -14141,9 +14145,21 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("REGION URL: %#v", userdata.ActiveOrg)
-	regionUrl := "https://frankfurt.shuffler.io"
-
+	regionUrl := ""
+	if project.Environment == "cloud" {
+		if len(userdata.ActiveOrg.RegionUrl) > 0 {
+			regionUrl = userdata.ActiveOrg.RegionUrl
+		} else {
+			org, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org %s during login for %s (%s): %s", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, err)
+			} else {
+				if strings.Contains(strings.ToLower(org.RegionUrl), "http") {
+					regionUrl = strings.ToLower(org.RegionUrl)
+				}
+			}
+		}
+	}
 
 	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
@@ -14168,7 +14184,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Expiration: expiration.Unix(),
 		})
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d, "region_url": "%s"}]}`, userdata.Session, expiration.Unix(), regionUrl)
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
