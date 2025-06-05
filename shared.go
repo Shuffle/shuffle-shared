@@ -29020,6 +29020,13 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(workflow.ID) == 0 || len(workflow.Name) == 0 {
+		log.Printf("[WARNING] Workflow %s is not valid. Missing ID or Name.", fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow is not valid"}`))
+		return
+	}
+
 	// FIXME: Check if this workflow has a parent workflow
 	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != fileId {
 		workflow, err = GetWorkflow(ctx, workflow.ParentWorkflowId)
@@ -29073,7 +29080,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access childs workflows for %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access child workflows for %s", user.Username, workflow.ID)
 
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get child workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
