@@ -3272,98 +3272,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			return workflows, errors.New("No active org to find workflows for found")
 		}
 
-		//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//log.Printf("\n\n\nLooking for workflows for org %s with user %s (%s)\n\n\n", user.ActiveOrg.Id, user.Username, user.Id)
+
 		cursorStr := ""
-		query := datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
-
-		cnt := 0
-		maxIter := 1000
-		for {
-			cnt += 1
-			if cnt > maxIter {
-				log.Printf("[ERROR] Too many iterations in suborg workflow iterator")
-				break
-			}
-
-			it := project.Dbclient.Run(ctx, query)
-
-			if len(workflows) >= maxAmount {
-				break
-			}
-
-			for {
-				innerWorkflow := Workflow{}
-				_, err = it.Next(&innerWorkflow)
-				//log.Printf("[DEBUG] SUBFLOW: %#v", innerWorkflow.ID)
-
-				if err != nil {
-					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-
-						if !strings.Contains(fmt.Sprintf("%s", err), "input_markdown") {
-							log.Printf("[ERROR] Error in workflow loading. Migrating workflow query outputs to new workflow handler (6): %s", err)
-						}
-					} else if strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
-						break
-					} else {
-						log.Printf("[ERROR] Error in suborg workflow iterator: %s", err)
-						break
-					}
-				}
-
-				//log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
-
-				if innerWorkflow.Public {
-					continue
-				}
-
-				if innerWorkflow.Hidden {
-					continue
-				}
-
-				found := false
-				for _, loopedWorkflow := range workflows {
-					if loopedWorkflow.ID == innerWorkflow.ID {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					workflows = append(workflows, innerWorkflow)
-				}
-
-				if len(workflows) >= maxAmount {
-					break
-				}
-			}
-
-			// FIXME: Handle nil?
-			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching suborg workflows: %v", err)
-				break
-			}
-
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("[ERROR] Problem with cursor: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					break
-				}
-
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
-			}
-		}
-
-		query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
-		cursorStr = ""
+		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
 		for {
 			it := project.Dbclient.Run(ctx, query)
-
 			if len(workflows) >= maxAmount {
 				break
 			}
@@ -3429,6 +3343,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			}
 		}
 	}
+
+	//log.Printf("Found %d workflows for user %s (%s) in org %s", len(workflows), user.Username, user.Id, user.ActiveOrg.Id)
 
 	if len(workflows) > maxAmount {
 		workflows = workflows[:maxAmount]
@@ -4216,6 +4132,14 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 	}
 
+	if len(data.ManagerOrgs) == 0 && len(data.CreatorOrg) > 0 {
+		data.ManagerOrgs = []OrgMini{
+			OrgMini{
+				Id:   data.CreatorOrg,
+			},
+		}
+	}
+
 	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
 	if data.Created == 0 {
@@ -4305,6 +4229,10 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		err = SetCache(ctx, cacheKey, neworg, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org '%s': %s", cacheKey, err)
+		}
+
+		for _, user := range data.Users {
+			DeleteCache(ctx, fmt.Sprintf("user_orgs_%s", user.Id))
 		}
 	}
 
@@ -4586,7 +4514,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 				return *api, nil
 			}
 
-			log.Printf("[ERROR] Some OpenAPI  refissue for ID '%s': %s", id, err)
+			log.Printf("[ERROR] Some OpenAPI refissue for ID '%s': %s", id, err)
 
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
@@ -5323,6 +5251,10 @@ func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 }
 
 func fixUserOrg(ctx context.Context, user *User) *User {
+	// Made it background due to potential timeouts if this is 
+	// used in API calls
+	ctx = context.Background()
+
 	found := false
 	for _, id := range user.Orgs {
 		if user.ActiveOrg.Id == id {
@@ -5349,32 +5281,34 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 			continue
 		}
 
-		org, err := GetOrg(ctx, orgId)
-		if err != nil {
-			log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
-			continue
-		}
-
-		orgIndex := 0
-		userFound := false
-		for index, orgUser := range org.Users {
-			if orgUser.Id == user.Id {
-				orgIndex = index
-				userFound = true
-				break
+		go func(orgId string) {
+			org, err := GetOrg(ctx, orgId)
+			if err != nil {
+				log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				return
 			}
-		}
 
-		if userFound {
-			org.Users[orgIndex] = innerUser
-		} else {
-			org.Users = append(org.Users, innerUser)
-		}
+			orgIndex := 0
+			userFound := false
+			for index, orgUser := range org.Users {
+				if orgUser.Id == user.Id {
+					orgIndex = index
+					userFound = true
+					break
+				}
+			}
 
-		err = SetOrg(ctx, *org, org.Id)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org %s (2)", orgId)
-		}
+			if userFound {
+				org.Users[orgIndex] = innerUser
+			} else {
+				org.Users = append(org.Users, innerUser)
+			}
+
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org %s (2)", orgId)
+			}
+		}(orgId)
 	}
 
 	return user
@@ -5992,6 +5926,11 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					}
 
 					// Special fix for other regions for these reserved apps
+					if innerApp.Public == false {
+						continue
+					}
+
+					/*
 					if innerApp.Public == false && innerApp.Sharing == false && gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
 						if ArrayContains(importantApps, innerApp.Name) {
 							innerApp.Public = true
@@ -6001,6 +5940,7 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 							continue
 						}
 					}
+					*/
 
 					if len(innerApp.Actions) == 0 {
 						foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
@@ -6009,9 +5949,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						}
 					}
 
-					//log.Printf("[DEBUG] Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
-					//publicApps = append(publicApps, innerApp)
-					//publicApps, innerApp = fixAppAppend(allApps, innerApp)
 					allApps, innerApp = fixAppAppend(allApps, innerApp)
 
 				}
@@ -6118,10 +6055,18 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 
 		parentOrg := &Org{}
+		if len(org.CreatorOrg) > 0 && len(org.ManagerOrgs) == 0 {
+			org.ManagerOrgs = []OrgMini{
+				OrgMini{
+					Id: org.CreatorOrg,
+				},
+			}
+		}
+		
 		if len(org.ManagerOrgs) > 0 {
 			parentOrg, err = GetOrg(ctx, org.ManagerOrgs[0].Id)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting parent org %s during app load verification: %s", org.ManagerOrgs[0], err)
+				log.Printf("[ERROR] Failed getting parent org %s during app load verification: %s", org.ManagerOrgs[0].Id, err)
 			}
 		}
 
@@ -9322,10 +9267,12 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
+	/*
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
 	DeleteCache(ctx, cacheKey)
 	cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
 	DeleteCache(ctx, cacheKey)
+	*/
 
 	return nil
 }
@@ -9631,7 +9578,7 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			} else if strings.Contains(fmt.Sprintf("%s", err), "no matching index found") || strings.Contains(fmt.Sprintf("%s", err), "not ready to serve") {
 				log.Printf("[ERROR] Failed loading notifications based on index: %s", err)
 
-				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(200)
+				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(199)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
 					return notifications, err
@@ -9650,7 +9597,10 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		// Set it low, because Notifications are very often being set 
+		// in certain cases. This means lowering this, will increase cache util
+		// while not clearing it on every SetNotification()
+		err = SetCache(ctx, cacheKey, data, 5)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification cache: %s", err)
 		}
@@ -10325,6 +10275,7 @@ func GetEnvironmentCount() (int, error) {
 	return count, nil
 }
 
+// Used for onprem validation of workflow -> user -> org mapping
 func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 	index := "workflow"
 
@@ -10393,15 +10344,8 @@ func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 			workflows = append(workflows, hit.Source)
 		}
 		return workflows, nil
-	} else {
-		// implementation for different db
-		q := datastore.NewQuery(index).Limit(50)
+	} 
 
-		_, err := project.Dbclient.GetAll(ctx, q, &workflows)
-		if err != nil {
-			return []Workflow{}, err
-		}
-	}
 	return workflows, nil
 }
 

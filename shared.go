@@ -3463,7 +3463,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just here to verify that the user is logged in
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in validate swagger: %s", err)
 		resp.WriteHeader(401)
@@ -3484,29 +3484,35 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 		id = location[4]
 	}
 
-	/*
-		if len(id) != 32 {
-			log.Printf("Missing parts of API in request!")
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	*/
-	//_, err = GetApp(ctx, id)
-	//if err == nil {
-	//}
-
-	// FIXME - FIX AUTH WITH APP
-	ctx := GetContext(request)
-	parsedApi, err := GetOpenApiDatastore(ctx, id)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting OpenAPI: %s", err)
-		resp.WriteHeader(401)
+	if len(id) != 32 {
+		log.Printf("Missing parts of API in request!")
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	log.Printf("[INFO] API LENGTH GET: %d, ID: %s", len(parsedApi.Body), id)
+	ctx := GetContext(request)
+	parsedApi, openapiErr := GetOpenApiDatastore(ctx, id)
+	if openapiErr != nil {
+		log.Printf("[ERROR] Failed getting OpenAPI %s: %s", id, err)
+	}
+
+	app, err := GetApp(ctx, id, user, false)
+	if err == nil || len(app.ID) > 0 {
+		log.Printf("[AUDIT] Found app %s (%s) for OpenAPI. Checking for user %s (%s) in org %s (%s) to access", app.Name, id, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		if !app.Public && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+		// Try cross region loading? 
+		//if openapiLoad != nil {
+		//}
+	}
+
+	log.Printf("[INFO] OpenAPI Get length: %d, ID: %s", len(parsedApi.Body), id)
 
 	parsedApi.Success = true
 	data, err := json.Marshal(parsedApi)
@@ -5979,6 +5985,10 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	}
 
 	if newAction.AppID != oldAction.AppID {
+		if debug { 
+			log.Printf("[DEBUG] APPID CHANGED: %s (%#v) vs %s (%#v)", newAction.Name, newAction.AppID, oldAction.Name, oldAction.AppID)
+		}
+
 		changes = append(changes, "app_id")
 	}
 
@@ -6525,7 +6535,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(parentAction, oldAction)
 			if changed || len(changeType) > 0 {
-				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
+				if debug { 
+					log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
+				}
 				updatedActions = append(updatedActions, parentAction)
 			}
 		}
@@ -8126,7 +8138,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if fileId != workflow.ID {
-		log.Printf("[WARNING] Path and request ID are not matching in workflow save: %s != %s.", fileId, workflow.ID)
+		log.Printf("[ERROR] Path and request ID are NOT matching in workflow save: %s != %s. URL: %s", fileId, workflow.ID, request.URL.String())
 		resp.WriteHeader(400)
 		//resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
 		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching. Export and re-import this workflow for use in your region."}`))
@@ -10479,7 +10491,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting App Config Update request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
@@ -11116,44 +11128,76 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSOTest {
 
-		baseSSOUrl := org.SSOConfig.SSOEntrypoint
-		redirectKey := "SSO_REDIRECT"
-		if len(org.SSOConfig.OpenIdAuthorization) > 0 {
-			log.Printf("[INFO] OpenID login for %s", org.Id)
-			redirectKey = "SSO_REDIRECT"
-
-			baseSSOUrl = GetOpenIdUrl(request, *org)
-		}
-
-		if !strings.HasPrefix(baseSSOUrl, "http") {
-			log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
-			//resp.WriteHeader(401)
-			//resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
-			//return
-		} else {
-			// Check if the user has other orgs that can be swapped to - if so SWAP
-			log.Printf("[DEBUG] Change org: Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
-			ssoResponse := SSOResponse{
-				Success: true,
-				Reason:  redirectKey,
-				URL:     baseSSOUrl,
-			}
-
-			b, err := json.Marshal(ssoResponse)
+		// Check if the org is the suborg or not?
+		skipSSO := false
+		if len(org.CreatorOrg) > 0 {
+			log.Printf("[DEBUG] User %s (%s) is trying to change to suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+			parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 			if err != nil {
-				log.Printf("[ERROR] Failed marshalling SSO response: %s", err)
-				resp.Write([]byte(`{"success": false}`))
+				log.Printf("[ERROR] Failed getting parent org %s for suborg %s: %s", org.CreatorOrg, org.Id, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed getting parent org for suborg"}`))
 				return
 			}
 
-			resp.WriteHeader(200)
-			resp.Write(b)
-			return
+			if parentOrg.SSOConfig.SkipSSOForAdmins {
+				for _, orgUser := range parentOrg.Users {
+					if orgUser.Id == user.Id && orgUser.Role == "admin" {
+						log.Printf("[DEBUG] User %s (%s) is admin in parent org %s (%s) and can skip SSO", user.Username, user.Id, parentOrg.Name, parentOrg.Id)
+						// Skip SSO for admin in suborgs
+						skipSSO = true
+						break
+					}
+				}
+			}
+		}
+
+		if skipSSO {
+			log.Printf("[AUDIT] User %s (%s) is skipping SSO for suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+		} else {
+			baseSSOUrl := org.SSOConfig.SSOEntrypoint
+			redirectKey := "SSO_REDIRECT"
+			if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+				log.Printf("[INFO] OpenID login for %s", org.Id)
+				redirectKey = "SSO_REDIRECT"
+
+				baseSSOUrl = GetOpenIdUrl(request, *org)
+			}
+
+			if !strings.HasPrefix(baseSSOUrl, "http") {
+				log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
+				return
+			} else {
+				// Check if the user has other orgs that can be swapped to - if so SWAP
+				log.Printf("[DEBUG] Change org: Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
+				ssoResponse := SSOResponse{
+					Success: true,
+					Reason:  redirectKey,
+					URL:     baseSSOUrl,
+				}
+
+				b, err := json.Marshal(ssoResponse)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling SSO response: %s", err)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+
+				resp.WriteHeader(200)
+				resp.Write(b)
+				return
+			}
 		}
 	}
 
 	if project.Environment == "cloud" && len(org.RegionUrl) > 0 && !strings.Contains(org.RegionUrl, "\"") {
 		regionUrl = org.RegionUrl
+	}
+
+	if len(regionUrl) > 0 && !ArrayContains(user.Regions, regionUrl) {
+		user.Regions = append(user.Regions, regionUrl)
 	}
 
 	userFound := false
@@ -11688,6 +11732,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		Billing         Billing      `json:"billing" datastore:"billing"`
 		Branding        OrgBranding  `json:"branding" datastore:"branding"`
 		EditingBranding bool         `json:"editing_branding" datastore:"editing_branding"`
+		Editing         string       `json:"editing" datastore:"editing"`
 	}
 
 	var tmpData ReturnData
@@ -11845,21 +11890,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	//Update mfa required value
 	if tmpData.MFARequired != org.MFARequired {
+		log.Printf("[AUDIT] Setting MFA required to %t for org %s (%s)", tmpData.MFARequired, org.Name, org.Id)
 		org.MFARequired = tmpData.MFARequired
 	}
-
-	//if len(tmpData.SSOConfig) > 0 {
-	if len(tmpData.SSOConfig.SSOEntrypoint) > 0 || len(tmpData.SSOConfig.OpenIdClientId) > 0 || len(tmpData.SSOConfig.OpenIdClientSecret) > 0 || len(tmpData.SSOConfig.OpenIdAuthorization) > 0 || len(tmpData.SSOConfig.OpenIdToken) > 0 {
-		org.SSOConfig = tmpData.SSOConfig
-	}
-	// Check if there are new values for SSO entry point or certificate or SSORequired
-	if (tmpData.SSOConfig.SSOEntrypoint != org.SSOConfig.SSOEntrypoint) ||
-		(tmpData.SSOConfig.SSOCertificate != org.SSOConfig.SSOCertificate) ||
-		(tmpData.SSOConfig.SSORequired != org.SSOConfig.SSORequired) {
-		org.SSOConfig = tmpData.SSOConfig
-	}
-
-	if (tmpData.SSOConfig.OpenIdClientId != org.SSOConfig.OpenIdClientId) || (tmpData.SSOConfig.OpenIdAuthorization != org.SSOConfig.OpenIdAuthorization) || (tmpData.SSOConfig.RoleRequired != org.SSOConfig.RoleRequired) {
+	if tmpData.Editing == "sso_config" {
+		log.Printf("[AUDIT] Editing SSO config for org %s (%s)", org.Name, org.Id)
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
@@ -14116,6 +14151,22 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	regionUrl := ""
+	if project.Environment == "cloud" {
+		if len(userdata.ActiveOrg.RegionUrl) > 0 {
+			regionUrl = userdata.ActiveOrg.RegionUrl
+		} else {
+			org, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org %s during login for %s (%s): %s", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, err)
+			} else {
+				if strings.Contains(strings.ToLower(org.RegionUrl), "http") {
+					regionUrl = strings.ToLower(org.RegionUrl)
+				}
+			}
+		}
+	}
+
 	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
@@ -14139,7 +14190,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Expiration: expiration.Unix(),
 		})
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, userdata.Session, expiration.Unix())
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
@@ -14204,7 +14255,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, sessionToken, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
@@ -14229,7 +14280,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting LOGIN SSO request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
@@ -15473,8 +15524,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	//log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
-	//os.Exit(3)
 	return &workflowExecution, true, nil
 }
 
@@ -21075,6 +21124,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" && org.RegionUrl != "https://shuffler.io" {
 		newUser.Regions = append(newUser.Regions, org.RegionUrl)
 	}
+
 	//Store users last session as new session so user don't have to go through sso again while changing org.
 	newUser.UsersLastSession = sessionToken
 
@@ -28975,6 +29025,13 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(workflow.ID) == 0 || len(workflow.Name) == 0 {
+		log.Printf("[WARNING] Workflow %s is not valid. Missing ID or Name.", fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow is not valid"}`))
+		return
+	}
+
 	// FIXME: Check if this workflow has a parent workflow
 	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != fileId {
 		workflow, err = GetWorkflow(ctx, workflow.ParentWorkflowId)
@@ -29028,7 +29085,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access childs workflows for %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access child workflows for %s", user.Username, workflow.ID)
 
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get child workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
