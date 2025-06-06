@@ -3298,12 +3298,10 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 
 				if innerWorkflow.Public {
-					log.Printf("skip public")
 					continue
 				}
 
 				if innerWorkflow.Hidden {
-					log.Printf("skip hidden")
 					continue
 				}
 
@@ -3337,7 +3335,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			} else {
 				nextStr := fmt.Sprintf("%s", nextCursor)
 				if cursorStr == nextStr {
-					//log.Printf("skip cursor")
 					break
 				}
 
