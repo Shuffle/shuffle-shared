@@ -11196,6 +11196,10 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 		regionUrl = org.RegionUrl
 	}
 
+	if len(regionUrl) > 0 && !ArrayContains(user.Regions, regionUrl) {
+		user.Regions = append(user.Regions, regionUrl)
+	}
+
 	userFound := false
 	usr := User{}
 	for _, orgUsr := range org.Users {
@@ -21120,6 +21124,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" && org.RegionUrl != "https://shuffler.io" {
 		newUser.Regions = append(newUser.Regions, org.RegionUrl)
 	}
+
 	//Store users last session as new session so user don't have to go through sso again while changing org.
 	newUser.UsersLastSession = sessionToken
 
