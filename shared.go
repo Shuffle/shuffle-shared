@@ -9098,7 +9098,7 @@ func HandleGetAllPartners(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	partners, err := GetPartner(ctx, "", "")
+	partners, err := GetAllPartners(ctx)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partners: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -9141,7 +9141,6 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Get ID from URL parameters - could be either partner ID or org ID
 	var partnerId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -9152,7 +9151,23 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 	orgId := request.Header.Get("Org-Id")
-	partners, err := GetPartner(ctx, partnerId, orgId)
+
+	var partner *Partner
+	var err error
+
+	// If partnerId is provided, use GetPartnerById
+	if partnerId != "" {
+		partner, err = GetPartnerById(ctx, partnerId)
+	} else if orgId != "" {
+		// If only orgId is provided, use GetPartnerByOrgId
+		partner, err = GetPartnerByOrgId(ctx, orgId)
+	} else {
+		// Neither partnerId nor orgId provided
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Either partner ID or organization ID must be provided"}`))
+		return
+	}
+
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partner: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -9160,18 +9175,11 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(partners) == 0 {
+	if partner == nil {
 		resp.WriteHeader(http.StatusNotFound)
 		resp.Write([]byte(`{"success": false, "reason": "Partner not found"}`))
 		return
 	}
-
-	// Example improvement for handling multiple partners
-	if len(partners) > 1 {
-		log.Printf("[WARNING] Multiple partners found with ID: %s, using the first one", partnerId)
-	}
-
-	partner := partners[0]
 
 	if len(partner.Id) == 0 {
 		log.Printf("[ERROR] Partner ID is empty for partner: %v", partner)
@@ -9180,11 +9188,10 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-
 	// Marshal the response
 	response, err := json.Marshal(struct {
-		Success bool    `json:"success"`
-		Partner Partner `json:"partner"`
+		Success bool     `json:"success"`
+		Partner *Partner `json:"partner"`
 	}{
 		Success: true,
 		Partner: partner,
@@ -9201,6 +9208,7 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(response)
 }
 
+// This is used to publish partner at first and then update it later
 func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -9223,6 +9231,13 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if user.Role != "admin" {
+		log.Printf("[AUDIT] User %s (%s) tried to publish a partner but is not an admin", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Not authorized to publish partners"}`))
+		return
+	}
+
 	location := strings.Split(request.URL.String(), "/")
 
 	var Id string
@@ -9232,7 +9247,6 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-
 		Id = location[4]
 	}
 
@@ -9256,9 +9270,14 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 
-
 	if len(tmpData.OrgId) == 0 {
 		tmpData.OrgId = user.ActiveOrg.Id
+	}
+
+	if len(tmpData.Name) == 0 {
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Partner name is required"}`))
+		return
 	}
 
 	overwrite := false
@@ -9267,20 +9286,22 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		overwrite = true
 
 		// Get existing partner to check if name has changed
-		existingPartners, err := GetPartner(ctx, tmpData.Id, "")
-		if err == nil && len(existingPartners) > 0 {
-			existingPartner := existingPartners[0]
-
+		existingPartner, err := GetPartnerById(ctx, tmpData.Id)
+		if err == nil && existingPartner != nil {
 			// Check if partner name has changed
 			if existingPartner.Name != tmpData.Name && len(existingPartner.Usecases) > 0 {
 
 				// Update all usecases associated with this partner
 				for _, usecaseId := range existingPartner.Usecases {
 					usecases, err := GetUsecaseNew(ctx, usecaseId, true)
-					if err != nil || len(usecases) == 0 {
-						log.Printf("[WARNING] Failed to get usecase %s: %v", usecaseId, err)
+					if err != nil {
+						log.Printf("[WARNING] Failed to get usecase %s : %v", usecaseId, err)
 						continue
 					}
+					if len(usecases) == 0 {
+						log.Printf("[WARNING] No usecases found for ID %s (length: 0)", usecaseId)
+ 						continue
+ 					}
 
 					usecase := usecases[0]
 
@@ -9305,14 +9326,6 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	// Add validation for required fields
-	if len(tmpData.Name) == 0 {
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Partner name is required"}`))
-		return
-	}
-
-	// Fix the ID assignment logic
 	if len(tmpData.Id) == 0 {
 		tmpData.Id = uuid.NewV4().String()
 	} else if tmpData.Id != Id && len(Id) > 0 {
@@ -25296,7 +25309,7 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 
 	if user.Role != "admin" {
 		log.Printf("[AUDIT] User isn't admin to publish usecase: %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(409)
+		resp.WriteHeader(403)
 		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Must be admin to perform this action"}`)))
 		return
 	}
@@ -25347,15 +25360,20 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	partners, err := GetPartner(ctx, tmpData.CompanyInfo.Id, "")
-	if err != nil || len(partners) == 0 {
-		log.Printf("[WARNING] Partner %v doesn't exist.", partners)
+	partner, err := GetPartnerById(ctx, tmpData.CompanyInfo.Id)
+	if err != nil || partner == nil {
+		log.Printf("[WARNING] Partner doesn't exist: %v", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding partner"}`))
 		return
 	}
 
-	partner := partners[0]
+	if partner.OrgId != user.ActiveOrg.Id {
+		log.Printf("[WARNING] User %s (%s) is trying to publish usecase for partner %s (%s) but doesn't have access to it", user.Username, user.Id, partner.Name, partner.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
+		return
+	}
 
 	overwrite := false
 
@@ -25389,7 +25407,7 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 	if len(partner.Usecases) == 0 {
 		partner.Usecases = []string{}
 	}
-	
+
 	// Check if the usecase is already in the partner's usecases
 	found := false
 	for _, usecase := range partner.Usecases {
@@ -25403,7 +25421,7 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 	if !found {
 		partner.Usecases = append(partner.Usecases, tmpData.Id)
 
-		err = SetPartner(ctx, &partner)
+		err = SetPartner(ctx, partner)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting partner %s with usecase %s: %v", partner.Id, tmpData.Id, err)
 			resp.WriteHeader(500)
@@ -25416,9 +25434,9 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(200)
 	resp.Write([]byte(`{"success": true, "message": "Usecase published", "usecaseId": "` + tmpData.Id + `"}`))
-	return
 }
 
+// Used to get partner usecases (On Admin page and On Partner Page) & Individual usecase
 func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -25443,20 +25461,22 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
-
-		if location[4] == "all" {
-			Id = ""
-		} else {
-			Id = location[4]
-		}
+		Id = location[4]
 	}
 
 	ctx := GetContext(request)
 	isUsecaseId := true
 	if location[3] == "partners" {
 		isUsecaseId = false
+		_, err := HandleAlgoliaPartnerSearch(ctx, Id)
+		if err != nil {
+			log.Printf("[WARNING] Partner with Id %s is not public: %s", Id, err)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
 	}
-	
+
 	usecases, err := GetUsecaseNew(ctx, Id, isUsecaseId)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get usecases: %v", err)
@@ -25552,15 +25572,20 @@ func HandleDeleteUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	partners, err := GetPartner(ctx, usecase.CompanyInfo.Id, "")
-	if err != nil || len(partners) == 0 {
-		log.Printf("[WARNING] Partner %v doesn't exist.", partners)
+	partner, err := GetPartnerById(ctx, usecase.CompanyInfo.Id)
+	if err != nil {
+		log.Printf("[WARNING] Partner Id %v doesn't exist.", usecase.CompanyInfo.Id)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding partner"}`))
 		return
 	}
 
-	partner := partners[0]
+	if partner.OrgId != user.ActiveOrg.Id {
+		log.Printf("[AUDIT] User %s (%s) tried to delete usecase %s from partner %s (%s) but doesn't have access", user.Username, user.Id, usecase.Id, partner.Name, partner.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
+		return
+	}
 
 	// Check if the usecase is in the partner's usecases
 	found := false
@@ -25583,7 +25608,7 @@ func HandleDeleteUsecase(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Update the partner with the modified usecases
-	err = SetPartner(ctx, &partner)
+	err = SetPartner(ctx, partner)
 	if err != nil {
 		log.Printf("[WARNING] Failed setting partner %s with usecase %s: %v", partner.Id, usecase.Id, err)
 		resp.WriteHeader(500)
