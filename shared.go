@@ -5016,7 +5016,6 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		Lastname    string   `json:"lastname"`
 		Role        string   `json:"role"`
 		Username    string   `json:"username"`
-		EthInfo     EthInfo  `json:"eth_info"`
 		CompanyRole string   `json:"company_role"`
 		Suborgs     []string `json:"suborgs"`
 
@@ -5197,10 +5196,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		if len(t.EthInfo.Account) > 0 {
-			log.Printf("[DEBUG] Should set ethinfo to %s", t.EthInfo)
-			foundUser.EthInfo = t.EthInfo
-		}
+		//if len(t.EthInfo.Account) > 0 {
+		//	log.Printf("[DEBUG] Should set ethinfo to %s", t.EthInfo)
+		//	foundUser.EthInfo = t.EthInfo
+		//}
 
 		// Check if UserID is different?
 		/*
@@ -9015,19 +9014,21 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			item.ApiKey = ""
 		}
 
+		item.ApiKey = ""
 		item.Password = ""
 		item.Session = ""
+		item.UsersLastSession = ""
 		item.VerificationToken = ""
+		item.ValidatedSessionOrgs = []string{}
 		item.Orgs = []string{}
-		item.EthInfo = EthInfo{}
 
 		item.Authentication = []UserAuth{}
-		item.Executions = ExecutionInfo{}
-		item.Limits = UserLimits{}
 		item.PrivateApps = []WorkflowApp{}
 		item.MFA = MFAInfo{
 			Active: item.MFA.Active,
 		}
+
+		item.ActiveOrg = OrgMini{}
 
 		if !user.SupportAccess {
 			item.LoginInfo = []LoginInfo{}
@@ -11211,7 +11212,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound && !user.SupportAccess {
-		log.Printf("[WARNING] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
+		log.Printf("[ERROR] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org (2). Please contact support@shuffler.io if this is unexpected."}`))
 		return
@@ -16052,7 +16053,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		lastResult := ""
 		// type ActionResult struct {
 		for _, result := range workflowExecution.Results {
-			log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
+			if debug { 
+				log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
+			}
+
 			if actionResult.Action.ID == result.Action.ID {
 				continue
 			}
@@ -17719,7 +17723,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, fileId)
 	if err != nil {
-		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		log.Printf("[INFO] Organization '%s' doesn't exist: %s", fileId, err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return

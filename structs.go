@@ -617,8 +617,6 @@ type User struct {
 	VerificationToken    string        `datastore:"verification_token" json:"verification_token"`
 	ApiKey               string        `datastore:"apikey" json:"apikey"`
 	ResetReference       string        `datastore:"reset_reference" json:"reset_reference"`
-	Executions           ExecutionInfo `datastore:"executions" json:"executions"`
-	Limits               UserLimits    `datastore:"limits" json:"limits,omitempty"`
 	MFA                  MFAInfo       `datastore:"mfa_info,noindex" json:"mfa_info"`
 	Authentication       []UserAuth    `datastore:"authentication,noindex" json:"authentication"`
 	ResetTimeout         int64         `datastore:"reset_timeout,noindex" json:"reset_timeout"`
@@ -636,7 +634,6 @@ type User struct {
 	Theme                string        `datastore:"theme" json:"theme"`
 
 	// Starting web3 integration
-	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
 	PublicProfile PublicProfile `datastore:"public_profile" json:"public_profile"`
 
 	// Tracking logins and such
