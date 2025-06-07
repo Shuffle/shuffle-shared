@@ -3544,7 +3544,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
+				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
 				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
@@ -4069,10 +4069,11 @@ func GetUsersByOrg(ctx context.Context, orgId string) ([]User, error) {
 		_, err := project.Dbclient.GetAll(ctx, query, &users)
 		if err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				return users, err
-			} else {
-				log.Printf("[ERROR] Problem in user loading for org %s: %s", orgId, err)
-			}
+				return users, nil 
+			} 
+				
+			log.Printf("[ERROR] Problem in user loading for org %s: %s", orgId, err)
+			return users, err
 		}
 	}
 
@@ -4085,8 +4086,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	if len(data.Users) == 0 {
-		// FIXME: Why do we need autocorrective mechanisms like this?
-		// Where do users go? wtf.
+		// Where do users go sometimes? wtf.
 		if project.Environment == "cloud" {
 			orgUsers, err := GetUsersByOrg(ctx, id)
 			if err != nil {
@@ -4100,7 +4100,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 
 		if len(data.Users) == 0 {
-			return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
+			return errors.New("Not allowed to update an org without any users in the organization. Need AT LEAST one user to update")
 		}
 	}
 
@@ -4224,72 +4224,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 
 	return nil
 }
-
-/*
-func GetSession(ctx context.Context, thissession string) (*Session, error) {
-	session := &Session{}
-
-	cacheKey := thissession
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		err = json.Unmarshal(cacheData, &session)
-		if err == nil {
-			return session, nil
-		}
-	} else {
-		//log.Printf("[WARNING] Error getting session cache for %s: %v", thissession, err)
-	}
-
-	nameKey := "sessions"
-	if project.DbType == "opensearch" {
-		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), thissession)
-		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return session, err
-		}
-
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return session, errors.New("Session doesn't exist")
-		}
-
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return session, err
-		}
-
-		wrapped := SessionWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return session, err
-		}
-
-		session = &wrapped.Source
-	} else {
-		key := datastore.NameKey(nameKey, thissession, nil)
-		if err := project.Dbclient.Get(ctx, key, session); err != nil {
-			return &Session{}, err
-		}
-	}
-
-	if project.CacheDb {
-		data, err := json.Marshal(thissession)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling session: %s", err)
-			return session, nil
-		}
-
-		err = SetCache(ctx, thissession, data, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed updating session cache: %s", err)
-		}
-	}
-
-	return session, nil
-}
-*/
 
 // Index = Username
 func DeleteKey(ctx context.Context, entity string, value string) error {
@@ -12679,8 +12613,6 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			}
 
 		}
-
-		//log.Printf("[INFO] Got %d cacheKeys for org %s (datastore)", len(cacheKeys), orgId)
 	}
 
 	// Sort by edited field

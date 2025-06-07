@@ -211,7 +211,7 @@ type WorkflowApp struct {
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
 
 	ReferenceInfo struct {
-		OnpremBackup bool     `json:"onprem_backup" datastore:"onprem_backup"`
+		OnpremBackup bool `json:"onprem_backup" datastore:"onprem_backup"`
 
 		IsPartner        bool     `json:"is_partner" datastore:"is_partner"`
 		PartnerContacts  string   `json:"partner_contacts" datastore:"partner_contacts"`
@@ -617,6 +617,8 @@ type User struct {
 	VerificationToken    string        `datastore:"verification_token" json:"verification_token"`
 	ApiKey               string        `datastore:"apikey" json:"apikey"`
 	ResetReference       string        `datastore:"reset_reference" json:"reset_reference"`
+	Executions           ExecutionInfo `datastore:"executions" json:"executions"`
+	Limits               UserLimits    `datastore:"limits" json:"limits,omitempty"`
 	MFA                  MFAInfo       `datastore:"mfa_info,noindex" json:"mfa_info"`
 	Authentication       []UserAuth    `datastore:"authentication,noindex" json:"authentication"`
 	ResetTimeout         int64         `datastore:"reset_timeout,noindex" json:"reset_timeout"`
@@ -632,8 +634,6 @@ type User struct {
 	ValidatedSessionOrgs []string      `datastore:"validated_session_orgs" json:"validated_session_orgs"` // Orgs that have been used in the current session for the user
 	UsersLastSession     string        `datastore:"users_last_session" json:"users_last_session"`
 	Theme                string        `datastore:"theme" json:"theme"`
-
-	// Starting web3 integration
 	PublicProfile PublicProfile `datastore:"public_profile" json:"public_profile"`
 
 	// Tracking logins and such
@@ -642,6 +642,9 @@ type User struct {
 	Regions      []string     `datastore:"regions" json:"regions"`
 
 	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
+
+	// Old web3 integration
+	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
 }
 
 type EthInfo struct {
@@ -1156,24 +1159,24 @@ type Variable struct {
 }
 
 type SingulResult struct {
-	Success bool   `json:"success"`
-	Action  string `json:"action"`
-	Output  string `json:"output"`
+	Success     bool        `json:"success"`
+	Action      string      `json:"action"`
+	Output      string      `json:"output"`
 	RawResponse interface{} `json:"raw_response"`
 }
 
 type SingulStats struct {
-	Id      string `json:"id"`
+	Id string `json:"id"`
 
-	Failed   bool  `json:"failed"`
-	Result   string `json:"result"`
-	ExecutionId string `json:"execution_id"`
-	WorkflowId  string `json:"workflow_id"`
-	NotificationWorkflow bool `json:"notification_workflow"`
+	Failed               bool   `json:"failed"`
+	Result               string `json:"result"`
+	ExecutionId          string `json:"execution_id"`
+	WorkflowId           string `json:"workflow_id"`
+	NotificationWorkflow bool   `json:"notification_workflow"`
 
 	IsGeneratedNotificationWorkflow bool `json:"is_generated_notification_workflow"`
 
-	OrgId  string `json:"org_id"`
+	OrgId string `json:"org_id"`
 }
 
 type WorkflowExecution struct {
@@ -1424,7 +1427,7 @@ type Workflow struct {
 }
 
 type BackupConfig struct {
-	OnpremBackup bool   `json:"onprem_backup" datastore:"onprem_backup"`
+	OnpremBackup bool `json:"onprem_backup" datastore:"onprem_backup"`
 
 	UploadRepo     string `json:"upload_repo" datastore:"upload_repo"`
 	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
