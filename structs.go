@@ -3812,12 +3812,13 @@ type SchemalessOutput struct {
 	Status  int    `json:"status,omitempty"`
 	URL     string `json:"url,omitempty"`
 
+	// Optional
+	RawResponse interface{} `json:"raw_response,omitempty"`
+
 	// JSON output. What if it's a list?
 	//Output map[string]interface{} `json:"output"`
 	Output interface{} `json:"output"`
 
-	// Optional
-	RawResponse interface{} `json:"raw_response,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {
