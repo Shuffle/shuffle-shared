@@ -4202,7 +4202,9 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(parentWorkflows))
 	if project.Environment == "cloud" && len(parentWorkflows) > 40 {
-		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//if debug  {
+		//	log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//}
 
 		// Check for "subflow" query
 		isSubflow := false
@@ -15893,7 +15895,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		childNodes := []string{}
 		if workflowExecution.Workflow.Configuration.ExitOnError {
 			// Find underlying nodes and add them
-			log.Printf("[WARNING] Actionresult is %s for node %s (%s) in execution %s. Should set workflowExecution and exit all running functions", actionResult.Status, actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId)
+			log.Printf("[WARNING][%s] Actionresult is %s for node %s (%s). Should set workflowExecution and exit all running functions", workflowExecution.ExecutionId, actionResult.Status, actionResult.Action.Label, actionResult.Action.ID)
 			workflowExecution.Status = actionResult.Status
 			workflowExecution.LastNode = actionResult.Action.ID
 
@@ -15904,7 +15906,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 		} else {
 
-			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
+			log.Printf("[WARNING][%s] Actionresult is %s for node %s. Continuing anyway because of workflow configuration.", workflowExecution.ExecutionId, actionResult.Status, actionResult.Action.ID)
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
 			childNodes = FindChildNodes(workflowExecution.Workflow, actionResult.Action.ID, []string{}, []string{})
@@ -17703,7 +17705,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	//for key, value := range data.Apps {
-	var fileId string
+	var orgId string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
@@ -17713,17 +17715,17 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		fileId = location[4]
+		orgId = location[4]
 	}
 
-	if fileId == "undefined" {
-		fileId = user.ActiveOrg.Id
-	}
+	// Overwriting, as we don't want it to work that way
+	// Should use Org-Id header instead
+	orgId = user.ActiveOrg.Id
 
 	ctx := GetContext(request)
-	org, err := GetOrg(ctx, fileId)
+	org, err := GetOrg(ctx, orgId)
 	if err != nil {
-		log.Printf("[INFO] Organization '%s' doesn't exist: %s", fileId, err)
+		log.Printf("[INFO] Organization '%s' doesn't exist: %s", orgId, err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -17756,10 +17758,47 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		isSuccess = false
 	}
 
+	// This is NOT required unless automation/other config is set.
+	foundCategories := []string{}
+	categoryConfig := &DatastoreCategoryUpdate{}
+	if len(category) > 0 && category != "default" { 
+		foundCategories = append(foundCategories, category)
+		categoryConfig, err = GetDatastoreCategoryConfig(ctx, org.Id, category)
+		if err != nil {
+			//if debug { 
+			//	log.Printf("[WARNING] Failed to get category config for org %s: %s", org.Id, err)
+			//}
+		}
+	} else {
+		allCategories, err := GetDatastoreCategories(ctx, org.Id)
+		if err == nil {
+			for _, cat := range allCategories {
+				foundCategories = append(foundCategories, cat.Category)
+			}
+		}
+
+		for _, key := range keys {
+			if len(key.Category) == 0 || key.Category == "default" {
+				continue
+			}
+
+			if ArrayContains(foundCategories, key.Category) {
+				continue
+			}
+
+			foundCategories = append(foundCategories, key.Category)
+		}
+	}
+
 	newReturn := CacheReturn{
 		Success: isSuccess,
 		Keys:    keys,
 		Cursor:  newCursor,
+
+		Category: category,
+		Config: *categoryConfig,
+
+		Categories: foundCategories,
 	}
 
 	b, err := json.Marshal(newReturn)
@@ -18096,7 +18135,11 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
-	log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Key: %#v", tmpData.Key, tmpData.OrgId, err, cacheData)
+
+	if debug { 
+		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Key: %#v", tmpData.Key, tmpData.OrgId, err, cacheData)
+	}
+
 	if err != nil || len(cacheData.Key) == 0 {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete). Does it exist?", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(400)
@@ -18637,7 +18680,8 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 
 	// Check if cache already existed and if distributed
-	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
+	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
 	if err == nil {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
 	}
@@ -18728,6 +18772,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	if appId != action.AppID {
 		if appId == "agent" {
 			action.AppID = "agent"
+		} else if strings.ToLower(appId) == "http" || strings.ToLower(action.AppID) == "http" {
+			action.AppID = "http"
 		} else {
 			log.Printf("[WARNING] Bad appid in single execution of App %s", appId)
 			return workflowExecution, errors.New(fmt.Sprintf("No App ID found matching %s", appId))
@@ -18749,6 +18795,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			decisionId = decision[0]
 		}
 	} else if strings.ToLower(appId) == "http" {
+
 		// Find the app and the ID for it
 		apps, err := FindWorkflowAppByName(ctx, "http")
 		if err != nil {
@@ -18793,6 +18840,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				}
 
 				appId = app.ID
+
+				action.AppID = app.ID
+				action.AppVersion = app.AppVersion
+				action.Label = fmt.Sprintf("HTTP standalone action")
 			} else {
 				log.Printf("[WARNING] Failed to find HTTP app in single action execution")
 				return workflowExecution, errors.New("Failed to find HTTP app. Is it installed?")
@@ -18868,7 +18919,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		app = *newApp
 	}
 
-	// FIXME: We need to inject missing empty auth here in some cases
 	// This is NOT a good solution, but a good bypass
 	if app.Authentication.Required {
 		if len(action.AuthenticationId) > 0 {
@@ -19242,6 +19292,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 	if len(workflowExecution.ExecutionSource) == 0 || workflowExecution.ExecutionSource == "default" {
 		workflowExecution.ExecutionSource = "single_action"
+	}
+
+	if len(workflowExecution.Workflow.Name) == 0 {
+		workflowExecution.Workflow.Name = fmt.Sprintf("%s Single app run", action.AppName)
 	}
 
 	go SetWorkflowExecution(context.Background(), workflowExecution, true)
@@ -30023,4 +30077,107 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	//log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to '%s'\n\n", exec.ExecutionId, len(workflow.Validation.Errors), marshalledValidation)
 
 	return exec
+}
+
+func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Checking if it's a special region. All user-specific requests should
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Only admins can access this endpoint"}`))
+		return
+	}
+
+	categoryUpdate := DatastoreCategoryUpdate{} 
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading body in datastore category config: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	err = json.Unmarshal(body, &categoryUpdate)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling body in datastore category config: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	if len(categoryUpdate.Category) == 0 || strings.ToLower(categoryUpdate.Category) == "default" {
+		categoryUpdate.Category = ""
+	}
+
+	// Validate input - especially for workflows 
+	for automationId, automation := range categoryUpdate.Automations {
+		if len(automation.Name) == 0 {
+			continue
+		}
+
+		if strings.ToLower(automation.Name) == "run workflow" {
+			foundWorkflowIds := ""
+			foundWorkflowIdIndex := -1
+
+			for optionIndex, option := range automation.Options {
+				if option.Key == "workflow_id" {
+					foundWorkflowIds = option.Value
+					foundWorkflowIdIndex = optionIndex
+					break
+				}
+			}
+
+			newWorkflows := []string{}
+			for _, workflowId := range strings.Split(foundWorkflowIds, ",") {
+				if len(workflowId) == 0 {
+					continue
+				}
+
+				wf, err := GetWorkflow(ctx, strings.TrimSpace(workflowId))
+				if err != nil {
+					log.Printf("[WARNING] Failed getting workflow '%s' for automation %s: %s", workflowId, automationId, err)
+					continue
+				}
+
+				if wf.OrgId != user.ActiveOrg.Id {
+					continue
+				}
+
+				newWorkflows = append(newWorkflows, workflowId)
+			}
+
+			categoryUpdate.Automations[automationId].Options[foundWorkflowIdIndex].Value = strings.Join(newWorkflows, ",")
+		}
+	}
+
+	if categoryUpdate.Settings.Timeout < 60 {
+		categoryUpdate.Settings.Timeout = 0
+	} else if categoryUpdate.Settings.Timeout > 2147483647 {
+		categoryUpdate.Settings.Timeout = 0
+	}
+
+	categoryUpdate.OrgId = user.ActiveOrg.Id
+	err = SetDatastoreCategoryConfig(ctx, categoryUpdate)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting category config: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true}`))
 }
