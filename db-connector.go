@@ -12719,6 +12719,112 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 	return nil
 }
 
+func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, error) {
+	nameKey := "org_cache"
+
+	count := -1
+	if len(orgId) == 0 {
+		return count, errors.New("OrgId is required for GetCacheKeyCount")
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 100000,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if len(category) > 0 {
+			// Change out the "must" part entirely to contain the workflow id as well
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+				{
+					"match": map[string]interface{}{
+						"org_id": orgId,
+					},
+				},
+				{
+					"match": map[string]interface{}{
+						"category": category,
+					},
+				},
+			}
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[ERROR] Error encoding cache key count query: %s", err)
+			return count, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get cache key count): %s", err)
+			return count, err
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			log.Printf("[ERROR] Error reading response body for cache key count: %s", err)
+			return count, err
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			log.Printf("[WARNING] Body of cache key count is bad. Status: %d. This is fixed by adding an item.", res.StatusCode)
+			if res.StatusCode == 404 {
+				return count, nil // No keys found
+			}
+
+			return count, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		wrapped := CacheKeySearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			log.Printf("[ERROR] Error unmarshalling response body for cache key count: %s", err)
+			return count, err
+		}
+
+		count = wrapped.Hits.Total.Value
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId)
+		if len(category) > 0 {
+			query = query.Filter("category =", category)
+		}
+
+		newCount, err := project.Dbclient.Count(ctx, query)
+		if err != nil {
+			//log.Printf("[ERROR] Error counting cache keys for org %s: %s", orgId, err)
+			return count, err 
+		} else {
+			count = newCount
+		}
+	}
+
+	return count, nil 
+}
+
 func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
 	nameKey := "org_cache"
 	if strings.ToLower(category) == "default" {
@@ -12820,10 +12926,12 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		cacheKeys = newCacheKeys
 	} else {
 		// Query datastore with pages
-		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited").Limit(max)
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited")
 		if len(category) > 0 {
 			query = query.Filter("category =", category)
 		}
+
+		query = query.Limit(max)
 
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)

@@ -3650,10 +3650,10 @@ type OrgDatastoreCategoryWrapper struct {
 		} `json:"total"`
 		MaxScore float64 `json:"max_score"`
 		Hits     []struct {
-			Index  string       `json:"_index"`
-			Type   string       `json:"_type"`
-			ID     string       `json:"_id"`
-			Score  float64      `json:"_score"`
+			Index  string                  `json:"_index"`
+			Type   string                  `json:"_type"`
+			ID     string                  `json:"_id"`
+			Score  float64                 `json:"_score"`
 			Source DatastoreCategoryUpdate `json:"_source"`
 		} `json:"hits"`
 	} `json:"hits"`
@@ -4055,12 +4055,16 @@ type ExecutionReturn struct {
 
 // Create struct
 type CacheReturn struct {
-	Success    bool                    `json:"success"`
-	Keys       []CacheKeyData          `json:"keys"`
-	Cursor     string                  `json:"cursor"`
+	Success     bool   `json:"success"`
+	Amount      int    `json:"amount"`
+	Cursor      string `json:"cursor"`
+	TotalAmount int    `json:"total_amount"`
+
 	Category   string                  `json:"category"`
 	Config     DatastoreCategoryUpdate `json:"category_config,omitempty"`
 	Categories []string                `json:"categories,omitempty"`
+
+	Keys []CacheKeyData `json:"keys"`
 }
 
 type GCPIncident struct {

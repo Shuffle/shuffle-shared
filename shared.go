@@ -16448,7 +16448,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			valueToReturn := ""
 			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
 				valueToReturn = workflowExecution.Workflow.DefaultReturnValue
-				//log.Printf("\n\nCHECKING RESULT FOR LAST NODE %s with value \"%s\". Executionparent: %s\n\n", workflowExecution.ExecutionSourceNode, workflowExecution.Workflow.DefaultReturnValue, workflowExecution.ExecutionParent)
 				for _, result := range workflowExecution.Results {
 					if result.Action.ID == workflowExecution.LastNode {
 						if result.Status == "ABORTED" || result.Status == "FAILURE" || result.Status == "SKIPPED" {
@@ -17706,16 +17705,21 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 
 	//for key, value := range data.Apps {
 	var orgId string
+	category := ""
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
+		} else {
+			if location[4] == "category" && len(location) > 5 {
+				category = location[5]
+				if strings.Contains(category, "?") {
+					category = strings.Split(category, "?")[0]
+				}
+			} else {
+				orgId = location[4]
+			}
 		}
-
-		orgId = location[4]
 	}
 
 	// Overwriting, as we don't want it to work that way
@@ -17746,7 +17750,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
-	category := ""
 	categoryList, categoryOk := request.URL.Query()["category"]
 	if categoryOk && len(categoryList) > 0 {
 		category = categoryList[0]
@@ -17794,11 +17797,83 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		Success: isSuccess,
 		Keys:    keys,
 		Cursor:  newCursor,
+		Amount:      len(keys),
+		TotalAmount: -1,
 
 		Category: category,
 		Config: *categoryConfig,
 
 		Categories: foundCategories,
+	}
+
+	outputTypeList, outputTypeOk := request.URL.Query()["type"]
+	if outputTypeOk && len(outputTypeList) > 0 {
+		outputType := outputTypeList[0]
+
+		if outputType == "ndjson" || outputType == "csv" || outputType == "raw"{
+			outputString := ""
+			for _, key := range newReturn.Keys {
+				if len(key.Value) == 0 {
+					continue
+				}
+
+				newValue := strings.ReplaceAll(strings.ReplaceAll(key.Value, "\\n", "\n"), "\\r", "\r")
+				newValue = strings.ReplaceAll(strings.ReplaceAll(newValue, "\n", "\\n"), "\r", "\\r")
+
+				outputString += newValue+"\n"
+			}
+
+			// This forces browsers to download for some reason?
+			//resp.Header().Set("Content-Type", "application/x-ndjson")
+			resp.WriteHeader(200)
+			resp.Write([]byte(outputString))
+			return
+
+		} else if outputType == "values" || outputType == "json" {
+			newOutput := []string{}
+			for _, key := range newReturn.Keys {
+				if len(key.Value) == 0 {
+					continue
+				}
+
+				newOutput = append(newOutput, key.Value)
+			}
+
+			marshalledOutput, err := json.MarshalIndent(newOutput, "", "  ")
+			if err != nil {
+				log.Printf("[WARNING] Failed to marshal cache values for org %s: %s", org.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Something went wrong in cache value json management. Please refresh."}`))
+				return
+			}
+
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(200)
+			resp.Write(marshalledOutput)
+			return
+
+
+		} else if outputType == "keys" || outputType == "meta" {
+			marshalledOutput, err := json.MarshalIndent(newReturn.Keys, "", "  ")
+			if err != nil {
+				log.Printf("[WARNING] Failed to marshal cache keys for org %s: %s", org.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Something went wrong in cache key json management. Please refresh."}`))
+				return
+			}
+
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(200)
+			resp.Write(marshalledOutput)
+			return
+		}
+	} 
+
+	categoryCount, err := GetCacheKeyCount(ctx, orgId, category) 
+	if err != nil {
+		log.Printf("[WARNING] Failed to get cache key count for org %s: %s", org.Id, err)
+	} else {
+		newReturn.TotalAmount = categoryCount
 	}
 
 	b, err := json.Marshal(newReturn)
@@ -30127,6 +30202,13 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 		if len(automation.Name) == 0 {
 			continue
 		}
+
+		// Don't want to do this either just in case they have something configured, but unused
+		/*
+		if automation.Enabled != true {
+			continue
+		}
+		*/
 
 		if strings.ToLower(automation.Name) == "run workflow" {
 			foundWorkflowIds := ""
