@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"crypto/sha1"
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
@@ -105,7 +106,7 @@ func SetOrgStatistics(ctx context.Context, stats ExecutionInfo, id string) error
 	}
 
 	if len(newDaily) < len(stats.OnpremStats) {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Deduped %d stats for org %s", len(stats.OnpremStats)-len(newDaily), id)
 		}
 	}
@@ -811,8 +812,10 @@ func GetLiveWorkflowExecutionData(ctx context.Context, beforeTimestamp int, afte
 
 		_, err := project.Dbclient.GetAll(ctx, q, &liveExecs)
 		if err != nil {
-			log.Printf("[WARNING] Error getting live execution status: %s", err)
-			return liveExecs, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting live execution status: %s", err)
+				return liveExecs, err
+			}
 		}
 	}
 
@@ -2193,8 +2196,10 @@ func FindSimilarFilename(ctx context.Context, filename, orgId string) ([]File, e
 		query := datastore.NewQuery(nameKey).Filter("filename =", filename).Limit(25)
 		_, err := project.Dbclient.GetAll(ctx, query, &files)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
-			return files, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+				return files, err
+			}
 		} else {
 			//log.Printf("[INFO] Got %d files for filename: %s", len(files), filename)
 			parsedFiles := []File{}
@@ -2350,8 +2355,10 @@ func FindSimilarFile(ctx context.Context, md5, orgId string) ([]File, error) {
 		query := datastore.NewQuery(nameKey).Filter("md5_sum =", md5).Limit(250)
 		_, err := project.Dbclient.GetAll(ctx, query, &files)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
-			return files, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+				return files, err
+			}
 		} else {
 			//log.Printf("[INFO] Got %d files for md5: %s", len(files), md5)
 			parsedFiles := []File{}
@@ -2767,7 +2774,9 @@ func GetAllChildOrgs(ctx context.Context, orgId string) ([]Org, error) {
 
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
-			return orgs, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return orgs, err
+			}
 		}
 	}
 
@@ -2883,7 +2892,9 @@ func GetWorkflow(ctx context.Context, id string, skipHealth ...bool) (*Workflow,
 				query := datastore.NewQuery(nameKey).Filter("id =", strings.ToLower(id)).Limit(1)
 				var workflows []Workflow
 				if _, err := project.Dbclient.GetAll(ctx, query, &workflows); err != nil {
-					return &Workflow{}, err
+					if !strings.Contains(err.Error(), `cannot load field`) {
+						return &Workflow{}, err
+					}
 				}
 
 				if len(workflows) == 1 {
@@ -3260,7 +3271,7 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 				}
 			}
 
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Appending workflows (ADMIN + suborg distribution) for organization %s. Already have %d workflows for the user. Found %d (%d new) for org. New unique amount: %d (1)", user.ActiveOrg.Id, userWorkflowLen, len(wrapped.Hits.Hits), len(workflows)-userWorkflowLen, len(workflows))
 			}
 		}
@@ -3272,98 +3283,12 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 			return workflows, errors.New("No active org to find workflows for found")
 		}
 
-		//log.Printf("[INFO] Appending suborg distribution workflows for organization %s (%s)", user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//log.Printf("\n\n\nLooking for workflows for org %s with user %s (%s)\n\n\n", user.ActiveOrg.Id, user.Username, user.Id)
+
 		cursorStr := ""
-		query := datastore.NewQuery(nameKey).Filter("suborg_distribution =", user.ActiveOrg.Id)
-
-		cnt := 0
-		maxIter := 1000
-		for {
-			cnt += 1
-			if cnt > maxIter {
-				log.Printf("[ERROR] Too many iterations in suborg workflow iterator")
-				break
-			}
-
-			it := project.Dbclient.Run(ctx, query)
-
-			if len(workflows) >= maxAmount {
-				break
-			}
-
-			for {
-				innerWorkflow := Workflow{}
-				_, err = it.Next(&innerWorkflow)
-				//log.Printf("[DEBUG] SUBFLOW: %#v", innerWorkflow.ID)
-
-				if err != nil {
-					if strings.Contains(fmt.Sprintf("%s", err), "cannot load field") {
-
-						if !strings.Contains(fmt.Sprintf("%s", err), "input_markdown") {
-							log.Printf("[ERROR] Error in workflow loading. Migrating workflow query outputs to new workflow handler (6): %s", err)
-						}
-					} else if strings.Contains(fmt.Sprintf("%s", err), "no more items in iterator") {
-						break
-					} else {
-						log.Printf("[ERROR] Error in suborg workflow iterator: %s", err)
-						break
-					}
-				}
-
-				//log.Printf("[DEBUG] Got suborg workflow %s (%s)", innerWorkflow.Name, innerWorkflow.ID)
-
-				if innerWorkflow.Public {
-					continue
-				}
-
-				if innerWorkflow.Hidden {
-					continue
-				}
-
-				found := false
-				for _, loopedWorkflow := range workflows {
-					if loopedWorkflow.ID == innerWorkflow.ID {
-						found = true
-						break
-					}
-				}
-
-				if !found {
-					workflows = append(workflows, innerWorkflow)
-				}
-
-				if len(workflows) >= maxAmount {
-					break
-				}
-			}
-
-			// FIXME: Handle nil?
-			if err != iterator.Done {
-				//log.Printf("[INFO] Failed fetching suborg workflows: %v", err)
-				break
-			}
-
-			// Get the cursor for the next page of results.
-			nextCursor, err := it.Cursor()
-			if err != nil {
-				log.Printf("[ERROR] Problem with cursor: %s", err)
-				break
-			} else {
-				nextStr := fmt.Sprintf("%s", nextCursor)
-				if cursorStr == nextStr {
-					break
-				}
-
-				cursorStr = nextStr
-				query = query.Start(nextCursor)
-			}
-		}
-
-		query = datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
-		cursorStr = ""
+		query := datastore.NewQuery(nameKey).Filter("org_id =", user.ActiveOrg.Id).Limit(limit)
 		for {
 			it := project.Dbclient.Run(ctx, query)
-
 			if len(workflows) >= maxAmount {
 				break
 			}
@@ -3430,6 +3355,8 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 		}
 	}
 
+	//log.Printf("Found %d workflows for user %s (%s) in org %s", len(workflows), user.Username, user.Id, user.ActiveOrg.Id)
+
 	if len(workflows) > maxAmount {
 		workflows = workflows[:maxAmount]
 	}
@@ -3473,30 +3400,6 @@ func GetAllWorkflowsByQuery(ctx context.Context, user User, maxAmount int, curso
 	return fixedWorkflows, nil
 }
 
-func GetAllHooks(ctx context.Context) ([]Hook, error) {
-	var apis []Hook
-	q := datastore.NewQuery("hooks")
-
-	_, err := project.Dbclient.GetAll(ctx, q, &apis)
-	if err != nil && len(apis) == 0 {
-		return []Hook{}, err
-	}
-
-	return apis, nil
-}
-
-func GetAllOpenApi(ctx context.Context) ([]ParsedOpenApi, error) {
-	var apis []ParsedOpenApi
-	q := datastore.NewQuery("openapi3")
-
-	_, err := project.Dbclient.GetAll(ctx, q, &apis)
-	if err != nil && len(apis) == 0 {
-		return []ParsedOpenApi{}, err
-	}
-
-	return apis, nil
-}
-
 func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 	nameKey := "Organizations"
 	cacheKey := fmt.Sprintf("creator_%s_%s", nameKey, id)
@@ -3523,7 +3426,9 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		allOrgs := []Org{}
 		_, err := project.Dbclient.GetAll(ctx, query, &allOrgs)
 		if err != nil {
-			return curOrg, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return curOrg, err
+			}
 		}
 
 		if len(allOrgs) > 0 {
@@ -3544,8 +3449,7 @@ func GetOrgByCreatorId(ctx context.Context, id string) (*Org, error) {
 		user.ResetReference = ""
 		user.PrivateApps = []WorkflowApp{}
 		user.VerificationToken = ""
-		//user.ApiKey = ""
-		user.Executions = ExecutionInfo{}
+		user.ApiKey = ""
 		newUsers = append(newUsers, user)
 	}
 
@@ -3641,7 +3545,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, curOrg); err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				//log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
+				log.Printf("[WARNING] Error in org loading (4), but returning without warning: %s", err)
 				err = nil
 			} else {
 				log.Printf("[ERROR] Problem in org loading (2) for %s: %s", key, err)
@@ -3664,8 +3568,7 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 		user.ResetReference = ""
 		user.PrivateApps = []WorkflowApp{}
 		user.VerificationToken = ""
-		//user.ApiKey = ""
-		user.Executions = ExecutionInfo{}
+		user.ApiKey = ""
 		newUsers = append(newUsers, user)
 	}
 
@@ -3751,9 +3654,9 @@ func GetOrg(ctx context.Context, id string) (*Org, error) {
 	}
 
 	/*
-	if orgErr {
-		return curOrg, orgErr
-	}
+		if orgErr {
+			return curOrg, orgErr
+		}
 	*/
 
 	return curOrg, nil
@@ -3811,7 +3714,9 @@ func GetFirstOrg(ctx context.Context) (*Org, error) {
 		allOrgs := []Org{}
 		_, err := project.Dbclient.GetAll(ctx, query, &allOrgs)
 		if err != nil {
-			return curOrg, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return curOrg, err
+			}
 		}
 
 		if len(allOrgs) > 0 {
@@ -3991,7 +3896,7 @@ func GetTutorials(ctx context.Context, org Org, updateOrg bool) *Org {
 	if updateOrg {
 		SetOrg(ctx, org, org.Id)
 	}
-	return &org	
+	return &org
 }
 
 func propagateOrg(org Org, reverse bool) error {
@@ -4165,10 +4070,11 @@ func GetUsersByOrg(ctx context.Context, orgId string) ([]User, error) {
 		_, err := project.Dbclient.GetAll(ctx, query, &users)
 		if err != nil {
 			if strings.Contains(err.Error(), `cannot load field`) {
-				return users, err
-			} else {
-				log.Printf("[ERROR] Problem in user loading for org %s: %s", orgId, err)
+				return users, nil
 			}
+
+			log.Printf("[ERROR] Problem in user loading for org %s: %s", orgId, err)
+			return users, err
 		}
 	}
 
@@ -4181,8 +4087,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	}
 
 	if len(data.Users) == 0 {
-		// FIXME: Why do we need autocorrective mechanisms like this?
-		// Where do users go? wtf.
+		// Where do users go sometimes? wtf.
 		if project.Environment == "cloud" {
 			orgUsers, err := GetUsersByOrg(ctx, id)
 			if err != nil {
@@ -4196,7 +4101,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 
 		if len(data.Users) == 0 {
-			return errors.New("Not allowed to update an org without any users in the organization. Add at least one user to update")
+			return errors.New("Not allowed to update an org without any users in the organization. Need AT LEAST one user to update")
 		}
 	}
 
@@ -4216,6 +4121,14 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		}
 	}
 
+	if len(data.ManagerOrgs) == 0 && len(data.CreatorOrg) > 0 {
+		data.ManagerOrgs = []OrgMini{
+			OrgMini{
+				Id: data.CreatorOrg,
+			},
+		}
+	}
+
 	nameKey := "Organizations"
 	timeNow := int64(time.Now().Unix())
 	if data.Created == 0 {
@@ -4231,7 +4144,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		user.MFA = MFAInfo{}
 		user.Authentication = []UserAuth{}
 
-		user.EthInfo = EthInfo{}
 		user.PublicProfile = PublicProfile{}
 		user.LoginInfo = []LoginInfo{}
 		user.PersonalInfo = PersonalInfo{}
@@ -4289,7 +4201,6 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 			user.ResetReference = ""
 			user.PrivateApps = []WorkflowApp{}
 			user.VerificationToken = ""
-			user.Executions = ExecutionInfo{}
 			newUsers = append(newUsers, user)
 		}
 
@@ -4306,76 +4217,14 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for org '%s': %s", cacheKey, err)
 		}
+
+		for _, user := range data.Users {
+			DeleteCache(ctx, fmt.Sprintf("user_orgs_%s", user.Id))
+		}
 	}
 
 	return nil
 }
-
-/*
-func GetSession(ctx context.Context, thissession string) (*Session, error) {
-	session := &Session{}
-
-	cacheKey := thissession
-	cache, err := GetCache(ctx, cacheKey)
-	if err == nil {
-		cacheData := []byte(cache.([]uint8))
-		err = json.Unmarshal(cacheData, &session)
-		if err == nil {
-			return session, nil
-		}
-	} else {
-		//log.Printf("[WARNING] Error getting session cache for %s: %v", thissession, err)
-	}
-
-	nameKey := "sessions"
-	if project.DbType == "opensearch" {
-		//log.Printf("GETTING ES USER %s",
-		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), thissession)
-		if err != nil {
-			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
-			return session, err
-		}
-
-		defer res.Body.Close()
-		if res.StatusCode == 404 {
-			return session, errors.New("Session doesn't exist")
-		}
-
-		respBody, err := ioutil.ReadAll(res.Body)
-		if err != nil {
-			return session, err
-		}
-
-		wrapped := SessionWrapper{}
-		err = json.Unmarshal(respBody, &wrapped)
-		if err != nil {
-			return session, err
-		}
-
-		session = &wrapped.Source
-	} else {
-		key := datastore.NameKey(nameKey, thissession, nil)
-		if err := project.Dbclient.Get(ctx, key, session); err != nil {
-			return &Session{}, err
-		}
-	}
-
-	if project.CacheDb {
-		data, err := json.Marshal(thissession)
-		if err != nil {
-			log.Printf("[WARNING] Failed marshalling session: %s", err)
-			return session, nil
-		}
-
-		err = SetCache(ctx, thissession, data, 30)
-		if err != nil {
-			log.Printf("[WARNING] Failed updating session cache: %s", err)
-		}
-	}
-
-	return session, nil
-}
-*/
 
 // Index = Username
 func DeleteKey(ctx context.Context, entity string, value string) error {
@@ -4586,7 +4435,7 @@ func GetOpenApiDatastore(ctx context.Context, id string) (ParsedOpenApi, error) 
 				return *api, nil
 			}
 
-			log.Printf("[ERROR] Some OpenAPI  refissue for ID '%s': %s", id, err)
+			log.Printf("[ERROR] Some OpenAPI refissue for ID '%s': %s", id, err)
 
 			//project.BucketName := project.BucketName
 			fullParsedPath := fmt.Sprintf("extra_specs/%s/openapi.json", id)
@@ -4775,7 +4624,9 @@ func FindWorkflowByName(ctx context.Context, name string) ([]Workflow, error) {
 
 		_, err := project.Dbclient.GetAll(ctx, q, &workflows)
 		if err != nil && len(workflows) == 0 {
-			return []Workflow{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return []Workflow{}, err
+			}
 		}
 	}
 
@@ -4871,8 +4722,10 @@ func FindWorkflowAppByName(ctx context.Context, appName string) ([]WorkflowApp, 
 		q := datastore.NewQuery(nameKey).Filter("Name =", appName).Limit(6)
 		_, err := project.Dbclient.GetAll(ctx, q, &apps)
 		if err != nil && len(apps) == 0 {
-			log.Printf("[WARNING] Failed getting apps for name: %s", appName)
-			return apps, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting apps for name: %s", appName)
+				return apps, err
+			}
 		}
 	}
 
@@ -4967,8 +4820,10 @@ func FindGeneratedUser(ctx context.Context, username string) ([]User, error) {
 		q := datastore.NewQuery(nameKey).Filter("Username =", username)
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
-			log.Printf("[WARNING] Failed getting users for username: %s", username)
-			return users, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting users for username: %s", username)
+				return users, err
+			}
 		}
 	}
 
@@ -5060,8 +4915,10 @@ func FindUser(ctx context.Context, username string) ([]User, error) {
 		q := datastore.NewQuery(nameKey).Filter("Username =", username)
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
-			log.Printf("[WARNING] Failed getting users for username: %s", username)
-			return users, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting users for username: %s", username)
+				return users, err
+			}
 		}
 	}
 
@@ -5323,6 +5180,10 @@ func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client
 }
 
 func fixUserOrg(ctx context.Context, user *User) *User {
+	// Made it background due to potential timeouts if this is
+	// used in API calls
+	ctx = context.Background()
+
 	found := false
 	for _, id := range user.Orgs {
 		if user.ActiveOrg.Id == id {
@@ -5337,8 +5198,6 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 
 	innerUser := *user
 	innerUser.PrivateApps = []WorkflowApp{}
-	innerUser.Executions = ExecutionInfo{}
-	innerUser.Limits = UserLimits{}
 	innerUser.Authentication = []UserAuth{}
 	innerUser.Password = ""
 	innerUser.Session = ""
@@ -5349,32 +5208,34 @@ func fixUserOrg(ctx context.Context, user *User) *User {
 			continue
 		}
 
-		org, err := GetOrg(ctx, orgId)
-		if err != nil {
-			log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
-			continue
-		}
-
-		orgIndex := 0
-		userFound := false
-		for index, orgUser := range org.Users {
-			if orgUser.Id == user.Id {
-				orgIndex = index
-				userFound = true
-				break
+		go func(orgId string) {
+			org, err := GetOrg(ctx, orgId)
+			if err != nil {
+				log.Printf("[WARNING] Error getting org %s in fixUserOrg: %s", orgId, err)
+				return
 			}
-		}
 
-		if userFound {
-			org.Users[orgIndex] = innerUser
-		} else {
-			org.Users = append(org.Users, innerUser)
-		}
+			orgIndex := 0
+			userFound := false
+			for index, orgUser := range org.Users {
+				if orgUser.Id == user.Id {
+					orgIndex = index
+					userFound = true
+					break
+				}
+			}
 
-		err = SetOrg(ctx, *org, org.Id)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting org %s (2)", orgId)
-		}
+			if userFound {
+				org.Users[orgIndex] = innerUser
+			} else {
+				org.Users = append(org.Users, innerUser)
+			}
+
+			err = SetOrg(ctx, *org, org.Id)
+			if err != nil {
+				log.Printf("[WARNING] Failed setting org %s (2)", orgId)
+			}
+		}(orgId)
 	}
 
 	return user
@@ -5474,7 +5335,9 @@ func GetAllWorkflowAppAuth(ctx context.Context, orgId string) ([]AppAuthenticati
 
 		_, err := project.Dbclient.GetAll(ctx, q, &allworkflowappAuths)
 		if err != nil && len(allworkflowappAuths) == 0 {
-			return allworkflowappAuths, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return allworkflowappAuths, err
+			}
 		}
 	}
 
@@ -5644,7 +5507,9 @@ func GetEnvironments(ctx context.Context, orgId string) ([]Environment, error) {
 		//q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("archived =", false).Limit(10)
 		_, err := project.Dbclient.GetAll(ctx, q, &environments)
 		if err != nil && len(environments) == 0 {
-			return []Environment{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return []Environment{}, err
+			}
 		}
 
 		//log.Printf("Got %d environments for org: %s", len(environments), environments)
@@ -5992,15 +5857,21 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 					}
 
 					// Special fix for other regions for these reserved apps
-					if innerApp.Public == false && innerApp.Sharing == false && gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-						if ArrayContains(importantApps, innerApp.Name) {
-							innerApp.Public = true
-							innerApp.Sharing = true
-						} else {
-							log.Printf("[INFO] App %s is not public", innerApp.Name)
-							continue
-						}
+					if innerApp.Public == false {
+						continue
 					}
+
+					/*
+						if innerApp.Public == false && innerApp.Sharing == false && gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+							if ArrayContains(importantApps, innerApp.Name) {
+								innerApp.Public = true
+								innerApp.Sharing = true
+							} else {
+								log.Printf("[INFO] App %s is not public", innerApp.Name)
+								continue
+							}
+						}
+					*/
 
 					if len(innerApp.Actions) == 0 {
 						foundApp, err := getCloudFileApp(ctx, innerApp, innerApp.ID)
@@ -6009,9 +5880,6 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 						}
 					}
 
-					//log.Printf("[DEBUG] Got app %s:%s (%s)", innerApp.Name, innerApp.AppVersion, innerApp.ID)
-					//publicApps = append(publicApps, innerApp)
-					//publicApps, innerApp = fixAppAppend(allApps, innerApp)
 					allApps, innerApp = fixAppAppend(allApps, innerApp)
 
 				}
@@ -6118,10 +5986,18 @@ func GetPrioritizedApps(ctx context.Context, user User) ([]WorkflowApp, error) {
 		}
 
 		parentOrg := &Org{}
+		if len(org.CreatorOrg) > 0 && len(org.ManagerOrgs) == 0 {
+			org.ManagerOrgs = []OrgMini{
+				OrgMini{
+					Id: org.CreatorOrg,
+				},
+			}
+		}
+
 		if len(org.ManagerOrgs) > 0 {
 			parentOrg, err = GetOrg(ctx, org.ManagerOrgs[0].Id)
 			if err != nil {
-				log.Printf("[ERROR] Failed getting parent org %s during app load verification: %s", org.ManagerOrgs[0], err)
+				log.Printf("[ERROR] Failed getting parent org %s during app load verification: %s", org.ManagerOrgs[0].Id, err)
 			}
 		}
 
@@ -7001,10 +6877,12 @@ func GetWorkflowQueue(ctx context.Context, id string, limit int) (ExecutionReque
 		q := datastore.NewQuery(nameKey).Limit(limit)
 		_, err := project.Dbclient.GetAll(ctx, q, &executions)
 		if err != nil {
-			log.Printf("[WARNING] Error getting workflow queue: %s", err)
-			return ExecutionRequestWrapper{
-				Data: executions,
-			}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting workflow queue: %s", err)
+				return ExecutionRequestWrapper{
+					Data: executions,
+				}, err
+			}
 		}
 	}
 
@@ -7395,12 +7273,13 @@ func GetOpenseaAssets(ctx context.Context, collectionName string) ([]OpenseaAsse
 
 		return executions, nil
 	} else {
-		// FIXME: Sorting doesn't seem to work...
 		q := datastore.NewQuery(index).Limit(24)
 		_, err := project.Dbclient.GetAll(ctx, q, &executions)
 		if err != nil {
-			log.Printf("[WARNING] Error getting opensea items: %s", err)
-			return executions, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting opensea items: %s", err)
+				return executions, err
+			}
 		}
 	}
 
@@ -8516,8 +8395,10 @@ func GetScheduleByWorkflowId(ctx context.Context, workflowId string) (*ScheduleO
 		tmpSchedules := []ScheduleOld{}
 		_, err := project.Dbclient.GetAll(ctx, q, &tmpSchedules)
 		if err != nil && len(tmpSchedules) == 0 {
-			log.Printf("[WARNING] Error getting schedules for workflow Id: %s", err)
-			return curSchedule, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting schedules for workflow Id: %s", err)
+				return curSchedule, err
+			}
 		}
 
 		if len(tmpSchedules) > 0 {
@@ -8651,7 +8532,9 @@ func GetHooks(ctx context.Context, OrgId string) ([]Hook, error) {
 
 		_, err := project.Dbclient.GetAll(ctx, q, &hooks)
 		if err != nil && len(hooks) == 0 {
-			return hooks, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return hooks, err
+			}
 		}
 	}
 
@@ -8741,7 +8624,9 @@ func GetPipelines(ctx context.Context, OrgId string) ([]Pipeline, error) {
 
 		_, err := project.Dbclient.GetAll(ctx, q, &pipelines)
 		if err != nil && len(pipelines) == 0 {
-			return pipelines, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return pipelines, err
+			}
 		}
 	}
 
@@ -8849,8 +8734,10 @@ func GetSessionNew(ctx context.Context, sessionId string) (User, error) {
 		q := datastore.NewQuery(nameKey).Filter("session =", sessionId).Limit(1)
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
-			log.Printf("[WARNING] Error getting session: %s", err)
-			return User{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting session: %s", err)
+				return User{}, err
+			}
 		}
 	}
 
@@ -8956,8 +8843,10 @@ func GetApikey(ctx context.Context, apikey string) (User, error) {
 		q := datastore.NewQuery(nameKey).Filter("apikey =", apikey).Limit(1)
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil && len(users) == 0 {
-			log.Printf("[WARNING] Error getting apikey: %s", err)
-			return User{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Error getting apikey: %s", err)
+				return User{}, err
+			}
 		}
 	}
 
@@ -9322,10 +9211,12 @@ func SetNotification(ctx context.Context, notification Notification) error {
 		}
 	}
 
-	cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
-	DeleteCache(ctx, cacheKey)
-	cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
-	DeleteCache(ctx, cacheKey)
+	/*
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, notification.OrgId)
+		DeleteCache(ctx, cacheKey)
+		cacheKey = fmt.Sprintf("%s_%s", nameKey, notification.UserId)
+		DeleteCache(ctx, cacheKey)
+	*/
 
 	return nil
 }
@@ -9631,10 +9522,12 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			} else if strings.Contains(fmt.Sprintf("%s", err), "no matching index found") || strings.Contains(fmt.Sprintf("%s", err), "not ready to serve") {
 				log.Printf("[ERROR] Failed loading notifications based on index: %s", err)
 
-				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(200)
+				q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(199)
 				_, err := project.Dbclient.GetAll(ctx, q, &notifications)
 				if err != nil && len(notifications) == 0 {
-					return notifications, err
+					if !strings.Contains(err.Error(), `cannot load field`) {
+						return notifications, err
+					}
 				}
 
 			} else {
@@ -9650,7 +9543,10 @@ func GetOrgNotifications(ctx context.Context, orgId string) ([]Notification, err
 			return notifications, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		// Set it low, because Notifications are very often being set
+		// in certain cases. This means lowering this, will increase cache util
+		// while not clearing it on every SetNotification()
+		err = SetCache(ctx, cacheKey, data, 5)
 		if err != nil {
 			log.Printf("[WARNING] Failed updating notification cache: %s", err)
 		}
@@ -9918,8 +9814,10 @@ func GetAllFiles(ctx context.Context, orgId, namespace string) ([]File, error) {
 			namespaceQuery := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Filter("namespace !=", "").Limit(1000)
 			_, err = project.Dbclient.GetAll(ctx, namespaceQuery, &namespaceFiles)
 			if err != nil {
-				log.Printf("[ERROR] Failed loading namespace files: %s", err)
-				return files, nil
+				if !strings.Contains(err.Error(), `cannot load field`) {
+					log.Printf("[ERROR] Failed loading namespace files: %s", err)
+					return files, nil
+				}
 			}
 
 			for _, f := range namespaceFiles {
@@ -10111,7 +10009,9 @@ func GetAuthGroups(ctx context.Context, orgId string) ([]AppAuthenticationGroup,
 		q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(50)
 		_, err := project.Dbclient.GetAll(ctx, q, &appAuths)
 		if err != nil && len(appAuths) == 0 {
-			return appAuths, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return appAuths, err
+			}
 		}
 	}
 
@@ -10218,7 +10118,9 @@ func GetAllSchedules(ctx context.Context, orgId string) ([]ScheduleOld, error) {
 
 		_, err := project.Dbclient.GetAll(ctx, q, &schedules)
 		if err != nil && len(schedules) == 0 {
-			return schedules, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return schedules, err
+			}
 		}
 	}
 
@@ -10325,6 +10227,7 @@ func GetEnvironmentCount() (int, error) {
 	return count, nil
 }
 
+// Used for onprem validation of workflow -> user -> org mapping
 func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 	index := "workflow"
 
@@ -10393,15 +10296,8 @@ func GetAllWorkflows(ctx context.Context) ([]Workflow, error) {
 			workflows = append(workflows, hit.Source)
 		}
 		return workflows, nil
-	} else {
-		// implementation for different db
-		q := datastore.NewQuery(index).Limit(50)
-
-		_, err := project.Dbclient.GetAll(ctx, q, &workflows)
-		if err != nil {
-			return []Workflow{}, err
-		}
 	}
+
 	return workflows, nil
 }
 
@@ -10478,7 +10374,9 @@ func GetAllUsers(ctx context.Context) ([]User, error) {
 
 		_, err := project.Dbclient.GetAll(ctx, q, &users)
 		if err != nil {
-			return []User{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return []User{}, err
+			}
 		}
 	}
 
@@ -11498,8 +11396,10 @@ func GetOrgByField(ctx context.Context, fieldName, value string) ([]Org, error) 
 		query := datastore.NewQuery(nameKey).Filter(fmt.Sprintf("%s =", fieldName), value).Limit(10)
 		_, err := project.Dbclient.GetAll(ctx, query, &orgs)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting orgs for field %s: %s", fieldName, err)
-			return orgs, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting orgs for field %s: %s", fieldName, err)
+				return orgs, err
+			}
 		}
 	}
 
@@ -11579,7 +11479,9 @@ func GetAllOrgs(ctx context.Context) ([]Org, error) {
 
 		_, err := project.Dbclient.GetAll(ctx, q, &orgs)
 		if err != nil {
-			return []Org{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				return []Org{}, err
+			}
 		}
 	}
 
@@ -11617,8 +11519,10 @@ func GetSingulStatByExecutionId(ctx context.Context, executionId string) (Singul
 		query := datastore.NewQuery(nameKey).Filter("execution_id =", executionId).Limit(1)
 		_, err := project.Dbclient.GetAll(ctx, query, &stats)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting SingulStatByExecutionId: %s", err)
-			return SingulStats{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting SingulStatByExecutionId: %s", err)
+				return SingulStats{}, err
+			}
 		}
 	}
 
@@ -11635,8 +11539,10 @@ func GetSingulStats(ctx context.Context) ([]SingulStats, error) {
 		var stats []SingulStats
 		_, err := project.Dbclient.GetAll(ctx, query, &stats)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting SingulStats: %s", err)
-			return []SingulStats{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting SingulStats: %s", err)
+				return []SingulStats{}, err
+			}
 		}
 
 		if len(stats) == 0 {
@@ -11852,6 +11758,255 @@ func GetAppExecutionValues(ctx context.Context, parameterNames, orgId, workflowI
 	return workflows, nil
 }
 
+func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCategoryUpdate, error) {
+	nameKey := "datastore_category"
+
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, orgId)
+	categories := []DatastoreCategoryUpdate{}
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &categories)
+			if err == nil {
+				return categories, nil
+			} 
+		}
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 1000,
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[WARNING] Error encoding find datastore categories query: %s", err)
+			return categories, err
+		}
+
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get datastore categories): %s", err)
+			return categories, err
+		}
+
+		defer res.Body.Close()
+		if res.IsError() {
+			log.Printf("[WARNING] Failed datastore category query: %s", res.String())
+			return categories, errors.New(res.String())
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			return categories, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return categories, err
+		}
+
+		wrapped := OrgDatastoreCategoryWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil && len(wrapped.Hits.Hits) == 0 {
+			return categories, err
+		}
+
+		for _, hit := range wrapped.Hits.Hits {
+			if hit.Source.OrgId != orgId {
+				continue
+			}
+
+			categories = append(categories, hit.Source)
+		}
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(50)
+
+		_, err := project.Dbclient.GetAll(ctx, query, &categories)
+		if err != nil {
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting categories for %s: %s (1)", orgId, err)
+				return categories, err
+			}
+		}
+	}
+
+	if len(categories) == 0 {
+		log.Printf("[DEBUG] No categories found for org %s", orgId)
+		return categories, nil
+	}
+
+	if project.CacheDb {
+		cacheDataByte, err := json.Marshal(categories)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in get datastore categories: %s", err)
+			return categories, nil
+		}
+
+		err = SetCache(ctx, cacheKey, cacheDataByte, 60)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting datastore categories for org %s: %s", orgId, err)
+			return categories, nil 
+		}
+	}
+
+	return categories, nil
+
+}
+
+func GetDatastoreCategoryConfig(ctx context.Context, orgId, category string) (*DatastoreCategoryUpdate, error) {
+	nameKey := "datastore_category"
+	category = strings.ReplaceAll(strings.ToLower(category), " ", "_")
+
+	categoryData := &DatastoreCategoryUpdate{}
+	cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, orgId, category)
+	if project.CacheDb {
+		cache, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			cacheData := []byte(cache.([]uint8))
+			err = json.Unmarshal(cacheData, &categoryData)
+			if err == nil {
+				return categoryData, nil
+			}
+		}
+	}
+
+	seedString := fmt.Sprintf("%s_%s", orgId, category)
+	hash := sha1.New()
+	hash.Write([]byte(seedString))
+	hashBytes := hash.Sum(nil)
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, hashBytes)
+	id := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+	if project.DbType == "opensearch" {
+		res, err := project.Es.Get(strings.ToLower(GetESIndexPrefix(nameKey)), id)
+		if err != nil {
+			log.Printf("[WARNING] Error for %s: %s", cacheKey, err)
+			return categoryData, err
+		}
+
+		defer res.Body.Close()
+		if res.StatusCode == 404 {
+			return categoryData, errors.New("Key doesn't exist")
+		}
+
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			return categoryData, err
+		}
+
+		wrapped := DatastoreCategoryKeyWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			return categoryData, err
+		}
+
+		categoryData = &wrapped.Source
+	} else {
+		key := datastore.NameKey(nameKey, id, nil)
+
+		if err := project.Dbclient.Get(ctx, key, categoryData); err != nil {
+
+			if strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
+				err = nil
+			} else {
+				return categoryData, fmt.Errorf("Error getting datastore category config for org %s and category '%s': %w", orgId, category, err)
+			}
+		}
+	}
+
+	if len(categoryData.Id) == 0 {
+		return categoryData, fmt.Errorf("No category found for org %s and category %s", orgId, category)
+	}
+
+	if project.CacheDb {
+		cacheDataByte, err := json.Marshal(categoryData)
+		if err != nil {
+			log.Printf("[WARNING] Failed marshalling in get datastore category config: %s", err)
+			return categoryData, nil
+		}
+
+		err = SetCache(ctx, cacheKey, cacheDataByte, 60)
+		if err != nil {
+			log.Printf("[WARNING] Failed setting datastore category for get category '%s' in org %s: %s", category, orgId, err)
+			return categoryData, err
+		}
+	}
+
+	return categoryData, nil
+}
+
+func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryUpdate) error {
+	nameKey := "datastore_category"
+	if len(category.OrgId) == 0 {
+		return errors.New("OrgId is required for SetSetDatastoreCategoryConfig")
+	}
+
+	category.Category = strings.ReplaceAll(strings.ToLower(category.Category), " ", "_")
+
+	// Deterministic UUID based on OrgId and Category
+	seedString := fmt.Sprintf("%s_%s", category.OrgId, category.Category)
+	hash := sha1.New()
+	hash.Write([]byte(seedString))
+	hashBytes := hash.Sum(nil)
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, hashBytes)
+
+	category.Id = uuid.Must(uuid.FromBytes(uuidBytes)).String()
+	if len(category.Id) != 36 {
+		return errors.New(fmt.Sprintf("Failed to generate valid UUID for category with orgId %s and category %s", category.OrgId, category.Category))
+	}
+
+	// New struct, to not add body, author etc
+	data, err := json.Marshal(category)
+	if err != nil {
+		log.Printf("[ERROR] Failed marshalling in set datastore category key: %s", err)
+		return nil
+	}
+
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, category.Id, data)
+		if err != nil {
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, category.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, &category); err != nil {
+			log.Printf("[ERROR] Error setting org cache: %s", err)
+			return err
+		}
+	}
+
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s_%s", nameKey, category.OrgId, category.Category)
+		err = SetCache(ctx, cacheKey, data, 60)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting datastore category for set category '%s' in org %s: %s", category.Category, category.OrgId, err)
+		}
+	}
+
+	return nil
+}
+
 // Used for cache for individual organizations
 func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 	nameKey := "org_cache"
@@ -11904,6 +12059,52 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		err = SetCache(ctx, cacheKey, data, 30)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
+		}
+
+		// Delete cache in current org + category + child orgs
+		cursor := ""
+		currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, cacheData.OrgId, cacheData.Category)
+		DeleteCache(ctx, currentKey)
+
+		for _, suborg := range cacheData.SuborgDistribution {
+			currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, suborg, cacheData.Category)
+			DeleteCache(ctx, currentKey)
+		}
+	}
+
+	// Look for category triggers
+	if len(cacheData.Category) > 0 {
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+		if err == nil {
+			for _, automation := range categoryConfig.Automations {
+				if !automation.Enabled {
+					continue
+				}
+
+				if len(automation.Options) == 0 {
+					continue
+				}
+
+				log.Printf("[DEBUG] Found automation %s to run. Value: %s", automation.Name, automation.Options[0].Value)
+
+				// Run the automation
+				// This should prolly make a notification if it fails
+				go func(cacheData CacheKeyData, automation DatastoreAutomation) {
+					err := handleRunDatastoreAutomation(context.Background(), cacheData, automation)
+					if err != nil {
+						log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
+
+						CreateOrgNotification(
+							ctx,
+							fmt.Sprintf("Problem with automation '%s' in category '%s'", automation.Name, cacheData.Category),
+							fmt.Sprintf("Failed running automation '%s' for cache key '%s' in category '%s'. Error: %s", automation.Name, cacheData.Key, cacheData.Category, err),
+							fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
+							cacheData.OrgId,
+							true,
+						)
+					}
+				}(cacheData, automation)
+			}
 		}
 	}
 
@@ -11966,7 +12167,6 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 		cacheData = &wrapped.Source
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
-		//key := datastore.NameKey(nameKey, id, nil)
 
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
 
@@ -11974,7 +12174,7 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
 				err = nil
 			} else {
-				log.Printf("[WARNING] Error in cache key loading for %s: %s", id, err)
+				log.Printf("[WARNING] Error in datastore key loading for %s: %s", id, err)
 
 				if len(category) > 0 && category != "default" {
 				} else {
@@ -12005,8 +12205,10 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 					query := datastore.NewQuery(nameKey).Filter("Key =", newId).Limit(5)
 					_, err := project.Dbclient.GetAll(ctx, query, &cacheKeys)
 					if err != nil {
-						log.Printf("[WARNING] Failed getting cacheKey %s: %s (1)", newId, err)
-						return cacheData, err
+						if !strings.Contains(err.Error(), `cannot load field`) {
+							log.Printf("[WARNING] Failed getting cacheKey %s: %s (1)", newId, err)
+							return cacheData, err
+						}
 					}
 
 					if len(cacheKeys) > 0 {
@@ -12032,8 +12234,9 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 		}
 	}
 
+	log.Printf("[DEBUG] Found key '%s' in cache with org %s and category %s", cacheData.Key, cacheData.OrgId, cacheData.Category)
+
 	if project.CacheDb {
-		//log.Printf("[DEBUG] Setting cache for workflow %s", cacheKey)
 		data, err := json.Marshal(cacheData)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling in getcachekey: %s", err)
@@ -12516,6 +12719,112 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 	return nil
 }
 
+func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, error) {
+	nameKey := "org_cache"
+
+	count := -1
+	if len(orgId) == 0 {
+		return count, errors.New("OrgId is required for GetCacheKeyCount")
+	}
+
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+		query := map[string]interface{}{
+			"size": 100000,
+			"sort": map[string]interface{}{
+				"edited": map[string]interface{}{
+					"order": "desc",
+				},
+			},
+			"query": map[string]interface{}{
+				"bool": map[string]interface{}{
+					"must": []map[string]interface{}{
+						map[string]interface{}{
+							"match": map[string]interface{}{
+								"org_id": orgId,
+							},
+						},
+					},
+				},
+			},
+		}
+
+		if len(category) > 0 {
+			// Change out the "must" part entirely to contain the workflow id as well
+			query["query"].(map[string]interface{})["bool"].(map[string]interface{})["must"] = []map[string]interface{}{
+				{
+					"match": map[string]interface{}{
+						"org_id": orgId,
+					},
+				},
+				{
+					"match": map[string]interface{}{
+						"category": category,
+					},
+				},
+			}
+		}
+
+		if err := json.NewEncoder(&buf).Encode(query); err != nil {
+			log.Printf("[ERROR] Error encoding cache key count query: %s", err)
+			return count, err
+		}
+
+		// Perform the search request.
+		res, err := project.Es.Search(
+			project.Es.Search.WithContext(ctx),
+			project.Es.Search.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+			project.Es.Search.WithBody(&buf),
+			project.Es.Search.WithTrackTotalHits(true),
+		)
+
+		if err != nil {
+			log.Printf("[ERROR] Error getting response from Opensearch (get cache key count): %s", err)
+			return count, err
+		}
+
+		defer res.Body.Close()
+		respBody, err := ioutil.ReadAll(res.Body)
+		if err != nil {
+			log.Printf("[ERROR] Error reading response body for cache key count: %s", err)
+			return count, err
+		}
+
+		if res.StatusCode != 200 && res.StatusCode != 201 {
+			log.Printf("[WARNING] Body of cache key count is bad. Status: %d. This is fixed by adding an item.", res.StatusCode)
+			if res.StatusCode == 404 {
+				return count, nil // No keys found
+			}
+
+			return count, errors.New(fmt.Sprintf("Bad statuscode: %d", res.StatusCode))
+		}
+
+		wrapped := CacheKeySearchWrapper{}
+		err = json.Unmarshal(respBody, &wrapped)
+		if err != nil {
+			log.Printf("[ERROR] Error unmarshalling response body for cache key count: %s", err)
+			return count, err
+		}
+
+		count = wrapped.Hits.Total.Value
+	} else {
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId)
+		if len(category) > 0 {
+			query = query.Filter("category =", category)
+		}
+
+		newCount, err := project.Dbclient.Count(ctx, query)
+		if err != nil {
+			//log.Printf("[ERROR] Error counting cache keys for org %s: %s", orgId, err)
+			return count, err 
+		} else {
+			count = newCount
+		}
+	}
+
+	return count, nil 
+}
+
 func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
 	nameKey := "org_cache"
 	if strings.ToLower(category) == "default" {
@@ -12617,10 +12926,12 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		cacheKeys = newCacheKeys
 	} else {
 		// Query datastore with pages
-		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited").Limit(max)
+		query := datastore.NewQuery(nameKey).Filter("OrgId =", orgId).Order("-Edited")
 		if len(category) > 0 {
 			query = query.Filter("category =", category)
 		}
+
+		query = query.Limit(max)
 
 		if inputcursor != "" {
 			outputcursor, err := datastore.DecodeCursor(inputcursor)
@@ -12695,8 +13006,75 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 			}
 
 		}
+	}
 
-		//log.Printf("[INFO] Got %d cacheKeys for org %s (datastore)", len(cacheKeys), orgId)
+	categories := []string{}
+	if len(category) > 0 && category != "default" {
+		categories = []string{category}
+	} else if len(category) == 0 || category == "default" {
+		for _, cacheKey := range cacheKeys {
+			if len(cacheKey.Category) > 0 && cacheKey.Category != "default" && !ArrayContains(categories, cacheKey.Category) {
+				categories = append(categories, cacheKey.Category)
+			}
+		}
+	}
+
+	// Get category settings and do stuff
+	if len(categories) > 0 {
+		removedKeys := []string{}
+		for _, category := range categories {
+			categoryConfig, err := GetDatastoreCategoryConfig(ctx, orgId, category)
+			if err != nil {
+				continue
+			}
+
+			// Kind of arbitrary, but a good start
+			if categoryConfig.Settings.Timeout >= 60 {
+				// Check if any key is edited within this time
+				editedTime := time.Now().Unix() - int64(categoryConfig.Settings.Timeout)
+				backgroundCtx := context.Background()
+				newCacheKeys := []CacheKeyData{}
+				for _, cacheKey := range cacheKeys {
+					if cacheKey.Category != category {
+						continue
+					}
+
+					if cacheKey.Edited >= editedTime {
+						newCacheKeys = append(newCacheKeys, cacheKey)
+					} else {
+						if debug { 
+							log.Printf("[DEBUG] Should delete cache key '%s' with edited time %d. Timed out!", cacheKey.Key, cacheKey.Edited)
+						}
+
+
+						// URL encode the key
+						parsedRawkey := url.QueryEscape(cacheKey.Key)
+						parsedKey := fmt.Sprintf("%s_%s_%s", orgId, parsedRawkey, category)
+						err = DeleteKey(backgroundCtx, nameKey, parsedKey)
+						if err != nil {
+							log.Printf("[ERROR] Failed finding cache key %s: %s", parsedKey, err)
+						}
+						removedKeys = append(removedKeys, cacheKey.Key+cacheKey.Category) 
+					}
+				}
+			}
+		}
+
+		// Find missing keys from 
+		allNewCacheKeys := []CacheKeyData{}
+		for _, cacheKey := range cacheKeys {
+			if cacheKey.Category == "default" || len(cacheKey.Category) == 0 {
+				allNewCacheKeys = append(allNewCacheKeys, cacheKey)
+				continue
+			}
+
+			parsedKey := cacheKey.Key + cacheKey.Category
+			if !ArrayContains(removedKeys, parsedKey) {
+				allNewCacheKeys = append(allNewCacheKeys, cacheKey)
+			}
+		}
+
+		cacheKeys = allNewCacheKeys
 	}
 
 	// Sort by edited field
@@ -12704,7 +13082,9 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 		return cacheKeys[i].Edited > cacheKeys[j].Edited
 	})
 
-	if project.CacheDb {
+	// Only cache if NO cursor at all.
+	// Otherwise we need to track and clean up all cursors
+	if project.CacheDb && len(inputcursor) == 0 {
 		newcache, err := json.Marshal(cacheKeys)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)
@@ -12718,15 +13098,33 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	foundOrg, err := GetOrg(ctx, orgId)
-	if err == nil && len(foundOrg.ChildOrgs) == 0 && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
+	if err == nil && len(foundOrg.CreatorOrg) > 0 && foundOrg.CreatorOrg != orgId {
 		parentOrg, err := GetOrg(ctx, foundOrg.CreatorOrg)
-		if err == nil {
+		if err != nil {
+			log.Printf("[ERROR] Failed finding parent org %s for org %s: %s", foundOrg.CreatorOrg, orgId, err)
+		} else {
 			parentOrgCache, _, err := GetAllCacheKeys(ctx, parentOrg.Id, "", max, inputcursor)
-			if err == nil {
+			if err != nil {
+				log.Printf("[ERROR] Failed getting parent org cache keys for org %s: %s", parentOrg.Id, err)
+			} else {
+				if debug {
+					log.Printf("[DEBUG] Loaded %d parent org cache keys for org %s. Validating if child org %s should get the keys", len(parentOrgCache), parentOrg.Id, orgId)
+				}
+
 				for _, parentCache := range parentOrgCache {
+					/*
+						if debug && len(parentCache.SuborgDistribution) > 0 {
+							log.Printf("[DEBUG] Parent org %s keys: %#v", parentOrg.Id, parentCache.SuborgDistribution)
+						}
+					*/
+
 					if !ArrayContains(parentCache.SuborgDistribution, orgId) {
 						continue
 					}
+
+					// Clean up just in case
+					parentCache.PublicAuthorization = ""
+					parentCache.SuborgDistribution = []string{orgId}
 					cacheKeys = append(cacheKeys, parentCache)
 				}
 			}
@@ -12815,8 +13213,10 @@ func GetAllDeals(ctx context.Context, orgId string) ([]ResellerDeal, error) {
 		query := datastore.NewQuery(nameKey).Filter("reseller_org =", orgId).Limit(50)
 		_, err := project.Dbclient.GetAll(ctx, query, &deals)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
-			return deals, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting deals for org: %s", orgId)
+				return deals, err
+			}
 		}
 
 		log.Printf("[INFO] Got %d deals for org %s", len(deals), orgId)
@@ -13290,8 +13690,10 @@ func GetSuggestions(ctx context.Context, creatorname string) ([]Suggestion, erro
 		q := datastore.NewQuery(nameKey).Filter("creator =", creatorname).Filter("status =", "")
 		_, err := project.Dbclient.GetAll(ctx, q, &suggestions)
 		if err != nil && len(suggestions) == 0 {
-			log.Printf("[WARNING] Failed getting suggestion for: %s. Err: %s", creatorname, err)
-			return suggestions, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting suggestion for: %s. Err: %s", creatorname, err)
+				return suggestions, err
+			}
 		}
 	}
 
@@ -14076,8 +14478,10 @@ func GetOrgAuth(ctx context.Context, session string) (User, error) {
 		var orgs []Org
 		_, err := project.Dbclient.GetAll(ctx, q, &orgs)
 		if err != nil {
-			log.Printf("[WARNING] Failed getting org for session %#v: %s", session, err)
-			return User{}, err
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[WARNING] Failed getting org for session %#v: %s", session, err)
+				return User{}, err
+			}
 		}
 
 		if len(orgs) == 0 {
@@ -14138,8 +14542,10 @@ func GetSyncApikeyByOrg(ctx context.Context, orgId string) (string, error) {
 	q := datastore.NewQuery(nameKey).Filter("OrgId =", orgId)
 	_, err = dbclient.GetAll(ctx, q, &syncKeys)
 	if err != nil && len(syncKeys) == 0 {
-		log.Printf("[WARNING] Error getting cloudsync apikeys: %s", err)
-		return "", err
+		if !strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[WARNING] Error getting cloudsync apikeys: %s", err)
+			return "", err
+		}
 	}
 
 	returnData := ""
