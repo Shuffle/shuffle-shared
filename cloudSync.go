@@ -999,8 +999,6 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 		Timeout: 120 * time.Second,
 	}
 
-	//fmt.Fprint(resp, "OK")
-	//http.Redirect(resp, request, "https://europe-west2-shuffler.cloudfunctions.net/ShuffleSSR", 303)
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
 		log.Printf("[ERROR] Issue in SSR body proxy: %s", err)
@@ -1010,7 +1008,10 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 
 	//req.Body = ioutil.NopCloser(bytes.NewReader(body))
 	url := fmt.Sprintf("%s://%s%s", proxyScheme, proxyHost, req.RequestURI)
-	//log.Printf("[DEBUG] Request (%s) request URL: %s. More: %s", req.Method, url, req.URL.String())
+
+	if debug { 
+		log.Printf("[DEBUG] Request (%s) request URL: %s. More: %s", req.Method, url, req.URL.String())
+	}
 
 	proxyReq, err := http.NewRequest(req.Method, url, bytes.NewReader(body))
 	if err != nil {
@@ -1053,13 +1054,14 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	// Need to clear cache in case user gets updated in db
 	// with a new session and such. This only forces a new search,
 	// and shouldn't get them logged out
-	ctx := GetContext(req)
 	c, err := req.Cookie("session_token")
 	if err != nil {
 		c, err = req.Cookie("__session")
 	}
 
+	// FIXME: What is the point of this cookie checking?
 	if err == nil {
+		ctx := GetContext(req)
 		DeleteCache(ctx, fmt.Sprintf("session_%s", c.Value))
 	}
 }
