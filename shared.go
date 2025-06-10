@@ -9274,6 +9274,26 @@ func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
 		tmpData.OrgId = user.ActiveOrg.Id
 	}
 
+	isPartner := false
+	org, err := GetOrg(ctx, user.ActiveOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", user.ActiveOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting your org details"}`))
+		return
+	}
+
+	if org.LeadInfo.TechPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.DistributionPartner || org.LeadInfo.ServicePartner {
+		isPartner = true
+	}
+
+	if !isPartner {
+		log.Printf("[AUDIT] User %s (%s) tried to publish a partner details but the org is not a partner", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Your organization is not a partner"}`))
+		return
+	}
+
 	if len(tmpData.Name) == 0 {
 		resp.WriteHeader(http.StatusBadRequest)
 		resp.Write([]byte(`{"success": false, "reason": "Partner name is required"}`))
