@@ -18751,9 +18751,9 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
-	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
 	// Check if cache already existed and if distributed
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+
 	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
 	if err == nil {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
@@ -27996,7 +27996,45 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	org, err := GetOrg(ctx, fileId)
+	// get the request body
+	type ReturnData struct {
+		OrgId    string `json:"suborg_id"`
+		Password string `json:"password"`
+	}
+
+	var tmpData ReturnData
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body in delete org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+	}
+
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling body in delete org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshalling body"}`))
+		return
+	}
+
+	// check if the password is correct
+	if len(tmpData.Password) == 0 {
+		log.Printf("[WARNING] No password provided in delete org request")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No password provided"}`))
+		return
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(tmpData.Password))
+	if err != nil {
+		log.Printf("[WARNING] Password for user %s is incorrect in delete org request", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Incorrect password"}`))
+		return
+	}
+
+	parentOrg, err := GetOrg(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
 		resp.WriteHeader(500)
@@ -28004,32 +28042,40 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	foundAdmin := false
-	for _, orgUser := range org.Users {
-		if user.Username == orgUser.Username && orgUser.Role == "admin" {
-			foundAdmin = true
+	subOrg, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", tmpData.OrgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+		return
+	}
+
+	if subOrg.CreatorOrg != parentOrg.Id {
+		log.Printf("[WARNING] Org '%s' is not a child org of '%s'. Not deleting.", tmpData.OrgId, fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org is not a child org of the parent org"}`))
+		return
+	}
+
+	isAdmin := false
+	for _, orgUser := range parentOrg.Users {
+		if orgUser.Username == user.Username && orgUser.Role == "admin" {
+			isAdmin = true
 			break
 		}
 	}
 
-	if !foundAdmin {
-		log.Printf("[WARNING] User %s is not an admin of org %s", user.Username, org.Name)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Not admin of org"}`))
-		return
-	}
-
-	// Check if it's a suborg
-	if len(org.ManagerOrgs) == 0 || len(org.ChildOrgs) > 0 {
-		log.Printf("[WARNING] Org '%s' is NOT a suborg. Not deleting.", fileId)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Org is not a suborg"}`))
+	if !isAdmin {
+		log.Printf("[WARNING] User %s is not an admin in org '%s'. Not deleting.", user.Username, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User is not an admin in the parent org"}`))
 		return
 	}
 
 	// Get workflows
-	user.ActiveOrg.Id = org.Id
-	user.ActiveOrg.Name = org.Name
+	currentActiveOrg := user.ActiveOrg
+	user.ActiveOrg.Id = subOrg.Id
+	user.ActiveOrg.Name = subOrg.Name
 	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
@@ -28047,9 +28093,9 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Delete the org
-	err = DeleteKey(ctx, "Organizations", fileId)
+	err = DeleteKey(ctx, "Organizations", subOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed deleting org '%s': %s", fileId, err)
+		log.Printf("[WARNING] Failed deleting org '%s': %s", subOrg.Id, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed deleting org"}`))
 		return
@@ -28057,53 +28103,41 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	newOrgString := []string{}
 	for _, orgId := range user.Orgs {
-		if orgId != fileId {
+		if orgId != subOrg.Id {
 			newOrgString = append(newOrgString, orgId)
 		}
 	}
 
+	newChildOrg := []OrgMini{}
+	for _, childOrg := range parentOrg.ChildOrgs {
+		if childOrg.Id != subOrg.Id {
+			newChildOrg = append(newChildOrg, childOrg)
+		}
+	}
+
+	parentOrg.ChildOrgs = newChildOrg
+
+	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting parent org '%s': %s", parentOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed setting parent org"}`))
+		return
+	}
+
 	user.Orgs = newOrgString
-	newOrg := ""
-	if len(org.ManagerOrgs) > 0 {
-		if ArrayContains(user.Orgs, org.ManagerOrgs[0].Id) {
-			newOrg = org.ManagerOrgs[0].Id
-		} else {
-			if len(user.Orgs) > 0 {
-				newOrg = user.Orgs[0]
-			} else {
-				log.Printf("[WARNING] User %s has no orgs left. Setting default to empty.", user.Username)
-				newOrg = ""
-			}
-		}
-	}
-
-	if len(newOrg) > 0 {
-		// Get the org and fill in
-		newOrgDetails, err := GetOrg(ctx, newOrg)
-		if err == nil {
-			user.ActiveOrg.Id = newOrgDetails.Id
-			user.ActiveOrg.Name = newOrgDetails.Name
-		} else {
-			user.ActiveOrg.Id = ""
-			user.ActiveOrg.Name = ""
-		}
+	if user.ActiveOrg.Id == subOrg.Id {
+		// If the user is in the org that was deleted, set active org as parent org
+		user.ActiveOrg.Id = parentOrg.Id
+		user.ActiveOrg.Name = parentOrg.Name
 	} else {
-		// Will cause the user to generate a new org as it doesn't have any?
-		user.ActiveOrg.Id = ""
-		user.ActiveOrg.Name = ""
+		user.ActiveOrg.Id = currentActiveOrg.Id
+		user.ActiveOrg.Name = currentActiveOrg.Name
 	}
 
-	//for _, orgUser := range org.Users {
-	//	// Get the user
-	//	orgUserDetails, err := GetUser(ctx, orgUser.Username)
-	//	if err != nil {
-	//		continue
-	//	}
-
-	//	if orgUserDetails.ActiveOrg.Id == fileId {
-	//		orgUserDetails.ActiveOrg.Id = newOrg
-	//	}
-	//}
+	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	DeleteCache(ctx, suborgCacheKey)
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 
 	err = SetUser(ctx, &user, true)
 	if err != nil {
