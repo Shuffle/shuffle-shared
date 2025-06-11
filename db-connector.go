@@ -12891,49 +12891,56 @@ func SetUsecaseNew(ctx context.Context, usecase *UsecaseInfo) error {
     return nil
 }
 
-func GetUsecaseNew(ctx context.Context, id string, isUsecaseId bool) ([]UsecaseInfo, error) {
+// GetIndividualUsecase retrieves a single usecase by its ID
+func GetIndividualUsecase(ctx context.Context, id string) (UsecaseInfo, error) {
     nameKey := "Usecases"
-    var usecases []UsecaseInfo
-
-    if isUsecaseId {
-		// Get Usecase by ID
-        if project.CacheDb {
-            cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-            cacheData, err := GetCache(ctx, cacheKey)
-            if err == nil {
-                // Cache hit
-                var usecase UsecaseInfo
-                cacheBytes, ok := cacheData.([]byte)
-                if ok {
-                    err = json.Unmarshal(cacheBytes, &usecase)
-                    if err == nil {
-                        return []UsecaseInfo{usecase}, nil
-                    }
+    
+    // Check cache first
+    if project.CacheDb {
+        cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+        cacheData, err := GetCache(ctx, cacheKey)
+        if err == nil {
+            // Cache hit
+            var usecase UsecaseInfo
+            cacheBytes, ok := cacheData.([]byte)
+            if ok {
+                err = json.Unmarshal(cacheBytes, &usecase)
+                if err == nil {
+                    return usecase, nil
                 }
             }
         }
-
-        k := datastore.NameKey(nameKey, id, nil)
-        usecase := &UsecaseInfo{}
-        err := project.Dbclient.Get(ctx, k, usecase)
-		if err != nil {
-			log.Printf("[ERROR] Failed to get usecase by ID %s: %s", id, err)
-			return nil, fmt.Errorf("failed to get usecase by ID: %w", err)
-        }
-        // Cache the result
-        if project.CacheDb {
-            data, err := json.Marshal(usecase)
-            if err == nil {
-                cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-                SetCache(ctx, cacheKey, data, 30)
-            }
-        }
-        return []UsecaseInfo{*usecase}, nil
     }
 
-	// Get Usecases by partner ID
+    // Get from datastore if not in cache
+    k := datastore.NameKey(nameKey, id, nil)
+    usecase := &UsecaseInfo{}
+    err := project.Dbclient.Get(ctx, k, usecase)
+    if err != nil {
+        log.Printf("[ERROR] Failed to get usecase by ID %s: %s", id, err)
+        return UsecaseInfo{}, fmt.Errorf("failed to get usecase by ID: %w", err)
+    }
+    
+    // Cache the result
     if project.CacheDb {
-        cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, id)
+        data, err := json.Marshal(usecase)
+        if err == nil {
+            cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+            SetCache(ctx, cacheKey, data, 30)
+        }
+    }
+    
+    return *usecase, nil
+}
+
+// GetUsecases retrieves multiple usecases by partner ID
+func GetPartnerUsecases(ctx context.Context, partnerId string) ([]UsecaseInfo, error) {
+    nameKey := "Usecases"
+    var usecases []UsecaseInfo
+    
+    // Check cache first
+    if project.CacheDb {
+        cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
         cacheData, err := GetCache(ctx, cacheKey)
         if err == nil {
             var cachedUsecases []UsecaseInfo
@@ -12947,17 +12954,19 @@ func GetUsecaseNew(ctx context.Context, id string, isUsecaseId bool) ([]UsecaseI
         }
     }
 
-    q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", id)
+    // Get from datastore if not in cache
+    q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", partnerId)
     _, err := project.Dbclient.GetAll(ctx, q, &usecases)
     if err != nil {
         log.Printf("[ERROR] Failed to get usecases by partner ID: %s", err)
         return nil, fmt.Errorf("failed to get usecases by partner ID: %w", err)
     }
 
+    // Cache the results
     if project.CacheDb && len(usecases) > 0 {
         data, err := json.Marshal(usecases)
         if err == nil {
-            cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, id)
+            cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
             SetCache(ctx, cacheKey, data, 30)
         }
     }

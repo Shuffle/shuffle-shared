@@ -25522,9 +25522,11 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	isUsecaseId := true
+	var usecases []UsecaseInfo
+	var err error
+
 	if location[3] == "partners" {
-		isUsecaseId = false
+		// Partner ID - get all usecases for this partner
 		_, err := HandleAlgoliaPartnerSearch(ctx, Id)
 		if err != nil {
 			log.Printf("[WARNING] Partner with Id %s is not public: %s", Id, err)
@@ -25532,9 +25534,18 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false}`))
 			return
 		}
+
+		// Gettting the partner's usecases
+		usecases, err = GetPartnerUsecases(ctx, Id)
+	} else {
+		var usecase UsecaseInfo
+		usecase, err = GetIndividualUsecase(ctx, Id)
+		if err == nil {
+			// Getting the individual usecase
+			usecases = []UsecaseInfo{usecase}
+		}
 	}
 
-	usecases, err := GetUsecaseNew(ctx, Id, isUsecaseId)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get usecases: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -25558,6 +25569,7 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	log.Printf("[DEBUG] Successfully retrieved %d usecases for %s", len(usecases), Id)
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(response)
 }
@@ -25605,15 +25617,13 @@ func HandleDeleteUsecase(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	usecases, err := GetUsecaseNew(ctx, Id, true)
-	if err != nil || len(usecases) == 0 {
+	usecase, err := GetIndividualUsecase(ctx, Id)
+	if err != nil {
 		log.Printf("[ERROR] Failed getting usecase %s: %s", Id, err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed getting usecase"}`))
 		return
 	}
-
-	usecase := usecases[0]
 
 	if len(usecase.Id) == 0 {
 		log.Printf("[ERROR] Usecase %s not found", Id)
