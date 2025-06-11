@@ -9174,23 +9174,18 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	orgId := request.Header.Get("Org-Id")
 
 	var partner *Partner
 	var err error
 
-	// If partnerId is provided, use GetPartnerById
-	if partnerId != "" {
-		partner, err = GetPartnerById(ctx, partnerId)
-	} else if orgId != "" {
-		// If only orgId is provided, use GetPartnerByOrgId
-		partner, err = GetPartnerByOrgId(ctx, orgId)
-	} else {
-		// Neither partnerId nor orgId provided
+	if len(partnerId) == 0 {
+		log.Printf("[ERROR] Partner ID is missing in request: %s", request.URL.String())
 		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Either partner ID or organization ID must be provided"}`))
+		resp.Write([]byte(`{"success": false, "reason": "Missing partner ID"}`))
 		return
 	}
+
+	partner, err = GetPartnerById(ctx, partnerId)
 
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partner: %v", err)
@@ -9230,171 +9225,6 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(response)
-}
-
-// This is used to publish partner at first and then update it later
-func HandlePublishPartner(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	if project.Environment == "cloud" {
-		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
-		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
-			RedirectUserRequest(resp, request)
-			return
-		}
-	}
-
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access"}`))
-		return
-	}
-
-	if user.Role != "admin" {
-		log.Printf("[AUDIT] User %s (%s) tried to publish a partner but is not an admin", user.Username, user.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Not authorized to publish partners"}`))
-		return
-	}
-
-	location := strings.Split(request.URL.String(), "/")
-
-	var Id string
-	if location[1] == "api" {
-		if len(location) <= 4 {
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-		Id = location[4]
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[WARNING] Failed reading body: %v", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	var tmpData Partner
-
-	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling partner: %v", err)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	ctx := GetContext(request)
-
-	if len(tmpData.OrgId) == 0 {
-		tmpData.OrgId = user.ActiveOrg.Id
-	}
-
-	isPartner := false
-	org, err := GetOrg(ctx, user.ActiveOrg.Id)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting org '%s': %s", user.ActiveOrg.Id, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting your org details"}`))
-		return
-	}
-
-	if org.LeadInfo.TechPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.DistributionPartner || org.LeadInfo.ServicePartner {
-		isPartner = true
-	}
-
-	if !isPartner {
-		log.Printf("[AUDIT] User %s (%s) tried to publish a partner details but the org is not a partner", user.Username, user.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Your organization is not a partner"}`))
-		return
-	}
-
-	if len(tmpData.Name) == 0 {
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Partner name is required"}`))
-		return
-	}
-
-	overwrite := false
-
-	if len(tmpData.Id) > 0 {
-		overwrite = true
-
-		// Get existing partner to check if name has changed
-		existingPartner, err := GetPartnerById(ctx, tmpData.Id)
-		if err == nil && existingPartner != nil {
-			// Check if partner name has changed
-			if existingPartner.Name != tmpData.Name && len(existingPartner.Usecases) > 0 {
-
-				// Update all usecases associated with this partner
-				for _, usecaseId := range existingPartner.Usecases {
-					usecases, err := GetUsecaseNew(ctx, usecaseId, true)
-					if err != nil {
-						log.Printf("[WARNING] Failed to get usecase %s : %v", usecaseId, err)
-						continue
-					}
-					if len(usecases) == 0 {
-						log.Printf("[WARNING] No usecases found for ID %s (length: 0)", usecaseId)
- 						continue
- 					}
-
-					usecase := usecases[0]
-
-					// Update company name in the usecase if it matches the partner ID
-					if usecase.CompanyInfo.Id == existingPartner.Id {
-						usecase.CompanyInfo.Name = tmpData.Name
-
-						// Update usecase in Algolia
-						_, err = HandleAlgoliaUsecaseUpload(ctx, usecase, true)
-						if err != nil {
-							log.Printf("[WARNING] Failed to update usecase %s in Algolia: %v", usecase.Id, err)
-						}
-
-						// Update usecase in database
-						err = SetUsecaseNew(ctx, &usecase)
-						if err != nil {
-							log.Printf("[WARNING] Failed to update usecase %s in database: %v", usecase.Id, err)
-						}
-					}
-				}
-			}
-		}
-	}
-
-	if len(tmpData.Id) == 0 {
-		tmpData.Id = uuid.NewV4().String()
-	} else if tmpData.Id != Id && len(Id) > 0 {
-		// Handle mismatch between URL ID and body ID
-		log.Printf("[WARNING] ID mismatch: URL ID %s vs Body ID %s", Id, tmpData.Id)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "ID mismatch between URL and request body"}`))
-		return
-	}
-
-	_, err = HandleAlgoliaPartnerUpload(ctx, tmpData, overwrite)
-	if err != nil {
-		log.Printf("[WARNING] Failed publishing partner to Algolia: %v", err)
-	}
-
-	err = SetPartner(ctx, &tmpData)
-	if err != nil {
-		log.Printf("[WARNING] Failed publishing partner: %v", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false}`))
-		return
-	}
-
-	resp.WriteHeader(200)
-	resp.Write([]byte(`{"success": true, "message": "Partner published"}`))
 }
 
 func HandlePasswordChange(resp http.ResponseWriter, request *http.Request) {
