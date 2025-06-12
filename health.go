@@ -2229,16 +2229,16 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 						appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
 						if err == nil && len(appid.ObjectID) > 0 {
 							//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
-							tmpApp, err := GetApp(ctx, appid.ObjectID, user, false)
+							tmpApp, err = GetApp(ctx, appid.ObjectID, user, false)
 							if err == nil {
 								handled = true
 								action.AppID = tmpApp.ID
 								newOrgApps = append(newOrgApps, action.AppID)
-
 								workflowapps = append(workflowapps, *tmpApp)
 							}
 						}
 					}
+				}
 
 				if !handled {
 					action.Errors = []string{fmt.Sprintf("Couldn't find app %s:%s", action.AppName, action.AppVersion)}
