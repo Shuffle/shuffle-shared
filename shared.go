@@ -3507,7 +3507,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	} else {
-		// Try cross region loading? 
+		// Try cross region loading?
 		//if openapiLoad != nil {
 		//}
 	}
@@ -5986,7 +5986,7 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	}
 
 	if newAction.AppID != oldAction.AppID {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] APPID CHANGED: %s (%#v) vs %s (%#v)", newAction.Name, newAction.AppID, oldAction.Name, oldAction.AppID)
 		}
 
@@ -6536,7 +6536,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(parentAction, oldAction)
 			if changed || len(changeType) > 0 {
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
 				}
 				updatedActions = append(updatedActions, parentAction)
@@ -8686,7 +8686,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Errors:  workflow.Errors,
 	}
 
-	if !strings.Contains(strings.ToLower(workflow.Name), "ops dashboard") { 
+	if !strings.Contains(strings.ToLower(workflow.Name), "ops dashboard") {
 		log.Printf("[INFO] Saved new version of workflow '%s' (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
 	}
 
@@ -13504,7 +13504,7 @@ func GetRequestIp(r *http.Request) string {
 		// The client's IP is usually the first one.
 		stringSplit := strings.Split(forwardedFor, ",")
 		if len(stringSplit) > 1 {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s. Returning first.", forwardedFor)
 			}
 
@@ -15742,7 +15742,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		// This is finicky, but it's the easiest fix for this
 
 		if setExecutionVariable(actionResult) {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG][%s] Updating exec variable '%s' with new value from node '%s' of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, actionResult.Action.Label, len(actionResult.Result))
 			}
 
@@ -16055,7 +16055,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		lastResult := ""
 		// type ActionResult struct {
 		for _, result := range workflowExecution.Results {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
 			}
 
@@ -16134,10 +16134,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			// FIXME: Debug logs necessary to understand how workflows finish?
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
 			}
-
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -17764,11 +17763,11 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	// This is NOT required unless automation/other config is set.
 	foundCategories := []string{}
 	categoryConfig := &DatastoreCategoryUpdate{}
-	if len(category) > 0 && category != "default" { 
+	if len(category) > 0 && category != "default" {
 		foundCategories = append(foundCategories, category)
 		categoryConfig, err = GetDatastoreCategoryConfig(ctx, org.Id, category)
 		if err != nil {
-			//if debug { 
+			//if debug {
 			//	log.Printf("[WARNING] Failed to get category config for org %s: %s", org.Id, err)
 			//}
 		}
@@ -17794,14 +17793,14 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	newReturn := CacheReturn{
-		Success: isSuccess,
-		Keys:    keys,
-		Cursor:  newCursor,
+		Success:     isSuccess,
+		Keys:        keys,
+		Cursor:      newCursor,
 		Amount:      len(keys),
 		TotalAmount: -1,
 
 		Category: category,
-		Config: *categoryConfig,
+		Config:   *categoryConfig,
 
 		Categories: foundCategories,
 	}
@@ -17810,7 +17809,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	if outputTypeOk && len(outputTypeList) > 0 {
 		outputType := outputTypeList[0]
 
-		if outputType == "ndjson" || outputType == "csv" || outputType == "raw"{
+		if outputType == "ndjson" || outputType == "csv" || outputType == "raw" {
 			outputString := ""
 			for _, key := range newReturn.Keys {
 				if len(key.Value) == 0 {
@@ -17820,7 +17819,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 				newValue := strings.ReplaceAll(strings.ReplaceAll(key.Value, "\\n", "\n"), "\\r", "\r")
 				newValue = strings.ReplaceAll(strings.ReplaceAll(newValue, "\n", "\\n"), "\r", "\\r")
 
-				outputString += newValue+"\n"
+				outputString += newValue + "\n"
 			}
 
 			// This forces browsers to download for some reason?
@@ -17852,7 +17851,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			resp.Write(marshalledOutput)
 			return
 
-
 		} else if outputType == "keys" || outputType == "meta" {
 			marshalledOutput, err := json.MarshalIndent(newReturn.Keys, "", "  ")
 			if err != nil {
@@ -17867,9 +17865,9 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			resp.Write(marshalledOutput)
 			return
 		}
-	} 
+	}
 
-	categoryCount, err := GetCacheKeyCount(ctx, orgId, category) 
+	categoryCount, err := GetCacheKeyCount(ctx, orgId, category)
 	if err != nil {
 		log.Printf("[WARNING] Failed to get cache key count for org %s: %s", org.Id, err)
 	} else {
@@ -18211,7 +18209,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Key: %#v", tmpData.Key, tmpData.OrgId, err, cacheData)
 	}
 
@@ -18753,9 +18751,9 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
-
 	// Check if cache already existed and if distributed
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+
 	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
 	if err == nil {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
@@ -23038,7 +23036,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							workflowExecution.Workflow.Actions[workflowExecutionIndex].Parameters[paramKey].Value = backupApikey
 						}
 
-						if debug { 
+						if debug {
 							log.Printf("[DEBUG] Replaced apikey for %s with %s", param.Name, action.Parameters[paramKey].Value)
 						}
 
@@ -27998,7 +27996,45 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	org, err := GetOrg(ctx, fileId)
+	// get the request body
+	type ReturnData struct {
+		OrgId    string `json:"suborg_id"`
+		Password string `json:"password"`
+	}
+
+	var tmpData ReturnData
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body in delete org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+	}
+
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling body in delete org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshalling body"}`))
+		return
+	}
+
+	// check if the password is correct
+	if len(tmpData.Password) == 0 {
+		log.Printf("[WARNING] No password provided in delete org request")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No password provided"}`))
+		return
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(tmpData.Password))
+	if err != nil {
+		log.Printf("[WARNING] Password for user %s is incorrect in delete org request", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Incorrect password"}`))
+		return
+	}
+
+	parentOrg, err := GetOrg(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
 		resp.WriteHeader(500)
@@ -28006,32 +28042,40 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	foundAdmin := false
-	for _, orgUser := range org.Users {
-		if user.Username == orgUser.Username && orgUser.Role == "admin" {
-			foundAdmin = true
+	subOrg, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", tmpData.OrgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+		return
+	}
+
+	if subOrg.CreatorOrg != parentOrg.Id {
+		log.Printf("[WARNING] Org '%s' is not a child org of '%s'. Not deleting.", tmpData.OrgId, fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org is not a child org of the parent org"}`))
+		return
+	}
+
+	isAdmin := false
+	for _, orgUser := range parentOrg.Users {
+		if orgUser.Username == user.Username && orgUser.Role == "admin" {
+			isAdmin = true
 			break
 		}
 	}
 
-	if !foundAdmin {
-		log.Printf("[WARNING] User %s is not an admin of org %s", user.Username, org.Name)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Not admin of org"}`))
-		return
-	}
-
-	// Check if it's a suborg
-	if len(org.ManagerOrgs) == 0 || len(org.ChildOrgs) > 0 {
-		log.Printf("[WARNING] Org '%s' is NOT a suborg. Not deleting.", fileId)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Org is not a suborg"}`))
+	if !isAdmin {
+		log.Printf("[WARNING] User %s is not an admin in org '%s'. Not deleting.", user.Username, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User is not an admin in the parent org"}`))
 		return
 	}
 
 	// Get workflows
-	user.ActiveOrg.Id = org.Id
-	user.ActiveOrg.Name = org.Name
+	currentActiveOrg := user.ActiveOrg
+	user.ActiveOrg.Id = subOrg.Id
+	user.ActiveOrg.Name = subOrg.Name
 	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
@@ -28049,9 +28093,9 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Delete the org
-	err = DeleteKey(ctx, "Organizations", fileId)
+	err = DeleteKey(ctx, "Organizations", subOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed deleting org '%s': %s", fileId, err)
+		log.Printf("[WARNING] Failed deleting org '%s': %s", subOrg.Id, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed deleting org"}`))
 		return
@@ -28059,53 +28103,41 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	newOrgString := []string{}
 	for _, orgId := range user.Orgs {
-		if orgId != fileId {
+		if orgId != subOrg.Id {
 			newOrgString = append(newOrgString, orgId)
 		}
 	}
 
+	newChildOrg := []OrgMini{}
+	for _, childOrg := range parentOrg.ChildOrgs {
+		if childOrg.Id != subOrg.Id {
+			newChildOrg = append(newChildOrg, childOrg)
+		}
+	}
+
+	parentOrg.ChildOrgs = newChildOrg
+
+	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting parent org '%s': %s", parentOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed setting parent org"}`))
+		return
+	}
+
 	user.Orgs = newOrgString
-	newOrg := ""
-	if len(org.ManagerOrgs) > 0 {
-		if ArrayContains(user.Orgs, org.ManagerOrgs[0].Id) {
-			newOrg = org.ManagerOrgs[0].Id
-		} else {
-			if len(user.Orgs) > 0 {
-				newOrg = user.Orgs[0]
-			} else {
-				log.Printf("[WARNING] User %s has no orgs left. Setting default to empty.", user.Username)
-				newOrg = ""
-			}
-		}
-	}
-
-	if len(newOrg) > 0 {
-		// Get the org and fill in
-		newOrgDetails, err := GetOrg(ctx, newOrg)
-		if err == nil {
-			user.ActiveOrg.Id = newOrgDetails.Id
-			user.ActiveOrg.Name = newOrgDetails.Name
-		} else {
-			user.ActiveOrg.Id = ""
-			user.ActiveOrg.Name = ""
-		}
+	if user.ActiveOrg.Id == subOrg.Id {
+		// If the user is in the org that was deleted, set active org as parent org
+		user.ActiveOrg.Id = parentOrg.Id
+		user.ActiveOrg.Name = parentOrg.Name
 	} else {
-		// Will cause the user to generate a new org as it doesn't have any?
-		user.ActiveOrg.Id = ""
-		user.ActiveOrg.Name = ""
+		user.ActiveOrg.Id = currentActiveOrg.Id
+		user.ActiveOrg.Name = currentActiveOrg.Name
 	}
 
-	//for _, orgUser := range org.Users {
-	//	// Get the user
-	//	orgUserDetails, err := GetUser(ctx, orgUser.Username)
-	//	if err != nil {
-	//		continue
-	//	}
-
-	//	if orgUserDetails.ActiveOrg.Id == fileId {
-	//		orgUserDetails.ActiveOrg.Id = newOrg
-	//	}
-	//}
+	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	DeleteCache(ctx, suborgCacheKey)
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 
 	err = SetUser(ctx, &user, true)
 	if err != nil {
@@ -28603,7 +28635,7 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request, am
 
 	//log.Printf("\n\n\nIP: %s\n\n\n", foundIP)
 	if foundIP == "" || foundIP == "127.0.0.1" || foundIP == "::1" || foundIP == "[::1]" {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Skipping request overload check for IP: %s", foundIP)
 		}
 		return nil
@@ -30176,7 +30208,7 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 		return
 	}
 
-	categoryUpdate := DatastoreCategoryUpdate{} 
+	categoryUpdate := DatastoreCategoryUpdate{}
 	body, err := ioutil.ReadAll(request.Body)
 	if err != nil {
 		log.Printf("[ERROR] Failed reading body in datastore category config: %s", err)
@@ -30197,7 +30229,7 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 		categoryUpdate.Category = ""
 	}
 
-	// Validate input - especially for workflows 
+	// Validate input - especially for workflows
 	for automationId, automation := range categoryUpdate.Automations {
 		if len(automation.Name) == 0 {
 			continue
@@ -30205,9 +30237,9 @@ func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Reque
 
 		// Don't want to do this either just in case they have something configured, but unused
 		/*
-		if automation.Enabled != true {
-			continue
-		}
+			if automation.Enabled != true {
+				continue
+			}
 		*/
 
 		if strings.ToLower(automation.Name) == "run workflow" {
