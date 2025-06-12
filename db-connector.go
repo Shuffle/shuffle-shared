@@ -5211,15 +5211,13 @@ func GetPartnerById(ctx context.Context, id string) (*Partner, error) {
 	}
 
 	nameKey := "Partners"
-	log.Printf("[DEBUG] Getting partner by partnerId %s", id)
-
+	partner := &Partner{}
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
 		cachedData, err := GetCache(ctx, cacheKey)
 		if err == nil && cachedData != nil {
 			partnerBytes, ok := cachedData.([]byte)
 			if ok {
-				partner := &Partner{}
 				err = json.Unmarshal(partnerBytes, partner)
 				if err == nil {
 					return partner, nil
@@ -5228,11 +5226,15 @@ func GetPartnerById(ctx context.Context, id string) (*Partner, error) {
 		}
 	}
 
-	k := datastore.NameKey(nameKey, id, nil)
-	partner := &Partner{}
-	err := project.Dbclient.Get(ctx, k, partner)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get partner by ID: %w", err)
+	key := datastore.NameKey(nameKey, id, nil)
+	if err := project.Dbclient.Get(ctx, key, partner); err != nil {
+
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting partner (3): %s", err)
+			err = nil
+		} else {
+			return partner, fmt.Errorf("Error getting partner %s: %s", partner.Id, err)
+		}
 	}
 
 	if project.CacheDb {
@@ -5251,7 +5253,6 @@ func GetPartnerByOrgId(ctx context.Context, orgId string) (*Partner, error) {
 	}
 
 	nameKey := "Partners"
-	log.Printf("[DEBUG] Getting partner by orgId %s", orgId)
 
 	cacheKey := fmt.Sprintf("%s_org_%s", nameKey, orgId)
 	if project.CacheDb {
@@ -5295,7 +5296,6 @@ func GetPartnerByOrgId(ctx context.Context, orgId string) (*Partner, error) {
 
 func GetAllPartners(ctx context.Context) ([]Partner, error) {
 	nameKey := "Partners"
-	log.Printf("[DEBUG] Getting all partners")
 
 	// Try to get from cache first
 	cacheKey := fmt.Sprintf("%s_all", nameKey)
