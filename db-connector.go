@@ -8169,6 +8169,11 @@ func SetWorkflowAppAuthDatastore(ctx context.Context, workflowappauth AppAuthent
 	cacheKey = fmt.Sprintf("%s_%s", nameKey, workflowappauth.OrgId)
 	DeleteCache(ctx, cacheKey)
 
+	for _, dorg := range workflowappauth.SuborgDistribution {
+		cacheKey = fmt.Sprintf("%s_%s", nameKey, dorg)
+		DeleteCache(ctx, cacheKey)
+	}
+
 	return nil
 }
 
