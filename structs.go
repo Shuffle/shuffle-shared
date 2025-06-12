@@ -950,6 +950,7 @@ type Partner struct {
 	PartnerType       PartnerType `json:"partner_type" datastore:"partner_type"`
 	Country           string      `json:"country" datastore:"country"`
 	Region            string      `json:"region" datastore:"region"`
+	IsPublished       bool        `json:"ispublished" datastore:"ispublished"`
 	Created           int64       `json:"created" datastore:"created"`
 	Edited            int64       `json:"edited" datastore:"edited"`
 }
@@ -1799,6 +1800,7 @@ type AlgoliaSearchPartner struct {
 	Country     string   `json:"country"`
 	Region      string   `json:"region"`
 	OrgId       string   `json:"org_id"`
+	IsPublished bool     `json:"ispublished"`
 }
 
 type AlgoliaSearchUsecase struct {

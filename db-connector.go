@@ -5253,6 +5253,7 @@ func GetPartnerByOrgId(ctx context.Context, orgId string) (*Partner, error) {
 	}
 
 	nameKey := "Partners"
+	partner := &Partner{}
 
 	cacheKey := fmt.Sprintf("%s_org_%s", nameKey, orgId)
 	if project.CacheDb {
@@ -5261,7 +5262,6 @@ func GetPartnerByOrgId(ctx context.Context, orgId string) (*Partner, error) {
 			// Cache hit
 			partnerBytes, ok := cachedData.([]byte)
 			if ok {
-				partner := &Partner{}
 				err = json.Unmarshal(partnerBytes, partner)
 				if err == nil {
 					return partner, nil
@@ -5274,14 +5274,19 @@ func GetPartnerByOrgId(ctx context.Context, orgId string) (*Partner, error) {
 	var partners []Partner
 	_, err := project.Dbclient.GetAll(ctx, q, &partners)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get partner by org_id: %w", err)
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting partner (3): %s", err)
+			err = nil
+		} else {
+			return partner, fmt.Errorf("failed to get partner by org_id: %w", err)
+		}
 	}
 
 	if len(partners) == 0 {
 		return nil, fmt.Errorf("no partner found for org_id: %s", orgId)
 	}
 
-	partner := &partners[0]
+	partner = &partners[0]
 
 	if project.CacheDb {
 		// Cache the result
@@ -5319,7 +5324,12 @@ func GetAllPartners(ctx context.Context) ([]Partner, error) {
 	q := datastore.NewQuery(nameKey)
 	_, err := project.Dbclient.GetAll(ctx, q, &partners)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get all partners: %w", err)
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting partner (3): %s", err)
+			err = nil
+		} else {
+			return partners, fmt.Errorf("failed to get all partners: %w", err)
+		}
 	}
 
 	if project.CacheDb {
@@ -12894,7 +12904,7 @@ func SetUsecaseNew(ctx context.Context, usecase *UsecaseInfo) error {
 // GetIndividualUsecase retrieves a single usecase by its ID
 func GetIndividualUsecase(ctx context.Context, id string) (UsecaseInfo, error) {
     nameKey := "Usecases"
-    
+    usecase := UsecaseInfo{}
     // Check cache first
     if project.CacheDb {
         cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
@@ -12914,11 +12924,14 @@ func GetIndividualUsecase(ctx context.Context, id string) (UsecaseInfo, error) {
 
     // Get from datastore if not in cache
     k := datastore.NameKey(nameKey, id, nil)
-    usecase := &UsecaseInfo{}
-    err := project.Dbclient.Get(ctx, k, usecase)
+    err := project.Dbclient.Get(ctx, k, &usecase)
     if err != nil {
-        log.Printf("[ERROR] Failed to get usecase by ID %s: %s", id, err)
-        return UsecaseInfo{}, fmt.Errorf("failed to get usecase by ID: %w", err)
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting usecase (3): %s", err)
+			err = nil
+		} else {
+			return usecase, fmt.Errorf("failed to get usecase by ID: %w", err)
+		}
     }
     
     // Cache the result
@@ -12930,7 +12943,7 @@ func GetIndividualUsecase(ctx context.Context, id string) (UsecaseInfo, error) {
         }
     }
     
-    return *usecase, nil
+    return usecase, nil
 }
 
 // GetUsecases retrieves multiple usecases by partner ID
@@ -12958,8 +12971,12 @@ func GetPartnerUsecases(ctx context.Context, partnerId string) ([]UsecaseInfo, e
     q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", partnerId)
     _, err := project.Dbclient.GetAll(ctx, q, &usecases)
     if err != nil {
-        log.Printf("[ERROR] Failed to get usecases by partner ID: %s", err)
-        return nil, fmt.Errorf("failed to get usecases by partner ID: %w", err)
+        if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting usecase (3): %s", err)
+			err = nil
+		} else {
+			return usecases, fmt.Errorf("failed to get usecases by partner ID: %w", err)
+		}
     }
 
     // Cache the results
