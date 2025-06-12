@@ -2227,7 +2227,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 							} else {
 								newOrgApps = append(newOrgApps, action.AppID)
 							}
-
 							workflowapps = append(workflowapps, *tmpApp)
 					} else {
 						appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
@@ -2242,7 +2241,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 							}
 						}
 					}
-				}
 
 				if !handled {
 					action.Errors = []string{fmt.Sprintf("Couldn't find app %s:%s", action.AppName, action.AppVersion)}
