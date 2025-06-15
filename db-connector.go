@@ -17,6 +17,7 @@ import (
 	"os"
 	"strconv"
 
+	"sync"
 	"math"
 	"math/rand"
 	"sort"
@@ -12013,7 +12014,239 @@ func SetDatastoreCategoryConfig(ctx context.Context, category DatastoreCategoryU
 }
 
 // Used for cache for individual organizations
-func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
+// Tracks key by key, and scales pretty well :3
+func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
+	nameKey := "org_cache"
+	timeNow := int64(time.Now().Unix())
+
+	newArray := []CacheKeyData{}
+	dbKeys := []*datastore.Key{}
+
+	mainCategory := ""
+	wg := sync.WaitGroup{}
+
+	// 1. Get the key first.
+	// 2. Validate suborg distribution and other category configs 
+	cnt := 0
+	for index, cacheData := range allKeys { 
+		// Disallowing setting of multiple categories at a time
+		if index > 0 && len(cacheData.Category) > 0 {
+			if mainCategory != cacheData.Category {
+				log.Printf("BAD CATEGORY: %#v", cacheData)
+				continue
+			}
+		}
+
+		mainCategory = cacheData.Category
+		cnt += 1
+	}
+
+	log.Printf("[DEBUG] Uploading and validating %d keys to datastore", cnt)
+	cacheKeys := make(chan CacheKeyData, cnt)
+	datastoreKeys := make(chan datastore.Key, cnt)
+	for index, cacheData := range allKeys { 
+		// 1. Get the key first.
+		// 2. Validate suborg distribution and other category configs 
+
+		// Disallowing setting of multiple categories at a time
+		if index > 0 && len(cacheData.Category) > 0 {
+			if mainCategory != cacheData.Category {
+				continue
+			}
+		}
+
+		wg.Add(1)
+		go func(cacheData CacheKeyData, index int) {
+			defer wg.Done()
+
+			cacheData.Edited = timeNow
+			if cacheData.Created == 0 {
+				cacheData.Created = timeNow
+			}
+
+			cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
+			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
+				// Adds category on the end
+				cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
+			}
+
+			config, err := GetDatastoreKey(ctx, cacheId, cacheData.Category)
+			if err == nil {
+				cacheData.Created = config.Created
+				cacheData.Authorization = config.Authorization
+				cacheData.SuborgDistribution = config.SuborgDistribution
+				cacheData.PublicAuthorization = config.PublicAuthorization
+			}
+
+			if len(cacheId) > 128 {
+				cacheId = cacheId[0:127]
+			}
+
+			// URL encode
+			cacheId = url.QueryEscape(cacheId)
+			if len(cacheData.PublicAuthorization) == 0 {
+				cacheData.PublicAuthorization = uuid.NewV4().String()
+			}
+			cacheData.Authorization = ""
+
+			allKeys[index] = cacheData
+			//if project.DbType != "opensearch" {
+			// To make goroutines work well
+			//dbKeys = append(dbKeys, datastore.NameKey(nameKey, cacheId, nil))
+
+			datastoreKeys <- *datastore.NameKey(nameKey, cacheId, nil)
+			//newArray = append(newArray, cacheData)
+
+			cacheKeys <- cacheData
+		}(cacheData, index)
+		// Should set cache key here just in case? :thinking:
+	}
+
+	log.Printf("PRE WAIT")
+	wg.Wait()
+	log.Printf("PRE CLOSE")
+	close(cacheKeys)
+	close(datastoreKeys)
+	log.Printf("POST CLOSE")
+
+	for key := range cacheKeys {
+		if key.Key == "" {
+			continue
+		}
+
+		newArray = append(newArray, key)
+	}
+
+	for key := range datastoreKeys {
+		if key.Name == "" {
+			continue
+		}
+
+		dbKeys = append(dbKeys, &key)
+	}
+
+	// New struct, to not add body, author etc
+	if project.DbType == "opensearch" {
+		var buf bytes.Buffer
+
+		for _, cacheData := range newArray {
+			meta := map[string]map[string]string{
+            	"index": {"_index": nameKey},
+        	}
+
+			metaLine, err := json.Marshal(meta)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling meta in SetDatastoreKeyBulk: %s", err)
+				continue
+			}
+
+			buf.Write(metaLine)
+			buf.WriteByte('\n')
+
+			docLine, err := json.Marshal(cacheData)
+			if err != nil {
+				log.Printf("[ERROR] Failed marshalling doc in SetDatastoreKeyBulk: %s", err)
+				continue
+			}
+
+			buf.Write(docLine)
+			buf.WriteByte('\n')
+		}
+
+		res, err := project.Es.Bulk(
+			bytes.NewReader(buf.Bytes()),
+			project.Es.Bulk.WithContext(ctx),
+			project.Es.Bulk.WithIndex(strings.ToLower(GetESIndexPrefix(nameKey))),
+		)
+
+		if err != nil {
+			body, err := ioutil.ReadAll(res.Body)
+			if err != nil { 
+				log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s", err)
+				return err
+			}
+
+			log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s. Body: %s", err, body)
+			return err
+		}
+	} else {
+		if len(newArray) != len(dbKeys) {
+			log.Printf("[ERROR] SetDatastoreKeyBulk: Length of newArray (%d) and allKeys (%d) do not match", len(newArray), len(allKeys))
+
+			return errors.New("SetDatastoreKeyBulk: Length of newArray and allKeys do not match")
+		}
+
+		if _, err := project.Dbclient.PutMulti(ctx, dbKeys, newArray); err != nil {
+			log.Printf("[ERROR] Error setting bulk org datastore: %s", err)
+			return err
+		}
+	}
+
+	log.Printf("[DEBUG] SetDatastoreKeyBulk: Successfully set %d keys", len(newArray))
+
+	/*
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
+		}
+
+		// Delete cache in current org + category + child orgs
+		cursor := ""
+		currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, cacheData.OrgId, cacheData.Category)
+		DeleteCache(ctx, currentKey)
+
+		for _, suborg := range cacheData.SuborgDistribution {
+			currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, suborg, cacheData.Category)
+			DeleteCache(ctx, currentKey)
+		}
+	}
+	*/
+
+	// Look for category triggers
+	/*
+	if len(cacheData.Category) > 0 {
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
+		if err == nil {
+			for _, automation := range categoryConfig.Automations {
+				if !automation.Enabled {
+					continue
+				}
+
+				if len(automation.Options) == 0 {
+					continue
+				}
+
+				log.Printf("[DEBUG] Found automation %s to run. Value: %s", automation.Name, automation.Options[0].Value)
+
+				// Run the automation
+				// This should prolly make a notification if it fails
+				go func(cacheData CacheKeyData, automation DatastoreAutomation) {
+					err := handleRunDatastoreAutomation(context.Background(), cacheData, automation)
+					if err != nil {
+						log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
+
+						CreateOrgNotification(
+							ctx,
+							fmt.Sprintf("Problem with automation '%s' in category '%s'", automation.Name, cacheData.Category),
+							fmt.Sprintf("Failed running automation '%s' for cache key '%s' in category '%s'. Error: %s", automation.Name, cacheData.Key, cacheData.Category, err),
+							fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
+							cacheData.OrgId,
+							true,
+						)
+					}
+				}(cacheData, automation)
+			}
+		}
+	}
+	*/
+
+	return nil
+}
+
+// Used for cache for individual organizations
+func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 	nameKey := "org_cache"
 	timeNow := int64(time.Now().Unix())
 	cacheData.Edited = timeNow
@@ -12046,6 +12279,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 		log.Printf("[ERROR] Failed marshalling in set cache key: %s", err)
 		return nil
 	}
+
 	if project.DbType == "opensearch" {
 		err = indexEs(ctx, nameKey, cacheId, data)
 		if err != nil {
@@ -12117,7 +12351,7 @@ func SetCacheKey(ctx context.Context, cacheData CacheKeyData) error {
 }
 
 // Used for cache for individual organizations
-func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData, error) {
+func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKeyData, error) {
 	cacheData := &CacheKeyData{}
 	nameKey := "org_cache"
 
@@ -12127,7 +12361,9 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 
 	//log.Printf("[WARNING] ID in get cache: %s", id)
 	if len(category) > 0 && category != "default" {
-		id = fmt.Sprintf("%s_%s", id, category)
+		if !strings.HasSuffix(id, category) {
+			id = fmt.Sprintf("%s_%s", id, category)
+		}
 	}
 
 	id = url.QueryEscape(id)
@@ -12174,12 +12410,13 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 		key := datastore.NameKey(nameKey, id, nil)
 
 		if err := project.Dbclient.Get(ctx, key, cacheData); err != nil {
+			//log.Printf("ERROR: Failed getting cache key %s: %s", id, err)
 
 			if strings.Contains(err.Error(), `cannot load field`) {
 				log.Printf("[ERROR] Error in cache key loading. Migrating org cache to new handler (3): %s", err)
 				err = nil
 			} else {
-				log.Printf("[WARNING] Error in datastore key loading for %s: %s", id, err)
+				//log.Printf("[WARNING] Error in datastore key loading for %s: %s", id, err)
 
 				if len(category) > 0 && category != "default" {
 				} else {
@@ -12239,7 +12476,14 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 		}
 	}
 
-	log.Printf("[DEBUG] Found key '%s' in cache with org %s and category %s", cacheData.Key, cacheData.OrgId, cacheData.Category)
+	// NOT returning without this, as we want to cache even when 
+	// there isn't data in the key. This just makes general loading of individual 
+	// keys faster
+	if len(cacheData.Key) > 0 {
+		if debug { 
+			log.Printf("[DEBUG] Found key '%s' in datastore with org '%s' and category '%s'", cacheData.Key, cacheData.OrgId, cacheData.Category)
+		}
+	}
 
 	if project.CacheDb {
 		data, err := json.Marshal(cacheData)
@@ -12248,7 +12492,7 @@ func GetCacheKey(ctx context.Context, id string, category string) (*CacheKeyData
 			return cacheData, nil
 		}
 
-		err = SetCache(ctx, cacheKey, data, 30)
+		err = SetCache(ctx, cacheKey, data, 1440)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache for get cache key: %s", err)
 		}
@@ -12837,6 +13081,8 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
+	// Look for 
+
 
 	cursor := ""
 	cacheKeys := []CacheKeyData{}
@@ -13089,7 +13335,8 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 
 	// Only cache if NO cursor at all.
 	// Otherwise we need to track and clean up all cursors
-	if project.CacheDb && len(inputcursor) == 0 {
+	//if project.CacheDb && len(inputcursor) == 0 {
+	if project.CacheDb {
 		newcache, err := json.Marshal(cacheKeys)
 		if err != nil {
 			log.Printf("[WARNING] Failed marshalling cacheKeys: %s", err)

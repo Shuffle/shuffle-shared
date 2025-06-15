@@ -6803,7 +6803,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 				OrgId: execution.ExecutionOrg,
 			}
 
-			err := SetCacheKey(ctx, cacheData) 
+			err := SetDatastoreKey(ctx, cacheData) 
 			if err != nil {
 				log.Printf("[ERROR][%s] Failed updating AI requests: %s", execution.ExecutionId, err)
 			}
@@ -7150,7 +7150,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Work
 
 		// Get the item with key "threatlist_urls" from datastore
 		ctx := GetContext(nil)
-		_, err := GetCacheKey(ctx, "threatlist_urls", "")
+		_, err := GetDatastoreKey(ctx, "threatlist_urls", "")
 		if err != nil {
 			//log.Printf("[INFO] Failed to get threatlist URLs from datastore. Making it.: %s", err)
 			urls := []string{
@@ -7167,7 +7167,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Work
 					OrgId: orgId,
 				}
 
-				err = SetCacheKey(ctx, key)
+				err = SetDatastoreKey(ctx, key)
 				if err != nil {
 					log.Printf("[ERROR] Failed to set threatlist URLs in datastore: %s", err)
 				} else {
