@@ -1041,6 +1041,7 @@ type DatastoreAutomation struct {
 
 type DatastoreCategorySettings struct {
 	Timeout int64 `json:"timeout" datastore:"timeout"`
+	Public  bool  `json:"public" datastore:"public"` // If the category is public, meaning that it can be accessed without authentication
 }
 
 type DatastoreCategoryUpdate struct {

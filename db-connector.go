@@ -12032,7 +12032,6 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 		// Disallowing setting of multiple categories at a time
 		if index > 0 && len(cacheData.Category) > 0 {
 			if mainCategory != cacheData.Category {
-				log.Printf("BAD CATEGORY: %#v", cacheData)
 				continue
 			}
 		}
@@ -12041,7 +12040,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 		cnt += 1
 	}
 
-	log.Printf("[DEBUG] Uploading and validating %d keys to datastore", cnt)
+	if debug { 
+		log.Printf("[DEBUG] Uploading and validating %d keys to datastore", cnt)
+	}
+
 	cacheKeys := make(chan CacheKeyData, cnt)
 	datastoreKeys := make(chan datastore.Key, cnt)
 	for index, cacheData := range allKeys { 
@@ -12059,10 +12061,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 		go func(cacheData CacheKeyData, index int) {
 			defer wg.Done()
 
+			cacheData.Created = timeNow
 			cacheData.Edited = timeNow
-			if cacheData.Created == 0 {
-				cacheData.Created = timeNow
-			}
 
 			cacheId := fmt.Sprintf("%s_%s", cacheData.OrgId, cacheData.Key)
 			if len(cacheData.Category) > 0 && cacheData.Category != "default" {
@@ -12078,6 +12078,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 				cacheData.PublicAuthorization = config.PublicAuthorization
 			}
 
+			if cacheData.Created == 0 {
+				cacheData.Created = timeNow
+			}
+
 			if len(cacheId) > 128 {
 				cacheId = cacheId[0:127]
 			}
@@ -12090,24 +12094,16 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 			cacheData.Authorization = ""
 
 			allKeys[index] = cacheData
-			//if project.DbType != "opensearch" {
-			// To make goroutines work well
-			//dbKeys = append(dbKeys, datastore.NameKey(nameKey, cacheId, nil))
-
 			datastoreKeys <- *datastore.NameKey(nameKey, cacheId, nil)
-			//newArray = append(newArray, cacheData)
 
 			cacheKeys <- cacheData
 		}(cacheData, index)
 		// Should set cache key here just in case? :thinking:
 	}
 
-	log.Printf("PRE WAIT")
 	wg.Wait()
-	log.Printf("PRE CLOSE")
 	close(cacheKeys)
 	close(datastoreKeys)
-	log.Printf("POST CLOSE")
 
 	for key := range cacheKeys {
 		if key.Key == "" {
@@ -13301,10 +13297,11 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 						// URL encode the key
 						parsedRawkey := url.QueryEscape(cacheKey.Key)
 						parsedKey := fmt.Sprintf("%s_%s_%s", orgId, parsedRawkey, category)
-						err = DeleteKey(backgroundCtx, nameKey, parsedKey)
-						if err != nil {
-							log.Printf("[ERROR] Failed finding cache key %s: %s", parsedKey, err)
-						}
+						//err = DeleteKey(backgroundCtx, nameKey, parsedKey)
+						//if err != nil {
+						//	log.Printf("[ERROR] Failed finding cache key %s: %s", parsedKey, err)
+						//}
+						go DeleteKey(backgroundCtx, nameKey, parsedKey)
 						removedKeys = append(removedKeys, cacheKey.Key+cacheKey.Category) 
 					}
 				}

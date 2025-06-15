@@ -17687,19 +17687,19 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[DEBUG] Api authentication failed in list cache keys: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
-		return
-	}
-
-	if user.Role != "admin" && !user.SupportAccess {
-		log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
-		return
+	user, usererr := HandleApiAuthentication(resp, request)
+	if usererr != nil {
+		log.Printf("[AUDIT] Api authentication failed in list datastore keys: %s. Allowing continue in case category is public", usererr)
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		//return
+	} else {
+		if user.Role != "admin" && !user.SupportAccess {
+			log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
+			return
+		}
 	}
 
 	//for key, value := range data.Apps {
@@ -17725,6 +17725,33 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	// Should use Org-Id header instead
 	orgId = user.ActiveOrg.Id
 
+	categoryList, categoryOk := request.URL.Query()["category"]
+	if categoryOk && len(categoryList) > 0 {
+		category = categoryList[0]
+	}
+
+	orgQuery, orgOk := request.URL.Query()["org_id"]
+	if orgOk && len(orgQuery) > 0 {
+		orgId = orgQuery[0]
+	}
+
+	if usererr != nil {
+		if len(category) == 0 || category == "default" {
+			log.Printf("[WARNING] No category provided in request. Returning 400.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No category provided"}`))
+			return
+		}
+
+		// NEED to check the org etc
+		if len(orgId) == 0 {
+			log.Printf("[WARNING] No org ID provided in request. Returning 400.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No org ID provided"}`))
+			return
+		}
+	}
+
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, orgId)
 	if err != nil {
@@ -17734,7 +17761,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	maxAmount := 100 
+	maxAmount := 100
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
 		val, err := strconv.Atoi(top[0])
@@ -17747,11 +17774,6 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	cursorList, cursorOk := request.URL.Query()["cursor"]
 	if cursorOk && len(cursorList) > 0 {
 		cursor = cursorList[0]
-	}
-
-	categoryList, categoryOk := request.URL.Query()["category"]
-	if categoryOk && len(categoryList) > 0 {
-		category = categoryList[0]
 	}
 
 	keys := []CacheKeyData{}
@@ -17812,6 +17834,24 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			foundCategories = append(foundCategories, key.Category)
+		}
+	}
+
+	if orgId != user.ActiveOrg.Id {
+		if !categoryConfig.Settings.Public {
+			log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
+			return
+		}
+
+		// Cleanup just in case
+		categoryConfig = &DatastoreCategoryUpdate{}
+		for keyIndex, _ := range keys {
+			keys[keyIndex].WorkflowId = ""
+			keys[keyIndex].ExecutionId = ""
+			keys[keyIndex].PublicAuthorization = ""
+			keys[keyIndex].SuborgDistribution = []string{} 
 		}
 	}
 
@@ -17877,12 +17917,12 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		} else if outputType == "keys" {
 			fullString := ""
 			for _, key := range newReturn.Keys {
-				fullString += fmt.Sprintf("%s\n", key.Key) 
+				fullString += fmt.Sprintf("%s\n", key.Key)
 			}
 
 			resp.Write([]byte(fullString))
 
-			// Somehow this creates superflous request? 
+			// Somehow this creates superflous request?
 			//resp.WriteHeader(200)
 			return
 
@@ -18715,13 +18755,13 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	/*
-	// Check if cache already existed and if distributed
-	tmpData.Key = strings.Trim(tmpData.Key, " ")
-	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
-	if err == nil {
-		tmpData.SuborgDistribution = cacheData.SuborgDistribution
-	}
+		// Check if cache already existed and if distributed
+		tmpData.Key = strings.Trim(tmpData.Key, " ")
+		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
+		if err == nil {
+			tmpData.SuborgDistribution = cacheData.SuborgDistribution
+		}
 	*/
 
 	err = SetDatastoreKeyBulk(ctx, tmpData)

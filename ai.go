@@ -6787,6 +6787,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 			}
 		}
 
+		// Stores the key in shuffle datastore
 		marshalledCompletionRequest, err := json.MarshalIndent(completionRequest, "", "  ")
 
 		if err != nil {
