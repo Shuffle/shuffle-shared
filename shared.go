@@ -25428,18 +25428,11 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	partner, err := GetPartnerById(ctx, tmpData.CompanyInfo.Id)
+	partner, err := GetPartnerById(ctx, user.ActiveOrg.Id)
 	if err != nil || partner == nil {
 		log.Printf("[WARNING] Partner doesn't exist: %v", err)
 		resp.WriteHeader(401)
 		resp.Write([]byte(`{"success": false, "reason": "Failed finding partner"}`))
-		return
-	}
-
-	if partner.OrgId != user.ActiveOrg.Id {
-		log.Printf("[WARNING] User %s (%s) is trying to publish usecase for partner %s (%s) but doesn't have access to it", user.Username, user.Id, partner.Name, partner.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
 		return
 	}
 
@@ -25480,34 +25473,6 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
-	}
-
-	if len(partner.Usecases) == 0 {
-		partner.Usecases = []string{}
-	}
-
-	// Check if the usecase is already in the partner's usecases
-	found := false
-	for _, usecase := range partner.Usecases {
-		if usecase == tmpData.Id {
-			found = true
-			log.Printf("[DEBUG] Usecase %s already exists in partner %s's usecases", tmpData.Id, partner.Id)
-			break
-		}
-	}
-
-	if !found {
-		partner.Usecases = append(partner.Usecases, tmpData.Id)
-
-		err = SetPartner(ctx, partner)
-		if err != nil {
-			log.Printf("[WARNING] Failed setting partner %s with usecase %s: %v", partner.Id, tmpData.Id, err)
-			resp.WriteHeader(500)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		log.Printf("[DEBUG] Added usecase %s to partner %s's usecases", tmpData.Id, partner.Id)
 	}
 
 	resp.WriteHeader(200)
@@ -25713,47 +25678,10 @@ func HandleDeleteUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	partner, err := GetPartnerById(ctx, usecase.CompanyInfo.Id)
-	if err != nil {
-		log.Printf("[WARNING] Partner Id %v doesn't exist.", usecase.CompanyInfo.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed finding partner"}`))
-		return
-	}
-
-	if partner.OrgId != user.ActiveOrg.Id {
-		log.Printf("[AUDIT] User %s (%s) tried to delete usecase %s from partner %s (%s) but doesn't have access", user.Username, user.Id, usecase.Id, partner.Name, partner.Id)
+	if usecase.CompanyInfo.Id != user.ActiveOrg.Id {
+		log.Printf("[AUDIT] User %s (%s) tried to delete usecase %s from partner %s (%s) but doesn't have access", user.Username, user.Id, usecase.Id, usecase.CompanyInfo.Name, usecase.CompanyInfo.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
-		return
-	}
-
-	// Check if the usecase is in the partner's usecases
-	found := false
-
-	for i, usecaseId := range partner.Usecases {
-		if usecaseId == usecase.Id {
-			found = true
-			// Remove the usecase from the partner's usecases
-			partner.Usecases = append(partner.Usecases[:i], partner.Usecases[i+1:]...)
-			log.Printf("[DEBUG] Removed usecase %s from partner %s's usecases", usecase.Id, partner.Id)
-			break
-		}
-	}
-
-	if !found {
-		log.Printf("[DEBUG] Usecase %s not found in partner %s's usecases", usecase.Id, partner.Id)
-		resp.WriteHeader(404)
-		resp.Write([]byte(`{"success": false, "reason": "Usecase not found in partner's usecases"}`))
-		return
-	}
-
-	// Update the partner with the modified usecases
-	err = SetPartner(ctx, partner)
-	if err != nil {
-		log.Printf("[WARNING] Failed setting partner %s with usecase %s: %v", partner.Id, usecase.Id, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed updating partner with usecase deletion"}`))
 		return
 	}
 
