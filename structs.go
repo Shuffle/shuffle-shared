@@ -1041,6 +1041,7 @@ type DatastoreAutomation struct {
 
 type DatastoreCategorySettings struct {
 	Timeout int64 `json:"timeout" datastore:"timeout"`
+	Public  bool  `json:"public" datastore:"public"` // If the category is public, meaning that it can be accessed without authentication
 }
 
 type DatastoreCategoryUpdate struct {
@@ -1281,6 +1282,10 @@ type Action struct {
 	// ParameterLocks []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
 	SourceWorkflow  string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	SourceExecution string `json:"source_execution" yaml:"source_execution" datastore:"source_execution"`
+
+	// This is used for YAML translations in case we don't want to use the UI
+	//SourceConditions []Branch `json:"source_conditions" yaml:"source_conditions" datastore:"source_conditions"` // Conditions that are used to determine the source of the action
+	//Target string `json:"target,omitempty" yaml:"target,omitempty" datastore:"target"` // Target of the action, used for branches and conditions
 }
 
 // Added environment for location to execute

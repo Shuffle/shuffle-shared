@@ -15515,7 +15515,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
 
 		ctx := context.Background()
-		agentRequestMemory, err := GetCacheKey(ctx, requestKey, "agent_requests")
+		agentRequestMemory, err := GetDatastoreKey(ctx, requestKey, "agent_requests")
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed to find request memory for updates", actionResult.ExecutionId)
 		} else {
@@ -17687,19 +17687,19 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[DEBUG] Api authentication failed in list cache keys: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
-		return
-	}
-
-	if user.Role != "admin" && !user.SupportAccess {
-		log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
-		return
+	user, usererr := HandleApiAuthentication(resp, request)
+	if usererr != nil {
+		log.Printf("[AUDIT] Api authentication failed in list datastore keys: %s. Allowing continue in case category is public", usererr)
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		//return
+	} else {
+		if user.Role != "admin" && !user.SupportAccess {
+			log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
+			return
+		}
 	}
 
 	//for key, value := range data.Apps {
@@ -17725,6 +17725,33 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 	// Should use Org-Id header instead
 	orgId = user.ActiveOrg.Id
 
+	categoryList, categoryOk := request.URL.Query()["category"]
+	if categoryOk && len(categoryList) > 0 {
+		category = categoryList[0]
+	}
+
+	orgQuery, orgOk := request.URL.Query()["org_id"]
+	if orgOk && len(orgQuery) > 0 {
+		orgId = orgQuery[0]
+	}
+
+	if usererr != nil {
+		if len(category) == 0 || category == "default" {
+			log.Printf("[WARNING] No category provided in request. Returning 400.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No category provided"}`))
+			return
+		}
+
+		// NEED to check the org etc
+		if len(orgId) == 0 {
+			log.Printf("[WARNING] No org ID provided in request. Returning 400.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No org ID provided"}`))
+			return
+		}
+	}
+
 	ctx := GetContext(request)
 	org, err := GetOrg(ctx, orgId)
 	if err != nil {
@@ -17734,7 +17761,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	maxAmount := 150
+	maxAmount := 100
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
 		val, err := strconv.Atoi(top[0])
@@ -17749,15 +17776,33 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
-	categoryList, categoryOk := request.URL.Query()["category"]
-	if categoryOk && len(categoryList) > 0 {
-		category = categoryList[0]
-	}
-
-	keys, newCursor, err := GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
+	keys := []CacheKeyData{}
+	newCursor := ""
 	isSuccess := true
-	if err != nil {
-		isSuccess = false
+	if keyList, keyOk := request.URL.Query()["key"]; keyOk && len(keyList) > 0 {
+		key := keyList[0]
+		log.Printf("[DEBUG] Loooking for key %s", key)
+
+		cacheId := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, key)
+		if len(category) > 0 {
+			cacheId = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, key, category)
+		}
+
+		cacheItem, err := GetDatastoreKey(ctx, cacheId, category)
+		if err != nil {
+			isSuccess = false
+		}
+
+		log.Printf("KEY: %#v", cacheItem)
+
+		keys = []CacheKeyData{
+			*cacheItem,
+		}
+	} else {
+		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
+		if err != nil {
+			isSuccess = false
+		}
 	}
 
 	// This is NOT required unless automation/other config is set.
@@ -17789,6 +17834,24 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			}
 
 			foundCategories = append(foundCategories, key.Category)
+		}
+	}
+
+	if orgId != user.ActiveOrg.Id {
+		if !categoryConfig.Settings.Public {
+			log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
+			return
+		}
+
+		// Cleanup just in case
+		categoryConfig = &DatastoreCategoryUpdate{}
+		for keyIndex, _ := range keys {
+			keys[keyIndex].WorkflowId = ""
+			keys[keyIndex].ExecutionId = ""
+			keys[keyIndex].PublicAuthorization = ""
+			keys[keyIndex].SuborgDistribution = []string{} 
 		}
 	}
 
@@ -17851,7 +17914,19 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			resp.Write(marshalledOutput)
 			return
 
-		} else if outputType == "keys" || outputType == "meta" {
+		} else if outputType == "keys" {
+			fullString := ""
+			for _, key := range newReturn.Keys {
+				fullString += fmt.Sprintf("%s\n", key.Key)
+			}
+
+			resp.Write([]byte(fullString))
+
+			// Somehow this creates superflous request?
+			//resp.WriteHeader(200)
+			return
+
+		} else if outputType == "meta" {
 			marshalledOutput, err := json.MarshalIndent(newReturn.Keys, "", "  ")
 			if err != nil {
 				log.Printf("[WARNING] Failed to marshal cache keys for org %s: %s", org.Id, err)
@@ -17964,7 +18039,7 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	cacheId := fmt.Sprintf("%s_%s", orgId, config.Key)
-	cache, err := GetCacheKey(ctx, cacheId, config.Category)
+	cache, err := GetDatastoreKey(ctx, cacheId, config.Category)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting cache key '%s' for org %s (config)", config.Key, orgId)
 		resp.WriteHeader(400)
@@ -17980,7 +18055,7 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 			cache.SuborgDistribution = config.SelectedSuborg
 		}
 
-		err = SetCacheKey(ctx, *cache)
+		err = SetDatastoreKey(ctx, *cache)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache key '%s' for org %s (config)", config.Key, orgId)
 			resp.WriteHeader(400)
@@ -18049,7 +18124,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheKey = strings.Trim(cacheKey, " ")
 	cacheId := fmt.Sprintf("%s_%s", orgId, cacheKey)
 
-	cacheData, err := GetCacheKey(ctx, cacheId, "")
+	cacheData, err := GetDatastoreKey(ctx, cacheId, "")
 	if err != nil || cacheData.Key == "" {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (delete)", cacheId, orgId)
 		resp.WriteHeader(400)
@@ -18207,10 +18282,9 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
-	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
-
+	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if debug {
-		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Key: %#v", tmpData.Key, tmpData.OrgId, err, cacheData)
+		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v", tmpData.Key, tmpData.OrgId, err)
 	}
 
 	if err != nil || len(cacheData.Key) == 0 {
@@ -18241,14 +18315,12 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
 	}
 
-	log.Printf("[INFO] Deleting ID '%s'", cacheId)
-
-	entity := "org_cache"
-	err = DeleteKey(ctx, entity, url.QueryEscape(cacheId))
-	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (1)", tmpData.Key, tmpData.OrgId)
+	if len(cacheId) > 127 {
+		cacheId = cacheId[:127]
 	}
 
+	entity := "org_cache"
+	go DeleteKey(ctx, entity, url.QueryEscape(cacheId))
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (2)", tmpData.Key, tmpData.OrgId)
@@ -18477,7 +18549,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
+	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil {
 
 		// Doing a last resort search, e.g. to handle spaces and the like
@@ -18633,6 +18705,88 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
+func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, usererr := HandleApiAuthentication(resp, request)
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body in set cache: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	// FIXME: Look for "bulk=true" ?
+	var tmpData []CacheKeyData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling in setvalue: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	if usererr != nil || len(user.ActiveOrg.Id) == 0 {
+		log.Printf("\n\nNO AUTHENTICATION FOR BULK UPLOAD\n\n")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	} else {
+		for itemIndex, _ := range tmpData {
+			if len(user.ActiveOrg.Id) == 0 {
+				break
+			}
+
+			tmpData[itemIndex].OrgId = user.ActiveOrg.Id
+			if strings.ToLower(tmpData[itemIndex].Category) == "default" {
+				tmpData[itemIndex].Category = ""
+			}
+		}
+	}
+
+	/*
+		// Check if cache already existed and if distributed
+		tmpData.Key = strings.Trim(tmpData.Key, " ")
+		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
+		if err == nil {
+			tmpData.SuborgDistribution = cacheData.SuborgDistribution
+		}
+	*/
+
+	err = SetDatastoreKeyBulk(ctx, tmpData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to set %d datastore key(s) for org %s", len(tmpData), user.ActiveOrg.Id)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to set data. Please try again, or contact support@shuffler.io"}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully set %d datastore keys (or less) for org '%s' (%s)", len(tmpData), user.ActiveOrg.Name, user.ActiveOrg.Id)
+	type returnStruct struct {
+		Success bool `json:"success"`
+	}
+
+	returnData := returnStruct{
+		Success: true,
+	}
+
+	b, err := json.Marshal(returnData)
+	if err != nil {
+		b = []byte(`{"success": true}`)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
 func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -18673,7 +18827,6 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	if len(tmpData.OrgId) == 0 {
 		//log.Printf("[INFO] No org id specified. User org: %#v", user.ActiveOrg)
 		tmpData.OrgId = user.ActiveOrg.Id
@@ -18690,7 +18843,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 	if err != nil {
 		if len(tmpData.ExecutionId) > 0 {
-			log.Printf("[WARNING] Failed getting exec: %s", err)
+			log.Printf("[WARNING] Failed getting exec during cache set: %s", err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
 			return
@@ -18753,13 +18906,12 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	// Check if cache already existed and if distributed
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-
-	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
+	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err == nil {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
 	}
 
-	err = SetCacheKey(ctx, tmpData)
+	err = SetDatastoreKey(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(500)

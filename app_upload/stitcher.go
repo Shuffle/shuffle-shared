@@ -1010,8 +1010,8 @@ func main() {
 		bucketName = os.Args[5]
 	}
 
-	appname := "http"
-	appversion := "1.0.0"
+	appname := "shuffle-subflow"
+	appversion := "1.1.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)
