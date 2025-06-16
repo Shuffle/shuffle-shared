@@ -2934,7 +2934,9 @@ func CleanupExecutions(ctx context.Context, environment string, workflow Workflo
 		}
 
 		cnt += 1
-		log.Printf("[DEBUG] Result from aborting %s: %s", execution.ExecutionId, string(body))
+		if debug {
+			log.Printf("[DEBUG] Result from aborting %s: %s", execution.ExecutionId, string(body))
+		}
 	}
 
 	return cnt, nil
@@ -18288,7 +18290,7 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if err != nil || len(cacheData.Key) == 0 {
-		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete). Does it exist?", tmpData.Key, tmpData.OrgId)
+		log.Printf("[ERROR] Failed to DELETE cache key '%s' for org %s (delete) in category '%s'. Does it exist?", tmpData.Key, tmpData.OrgId, tmpData.Category)
 		resp.WriteHeader(400)
 
 		result := ResultChecker{

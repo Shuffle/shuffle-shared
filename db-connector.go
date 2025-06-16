@@ -12244,7 +12244,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 					// Run the automation
 					// This should prolly make a notification if it fails
 					go func(cacheData CacheKeyData, automation DatastoreAutomation) {
-						err := handleRunDatastoreAutomation(context.Background(), cacheData, automation)
+						err := handleRunDatastoreAutomation(cacheData, automation)
 						if err != nil {
 							log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
 
@@ -12369,7 +12369,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 				// Run the automation
 				// This should prolly make a notification if it fails
 				go func(cacheData CacheKeyData, automation DatastoreAutomation) {
-					err := handleRunDatastoreAutomation(context.Background(), cacheData, automation)
+					err := handleRunDatastoreAutomation(cacheData, automation)
 					if err != nil {
 						log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
 
@@ -12401,11 +12401,11 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		}
 	}
 
+	id = url.QueryEscape(id)
 	if len(id) > 127 {
 		id = id[0:127]
 	}
 
-	id = url.QueryEscape(id)
 	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
 	if project.CacheDb {
 		cache, err := GetCache(ctx, cacheKey)

@@ -505,6 +505,10 @@ type Environment struct {
 	Auth       string `json:"auth" datastore:"auth"`
 	Queue      int    `json:"queue" datastore:"queue"`
 
+	// Unique identifier to a single Orborus runtime
+	// This makes leader/follower model work for failovers
+	OrborusUuid string `json:"orborus_uuid" datastore:"orborus_uuid"`
+
 	Licensed bool       `json:"licensed" datastore:"licensed"`
 	RunType  string     `json:"run_type" datastore:"run_type"`
 	DataLake LakeConfig `json:"data_lake" datastore:"data_lake"`
@@ -4012,7 +4016,12 @@ type Suggestion struct {
 
 // Parse out CPU, memory and disk. Make struct
 type OrborusStats struct {
+	// Environment name~
 	Id string `json:"id"`
+
+	// Unique identifier for the current orborus runtime
+	// Used to track which Orborus can run
+	Uuid       string `json:"uuid" datastore:"uuid"`
 
 	OrgId        string `json:"org_id"`
 	Environment  string `json:"environment"`

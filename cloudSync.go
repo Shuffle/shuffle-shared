@@ -2087,3 +2087,90 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 
 	return fields
 }
+
+func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http.ResponseWriter, env *Environment) error {
+	if len(env.Id) == 0 || len(env.Name) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Environment ID or Name is not set"}`)))
+		return errors.New("Environment ID or Name is not set")
+	}
+
+	orborusLabel := request.Header.Get("x-orborus-label")
+
+	var orboruserr error
+	var orborusData OrborusStats
+	body, bodyerr := ioutil.ReadAll(request.Body)
+	if bodyerr == nil {
+		orboruserr := json.Unmarshal(body, &orborusData)
+		if orboruserr == nil {
+			if time.Now().Unix() > env.Checkin+120 {
+				if debug { 
+					log.Printf("[DEBUG] Failover orborus to %s", orborusData.Uuid)
+				}
+
+				env.OrborusUuid = orborusData.Uuid
+			}
+
+			if env.OrborusUuid != orborusData.Uuid && len(env.OrborusUuid) > 0 {
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Orborus UUID mismatch. This means another Orborus (Leader) is already handling this Runtime Location queue."}`)))
+				return errors.New("Orborus UUID mismatch")
+			} else {
+				env.Checkin = time.Now().Unix()
+			}
+		}
+	}
+
+	timeNow := time.Now().Unix()
+	if request.Method == "POST" {
+
+		// Updates every 120 seconds~
+		if time.Now().Unix() > env.Checkin+120 {
+			env.RunningIp = GetRequestIp(request)
+
+			// Orborus label = custom label for Orborus
+			if len(orborusLabel) > 0 {
+				env.RunningIp = orborusLabel
+			}
+
+			// Set the checkin cache
+			if bodyerr == nil && orboruserr == nil {
+				orborusData.RunningIp = env.RunningIp
+
+				env.OrborusUuid = orborusData.Uuid
+
+				marshalled, err := json.Marshal(orborusData)
+				if err == nil {
+					// Store for a full day. It's reset anyway in the UI at a certain point
+					cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+					go SetCache(context.Background(), cacheKey, marshalled, 1440)
+				}
+
+				if orborusData.Swarm {
+					env.Licensed = true
+					env.RunType = "docker"
+				}
+
+				if orborusData.Kubernetes {
+					env.RunType = "k8s"
+				}
+
+				orborusData.DataLake = env.DataLake
+			}
+
+			env.Checkin = timeNow
+			err := SetEnvironment(ctx, env)
+			if err != nil {
+				log.Printf("[ERROR] Failed updating environment: %s", err)
+			}
+		}
+	}
+
+	if env.Archived {
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't use archived environments. Make a new environment or restore the existing one."}`)))
+		return errors.New("Environment is archived")
+	}
+
+	return nil
+}
