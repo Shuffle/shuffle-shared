@@ -9130,10 +9130,18 @@ func HandleGetAllPartners(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if len(partners) == 0 {
-		log.Printf("[DEBUG] No partners found")
+	// Filter partners to only include public ones
+	var publicPartners []Partner
+	for _, partner := range partners {
+		if partner.Public {
+			publicPartners = append(publicPartners, partner)
+		}
+	}
+
+	if len(publicPartners) == 0 {
+		log.Printf("[DEBUG] No public partners found")
 		resp.WriteHeader(http.StatusNotFound)
-		resp.Write([]byte(`{"success": false, "reason": "No partners found"}`))
+		resp.Write([]byte(`{"success": false, "reason": "No public partners found"}`))
 		return
 	}
 
@@ -9172,6 +9180,11 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 			RedirectUserRequest(resp, request)
 			return
 		}
+	}
+
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting partner: %s. Continuing because it may be visible to it's owner", userErr)
 	}
 
 	var partnerId string
@@ -9214,6 +9227,15 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		resp.WriteHeader(http.StatusBadRequest)
 		resp.Write([]byte(`{"success": false, "reason": "Partner ID is empty"}`))
 		return
+	}
+
+	if !partner.Public {
+		if partner.Id != user.ActiveOrg.Id {
+			log.Printf("[AUDIT] User %s (%s) tried to access non-public partner %s (%s)", user.Username, user.Id, partner.Name, partner.Id)
+			resp.WriteHeader(http.StatusForbidden)
+			resp.Write([]byte(`{"success": false, "reason": "This partner is not public"}`))
+			return
+		}
 	}
 
 	type returnStruct struct {
@@ -25459,12 +25481,22 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	_, err = HandleAlgoliaUsecaseUpload(ctx, tmpData, overwrite)
-	if err != nil {
-		log.Printf("[ERROR] Failed publishing usecase to Algolia: %v", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed publishing usecase to Algolia"}`))
-		return
+	if tmpData.Public {
+		_, err = HandleAlgoliaUsecaseUpload(ctx, tmpData, overwrite)
+		if err != nil {
+			log.Printf("[ERROR] Failed publishing usecase to Algolia: %v", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed publishing usecase to Algolia"}`))
+			return
+		}
+	}else{
+		err = HandleAlgoliaUsecaseDeletion(ctx, tmpData.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed deleting usecase from Algolia: %v", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed deleting usecase from Algolia"}`))
+			return
+		}
 	}
 
 	err = SetUsecaseNew(ctx, &tmpData)
@@ -25495,6 +25527,11 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting usecases: %s. Continuing because it may be visible to it's owner", userErr)
+	}
+
 	var Id string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -25510,7 +25547,7 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	ctx := GetContext(request)
 
 	// Check if the partner is public or not
-	_, err := HandleAlgoliaPartnerSearch(ctx, Id)
+	partner, err := HandleAlgoliaPartnerSearch(ctx, Id)
 	if err != nil {
 		log.Printf("[WARNING] Partner with Id %s is not public: %s", Id, err)
 		resp.WriteHeader(401)
@@ -25519,13 +25556,25 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Gettting the partner's usecases
-	usecases, err := GetPartnerUsecases(ctx, Id)
+	var usecases []UsecaseInfo
+	allUsecases, err := GetPartnerUsecases(ctx, Id)
 
 	if err != nil {
 		log.Printf("[ERROR] Failed to get usecases: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get usecases"}`))
 		return
+	}
+
+	// Filter to only include public usecases
+	if partner.ObjectID != user.ActiveOrg.Id {
+		for _, usecase := range allUsecases {
+			if usecase.Public {
+				usecases = append(usecases, usecase)
+			}
+		}
+	}else {
+		usecases = allUsecases
 	}
 
 	type returnStruct struct {
@@ -25543,6 +25592,13 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[ERROR] Failed to marshal usecases: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to process usecase data"}`))
+		return
+	}
+
+	if len(usecases) == 0 {
+		log.Printf("[DEBUG] No usecases found for partner %s", Id)
+		resp.WriteHeader(http.StatusOK)
+		resp.Write([]byte(`{"success": true, "usecases": []}`))
 		return
 	}
 
@@ -25567,6 +25623,11 @@ func HandleGetIndividualUsecase(resp http.ResponseWriter, request *http.Request)
 		}
 	}
 
+	user, userErr := HandleApiAuthentication(resp, request)
+	if userErr != nil {
+		log.Printf("[AUDIT] Api authentication failed in getting usecase: %s. Continuing because it may be visible to it's owner", userErr)
+	}
+
 	var Id string
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
@@ -25588,6 +25649,15 @@ func HandleGetIndividualUsecase(resp http.ResponseWriter, request *http.Request)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get usecase"}`))
 		return
+	}
+
+	if !usecase.Public {
+		if usecase.CompanyInfo.Id != user.ActiveOrg.Id{
+			log.Printf("[AUDIT] User %s (%s) tried to access non-public usecase %s (%s)", user.Username, user.Id, usecase.MainContent.Title, usecase.Id)
+			resp.WriteHeader(http.StatusForbidden)
+			resp.Write([]byte(`{"success": false, "reason": "This usecase is not public"}`))
+			return
+		}
 	}
 
 	type returnStruct struct {

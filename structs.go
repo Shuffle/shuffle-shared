@@ -1799,7 +1799,6 @@ type AlgoliaSearchPartner struct {
 	Country     string   `json:"country"`
 	Region      string   `json:"region"`
 	OrgId       string   `json:"org_id"`
-	Public 		bool     `json:"public"`
 }
 
 type AlgoliaSearchUsecase struct {
@@ -1812,7 +1811,6 @@ type AlgoliaSearchUsecase struct {
 	PublicWorkflowID   string   `json:"public_workflow_id"`
 	SourceAppType      string   `json:"source_app_type"`
 	DestinationAppType string   `json:"destination_app_type"`
-	Public          bool     `json:"published"`
 	TimeEdited         int64    `json:"time_edited"`
 }
 

@@ -655,7 +655,6 @@ func HandleAlgoliaUsecaseUpload(ctx context.Context, usecase UsecaseInfo, overwr
 			DestinationAppType: usecase.MainContent.DestinationAppType,
 			PublicWorkflowID:   usecase.MainContent.PublicWorkflowID,
 			TimeEdited:         timeNow,
-			Public: 		    usecase.Public,
 		},
 	}
 
@@ -682,14 +681,14 @@ func HandleAlgoliaUsecaseDeletion(ctx context.Context, usecaseId string) error {
 	algoliaIndex := algClient.InitIndex("usecases")
 	res, err := algoliaIndex.Search(usecaseId)
 	if err != nil {
-		log.Printf("[ERROR] Failed searching Algolia creators (%s): %s", usecaseId, err)
+		log.Printf("[ERROR] Failed searching Algolia usecases (%s): %s", usecaseId, err)
 		return err
 	}
 
 	var newRecords []AlgoliaSearchUsecase
 	err = res.UnmarshalHits(&newRecords)
 	if err != nil {
-		log.Printf("[WARNING] Failed unmarshaling from Algolia creators: %s", err)
+		log.Printf("[WARNING] Failed unmarshaling from Algolia usecases: %s", err)
 		return err
 	}
 
