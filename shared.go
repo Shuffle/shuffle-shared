@@ -18283,9 +18283,8 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
 	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
-
 	if debug {
-		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Key: %#v", tmpData.Key, tmpData.OrgId, err, cacheData)
+		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v", tmpData.Key, tmpData.OrgId, err)
 	}
 
 	if err != nil || len(cacheData.Key) == 0 {
@@ -18316,14 +18315,12 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
 	}
 
-	log.Printf("[INFO] Deleting ID '%s'", cacheId)
-
-	entity := "org_cache"
-	err = DeleteKey(ctx, entity, url.QueryEscape(cacheId))
-	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (1)", tmpData.Key, tmpData.OrgId)
+	if len(cacheId) > 127 {
+		cacheId = cacheId[:127]
 	}
 
+	entity := "org_cache"
+	go DeleteKey(ctx, entity, url.QueryEscape(cacheId))
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (2)", tmpData.Key, tmpData.OrgId)

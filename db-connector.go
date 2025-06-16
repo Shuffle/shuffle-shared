@@ -12094,6 +12094,10 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 			cacheData.Authorization = ""
 
 			allKeys[index] = cacheData
+
+			if len(cacheId) > 127 {
+				cacheId = cacheId[:127]
+			}
 			datastoreKeys <- *datastore.NameKey(nameKey, cacheId, nil)
 
 			cacheKeys <- cacheData
@@ -12201,42 +12205,63 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 	*/
 
 	// Look for category triggers
-	/*
-	if len(cacheData.Category) > 0 {
-		categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
-		if err == nil {
-			for _, automation := range categoryConfig.Automations {
-				if !automation.Enabled {
-					continue
-				}
+	if len(mainCategory) > 0 && mainCategory != "default" && len(newArray) > 0 && len(newArray[0].OrgId) > 0 {
+		orgId := newArray[0].OrgId
 
-				if len(automation.Options) == 0 {
-					continue
-				}
+		categoryConfig, err := GetDatastoreCategoryConfig(ctx, orgId, mainCategory)
+		if err != nil {
+			// Set it in the DB
+			categoryUpdate := DatastoreCategoryUpdate{
+				Category: mainCategory,
+				OrgId: orgId,
+				Id: uuid.NewV4().String(),
 
-				log.Printf("[DEBUG] Found automation %s to run. Value: %s", automation.Name, automation.Options[0].Value)
+				Settings: DatastoreCategorySettings{
+					Public: false,
+					Timeout: 0,
+				},
+			}
 
-				// Run the automation
-				// This should prolly make a notification if it fails
-				go func(cacheData CacheKeyData, automation DatastoreAutomation) {
-					err := handleRunDatastoreAutomation(context.Background(), cacheData, automation)
-					if err != nil {
-						log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
-
-						CreateOrgNotification(
-							ctx,
-							fmt.Sprintf("Problem with automation '%s' in category '%s'", automation.Name, cacheData.Category),
-							fmt.Sprintf("Failed running automation '%s' for cache key '%s' in category '%s'. Error: %s", automation.Name, cacheData.Key, cacheData.Category, err),
-							fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
-							cacheData.OrgId,
-							true,
-						)
+			err := SetDatastoreCategoryConfig(ctx, categoryUpdate)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting datastore category config for org %s and category %s: %s", orgId, mainCategory, err)
+			}
+		} else {
+			for _, cacheData := range newArray {
+				for _, automation := range categoryConfig.Automations {
+					if !automation.Enabled {
+						continue
 					}
-				}(cacheData, automation)
+
+					if len(automation.Options) == 0 {
+						continue
+					}
+
+					if debug { 
+						log.Printf("[DEBUG] Found automation %s to run (2). Value: %s", automation.Name, automation.Options[0].Value)
+					}
+
+					// Run the automation
+					// This should prolly make a notification if it fails
+					go func(cacheData CacheKeyData, automation DatastoreAutomation) {
+						err := handleRunDatastoreAutomation(context.Background(), cacheData, automation)
+						if err != nil {
+							log.Printf("[ERROR] Failed running automation %s for cache key %s: %s", automation.Name, cacheData.Key, err)
+
+							CreateOrgNotification(
+								ctx,
+								fmt.Sprintf("Problem with automation '%s' in category '%s'", automation.Name, cacheData.Category),
+								fmt.Sprintf("Failed running automation '%s' for cache key '%s' in category '%s'. Error: %s", automation.Name, cacheData.Key, cacheData.Category, err),
+								fmt.Sprintf("/admin?tab=datastore&category=%s", cacheData.Category),
+								cacheData.OrgId,
+								true,
+							)
+						}
+					}(cacheData, automation)
+				}
 			}
 		}
 	}
-	*/
 
 	return nil
 }
@@ -12257,14 +12282,13 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 		cacheId = fmt.Sprintf("%s_%s", cacheId, cacheData.Category)
 	}
 
-	if len(cacheId) > 128 {
-		cacheId = cacheId[0:127]
-	}
-
 	// URL encode
 	cacheId = url.QueryEscape(cacheId)
-	cacheData.Authorization = ""
+	if len(cacheId) > 127 {
+		cacheId = cacheId[:127]
+	}
 
+	cacheData.Authorization = ""
 	if len(cacheData.PublicAuthorization) == 0 {
 		cacheData.PublicAuthorization = uuid.NewV4().String()
 	}
@@ -12308,9 +12332,27 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 	}
 
 	// Look for category triggers
-	if len(cacheData.Category) > 0 {
+	if len(cacheData.Category) > 0 && cacheData.Category != "default" {
 		categoryConfig, err := GetDatastoreCategoryConfig(ctx, cacheData.OrgId, cacheData.Category)
-		if err == nil {
+		if err != nil {
+			// Set it in the DB
+			categoryUpdate := DatastoreCategoryUpdate{
+				Category: cacheData.Category,
+				OrgId: cacheData.OrgId,
+				Id: uuid.NewV4().String(),
+
+				Settings: DatastoreCategorySettings{
+					Public: false,
+					Timeout: 0,
+				},
+			}
+
+			err := SetDatastoreCategoryConfig(ctx, categoryUpdate)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting datastore category config for org %s and category %s: %s", cacheData.OrgId, cacheData.Category, err)
+			}
+
+		} else {
 			for _, automation := range categoryConfig.Automations {
 				if !automation.Enabled {
 					continue
@@ -12320,7 +12362,9 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 					continue
 				}
 
-				log.Printf("[DEBUG] Found automation %s to run. Value: %s", automation.Name, automation.Options[0].Value)
+				if debug { 
+					log.Printf("[DEBUG] Found automation %s to run. Value: %s", automation.Name, automation.Options[0].Value)
+				}
 
 				// Run the automation
 				// This should prolly make a notification if it fails
@@ -12351,15 +12395,14 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	cacheData := &CacheKeyData{}
 	nameKey := "org_cache"
 
-	if len(id) > 128 {
-		id = id[0:127]
-	}
-
-	//log.Printf("[WARNING] ID in get cache: %s", id)
 	if len(category) > 0 && category != "default" {
 		if !strings.HasSuffix(id, category) {
 			id = fmt.Sprintf("%s_%s", id, category)
 		}
+	}
+
+	if len(id) > 127 {
+		id = id[0:127]
 	}
 
 	id = url.QueryEscape(id)
@@ -12966,6 +13009,9 @@ func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
 
 func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, error) {
 	nameKey := "org_cache"
+	if category == "default" {
+		category = ""
+	}
 
 	count := -1
 	if len(orgId) == 0 {
