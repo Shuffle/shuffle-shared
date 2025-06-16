@@ -444,6 +444,64 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 	return foundUser, nil
 }
 
+func HandleAlgoliaPartnerSearch(ctx context.Context, orgId string) (AlgoliaSearchPartner, error) {
+	
+	cacheKey := fmt.Sprintf("algolia_partner_%s", orgId)
+	searchPartner := AlgoliaSearchPartner{}
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &searchPartner)
+		if err == nil {
+			return searchPartner, nil
+		}
+	}
+	
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return AlgoliaSearchPartner{}, errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("partners")
+	res, err := algoliaIndex.Search(orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia partners: %s", err)
+		return AlgoliaSearchPartner{}, err
+	}
+
+	var newRecords []AlgoliaSearchPartner
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia partners: %s", err)
+		return AlgoliaSearchPartner{}, err
+	}
+
+	foundPartner := AlgoliaSearchPartner{}
+	for _, newRecord := range newRecords {
+		if newRecord.OrgId == orgId {
+			foundPartner = newRecord
+			break
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(foundPartner)
+		if err != nil {
+			return foundPartner, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating algolia partner cache: %s", err)
+		}
+	}
+
+	return foundPartner, nil
+}
+
 func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool, isOrg bool) (string, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
@@ -542,6 +600,116 @@ func HandleAlgoliaCreatorDeletion(ctx context.Context, userId string) (error) {
 		} 
 
 		log.Printf("[INFO] Successfully removed creator %s with ID %s FROM ALGOLIA!", foundItem.Username, userId)
+	}
+
+	return nil
+}
+
+// Usecase Algolia Upload
+func HandleAlgoliaUsecaseUpload(ctx context.Context, usecase UsecaseInfo, overwrite bool) (string, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("usecases")
+	res, err := algoliaIndex.Search(usecase.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia usecases: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchUsecase
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia partners: %s", err)
+		return "", err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == usecase.Id {
+			log.Printf("[INFO] Object %s already exists in Algolia", usecase.Id)
+
+			if overwrite {
+				break
+			} else {
+				return usecase.Id, errors.New("Usecase ID already exists!")
+			}
+		}
+	}
+
+	timeNow := int64(time.Now().Unix())
+	records := []AlgoliaSearchUsecase{
+		AlgoliaSearchUsecase{
+			ObjectID:           usecase.Id,
+			PartnerName:        usecase.CompanyInfo.Name,
+			PartnerId:          usecase.CompanyInfo.Id,
+			Name:               usecase.MainContent.Title,
+			Description:        usecase.MainContent.Description,
+			Categories:         usecase.MainContent.Categories,
+			SourceAppType:      usecase.MainContent.SourceAppType,
+			DestinationAppType: usecase.MainContent.DestinationAppType,
+			PublicWorkflowID:   usecase.MainContent.PublicWorkflowID,
+			TimeEdited:         timeNow,
+		},
+	}
+
+	_, err = algoliaIndex.SaveObjects(records)
+	if err != nil {
+		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		return "", err
+	}
+
+	log.Printf("[INFO] SUCCESSFULLY UPLOADED partner %s with ID %s TO ALGOLIA!", usecase.MainContent.Title, usecase.Id)
+	return usecase.Id, nil
+}
+
+// Usecase deletion
+func HandleAlgoliaUsecaseDeletion(ctx context.Context, usecaseId string) error {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("usecases")
+	res, err := algoliaIndex.Search(usecaseId)
+	if err != nil {
+		log.Printf("[ERROR] Failed searching Algolia usecases (%s): %s", usecaseId, err)
+		return err
+	}
+
+	var newRecords []AlgoliaSearchUsecase
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia usecases: %s", err)
+		return err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	foundItem := AlgoliaSearchUsecase{}
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == usecaseId {
+			foundItem = newRecord
+			break
+		}
+	}
+
+	// Should delete it?
+	if len(foundItem.ObjectID) > 0 {
+		_, err = algoliaIndex.DeleteObject(foundItem.ObjectID)
+		if err != nil {
+			log.Printf("[WARNING] Algolia Usecase delete problem: %s", err)
+			return err
+		}
+
+		log.Printf("[INFO] Successfully removed usecase %s with ID %s FROM ALGOLIA!", foundItem.Name, usecaseId)
 	}
 
 	return nil

@@ -5168,6 +5168,184 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 	return nil
 }
 
+// Partners functions
+func SetPartner(ctx context.Context, partner *Partner) error {
+    if partner == nil {
+        return errors.New("partner cannot be nil")
+    }
+
+    nameKey := "Partners"
+    timeNow := int64(time.Now().Unix())
+
+    // Set created time for new partners
+    if partner.Created == 0 {
+        partner.Created = timeNow
+    }
+    // Always update edited time
+    partner.Edited = timeNow
+
+    // Create datastore key and save
+    k := datastore.NameKey(nameKey, partner.Id, nil)
+    _, err := project.Dbclient.Put(ctx, k, partner)
+    if err != nil {
+        return err
+    }
+
+    // Update cache
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, partner.Id)
+		orgCacheKey := fmt.Sprintf("%s_org_%s", nameKey, partner.OrgId)
+		partnerData, err := json.Marshal(partner)
+		if err == nil {
+			SetCache(ctx, cacheKey, partnerData, 30)
+			SetCache(ctx, orgCacheKey, partnerData, 30)
+		}
+	}
+
+    return nil
+}
+
+
+func GetPartnerById(ctx context.Context, id string) (*Partner, error) {
+	if id == "" {
+		return nil, fmt.Errorf("partner ID cannot be empty")
+	}
+
+	nameKey := "Partners"
+	partner := &Partner{}
+	cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+	if project.CacheDb {
+		cachedData, err := GetCache(ctx, cacheKey)
+		if err == nil && cachedData != nil {
+			partnerBytes, ok := cachedData.([]byte)
+			if ok {
+				err = json.Unmarshal(partnerBytes, partner)
+				if err == nil {
+					return partner, nil
+				}
+			}
+		}
+	}
+
+	key := datastore.NameKey(nameKey, id, nil)
+	if err := project.Dbclient.Get(ctx, key, partner); err != nil {
+
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting partner (3): %s", err)
+			err = nil
+		} else {
+			return partner, fmt.Errorf("Error getting partner %s: %s", partner.Id, err)
+		}
+	}
+
+	if project.CacheDb {
+		partnerData, err := json.Marshal(partner)
+		if err == nil {
+			SetCache(ctx, cacheKey, partnerData, 30)
+		}
+	}
+
+	return partner, nil
+}
+
+func GetPartnerByOrgId(ctx context.Context, orgId string) (*Partner, error) {
+	if orgId == "" {
+		return nil, fmt.Errorf("organization ID cannot be empty")
+	}
+
+	nameKey := "Partners"
+	partner := &Partner{}
+
+	cacheKey := fmt.Sprintf("%s_org_%s", nameKey, orgId)
+	if project.CacheDb {
+		cachedData, err := GetCache(ctx, cacheKey)
+		if err == nil && cachedData != nil {
+			// Cache hit
+			partnerBytes, ok := cachedData.([]byte)
+			if ok {
+				err = json.Unmarshal(partnerBytes, partner)
+				if err == nil {
+					return partner, nil
+				}
+			}
+		}
+	}
+
+	q := datastore.NewQuery(nameKey).Filter("org_id =", orgId).Limit(1)
+	var partners []Partner
+	_, err := project.Dbclient.GetAll(ctx, q, &partners)
+	if err != nil {
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting partner (3): %s", err)
+			err = nil
+		} else {
+			return partner, fmt.Errorf("failed to get partner by org_id: %w", err)
+		}
+	}
+
+	if len(partners) == 0 {
+		return nil, fmt.Errorf("no partner found for org_id: %s", orgId)
+	}
+
+	partner = &partners[0]
+
+	if project.CacheDb {
+		// Cache the result
+		partnerData, err := json.Marshal(partner)
+		if err == nil {
+			SetCache(ctx, cacheKey, partnerData, 30)
+		}
+	}
+
+	return partner, nil
+}
+
+func GetAllPartners(ctx context.Context) ([]Partner, error) {
+	nameKey := "Partners"
+
+	// Try to get from cache first
+	cacheKey := fmt.Sprintf("%s_all", nameKey)
+	if project.CacheDb {
+		cachedData, err := GetCache(ctx, cacheKey)
+		if err == nil && cachedData != nil {
+			// Cache hit
+			partnersBytes, ok := cachedData.([]byte)
+			if ok {
+				var partners []Partner
+				err = json.Unmarshal(partnersBytes, &partners)
+				if err == nil {
+					return partners, nil
+				}
+			}
+		}
+	}
+
+	// Cache miss or error, get from datastore
+	var partners []Partner
+	q := datastore.NewQuery(nameKey)
+	_, err := project.Dbclient.GetAll(ctx, q, &partners)
+	if err != nil {
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting partner (3): %s", err)
+			err = nil
+		} else {
+			return partners, fmt.Errorf("failed to get all partners: %w", err)
+		}
+	}
+
+	if project.CacheDb {
+		// Cache the results
+		if len(partners) > 0 {
+			partnersData, err := json.Marshal(partners)
+			if err == nil {
+				SetCache(ctx, cacheKey, partnersData, 30)
+			}
+		}
+	}
+
+	return partners, nil
+}
+
 func getDatastoreClient(ctx context.Context, projectID string) (datastore.Client, error) {
 	// FIXME - this doesn't work
 	//client, err := datastore.NewClient(ctx, projectID, option.WithCredentialsFile(test"))
@@ -12960,6 +13138,145 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 
 	return usecase, nil
 
+}
+
+func SetUsecaseNew(ctx context.Context, usecase *UsecaseInfo) error {
+    if usecase == nil {
+        return errors.New("usecase cannot be nil")
+    }
+
+    nameKey := "Usecases"
+    timeNow := int64(time.Now().Unix())
+
+    // Set created time for new usecase
+    if usecase.Created == 0 {
+        usecase.Created = timeNow
+    }
+    // Always update edited time
+    usecase.Edited = timeNow
+
+    // Marshal data for storage and caching
+    data, err := json.Marshal(usecase)
+    if err != nil {
+        log.Printf("[WARNING] Failed marshalling in SetUsecaseNew: %s", err)
+        return err
+    }
+
+    // Store in database based on type
+    if project.DbType == "opensearch" {
+        err = indexEs(ctx, nameKey, usecase.Id, data)
+        if err != nil {
+            log.Printf("[ERROR] Failed indexing usecase in OpenSearch: %s", err)
+            return err
+        }
+    } else {
+        key := datastore.NameKey(nameKey, usecase.Id, nil)
+        if _, err := project.Dbclient.Put(ctx, key, usecase); err != nil {
+            log.Printf("[ERROR] Error adding usecase: %s", err)
+            return err
+        }
+    }
+
+    // Update cache
+    if project.CacheDb {
+        // Cache the usecase by ID
+        cacheKey := fmt.Sprintf("%s_%s", nameKey, usecase.Id)
+		partnerCacheKey := fmt.Sprintf("%s_partner_%s", nameKey, usecase.CompanyInfo.Id)
+		SetCache(ctx, partnerCacheKey, data, 30)
+        SetCache(ctx, cacheKey, data, 30)
+    }
+
+    return nil
+}
+
+// GetIndividualUsecase retrieves a single usecase by its ID
+func GetIndividualUsecase(ctx context.Context, id string) (UsecaseInfo, error) {
+    nameKey := "Usecases"
+    usecase := UsecaseInfo{}
+    // Check cache first
+    if project.CacheDb {
+        cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+        cacheData, err := GetCache(ctx, cacheKey)
+        if err == nil {
+            // Cache hit
+            var usecase UsecaseInfo
+            cacheBytes, ok := cacheData.([]byte)
+            if ok {
+                err = json.Unmarshal(cacheBytes, &usecase)
+                if err == nil {
+                    return usecase, nil
+                }
+            }
+        }
+    }
+
+    // Get from datastore if not in cache
+    k := datastore.NameKey(nameKey, id, nil)
+    err := project.Dbclient.Get(ctx, k, &usecase)
+    if err != nil {
+		if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting usecase (3): %s", err)
+			err = nil
+		} else {
+			return usecase, fmt.Errorf("failed to get usecase by ID: %w", err)
+		}
+    }
+    
+    // Cache the result
+    if project.CacheDb {
+        data, err := json.Marshal(usecase)
+        if err == nil {
+            cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+            SetCache(ctx, cacheKey, data, 30)
+        }
+    }
+    
+    return usecase, nil
+}
+
+// GetUsecases retrieves multiple usecases by partner ID
+func GetPartnerUsecases(ctx context.Context, partnerId string) ([]UsecaseInfo, error) {
+    nameKey := "Usecases"
+    var usecases []UsecaseInfo
+    
+    // Check cache first
+    if project.CacheDb {
+        cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
+        cacheData, err := GetCache(ctx, cacheKey)
+        if err == nil {
+            var cachedUsecases []UsecaseInfo
+            cacheBytes, ok := cacheData.([]byte)
+            if ok {
+                err = json.Unmarshal(cacheBytes, &cachedUsecases)
+                if err == nil {
+                    return cachedUsecases, nil
+                }
+            }
+        }
+    }
+
+    // Get from datastore if not in cache
+    q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", partnerId)
+    _, err := project.Dbclient.GetAll(ctx, q, &usecases)
+    if err != nil {
+        if strings.Contains(err.Error(), `cannot load field`) {
+			log.Printf("[ERROR] Error in getting usecase (3): %s", err)
+			err = nil
+		} else {
+			return usecases, fmt.Errorf("failed to get usecases by partner ID: %w", err)
+		}
+    }
+
+    // Cache the results
+    if project.CacheDb && len(usecases) > 0 {
+        data, err := json.Marshal(usecases)
+        if err == nil {
+            cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
+            SetCache(ctx, cacheKey, data, 30)
+        }
+    }
+
+    return usecases, nil
 }
 
 func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
