@@ -2236,7 +2236,10 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 							if err == nil {
 								handled = true
 								action.AppID = tmpApp.ID
-								newOrgApps = append(newOrgApps, action.AppID)
+								if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
+								}else {
+									newOrgApps = append(newOrgApps, action.AppID)
+								}
 								workflowapps = append(workflowapps, *tmpApp)
 							}
 						}
