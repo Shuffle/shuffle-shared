@@ -9130,15 +9130,24 @@ func HandleGetAllPartners(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Marshal the response
-	response, err := json.Marshal(struct {
+	if len(partners) == 0 {
+		log.Printf("[DEBUG] No partners found")
+		resp.WriteHeader(http.StatusNotFound)
+		resp.Write([]byte(`{"success": false, "reason": "No partners found"}`))
+		return
+	}
+
+	type returnStruct struct {
 		Success  bool      `json:"success"`
-		Partners []Partner `json:"partners"`
-	}{
+		Partners []Partner `json:"data"`
+	}
+
+	allPartners := returnStruct{
 		Success:  true,
 		Partners: partners,
-	})
+	}
 
+	response, err := json.Marshal(allPartners)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal partners: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -9207,15 +9216,17 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Marshal the response
-	response, err := json.Marshal(struct {
+	type returnStruct struct {
 		Success bool     `json:"success"`
 		Partner *Partner `json:"partner"`
-	}{
+	}
+
+	partnerData := returnStruct{
 		Success: true,
 		Partner: partner,
-	})
+	}
 
+	response, err := json.Marshal(partnerData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal partner: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -25448,14 +25459,24 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if tmpData.CompanyInfo.Id != user.ActiveOrg.Id {
+		log.Printf("[WARNING] User %s (%s) is trying to publish usecase for partner %s (%s) but doesn't have access to it", user.Username, user.Id, tmpData.CompanyInfo.Name, tmpData.CompanyInfo.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
+		return
+	}
+
 	_, err = HandleAlgoliaUsecaseUpload(ctx, tmpData, overwrite)
 	if err != nil {
-		log.Printf("[WARNING] Failed publishing usecase to Algolia: %v", err)
+		log.Printf("[ERROR] Failed publishing usecase to Algolia: %v", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed publishing usecase to Algolia"}`))
+		return
 	}
 
 	err = SetUsecaseNew(ctx, &tmpData)
 	if err != nil {
-		log.Printf("[WARNING] Failed publishing usecase: %v", err)
+		log.Printf("[ERROR] Failed publishing usecase: %v", err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false}`))
 		return
@@ -25493,7 +25514,7 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 	resp.Write([]byte(`{"success": true, "message": "Usecase published", "usecaseId": "` + tmpData.Id + `"}`))
 }
 
-// Used to get partner usecases (On Admin page and On Partner Page) & Individual usecase
+// Used to get partner usecases (On Admin page and On Partner Page)
 func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -25522,29 +25543,18 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-	var usecases []UsecaseInfo
-	var err error
 
-	if location[3] == "partners" {
-		// Partner ID - get all usecases for this partner
-		_, err := HandleAlgoliaPartnerSearch(ctx, Id)
-		if err != nil {
-			log.Printf("[WARNING] Partner with Id %s is not public: %s", Id, err)
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-
-		// Gettting the partner's usecases
-		usecases, err = GetPartnerUsecases(ctx, Id)
-	} else {
-		var usecase UsecaseInfo
-		usecase, err = GetIndividualUsecase(ctx, Id)
-		if err == nil {
-			// Getting the individual usecase
-			usecases = []UsecaseInfo{usecase}
-		}
+	// Check if the partner is public or not
+	_, err := HandleAlgoliaPartnerSearch(ctx, Id)
+	if err != nil {
+		log.Printf("[WARNING] Partner with Id %s is not public: %s", Id, err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
 	}
+
+	// Gettting the partner's usecases
+	usecases, err := GetPartnerUsecases(ctx, Id)
 
 	if err != nil {
 		log.Printf("[ERROR] Failed to get usecases: %v", err)
@@ -25553,15 +25563,17 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// Marshal the response
-	response, err := json.Marshal(struct {
+	type returnStruct struct {
 		Success  bool          `json:"success"`
 		Usecases []UsecaseInfo `json:"usecases"`
-	}{
+	}
+
+	usecaseData := returnStruct{
 		Success:  true,
 		Usecases: usecases,
-	})
+	}
 
+	response, err := json.Marshal(usecaseData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to marshal usecases: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -25570,6 +25582,68 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	log.Printf("[DEBUG] Successfully retrieved %d usecases for %s", len(usecases), Id)
+	resp.WriteHeader(http.StatusOK)
+	resp.Write(response)
+}
+
+// Used to get the individual usecase
+func HandleGetIndividualUsecase(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	if project.Environment == "cloud" {
+		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
+		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
+			log.Printf("[DEBUG] Redirecting Get Partner request to main site handler (shuffler.io)")
+			RedirectUserRequest(resp, request)
+			return
+		}
+	}
+
+	var Id string
+	location := strings.Split(request.URL.String(), "/")
+	if location[1] == "api" {
+		if len(location) <= 3 {
+			log.Printf("Path too short: %d", len(location))
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+		Id = location[4]
+	}
+
+	ctx := GetContext(request)
+
+	usecase, err := GetIndividualUsecase(ctx, Id)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to get usecase: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get usecase"}`))
+		return
+	}
+
+	type returnStruct struct {
+		Success bool        `json:"success"`
+		Usecase UsecaseInfo `json:"usecase"`
+	}
+
+	usecaseData := returnStruct{
+		Success: true,
+		Usecase: usecase,
+	}
+
+	response, err := json.Marshal(usecaseData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal usecase: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to process usecase data"}`))
+		return
+	}
+
+	log.Printf("[DEBUG] Successfully retrieved %s usecase of partner: %s", usecase.MainContent.Title, usecase.CompanyInfo.Id)
 	resp.WriteHeader(http.StatusOK)
 	resp.Write(response)
 }
