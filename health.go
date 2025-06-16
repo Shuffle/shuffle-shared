@@ -2145,7 +2145,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 		// autogeneration of app IDs, and export/imports of workflows
 		idFound := false
 		nameVersionFound := false
-		nameFound := false
 
 		discoveredApp := WorkflowApp{}
 		for _, innerApp := range workflowapps {
@@ -2172,13 +2171,14 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 					action.Public = innerApp.Public
 					action.Generated = innerApp.Generated
 					action.ReferenceUrl = innerApp.ReferenceUrl
-					nameVersionFound = true
+
+					idFound = true
 					break
 				}
 			}
 		}
 
-		if !idFound && !nameVersionFound {
+		if !idFound {
 			for _, innerApp := range workflowapps {
 				if innerApp.Name == action.AppName {
 					discoveredApp = innerApp
@@ -2188,8 +2188,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 					action.Public = innerApp.Public
 					action.Generated = innerApp.Generated
 					action.ReferenceUrl = innerApp.ReferenceUrl
-
-					nameFound = true
 					break
 				}
 			}
@@ -2213,7 +2211,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 		if !idFound {
 			if nameVersionFound {
-			} else if nameFound {
 			} else {
 				//log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
 				handled := false
@@ -2244,6 +2241,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 							}
 						}
 					}
+				}
 
 				if !handled {
 					action.Errors = []string{fmt.Sprintf("Couldn't find app %s:%s", action.AppName, action.AppVersion)}

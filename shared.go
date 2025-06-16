@@ -18879,34 +18879,54 @@ func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	if usererr != nil || len(user.ActiveOrg.Id) == 0 {
-		log.Printf("\n\nNO AUTHENTICATION FOR BULK UPLOAD\n\n")
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
-		return
-	} else {
-		for itemIndex, _ := range tmpData {
-			if len(user.ActiveOrg.Id) == 0 {
-				break
-			}
+		sourceExecution, sourceExecutionOk := request.URL.Query()["execution_id"]
+		sourceAuth, sourceAuthOk := request.URL.Query()["authorization"]
+		if !sourceAuthOk || !sourceExecutionOk {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (1)"}`))
+			return
+		}
 
-			tmpData[itemIndex].OrgId = user.ActiveOrg.Id
-			if strings.ToLower(tmpData[itemIndex].Category) == "default" {
-				tmpData[itemIndex].Category = ""
-			}
+		foundExec, err := GetWorkflowExecution(ctx, sourceExecution[0])
+		if err != nil {
+			log.Printf("[WARNING] Failed getting exec during cache set: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "No permission to get execution (2)"}`))
+			return
+		}
+
+		if sourceAuth[0] != foundExec.Authorization {
+			log.Printf("[INFO] Execution auth %s and %s don't match", foundExec.Authorization, sourceAuth[0])
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (3)"}`))
+			return
+		}
+
+		if len(foundExec.ExecutionOrg) == 0 {
+			log.Printf("[WARNING] Execution %s doesn't have an org set", foundExec.ExecutionId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Failed authentication (4)"}`))
+			return
+		}
+
+		user.ActiveOrg.Id = foundExec.ExecutionOrg 
+	} 
+
+	mainCategory := ""
+	for itemIndex, _ := range tmpData {
+		mainCategory = tmpData[itemIndex].Category
+		if len(user.ActiveOrg.Id) == 0 {
+			break
+		}
+
+		tmpData[itemIndex].OrgId = user.ActiveOrg.Id
+		if strings.ToLower(tmpData[itemIndex].Category) == "default" {
+			tmpData[itemIndex].Category = ""
 		}
 	}
 
-	/*
-		// Check if cache already existed and if distributed
-		tmpData.Key = strings.Trim(tmpData.Key, " ")
-		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-		cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
-		if err == nil {
-			tmpData.SuborgDistribution = cacheData.SuborgDistribution
-		}
-	*/
+	log.Printf("[AUDIT] Running bulk upload for org %s to category '%s'", user.ActiveOrg.Id, mainCategory)
 
 	err = SetDatastoreKeyBulk(ctx, tmpData)
 	if err != nil {
@@ -24782,7 +24802,6 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 		log.Printf("[DEBUG] Source auth: %s", sourceAuth[0])
 	}
 
-	// When reaching here, authentication is done, but not authorization.
 	// Need to verify the workflow, and whether it SHOULD have access to execute it.
 	sourceWorkflow, sourceWorkflowOk := request.URL.Query()["source_workflow"]
 	if sourceWorkflowOk {
@@ -24799,6 +24818,8 @@ func RunExecuteAccessValidation(request *http.Request, workflow *Workflow) (bool
 	}
 
 	//if workflow.OrgId != workflowExecution.Workflow.OrgId || workflow.ExecutingOrg.Id != workflowExecution.Workflow.ExecutingOrg.Id || workflow.OrgId == "" {
+	//if len(workflow.OrgId) > 0 && workflow.OrgId != workflowExecution.Workflow.OrgId {
+
 	if workflow.OrgId == "" || workflow.OrgId != workflowExecution.Workflow.OrgId {
 		log.Printf("[ERROR][%s] Bad org ID in workflowexecution subflow run. Required: %s vs %s", workflowExecution.ExecutionId, workflow.OrgId, workflowExecution.Workflow.OrgId)
 		return false, ""
