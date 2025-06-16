@@ -17,6 +17,7 @@ import (
 	"math/rand"
 	"io/ioutil"
 	"crypto/md5"
+	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/base64"
@@ -6789,6 +6790,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 			}
 		}
 
+		// Stores the key in shuffle datastore
 		marshalledCompletionRequest, err := json.MarshalIndent(completionRequest, "", "  ")
 
 		if err != nil {
@@ -6805,7 +6807,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 				OrgId: execution.ExecutionOrg,
 			}
 
-			err := SetCacheKey(ctx, cacheData) 
+			err := SetDatastoreKey(ctx, cacheData) 
 			if err != nil {
 				log.Printf("[ERROR][%s] Failed updating AI requests: %s", execution.ExecutionId, err)
 			}
@@ -7026,4 +7028,311 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	}
 
 	return contentOutput, nil
+}
+
+// These are just specific examples for specific cases
+// FIXME: Should these be loaded from public workflows?
+// I kind of think so ~
+// That means each algorithm needs to be written as if-statements to
+// replace a specific part of a workflow :thinking:
+
+// Should workflows be written as YAML and be text-editable? 
+func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Workflow, error) {
+	if len(orgId) == 0 {
+		return workflow, errors.New("Organization ID is empty")
+	}
+
+	parsedActiontype := actionType
+	if strings.Contains(strings.ToLower(actionType), "threat feed") {
+		parsedActiontype = "threatlist_monitor"
+	}
+
+	// If-else with specific rules per workflow
+	// Make sure it uses workflow -> copies data, as 
+	startActionId := uuid.NewV4().String()
+	startTriggerId := uuid.NewV4().String()
+
+	actionEnv := "cloud"
+	triggerEnv := "cloud"
+	ctx := context.Background()
+	if project.Environment != "cloud" {
+		triggerEnv = "onprem"
+
+		envs, err := GetEnvironments(ctx, orgId)
+		if err == nil { 
+			for _, env := range envs {
+				if env.Default {
+					actionEnv = env.Name
+					break
+				}
+			}
+		} else { 
+			actionEnv = "shuffle"
+		}
+	}
+
+	if parsedActiontype == "threatlist_monitor" {
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Monitor threatlists and ingest regularly",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: "GET",
+					AppID: "HTTP",
+					AppName: "HTTP",
+					ID: startActionId,
+					AppVersion: "1.4.0",
+					Environment: actionEnv,
+					Label: "Get threatlist URLs",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "url",
+							Value: "$shuffle_cache.threatlist_urls.value.#",
+						},
+					},
+				},
+				Action{
+					Name: "parse_ioc",
+					AppID: "Shuffle Tools",
+					AppName: "Shuffle Tools",
+					ID: uuid.NewV4().String(),
+					AppVersion: "1.2.0",
+					Environment: actionEnv,
+					Label: "Parse IOC",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "input_string",
+							Value: "$get_threatlist_urls.#.body",
+						},
+						WorkflowAppActionParameter{
+							Name:  "input_type",
+							Value: "domain,ipv4,sha256",
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					TriggerType: "SCHEDULE",
+					Label: "Pull threatlist URLs",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "0 0 * * *", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle", 
+						},
+					},
+				},
+			},
+		}
+
+		// For now while testing
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+
+		/*
+		if len(workflow.WorkflowVariables) == 0 {
+			workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
+		}
+
+		if len(workflow.Actions) == 0 {
+			workflow.Actions = defaultWorkflow.Actions
+		}
+
+		// Rules specific to this one
+		if len(workflow.Triggers) == 0 {
+			workflow.Triggers = defaultWorkflow.Triggers
+		}
+		*/
+
+		// Get the item with key "threatlist_urls" from datastore
+		ctx := GetContext(nil)
+		_, err := GetDatastoreKey(ctx, "threatlist_urls", "")
+		if err != nil {
+			//log.Printf("[INFO] Failed to get threatlist URLs from datastore. Making it.: %s", err)
+			urls := []string{
+				"https://sslbl.abuse.ch/blacklist/sslblacklist.csv",
+			}
+
+			jsonMarshalled, err := json.Marshal(urls)
+			if err != nil {
+				log.Printf("[ERROR] Failed to marshal threatlist URLs: %s", err)
+			} else {
+				key := CacheKeyData{
+					Key: "threatlist_urls",
+					Value: fmt.Sprintf(`%s`, string(jsonMarshalled)),
+					OrgId: orgId,
+				}
+
+				err = SetDatastoreKey(ctx, key)
+				if err != nil {
+					log.Printf("[ERROR] Failed to set threatlist URLs in datastore: %s", err)
+				} else {
+					log.Printf("[INFO] Successfully set threatlist URLs in datastore")
+				}
+			}
+		}
+	}
+
+	if len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
+		return workflow, errors.New("Workflow name or ID is empty")
+	}
+
+	if workflow.Actions[0].Position.X == 0 && workflow.Actions[0].Position.Y == 0 {
+		addition := float64(200)
+		startXPosition := float64(0)
+		startYPosition := float64(0)
+		for triggerIndex, _ := range workflow.Triggers {
+			workflow.Triggers[triggerIndex].Position = Position{
+				X: startXPosition,
+				Y: startYPosition,
+			}
+
+			startXPosition += addition 
+		}
+
+		for actionIndex, _ := range workflow.Actions {
+			workflow.Actions[actionIndex].Position = Position{
+				X: startXPosition,
+				Y: startYPosition, 
+			}
+
+			startXPosition += addition 
+		}
+	}
+
+	return workflow, nil
+}
+
+// Generates Workflows based on Singul
+// Main question: 
+// - Should we pre-define these? Or should it just "figure it out"?
+
+// Specific requirement for threatlist(s):
+// - URLs
+// - Where to put it (?)
+
+func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Input data:
+	// Data type (e.g. list_tickets, list_assets, threatlist_monitor etc)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Failed to authenticate user in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusUnauthorized)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to generate singul workflows: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading request body in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
+	categoryAction := CategoryAction{}
+	err = json.Unmarshal(body, &categoryAction)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling request body in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to parse request body"}`))
+		return
+	}
+
+	if len(categoryAction.Label) == 0 {
+		log.Printf("[ERROR] No label found in request body in GenerateSingulWorkflows")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "No label found in request body"}`))
+		return
+	}
+
+	log.Printf("[AUDIT] Allowing user %s (%s) to generate singul workflows for category '%s'", user.Username, user.Id, categoryAction.Label)
+
+	// Removing unecessary fields just in case
+	categoryAction = CategoryAction{
+		AppName: categoryAction.AppName,
+		Label: categoryAction.Label,
+		Fields: categoryAction.Fields,
+	}
+
+	// Deterministic IDs for the specific type. This is to ensure
+	// we just modify the required.
+	seedString := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, categoryAction.Label)
+	if len(categoryAction.AppName) > 0 && categoryAction.AppName != categoryAction.Label {
+		seedString = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, categoryAction.Label, categoryAction.AppName)
+	}
+
+	hash := sha1.New()
+	hash.Write([]byte(seedString))
+	hashBytes := hash.Sum(nil)
+
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, hashBytes)
+	workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+
+	log.Printf("Getting workflow with ID %s for category '%s'", workflowId, categoryAction.Label)
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil || workflow.ID == "" {
+		log.Printf("[ERROR] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
+	}
+
+	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction.Label)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
+		return
+	}
+
+	workflow = &newWorkflow
+	workflow.ID = workflowId
+
+	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
+		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", workflowId, user.ActiveOrg.Id, workflow.OrgId)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
+		return
+	}
+
+	if len(workflow.ID) == 0 || len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
+		log.Printf("[ERROR] No workflow found for ID %s in GenerateSingulWorkflows", workflowId)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
+		return
+	}
+
+	workflow.OrgId = user.ActiveOrg.Id
+	err = SetWorkflow(ctx, *workflow, workflow.ID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to set workflow in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true, "reason": "Not implemented yet"}`)) 
 }

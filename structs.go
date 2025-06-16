@@ -211,7 +211,7 @@ type WorkflowApp struct {
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`
 
 	ReferenceInfo struct {
-		OnpremBackup bool     `json:"onprem_backup" datastore:"onprem_backup"`
+		OnpremBackup bool `json:"onprem_backup" datastore:"onprem_backup"`
 
 		IsPartner        bool     `json:"is_partner" datastore:"is_partner"`
 		PartnerContacts  string   `json:"partner_contacts" datastore:"partner_contacts"`
@@ -634,10 +634,7 @@ type User struct {
 	ValidatedSessionOrgs []string      `datastore:"validated_session_orgs" json:"validated_session_orgs"` // Orgs that have been used in the current session for the user
 	UsersLastSession     string        `datastore:"users_last_session" json:"users_last_session"`
 	Theme                string        `datastore:"theme" json:"theme"`
-
-	// Starting web3 integration
-	EthInfo       EthInfo       `datastore:"eth_info" json:"eth_info"`
-	PublicProfile PublicProfile `datastore:"public_profile" json:"public_profile"`
+	PublicProfile        PublicProfile `datastore:"public_profile" json:"public_profile"`
 
 	// Tracking logins and such
 	LoginInfo    []LoginInfo  `datastore:"login_info" json:"login_info"`
@@ -645,6 +642,9 @@ type User struct {
 	Regions      []string     `datastore:"regions" json:"regions"`
 
 	UserGeoInfo UserGeoInfo `datastore:"user_geo_info" json:"user_geo_info"`
+
+	// Old web3 integration
+	EthInfo EthInfo `datastore:"eth_info" json:"eth_info"`
 }
 
 type EthInfo struct {
@@ -1027,6 +1027,32 @@ type Defaults struct {
 	KmsId string `json:"kms_id" datastore:"kms_id"`
 }
 
+type DatastoreAutomationOption struct {
+	Key   string `json:"key" datastore:"key"`
+	Value string `json:"value" datastore:"value,noindex"`
+}
+
+type DatastoreAutomation struct {
+	Name    string                      `json:"name" datastore:"name"`
+	Icon    string                      `json:"icon" datastore:"icon"`
+	Enabled bool                        `json:"enabled" datastore:"enabled"`
+	Options []DatastoreAutomationOption `json:"options" datastore:"options"`
+}
+
+type DatastoreCategorySettings struct {
+	Timeout int64 `json:"timeout" datastore:"timeout"`
+	Public  bool  `json:"public" datastore:"public"` // If the category is public, meaning that it can be accessed without authentication
+}
+
+type DatastoreCategoryUpdate struct {
+	Id          string                `json:"id" datastore:"id"`
+	OrgId       string                `json:"org_id" datastore:"org_id"`
+	Category    string                `json:"category" datastore:"category"`
+	Automations []DatastoreAutomation `json:"automations" datastore:"automations"`
+
+	Settings DatastoreCategorySettings `json:"settings" datastore:"settings"`
+}
+
 type CacheKeyData struct {
 	Success       bool   `json:"success" datastore:"Success"`
 	WorkflowId    string `json:"workflow_id," datastore:"WorkflowId"`
@@ -1159,24 +1185,24 @@ type Variable struct {
 }
 
 type SingulResult struct {
-	Success bool   `json:"success"`
-	Action  string `json:"action"`
-	Output  string `json:"output"`
+	Success     bool        `json:"success"`
+	Action      string      `json:"action"`
+	Output      string      `json:"output"`
 	RawResponse interface{} `json:"raw_response"`
 }
 
 type SingulStats struct {
-	Id      string `json:"id"`
+	Id string `json:"id"`
 
-	Failed   bool  `json:"failed"`
-	Result   string `json:"result"`
-	ExecutionId string `json:"execution_id"`
-	WorkflowId  string `json:"workflow_id"`
-	NotificationWorkflow bool `json:"notification_workflow"`
+	Failed               bool   `json:"failed"`
+	Result               string `json:"result"`
+	ExecutionId          string `json:"execution_id"`
+	WorkflowId           string `json:"workflow_id"`
+	NotificationWorkflow bool   `json:"notification_workflow"`
 
 	IsGeneratedNotificationWorkflow bool `json:"is_generated_notification_workflow"`
 
-	OrgId  string `json:"org_id"`
+	OrgId string `json:"org_id"`
 }
 
 type WorkflowExecution struct {
@@ -1256,6 +1282,10 @@ type Action struct {
 	// ParameterLocks []ParameterLock `json:"parameter_locks" datastore:"parameter_locks"`
 	SourceWorkflow  string `json:"source_workflow" yaml:"source_workflow" datastore:"source_workflow"`
 	SourceExecution string `json:"source_execution" yaml:"source_execution" datastore:"source_execution"`
+
+	// This is used for YAML translations in case we don't want to use the UI
+	//SourceConditions []Branch `json:"source_conditions" yaml:"source_conditions" datastore:"source_conditions"` // Conditions that are used to determine the source of the action
+	//Target string `json:"target,omitempty" yaml:"target,omitempty" datastore:"target"` // Target of the action, used for branches and conditions
 }
 
 // Added environment for location to execute
@@ -1427,7 +1457,7 @@ type Workflow struct {
 }
 
 type BackupConfig struct {
-	OnpremBackup bool   `json:"onprem_backup" datastore:"onprem_backup"`
+	OnpremBackup bool `json:"onprem_backup" datastore:"onprem_backup"`
 
 	UploadRepo     string `json:"upload_repo" datastore:"upload_repo"`
 	UploadBranch   string `json:"upload_branch" datastore:"upload_branch"`
@@ -2666,6 +2696,17 @@ type UserWrapper struct {
 	Source      User   `json:"_source"`
 }
 
+type DatastoreCategoryKeyWrapper struct {
+	Index       string                  `json:"_index"`
+	Type        string                  `json:"_type"`
+	ID          string                  `json:"_id"`
+	Version     int                     `json:"_version"`
+	SeqNo       int                     `json:"_seq_no"`
+	PrimaryTerm int                     `json:"_primary_term"`
+	Found       bool                    `json:"found"`
+	Source      DatastoreCategoryUpdate `json:"_source"`
+}
+
 type CacheKeyWrapper struct {
 	Index       string       `json:"_index"`
 	Type        string       `json:"_type"`
@@ -2837,6 +2878,7 @@ type SSOConfig struct {
 	SSORequired         bool   `json:"SSORequired" datastore:"SSORequired"`
 	AutoProvision       bool   `json:"auto_provision" datastore:"auto_provision"`
 	RoleRequired        bool   `json:"role_required" datastore:"role_required"`
+	SkipSSOForAdmins    bool   `json:"skip_sso_for_admins" datastore:"skip_sso_for_admins"`
 }
 
 type SamlRequest struct {
@@ -3597,6 +3639,31 @@ type CacheKeySearchWrapper struct {
 	} `json:"hits"`
 }
 
+type OrgDatastoreCategoryWrapper struct {
+	Took     int  `json:"took"`
+	TimedOut bool `json:"timed_out"`
+	Shards   struct {
+		Total      int `json:"total"`
+		Successful int `json:"successful"`
+		Skipped    int `json:"skipped"`
+		Failed     int `json:"failed"`
+	} `json:"_shards"`
+	Hits struct {
+		Total struct {
+			Value    int    `json:"value"`
+			Relation string `json:"relation"`
+		} `json:"total"`
+		MaxScore float64 `json:"max_score"`
+		Hits     []struct {
+			Index  string                  `json:"_index"`
+			Type   string                  `json:"_type"`
+			ID     string                  `json:"_id"`
+			Score  float64                 `json:"_score"`
+			Source DatastoreCategoryUpdate `json:"_source"`
+		} `json:"hits"`
+	} `json:"hits"`
+}
+
 type DealSearchWrapper struct {
 	Took     int  `json:"took"`
 	TimedOut bool `json:"timed_out"`
@@ -3811,12 +3878,12 @@ type SchemalessOutput struct {
 	Status  int    `json:"status,omitempty"`
 	URL     string `json:"url,omitempty"`
 
+	// Optional
+	RawResponse interface{} `json:"raw_response,omitempty"`
+
 	// JSON output. What if it's a list?
 	//Output map[string]interface{} `json:"output"`
 	Output interface{} `json:"output"`
-
-	// Optional
-	RawResponse interface{} `json:"raw_response,omitempty"`
 }
 
 type CategoryActionFieldOverride struct {
@@ -3994,9 +4061,16 @@ type ExecutionReturn struct {
 
 // Create struct
 type CacheReturn struct {
-	Success bool           `json:"success"`
-	Keys    []CacheKeyData `json:"keys"`
-	Cursor  string         `json:"cursor"`
+	Success     bool   `json:"success"`
+	Amount      int    `json:"amount"`
+	Cursor      string `json:"cursor"`
+	TotalAmount int    `json:"total_amount"`
+
+	Category   string                  `json:"category"`
+	Config     DatastoreCategoryUpdate `json:"category_config,omitempty"`
+	Categories []string                `json:"categories,omitempty"`
+
+	Keys []CacheKeyData `json:"keys"`
 }
 
 type GCPIncident struct {

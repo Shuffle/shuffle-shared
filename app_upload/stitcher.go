@@ -250,12 +250,29 @@ func addRequirements(filelocation string) {
 		return
 	}
 
-	//if strings.Contains(string(data), "liquid") && strings.Contains(string(data), "requests") {
-	//	log.Printf("[WARNING] Req file already formatted with liquid and requests?")
-	//	return
-	//}
+	// some basic dedup without version checks
+	filedata := shuffle.GetAppRequirements() + "\n" + string(data)
+	newlines := []string{}
+	existingLines := []string{}
+	for _, line := range strings.Split(filedata, "\n") {
+		if len(line) == 0 {
+			continue
+		}
 
-	filedata := shuffle.GetAppRequirements() + string(data)
+		libnameSplit := strings.Split(line, "==")
+		if len(libnameSplit) <= 1 {
+			continue
+		}
+
+		if !shuffle.ArrayContains(existingLines, libnameSplit[0]) {
+			existingLines = append(existingLines, libnameSplit[0])
+			newlines = append(newlines, line)
+		}
+	}
+
+	filedata = strings.Join(newlines, "\n")
+	log.Printf("[INFO] filedata: %s", filedata)
+
 	err = ioutil.WriteFile(filelocation, []byte(filedata), os.ModePerm)
 	if err != nil {
 		log.Panicf("[WARNING] failed writing data to file: %s", err)
@@ -305,6 +322,7 @@ func stitcher(appname string, appversion string) string {
 		log.Println("Failed writing to requirement: %s", err)
 		return ""
 	}
+
 
 	err = ioutil.WriteFile(fmt.Sprintf("%s/main.py", foldername), stitched, os.ModePerm)
 	if err != nil {
@@ -992,8 +1010,8 @@ func main() {
 		bucketName = os.Args[5]
 	}
 
-	appname := "shuffle-tools"
-	appversion := "1.2.0"
+	appname := "shuffle-subflow"
+	appversion := "1.1.0"
 	err := deployConfigToBackend(appfolder, appname, appversion)
 	if err != nil {
 		log.Printf("[WARNING] Failed uploading config: %s", err)

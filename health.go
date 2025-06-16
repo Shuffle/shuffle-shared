@@ -2226,7 +2226,11 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 						if err == nil {
 							handled = true
 							action.AppID = tmpApp.ID
-							newOrgApps = append(newOrgApps, action.AppID)
+
+							if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
+							} else {
+								newOrgApps = append(newOrgApps, action.AppID)
+							}
 
 							workflowapps = append(workflowapps, *tmpApp)
 						}
@@ -2833,7 +2837,7 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 				// Check to see if the action is valid
 				if curappaction.Name != action.Name {
-					//log.Printf("[ERROR] Action '%s' in app %s doesn't exist. Workflow: %s (%s)", action.Name, curapp.Name, workflow.Name, workflow.ID)
+
 					// Reserved names
 					if action.Name != "router" {
 						thisError := fmt.Sprintf("%s: Action %s in app %s doesn't exist", action.Label, action.Name, action.AppName)

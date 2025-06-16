@@ -4178,3 +4178,220 @@ func GetAppNameSplit(version DockerRequestCheck) (string, string, string, error)
 
 	return appname, baseAppname, appVersion, nil
 }
+
+func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte, cacheData CacheKeyData, automation DatastoreAutomation, url, runType  string) error {
+	var err error
+
+	if runType == "run_workflow" { 
+
+	} else if runType == "webhook" { 
+		webhookUrl := ""
+		for _, option := range automation.Options {
+			if option.Key == "webhook_url" {
+				webhookUrl = option.Value
+				break
+			}
+		}
+
+		if !strings.HasPrefix(webhookUrl, "http") {
+			return errors.New(fmt.Sprintf("Webhook URL %s is not valid", webhookUrl))
+		}
+
+		parsedBody := WorkflowAppAction{
+			AppID: "HTTP",
+			AppName: "HTTP",
+			Environment: "cloud",
+			//Name: "custom_command",
+			Name: "POST",
+			NodeType: "action",
+			Parameters: []WorkflowAppActionParameter{
+				WorkflowAppActionParameter{
+					Name: "url",
+					Value: webhookUrl,
+				},
+				WorkflowAppActionParameter{
+					Name: "method",
+					Value: "POST",
+				},
+				WorkflowAppActionParameter{
+					Name: "body",
+					Value: string(marshalledBody),
+				},
+				WorkflowAppActionParameter{
+					Name: "headers",
+					Value: "Content-Type: application/json\nAccept: application/json",
+				},
+			},
+		}
+
+		if project.Environment != "cloud" {
+			environments, err := GetEnvironments(ctx, cacheData.OrgId)
+			if err != nil {
+				return err
+			}
+
+			for _, env := range environments {
+				if env.Default {
+					parsedBody.Environment = env.Name
+					break
+				}
+			}
+		}
+
+		marshalledBody, err = json.Marshal(parsedBody)
+		if err != nil {
+			log.Printf("[ERROR] Failed to marshal parsedBody for webhook %s: %s", webhookUrl, err)
+			return err
+		}
+	}
+
+
+	// Find a user to use
+	org, err := GetOrg(ctx, cacheData.OrgId)
+	if err != nil {
+		return err
+	}
+
+	foundApikey := ""
+	for _, user := range org.Users {
+		if user.Role != "admin" {
+			continue
+		}
+
+		if len(user.ApiKey) > 0 {
+			foundApikey = user.ApiKey
+			break
+		} else {
+			foundUser, err := GetUser(ctx, user.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get user by ID %s: %s", user.Id, err)
+				continue
+			}
+
+			if len(foundUser.ApiKey) > 0 {
+				foundApikey = foundUser.ApiKey
+				break
+			}
+		}
+	}
+
+	// Send request to 
+	backendUrl := os.Getenv("BASE_URL")
+	if len(os.Getenv("SHUFFLE_CLOUDRUN_URL")) > 0 && strings.Contains(os.Getenv("SHUFFLE_CLOUDRUN_URL"), "http") {
+		backendUrl = os.Getenv("SHUFFLE_CLOUDRUN_URL")
+	}
+
+	//parsedUrl := fmt.Sprintf("%s/api/v1/apps/HTTP/run", backendUrl)
+	parsedUrl := fmt.Sprintf("%s%s", backendUrl, url)
+	client := &http.Client{
+		Timeout: time.Second * 5,
+	}
+
+	req, err := http.NewRequest(
+		"POST", 
+		parsedUrl, 
+		bytes.NewBuffer(marshalledBody),
+	)
+
+	if err != nil {
+		log.Printf("[ERROR] Failed to create request for webhook %s: %s", parsedUrl, err)
+		return err
+	}
+
+	req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", foundApikey))
+	req.Header.Add("Org-Id", cacheData.OrgId)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("[ERROR] Failed to send webhook request to %s: %s", parsedUrl, err)
+		return err
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed to read response body from webhook request to %s: %s", parsedUrl, err)
+		return err
+	}
+
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("[ERROR] Webhook request to %s failed with status code %d", parsedUrl, resp.StatusCode)
+		return errors.New(fmt.Sprintf("Webhook request failed with status code %d. Body: %s", resp.StatusCode, body))
+	}
+
+	return nil
+}
+
+func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, automation DatastoreAutomation) error {
+	if len(cacheData.OrgId) == 0 {
+		return errors.New("CacheKeyData.OrgId is required for handleRunAutomation")
+	}
+
+	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
+
+	// Unmarshal cacheData.Value to parsedOutput
+	parsedOutput := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(cacheData.Value), &parsedOutput); err != nil {
+		log.Printf("[ERROR] Failed to unmarshal cacheData.Value: %s", err)
+		parsedOutput["value"] = cacheData.Value
+	}
+
+	parsedOutput["shuffle_datastore"] = map[string]interface{}{ 
+		"action": "update",
+		"key": cacheData.Key,
+		"org_id": cacheData.OrgId,
+		"timestamp": cacheData.Edited,
+		"workflow_id": cacheData.WorkflowId,
+		"suborg_distribution": cacheData.SuborgDistribution,
+	}
+
+	marshalledBody, err := json.Marshal(parsedOutput)
+	if err != nil {
+		log.Printf("[ERROR] Failed to marshal parsedOutput. Key %s, Category: %s, org: %s, err: %s", cacheData.Key, cacheData.Category, cacheData.OrgId, err)
+		return err
+	}
+
+	if parsedName == "run_workflow" {
+		if debug { 
+			log.Printf("[DEBUG] Running workflow %s for org %s", automation.Options[0].Value, cacheData.OrgId) 
+		}
+
+		for _, option := range automation.Options {
+			if option.Key == "workflow_id" {
+				if len(option.Value) == 0 {
+					continue
+				}
+
+				cacheData.WorkflowId = option.Value
+				workflowIds := strings.Split(option.Value, ",")
+
+				handled := []string{}
+				for _, workflowId := range workflowIds {
+					workflowId = strings.TrimSpace(workflowId)
+					if ArrayContains(handled, workflowId) {
+						continue
+					}
+
+					handled = append(handled, workflowId)
+					go handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, fmt.Sprintf("/api/v1/workflows/%s/execute", workflowId), "run_workflow")
+				}
+
+				break
+			}
+		}
+
+	} else if parsedName == "send_webhook" {
+		if debug { 
+			log.Printf("[DEBUG] Sending webhook for url %s", automation.Options[0].Value)
+		}
+
+		return handleDatastoreAutomationWebhook(ctx, marshalledBody, cacheData, automation, "/api/v1/apps/HTTP/run", "webhook")
+
+		// Send the webhook using the HTTP app with a POST request
+
+	} else {
+		return fmt.Errorf("Unknown automation name %s", automation.Name)
+	}
+
+	return nil
+}

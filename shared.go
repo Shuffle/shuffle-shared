@@ -3463,7 +3463,7 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Just here to verify that the user is logged in
-	_, err := HandleApiAuthentication(resp, request)
+	user, err := HandleApiAuthentication(resp, request)
 	if err != nil {
 		log.Printf("[WARNING] Api authentication failed in validate swagger: %s", err)
 		resp.WriteHeader(401)
@@ -3484,29 +3484,35 @@ func GetOpenapi(resp http.ResponseWriter, request *http.Request) {
 		id = location[4]
 	}
 
-	/*
-		if len(id) != 32 {
-			log.Printf("Missing parts of API in request!")
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
-			return
-		}
-	*/
-	//_, err = GetApp(ctx, id)
-	//if err == nil {
-	//}
-
-	// FIXME - FIX AUTH WITH APP
-	ctx := GetContext(request)
-	parsedApi, err := GetOpenApiDatastore(ctx, id)
-	if err != nil {
-		log.Printf("[ERROR] Failed getting OpenAPI: %s", err)
-		resp.WriteHeader(401)
+	if len(id) != 32 {
+		log.Printf("Missing parts of API in request!")
+		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	log.Printf("[INFO] API LENGTH GET: %d, ID: %s", len(parsedApi.Body), id)
+	ctx := GetContext(request)
+	parsedApi, openapiErr := GetOpenApiDatastore(ctx, id)
+	if openapiErr != nil {
+		log.Printf("[ERROR] Failed getting OpenAPI %s: %s", id, err)
+	}
+
+	app, err := GetApp(ctx, id, user, false)
+	if err == nil || len(app.ID) > 0 {
+		log.Printf("[AUDIT] Found app %s (%s) for OpenAPI. Checking for user %s (%s) in org %s (%s) to access", app.Name, id, user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+
+		if !app.Public && app.Owner != user.Id && user.ActiveOrg.Id != app.ReferenceOrg && !user.SupportAccess {
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false}`))
+			return
+		}
+	} else {
+		// Try cross region loading?
+		//if openapiLoad != nil {
+		//}
+	}
+
+	log.Printf("[INFO] OpenAPI Get length: %d, ID: %s", len(parsedApi.Body), id)
 
 	parsedApi.Success = true
 	data, err := json.Marshal(parsedApi)
@@ -4196,7 +4202,9 @@ func GetWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 	//log.Printf("[DEBUG] Env: %s, workflows: %d", project.Environment, len(parentWorkflows))
 	if project.Environment == "cloud" && len(parentWorkflows) > 40 {
-		log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//if debug  {
+		//	log.Printf("[DEBUG] Removed workflow actions & images for user %s (%s) in org %s (%s)", user.Username, user.Id, user.ActiveOrg.Name, user.ActiveOrg.Id)
+		//}
 
 		// Check for "subflow" query
 		isSubflow := false
@@ -5010,7 +5018,6 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 		Lastname    string   `json:"lastname"`
 		Role        string   `json:"role"`
 		Username    string   `json:"username"`
-		EthInfo     EthInfo  `json:"eth_info"`
 		CompanyRole string   `json:"company_role"`
 		Suborgs     []string `json:"suborgs"`
 
@@ -5191,10 +5198,10 @@ func HandleUpdateUser(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if project.Environment == "cloud" {
-		if len(t.EthInfo.Account) > 0 {
-			log.Printf("[DEBUG] Should set ethinfo to %s", t.EthInfo)
-			foundUser.EthInfo = t.EthInfo
-		}
+		//if len(t.EthInfo.Account) > 0 {
+		//	log.Printf("[DEBUG] Should set ethinfo to %s", t.EthInfo)
+		//	foundUser.EthInfo = t.EthInfo
+		//}
 
 		// Check if UserID is different?
 		/*
@@ -5979,6 +5986,10 @@ func hasActionChanged(newAction Action, oldAction Action) (string, bool) {
 	}
 
 	if newAction.AppID != oldAction.AppID {
+		if debug {
+			log.Printf("[DEBUG] APPID CHANGED: %s (%#v) vs %s (%#v)", newAction.Name, newAction.AppID, oldAction.Name, oldAction.AppID)
+		}
+
 		changes = append(changes, "app_id")
 	}
 
@@ -6525,7 +6536,9 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 
 			changeType, changed := hasActionChanged(parentAction, oldAction)
 			if changed || len(changeType) > 0 {
-				log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
+				if debug {
+					log.Printf("[DEBUG] Action %s (%s) has changed in '%s'", parentAction.Label, parentAction.ID, changeType)
+				}
 				updatedActions = append(updatedActions, parentAction)
 			}
 		}
@@ -8126,7 +8139,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if fileId != workflow.ID {
-		log.Printf("[WARNING] Path and request ID are not matching in workflow save: %s != %s.", fileId, workflow.ID)
+		log.Printf("[ERROR] Path and request ID are NOT matching in workflow save: %s != %s. URL: %s", fileId, workflow.ID, request.URL.String())
 		resp.WriteHeader(400)
 		//resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching"}`))
 		resp.Write([]byte(`{"success": false, "reason": "ID in workflow data and path are not matching. Export and re-import this workflow for use in your region."}`))
@@ -8673,7 +8686,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		Errors:  workflow.Errors,
 	}
 
-	if !strings.Contains(strings.ToLower(workflow.Name), "ops dashboard") { 
+	if !strings.Contains(strings.ToLower(workflow.Name), "ops dashboard") {
 		log.Printf("[INFO] Saved new version of workflow '%s' (%s) for org %s. User: %s (%s). Actions: %d, Triggers: %d", workflow.Name, fileId, workflow.OrgId, user.Username, user.Id, len(workflow.Actions), len(workflow.Triggers))
 	}
 
@@ -9003,19 +9016,21 @@ func HandleGetUsers(resp http.ResponseWriter, request *http.Request) {
 			item.ApiKey = ""
 		}
 
+		item.ApiKey = ""
 		item.Password = ""
 		item.Session = ""
+		item.UsersLastSession = ""
 		item.VerificationToken = ""
+		item.ValidatedSessionOrgs = []string{}
 		item.Orgs = []string{}
-		item.EthInfo = EthInfo{}
 
 		item.Authentication = []UserAuth{}
-		item.Executions = ExecutionInfo{}
-		item.Limits = UserLimits{}
 		item.PrivateApps = []WorkflowApp{}
 		item.MFA = MFAInfo{
 			Active: item.MFA.Active,
 		}
+
+		item.ActiveOrg = OrgMini{}
 
 		if !user.SupportAccess {
 			item.LoginInfo = []LoginInfo{}
@@ -10479,7 +10494,7 @@ func UpdateWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting App Config Update request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
@@ -11116,44 +11131,76 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 
 	if (org.SSOConfig.SSORequired == true && user.UsersLastSession != user.Session && user.SupportAccess == false) || tmpData.SSOTest {
 
-		baseSSOUrl := org.SSOConfig.SSOEntrypoint
-		redirectKey := "SSO_REDIRECT"
-		if len(org.SSOConfig.OpenIdAuthorization) > 0 {
-			log.Printf("[INFO] OpenID login for %s", org.Id)
-			redirectKey = "SSO_REDIRECT"
-
-			baseSSOUrl = GetOpenIdUrl(request, *org)
-		}
-
-		if !strings.HasPrefix(baseSSOUrl, "http") {
-			log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
-			//resp.WriteHeader(401)
-			//resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
-			//return
-		} else {
-			// Check if the user has other orgs that can be swapped to - if so SWAP
-			log.Printf("[DEBUG] Change org: Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
-			ssoResponse := SSOResponse{
-				Success: true,
-				Reason:  redirectKey,
-				URL:     baseSSOUrl,
-			}
-
-			b, err := json.Marshal(ssoResponse)
+		// Check if the org is the suborg or not?
+		skipSSO := false
+		if len(org.CreatorOrg) > 0 {
+			log.Printf("[DEBUG] User %s (%s) is trying to change to suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+			parentOrg, err := GetOrg(ctx, org.CreatorOrg)
 			if err != nil {
-				log.Printf("[ERROR] Failed marshalling SSO response: %s", err)
-				resp.Write([]byte(`{"success": false}`))
+				log.Printf("[ERROR] Failed getting parent org %s for suborg %s: %s", org.CreatorOrg, org.Id, err)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "Failed getting parent org for suborg"}`))
 				return
 			}
 
-			resp.WriteHeader(200)
-			resp.Write(b)
-			return
+			if parentOrg.SSOConfig.SkipSSOForAdmins {
+				for _, orgUser := range parentOrg.Users {
+					if orgUser.Id == user.Id && orgUser.Role == "admin" {
+						log.Printf("[DEBUG] User %s (%s) is admin in parent org %s (%s) and can skip SSO", user.Username, user.Id, parentOrg.Name, parentOrg.Id)
+						// Skip SSO for admin in suborgs
+						skipSSO = true
+						break
+					}
+				}
+			}
+		}
+
+		if skipSSO {
+			log.Printf("[AUDIT] User %s (%s) is skipping SSO for suborg %s (%s)", user.Username, user.Id, org.Name, org.Id)
+		} else {
+			baseSSOUrl := org.SSOConfig.SSOEntrypoint
+			redirectKey := "SSO_REDIRECT"
+			if len(org.SSOConfig.OpenIdAuthorization) > 0 {
+				log.Printf("[INFO] OpenID login for %s", org.Id)
+				redirectKey = "SSO_REDIRECT"
+
+				baseSSOUrl = GetOpenIdUrl(request, *org)
+			}
+
+			if !strings.HasPrefix(baseSSOUrl, "http") {
+				log.Printf("[ERROR] SSO URL for %s (%s) is invalid: %s", org.Name, org.Id, baseSSOUrl)
+				resp.WriteHeader(401)
+				resp.Write([]byte(`{"success": false, "reason": "SSO URL is invalid"}`))
+				return
+			} else {
+				// Check if the user has other orgs that can be swapped to - if so SWAP
+				log.Printf("[DEBUG] Change org: Should redirect user %s in org %s (%s) to SSO login at %s", user.Username, user.ActiveOrg.Name, user.ActiveOrg.Id, baseSSOUrl)
+				ssoResponse := SSOResponse{
+					Success: true,
+					Reason:  redirectKey,
+					URL:     baseSSOUrl,
+				}
+
+				b, err := json.Marshal(ssoResponse)
+				if err != nil {
+					log.Printf("[ERROR] Failed marshalling SSO response: %s", err)
+					resp.Write([]byte(`{"success": false}`))
+					return
+				}
+
+				resp.WriteHeader(200)
+				resp.Write(b)
+				return
+			}
 		}
 	}
 
 	if project.Environment == "cloud" && len(org.RegionUrl) > 0 && !strings.Contains(org.RegionUrl, "\"") {
 		regionUrl = org.RegionUrl
+	}
+
+	if len(regionUrl) > 0 && !ArrayContains(user.Regions, regionUrl) {
+		user.Regions = append(user.Regions, regionUrl)
 	}
 
 	userFound := false
@@ -11167,7 +11214,7 @@ func HandleChangeUserOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	if !userFound && !user.SupportAccess {
-		log.Printf("[WARNING] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
+		log.Printf("[ERROR] User %s (%s) can't change to org %s (%s) (2)", user.Username, user.Id, org.Name, org.Id)
 		resp.WriteHeader(403)
 		resp.Write([]byte(`{"success": false, "reason": "No permission to change to this org (2). Please contact support@shuffler.io if this is unexpected."}`))
 		return
@@ -11263,6 +11310,9 @@ func HandleCreateSubOrg(resp http.ResponseWriter, request *http.Request) {
 
 		DeleteCache(ctx, fmt.Sprintf("%s_childorgs", inneruser.ActiveOrg.Id))
 	}
+
+	// Delete parent org cache as well from the org region
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", parentOrg.Id))
 
 	// Checking if it's a special region. All user-specific requests should
 	// go through shuffler.io and not subdomains
@@ -11685,6 +11735,7 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 		Billing         Billing      `json:"billing" datastore:"billing"`
 		Branding        OrgBranding  `json:"branding" datastore:"branding"`
 		EditingBranding bool         `json:"editing_branding" datastore:"editing_branding"`
+		Editing         string       `json:"editing" datastore:"editing"`
 	}
 
 	var tmpData ReturnData
@@ -11842,21 +11893,11 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 
 	//Update mfa required value
 	if tmpData.MFARequired != org.MFARequired {
+		log.Printf("[AUDIT] Setting MFA required to %t for org %s (%s)", tmpData.MFARequired, org.Name, org.Id)
 		org.MFARequired = tmpData.MFARequired
 	}
-
-	//if len(tmpData.SSOConfig) > 0 {
-	if len(tmpData.SSOConfig.SSOEntrypoint) > 0 || len(tmpData.SSOConfig.OpenIdClientId) > 0 || len(tmpData.SSOConfig.OpenIdClientSecret) > 0 || len(tmpData.SSOConfig.OpenIdAuthorization) > 0 || len(tmpData.SSOConfig.OpenIdToken) > 0 {
-		org.SSOConfig = tmpData.SSOConfig
-	}
-	// Check if there are new values for SSO entry point or certificate or SSORequired
-	if (tmpData.SSOConfig.SSOEntrypoint != org.SSOConfig.SSOEntrypoint) ||
-		(tmpData.SSOConfig.SSOCertificate != org.SSOConfig.SSOCertificate) ||
-		(tmpData.SSOConfig.SSORequired != org.SSOConfig.SSORequired) {
-		org.SSOConfig = tmpData.SSOConfig
-	}
-
-	if (tmpData.SSOConfig.OpenIdClientId != org.SSOConfig.OpenIdClientId) || (tmpData.SSOConfig.OpenIdAuthorization != org.SSOConfig.OpenIdAuthorization) || (tmpData.SSOConfig.RoleRequired != org.SSOConfig.RoleRequired) {
+	if tmpData.Editing == "sso_config" {
+		log.Printf("[AUDIT] Editing SSO config for org %s (%s)", org.Name, org.Id)
 		org.SSOConfig = tmpData.SSOConfig
 	}
 
@@ -13463,7 +13504,7 @@ func GetRequestIp(r *http.Request) string {
 		// The client's IP is usually the first one.
 		stringSplit := strings.Split(forwardedFor, ",")
 		if len(stringSplit) > 1 {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG] Found multiple IPs in X-Forwarded-For header: %s. Returning first.", forwardedFor)
 			}
 
@@ -14113,6 +14154,22 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	regionUrl := ""
+	if project.Environment == "cloud" {
+		if len(userdata.ActiveOrg.RegionUrl) > 0 {
+			regionUrl = userdata.ActiveOrg.RegionUrl
+		} else {
+			org, err := GetOrg(ctx, userdata.ActiveOrg.Id)
+			if err != nil {
+				log.Printf("[ERROR] Failed getting org %s during login for %s (%s): %s", userdata.ActiveOrg.Id, userdata.Username, userdata.Id, err)
+			} else {
+				if strings.Contains(strings.ToLower(org.RegionUrl), "http") {
+					regionUrl = strings.ToLower(org.RegionUrl)
+				}
+			}
+		}
+	}
+
 	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
@@ -14136,7 +14193,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			Expiration: expiration.Unix(),
 		})
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, userdata.Session, expiration.Unix())
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, userdata.Session, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
@@ -14201,7 +14258,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}]}`, sessionToken, expiration.Unix())
+		loginData = fmt.Sprintf(`{"success": true, "cookies": [{"key": "session_token", "value": "%s", "expiration": %d}], "region_url": "%s"}`, sessionToken, expiration.Unix(), regionUrl)
 		newData, err := json.Marshal(returnValue)
 		if err == nil {
 			loginData = string(newData)
@@ -14226,7 +14283,7 @@ func HandleSSOLogin(resp http.ResponseWriter, request *http.Request) {
 		// go through shuffler.io and not subdomains
 		gceProject := os.Getenv("SHUFFLE_GCEPROJECT")
 		if gceProject != "shuffler" && gceProject != sandboxProject && len(gceProject) > 0 {
-			log.Printf("[DEBUG] Redirecting LOGIN request to main site handler (shuffler.io)")
+			log.Printf("[DEBUG] Redirecting LOGIN SSO request to main site handler (shuffler.io)")
 			RedirectUserRequest(resp, request)
 			return
 		}
@@ -15458,7 +15515,7 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		log.Printf("[DEBUG] Getting agent chat history: %s", requestKey)
 
 		ctx := context.Background()
-		agentRequestMemory, err := GetCacheKey(ctx, requestKey, "agent_requests")
+		agentRequestMemory, err := GetDatastoreKey(ctx, requestKey, "agent_requests")
 		if err != nil {
 			log.Printf("[ERROR][%s] Failed to find request memory for updates", actionResult.ExecutionId)
 		} else {
@@ -15470,8 +15527,6 @@ func handleAgentDecisionStreamResult(workflowExecution WorkflowExecution, action
 		}
 	}
 
-	//log.Printf("\n\n\n[ERROR] Exiting as we aren't done handling decision responses\n\n\n")
-	//os.Exit(3)
 	return &workflowExecution, true, nil
 }
 
@@ -15687,7 +15742,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		// This is finicky, but it's the easiest fix for this
 
 		if setExecutionVariable(actionResult) {
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG][%s] Updating exec variable '%s' with new value from node '%s' of length %d (2)", workflowExecution.ExecutionId, actionResult.Action.ExecutionVariable.Name, actionResult.Action.Label, len(actionResult.Result))
 			}
 
@@ -15840,7 +15895,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		childNodes := []string{}
 		if workflowExecution.Workflow.Configuration.ExitOnError {
 			// Find underlying nodes and add them
-			log.Printf("[WARNING] Actionresult is %s for node %s (%s) in execution %s. Should set workflowExecution and exit all running functions", actionResult.Status, actionResult.Action.Label, actionResult.Action.ID, workflowExecution.ExecutionId)
+			log.Printf("[WARNING][%s] Actionresult is %s for node %s (%s). Should set workflowExecution and exit all running functions", workflowExecution.ExecutionId, actionResult.Status, actionResult.Action.Label, actionResult.Action.ID)
 			workflowExecution.Status = actionResult.Status
 			workflowExecution.LastNode = actionResult.Action.ID
 
@@ -15851,7 +15906,7 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			IncrementCache(ctx, workflowExecution.ExecutionOrg, "workflow_executions_failed")
 		} else {
 
-			log.Printf("[WARNING] Actionresult is %s for node %s in %s. Continuing anyway because of workflow configuration.", actionResult.Status, actionResult.Action.ID, workflowExecution.ExecutionId)
+			log.Printf("[WARNING][%s] Actionresult is %s for node %s. Continuing anyway because of workflow configuration.", workflowExecution.ExecutionId, actionResult.Status, actionResult.Action.ID)
 			// Finds ALL childnodes to set them to SKIPPED
 			// Remove duplicates
 			childNodes = FindChildNodes(workflowExecution.Workflow, actionResult.Action.ID, []string{}, []string{})
@@ -16000,7 +16055,10 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 		lastResult := ""
 		// type ActionResult struct {
 		for _, result := range workflowExecution.Results {
-			log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
+			if debug {
+				log.Printf("[DEBUG][%s] Checking result %s (%s) with status %s", workflowExecution.ExecutionId, result.Action.Label, result.Action.ID, result.Status)
+			}
+
 			if actionResult.Action.ID == result.Action.ID {
 				continue
 			}
@@ -16076,10 +16134,9 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			}
 
 			// FIXME: Debug logs necessary to understand how workflows finish?
-			if debug { 
+			if debug {
 				log.Printf("[DEBUG][%s] Found that %s (%s) should be skipped? Should check if it has more parents. If not, send in a skip", workflowExecution.ExecutionId, foundAction.Label, foundAction.AppName)
 			}
-
 
 			foundCount := 0
 			skippedBranches := []string{}
@@ -16390,7 +16447,6 @@ func ParsedExecutionResult(ctx context.Context, workflowExecution WorkflowExecut
 			valueToReturn := ""
 			if len(workflowExecution.Workflow.DefaultReturnValue) > 0 {
 				valueToReturn = workflowExecution.Workflow.DefaultReturnValue
-				//log.Printf("\n\nCHECKING RESULT FOR LAST NODE %s with value \"%s\". Executionparent: %s\n\n", workflowExecution.ExecutionSourceNode, workflowExecution.Workflow.DefaultReturnValue, workflowExecution.ExecutionParent)
 				for _, result := range workflowExecution.Results {
 					if result.Action.ID == workflowExecution.LastNode {
 						if result.Status == "ABORTED" || result.Status == "FAILURE" || result.Status == "SKIPPED" {
@@ -17631,49 +17687,81 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[DEBUG] Api authentication failed in list cache keys: %s", err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
-		return
-	}
-
-	if user.Role != "admin" && !user.SupportAccess {
-		log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
-		return
+	user, usererr := HandleApiAuthentication(resp, request)
+	if usererr != nil {
+		log.Printf("[AUDIT] Api authentication failed in list datastore keys: %s. Allowing continue in case category is public", usererr)
+		//resp.WriteHeader(401)
+		//resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		//return
+	} else {
+		if user.Role != "admin" && !user.SupportAccess {
+			log.Printf("[AUDIT] User %s (%s) tried to list cache keys without admin role", user.Username, user.Id)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Admin required"}`))
+			return
+		}
 	}
 
 	//for key, value := range data.Apps {
-	var fileId string
+	var orgId string
+	category := ""
 	location := strings.Split(request.URL.String(), "/")
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			log.Printf("Path too short: %d", len(location))
-			resp.WriteHeader(401)
-			resp.Write([]byte(`{"success": false}`))
+		} else {
+			if location[4] == "category" && len(location) > 5 {
+				category = location[5]
+				if strings.Contains(category, "?") {
+					category = strings.Split(category, "?")[0]
+				}
+			} else {
+				orgId = location[4]
+			}
+		}
+	}
+
+	// Overwriting, as we don't want it to work that way
+	// Should use Org-Id header instead
+	orgId = user.ActiveOrg.Id
+
+	categoryList, categoryOk := request.URL.Query()["category"]
+	if categoryOk && len(categoryList) > 0 {
+		category = categoryList[0]
+	}
+
+	orgQuery, orgOk := request.URL.Query()["org_id"]
+	if orgOk && len(orgQuery) > 0 {
+		orgId = orgQuery[0]
+	}
+
+	if usererr != nil {
+		if len(category) == 0 || category == "default" {
+			log.Printf("[WARNING] No category provided in request. Returning 400.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No category provided"}`))
 			return
 		}
 
-		fileId = location[4]
-	}
-
-	if fileId == "undefined" {
-		fileId = user.ActiveOrg.Id
+		// NEED to check the org etc
+		if len(orgId) == 0 {
+			log.Printf("[WARNING] No org ID provided in request. Returning 400.")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No org ID provided"}`))
+			return
+		}
 	}
 
 	ctx := GetContext(request)
-	org, err := GetOrg(ctx, fileId)
+	org, err := GetOrg(ctx, orgId)
 	if err != nil {
-		log.Printf("[INFO] Organization doesn't exist: %s", err)
+		log.Printf("[INFO] Organization '%s' doesn't exist: %s", orgId, err)
 		resp.WriteHeader(400)
 		resp.Write([]byte(`{"success": false}`))
 		return
 	}
 
-	maxAmount := 150
+	maxAmount := 100
 	top, topOk := request.URL.Query()["top"]
 	if topOk && len(top) > 0 {
 		val, err := strconv.Atoi(top[0])
@@ -17688,22 +17776,177 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 		cursor = cursorList[0]
 	}
 
-	category := ""
-	categoryList, categoryOk := request.URL.Query()["category"]
-	if categoryOk && len(categoryList) > 0 {
-		category = categoryList[0]
+	keys := []CacheKeyData{}
+	newCursor := ""
+	isSuccess := true
+	if keyList, keyOk := request.URL.Query()["key"]; keyOk && len(keyList) > 0 {
+		key := keyList[0]
+		log.Printf("[DEBUG] Loooking for key %s", key)
+
+		cacheId := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, key)
+		if len(category) > 0 {
+			cacheId = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, key, category)
+		}
+
+		cacheItem, err := GetDatastoreKey(ctx, cacheId, category)
+		if err != nil {
+			isSuccess = false
+		}
+
+		log.Printf("KEY: %#v", cacheItem)
+
+		keys = []CacheKeyData{
+			*cacheItem,
+		}
+	} else {
+		keys, newCursor, err = GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
+		if err != nil {
+			isSuccess = false
+		}
 	}
 
-	keys, newCursor, err := GetAllCacheKeys(ctx, org.Id, category, maxAmount, cursor)
-	isSuccess := true
-	if err != nil {
-		isSuccess = false
+	// This is NOT required unless automation/other config is set.
+	foundCategories := []string{}
+	categoryConfig := &DatastoreCategoryUpdate{}
+	if len(category) > 0 && category != "default" {
+		foundCategories = append(foundCategories, category)
+		categoryConfig, err = GetDatastoreCategoryConfig(ctx, org.Id, category)
+		if err != nil {
+			//if debug {
+			//	log.Printf("[WARNING] Failed to get category config for org %s: %s", org.Id, err)
+			//}
+		}
+	} else {
+		allCategories, err := GetDatastoreCategories(ctx, org.Id)
+		if err == nil {
+			for _, cat := range allCategories {
+				foundCategories = append(foundCategories, cat.Category)
+			}
+		}
+
+		for _, key := range keys {
+			if len(key.Category) == 0 || key.Category == "default" {
+				continue
+			}
+
+			if ArrayContains(foundCategories, key.Category) {
+				continue
+			}
+
+			foundCategories = append(foundCategories, key.Category)
+		}
+	}
+
+	if orgId != user.ActiveOrg.Id {
+		if !categoryConfig.Settings.Public {
+			log.Printf("[AUDIT] User %s (%s) tried to list cache keys for org %s without access", user.Username, user.Id, orgId)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "This category is no longer public."}`))
+			return
+		}
+
+		// Cleanup just in case
+		categoryConfig = &DatastoreCategoryUpdate{}
+		for keyIndex, _ := range keys {
+			keys[keyIndex].WorkflowId = ""
+			keys[keyIndex].ExecutionId = ""
+			keys[keyIndex].PublicAuthorization = ""
+			keys[keyIndex].SuborgDistribution = []string{} 
+		}
 	}
 
 	newReturn := CacheReturn{
-		Success: isSuccess,
-		Keys:    keys,
-		Cursor:  newCursor,
+		Success:     isSuccess,
+		Keys:        keys,
+		Cursor:      newCursor,
+		Amount:      len(keys),
+		TotalAmount: -1,
+
+		Category: category,
+		Config:   *categoryConfig,
+
+		Categories: foundCategories,
+	}
+
+	outputTypeList, outputTypeOk := request.URL.Query()["type"]
+	if outputTypeOk && len(outputTypeList) > 0 {
+		outputType := outputTypeList[0]
+
+		if outputType == "ndjson" || outputType == "csv" || outputType == "raw" {
+			outputString := ""
+			for _, key := range newReturn.Keys {
+				if len(key.Value) == 0 {
+					continue
+				}
+
+				newValue := strings.ReplaceAll(strings.ReplaceAll(key.Value, "\\n", "\n"), "\\r", "\r")
+				newValue = strings.ReplaceAll(strings.ReplaceAll(newValue, "\n", "\\n"), "\r", "\\r")
+
+				outputString += newValue + "\n"
+			}
+
+			// This forces browsers to download for some reason?
+			//resp.Header().Set("Content-Type", "application/x-ndjson")
+			resp.WriteHeader(200)
+			resp.Write([]byte(outputString))
+			return
+
+		} else if outputType == "values" || outputType == "json" {
+			newOutput := []string{}
+			for _, key := range newReturn.Keys {
+				if len(key.Value) == 0 {
+					continue
+				}
+
+				newOutput = append(newOutput, key.Value)
+			}
+
+			marshalledOutput, err := json.MarshalIndent(newOutput, "", "  ")
+			if err != nil {
+				log.Printf("[WARNING] Failed to marshal cache values for org %s: %s", org.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Something went wrong in cache value json management. Please refresh."}`))
+				return
+			}
+
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(200)
+			resp.Write(marshalledOutput)
+			return
+
+		} else if outputType == "keys" {
+			fullString := ""
+			for _, key := range newReturn.Keys {
+				fullString += fmt.Sprintf("%s\n", key.Key)
+			}
+
+			resp.Write([]byte(fullString))
+
+			// Somehow this creates superflous request?
+			//resp.WriteHeader(200)
+			return
+
+		} else if outputType == "meta" {
+			marshalledOutput, err := json.MarshalIndent(newReturn.Keys, "", "  ")
+			if err != nil {
+				log.Printf("[WARNING] Failed to marshal cache keys for org %s: %s", org.Id, err)
+				resp.WriteHeader(500)
+				resp.Write([]byte(`{"success": false, "reason": "Something went wrong in cache key json management. Please refresh."}`))
+				return
+			}
+
+			resp.Header().Set("Content-Type", "application/json")
+			resp.WriteHeader(200)
+			resp.Write(marshalledOutput)
+			return
+		}
+	}
+
+	categoryCount, err := GetCacheKeyCount(ctx, orgId, category)
+	if err != nil {
+		log.Printf("[WARNING] Failed to get cache key count for org %s: %s", org.Id, err)
+	} else {
+		newReturn.TotalAmount = categoryCount
 	}
 
 	b, err := json.Marshal(newReturn)
@@ -17796,7 +18039,7 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	cacheId := fmt.Sprintf("%s_%s", orgId, config.Key)
-	cache, err := GetCacheKey(ctx, cacheId, config.Category)
+	cache, err := GetDatastoreKey(ctx, cacheId, config.Category)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting cache key '%s' for org %s (config)", config.Key, orgId)
 		resp.WriteHeader(400)
@@ -17812,7 +18055,7 @@ func HandleCacheConfig(resp http.ResponseWriter, request *http.Request) {
 			cache.SuborgDistribution = config.SelectedSuborg
 		}
 
-		err = SetCacheKey(ctx, *cache)
+		err = SetDatastoreKey(ctx, *cache)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting cache key '%s' for org %s (config)", config.Key, orgId)
 			resp.WriteHeader(400)
@@ -17881,7 +18124,7 @@ func HandleDeleteCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cacheKey = strings.Trim(cacheKey, " ")
 	cacheId := fmt.Sprintf("%s_%s", orgId, cacheKey)
 
-	cacheData, err := GetCacheKey(ctx, cacheId, "")
+	cacheData, err := GetDatastoreKey(ctx, cacheId, "")
 	if err != nil || cacheData.Key == "" {
 		log.Printf("[WARNING] Failed to GET cache key '%s' for org %s (delete)", cacheId, orgId)
 		resp.WriteHeader(400)
@@ -18039,8 +18282,11 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", selectedOrg, tmpData.Key)
-	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
-	log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v. Key: %#v", tmpData.Key, tmpData.OrgId, err, cacheData)
+	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
+	if debug {
+		log.Printf("[DEBUG] Attempting to delete cache key '%s' for org %s. Error: %#v", tmpData.Key, tmpData.OrgId, err)
+	}
+
 	if err != nil || len(cacheData.Key) == 0 {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete). Does it exist?", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(400)
@@ -18069,14 +18315,12 @@ func HandleDeleteCacheKeyPost(resp http.ResponseWriter, request *http.Request) {
 		cacheId = fmt.Sprintf("%s_%s", cacheId, tmpData.Category)
 	}
 
-	log.Printf("[INFO] Deleting ID '%s'", cacheId)
-
-	entity := "org_cache"
-	err = DeleteKey(ctx, entity, url.QueryEscape(cacheId))
-	if err != nil {
-		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (1)", tmpData.Key, tmpData.OrgId)
+	if len(cacheId) > 127 {
+		cacheId = cacheId[:127]
 	}
 
+	entity := "org_cache"
+	go DeleteKey(ctx, entity, url.QueryEscape(cacheId))
 	err = DeleteKey(ctx, entity, cacheId)
 	if err != nil {
 		log.Printf("[WARNING] Failed to DELETE cache key %s for org %s (delete) (2)", tmpData.Key, tmpData.OrgId)
@@ -18305,7 +18549,7 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
 	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
-	cacheData, err := GetCacheKey(ctx, cacheId, tmpData.Category)
+	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err != nil {
 
 		// Doing a last resort search, e.g. to handle spaces and the like
@@ -18461,6 +18705,88 @@ func HandleGetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	resp.Write(b)
 }
 
+func HandleSetDatastoreKey(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	user, usererr := HandleApiAuthentication(resp, request)
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body in set cache: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		return
+	}
+
+	// FIXME: Look for "bulk=true" ?
+	var tmpData []CacheKeyData
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling in setvalue: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	ctx := GetContext(request)
+
+	if usererr != nil || len(user.ActiveOrg.Id) == 0 {
+		log.Printf("\n\nNO AUTHENTICATION FOR BULK UPLOAD\n\n")
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Failed authentication"}`))
+		return
+	} else {
+		for itemIndex, _ := range tmpData {
+			if len(user.ActiveOrg.Id) == 0 {
+				break
+			}
+
+			tmpData[itemIndex].OrgId = user.ActiveOrg.Id
+			if strings.ToLower(tmpData[itemIndex].Category) == "default" {
+				tmpData[itemIndex].Category = ""
+			}
+		}
+	}
+
+	/*
+		// Check if cache already existed and if distributed
+		tmpData.Key = strings.Trim(tmpData.Key, " ")
+		cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+		cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
+		if err == nil {
+			tmpData.SuborgDistribution = cacheData.SuborgDistribution
+		}
+	*/
+
+	err = SetDatastoreKeyBulk(ctx, tmpData)
+	if err != nil {
+		log.Printf("[ERROR] Failed to set %d datastore key(s) for org %s", len(tmpData), user.ActiveOrg.Id)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to set data. Please try again, or contact support@shuffler.io"}`))
+		return
+	}
+
+	log.Printf("[INFO] Successfully set %d datastore keys (or less) for org '%s' (%s)", len(tmpData), user.ActiveOrg.Name, user.ActiveOrg.Id)
+	type returnStruct struct {
+		Success bool `json:"success"`
+	}
+
+	returnData := returnStruct{
+		Success: true,
+	}
+
+	b, err := json.Marshal(returnData)
+	if err != nil {
+		b = []byte(`{"success": true}`)
+	}
+
+	resp.WriteHeader(200)
+	resp.Write(b)
+}
+
 func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	cors := HandleCors(resp, request)
 	if cors {
@@ -18501,7 +18827,6 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	if len(tmpData.OrgId) == 0 {
 		//log.Printf("[INFO] No org id specified. User org: %#v", user.ActiveOrg)
 		tmpData.OrgId = user.ActiveOrg.Id
@@ -18518,7 +18843,7 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	workflowExecution, err := GetWorkflowExecution(ctx, tmpData.ExecutionId)
 	if err != nil {
 		if len(tmpData.ExecutionId) > 0 {
-			log.Printf("[WARNING] Failed getting exec: %s", err)
+			log.Printf("[WARNING] Failed getting exec during cache set: %s", err)
 			resp.WriteHeader(500)
 			resp.Write([]byte(`{"success": false, "reason": "No permission to get execution"}`))
 			return
@@ -18579,14 +18904,14 @@ func HandleSetCacheKey(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	tmpData.Key = strings.Trim(tmpData.Key, " ")
-
 	// Check if cache already existed and if distributed
-	cacheData, err := GetCacheKey(ctx, tmpData.Key, tmpData.Category)
+	cacheId := fmt.Sprintf("%s_%s", tmpData.OrgId, tmpData.Key)
+	cacheData, err := GetDatastoreKey(ctx, cacheId, tmpData.Category)
 	if err == nil {
 		tmpData.SuborgDistribution = cacheData.SuborgDistribution
 	}
 
-	err = SetCacheKey(ctx, tmpData)
+	err = SetDatastoreKey(ctx, tmpData)
 	if err != nil {
 		log.Printf("[ERROR] Failed to set cache key '%s' for org %s", tmpData.Key, tmpData.OrgId)
 		resp.WriteHeader(500)
@@ -18672,6 +18997,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	if appId != action.AppID {
 		if appId == "agent" {
 			action.AppID = "agent"
+		} else if strings.ToLower(appId) == "http" || strings.ToLower(action.AppID) == "http" {
+			action.AppID = "http"
 		} else {
 			log.Printf("[WARNING] Bad appid in single execution of App %s", appId)
 			return workflowExecution, errors.New(fmt.Sprintf("No App ID found matching %s", appId))
@@ -18693,6 +19020,7 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			decisionId = decision[0]
 		}
 	} else if strings.ToLower(appId) == "http" {
+
 		// Find the app and the ID for it
 		apps, err := FindWorkflowAppByName(ctx, "http")
 		if err != nil {
@@ -18737,6 +19065,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 				}
 
 				appId = app.ID
+
+				action.AppID = app.ID
+				action.AppVersion = app.AppVersion
+				action.Label = fmt.Sprintf("HTTP standalone action")
 			} else {
 				log.Printf("[WARNING] Failed to find HTTP app in single action execution")
 				return workflowExecution, errors.New("Failed to find HTTP app. Is it installed?")
@@ -18812,7 +19144,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		app = *newApp
 	}
 
-	// FIXME: We need to inject missing empty auth here in some cases
 	// This is NOT a good solution, but a good bypass
 	if app.Authentication.Required {
 		if len(action.AuthenticationId) > 0 {
@@ -19186,6 +19517,10 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 
 	if len(workflowExecution.ExecutionSource) == 0 || workflowExecution.ExecutionSource == "default" {
 		workflowExecution.ExecutionSource = "single_action"
+	}
+
+	if len(workflowExecution.Workflow.Name) == 0 {
+		workflowExecution.Workflow.Name = fmt.Sprintf("%s Single app run", action.AppName)
 	}
 
 	go SetWorkflowExecution(context.Background(), workflowExecution, true)
@@ -21072,6 +21407,7 @@ func HandleOpenId(resp http.ResponseWriter, request *http.Request) {
 	if project.Environment == "cloud" && org.RegionUrl != "https://shuffler.io" {
 		newUser.Regions = append(newUser.Regions, org.RegionUrl)
 	}
+
 	//Store users last session as new session so user don't have to go through sso again while changing org.
 	newUser.UsersLastSession = sessionToken
 
@@ -22852,7 +23188,7 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 							workflowExecution.Workflow.Actions[workflowExecutionIndex].Parameters[paramKey].Value = backupApikey
 						}
 
-						if debug { 
+						if debug {
 							log.Printf("[DEBUG] Replaced apikey for %s with %s", param.Name, action.Parameters[paramKey].Value)
 						}
 
@@ -27812,7 +28148,45 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	org, err := GetOrg(ctx, fileId)
+	// get the request body
+	type ReturnData struct {
+		OrgId    string `json:"suborg_id"`
+		Password string `json:"password"`
+	}
+
+	var tmpData ReturnData
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[WARNING] Failed reading body in delete org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+	}
+
+	err = json.Unmarshal(body, &tmpData)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshalling body in delete org: %s", err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshalling body"}`))
+		return
+	}
+
+	// check if the password is correct
+	if len(tmpData.Password) == 0 {
+		log.Printf("[WARNING] No password provided in delete org request")
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "No password provided"}`))
+		return
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(tmpData.Password))
+	if err != nil {
+		log.Printf("[WARNING] Password for user %s is incorrect in delete org request", user.Username)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "Incorrect password"}`))
+		return
+	}
+
+	parentOrg, err := GetOrg(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
 		resp.WriteHeader(500)
@@ -27820,32 +28194,40 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	foundAdmin := false
-	for _, orgUser := range org.Users {
-		if user.Username == orgUser.Username && orgUser.Role == "admin" {
-			foundAdmin = true
+	subOrg, err := GetOrg(ctx, tmpData.OrgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", tmpData.OrgId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+		return
+	}
+
+	if subOrg.CreatorOrg != parentOrg.Id {
+		log.Printf("[WARNING] Org '%s' is not a child org of '%s'. Not deleting.", tmpData.OrgId, fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org is not a child org of the parent org"}`))
+		return
+	}
+
+	isAdmin := false
+	for _, orgUser := range parentOrg.Users {
+		if orgUser.Username == user.Username && orgUser.Role == "admin" {
+			isAdmin = true
 			break
 		}
 	}
 
-	if !foundAdmin {
-		log.Printf("[WARNING] User %s is not an admin of org %s", user.Username, org.Name)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Not admin of org"}`))
-		return
-	}
-
-	// Check if it's a suborg
-	if len(org.ManagerOrgs) == 0 || len(org.ChildOrgs) > 0 {
-		log.Printf("[WARNING] Org '%s' is NOT a suborg. Not deleting.", fileId)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Org is not a suborg"}`))
+	if !isAdmin {
+		log.Printf("[WARNING] User %s is not an admin in org '%s'. Not deleting.", user.Username, fileId)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false, "reason": "User is not an admin in the parent org"}`))
 		return
 	}
 
 	// Get workflows
-	user.ActiveOrg.Id = org.Id
-	user.ActiveOrg.Name = org.Name
+	currentActiveOrg := user.ActiveOrg
+	user.ActiveOrg.Id = subOrg.Id
+	user.ActiveOrg.Name = subOrg.Name
 	workflows, err := GetAllWorkflowsByQuery(ctx, user, 250, "")
 	if err != nil {
 		log.Printf("[WARNING] Failed getting workflows for user %s (0): %s", user.Username, err)
@@ -27863,9 +28245,9 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Delete the org
-	err = DeleteKey(ctx, "Organizations", fileId)
+	err = DeleteKey(ctx, "Organizations", subOrg.Id)
 	if err != nil {
-		log.Printf("[WARNING] Failed deleting org '%s': %s", fileId, err)
+		log.Printf("[WARNING] Failed deleting org '%s': %s", subOrg.Id, err)
 		resp.WriteHeader(500)
 		resp.Write([]byte(`{"success": false, "reason": "Failed deleting org"}`))
 		return
@@ -27873,53 +28255,41 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 
 	newOrgString := []string{}
 	for _, orgId := range user.Orgs {
-		if orgId != fileId {
+		if orgId != subOrg.Id {
 			newOrgString = append(newOrgString, orgId)
 		}
 	}
 
+	newChildOrg := []OrgMini{}
+	for _, childOrg := range parentOrg.ChildOrgs {
+		if childOrg.Id != subOrg.Id {
+			newChildOrg = append(newChildOrg, childOrg)
+		}
+	}
+
+	parentOrg.ChildOrgs = newChildOrg
+
+	err = SetOrg(ctx, *parentOrg, parentOrg.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed setting parent org '%s': %s", parentOrg.Id, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed setting parent org"}`))
+		return
+	}
+
 	user.Orgs = newOrgString
-	newOrg := ""
-	if len(org.ManagerOrgs) > 0 {
-		if ArrayContains(user.Orgs, org.ManagerOrgs[0].Id) {
-			newOrg = org.ManagerOrgs[0].Id
-		} else {
-			if len(user.Orgs) > 0 {
-				newOrg = user.Orgs[0]
-			} else {
-				log.Printf("[WARNING] User %s has no orgs left. Setting default to empty.", user.Username)
-				newOrg = ""
-			}
-		}
-	}
-
-	if len(newOrg) > 0 {
-		// Get the org and fill in
-		newOrgDetails, err := GetOrg(ctx, newOrg)
-		if err == nil {
-			user.ActiveOrg.Id = newOrgDetails.Id
-			user.ActiveOrg.Name = newOrgDetails.Name
-		} else {
-			user.ActiveOrg.Id = ""
-			user.ActiveOrg.Name = ""
-		}
+	if user.ActiveOrg.Id == subOrg.Id {
+		// If the user is in the org that was deleted, set active org as parent org
+		user.ActiveOrg.Id = parentOrg.Id
+		user.ActiveOrg.Name = parentOrg.Name
 	} else {
-		// Will cause the user to generate a new org as it doesn't have any?
-		user.ActiveOrg.Id = ""
-		user.ActiveOrg.Name = ""
+		user.ActiveOrg.Id = currentActiveOrg.Id
+		user.ActiveOrg.Name = currentActiveOrg.Name
 	}
 
-	//for _, orgUser := range org.Users {
-	//	// Get the user
-	//	orgUserDetails, err := GetUser(ctx, orgUser.Username)
-	//	if err != nil {
-	//		continue
-	//	}
-
-	//	if orgUserDetails.ActiveOrg.Id == fileId {
-	//		orgUserDetails.ActiveOrg.Id = newOrg
-	//	}
-	//}
+	suborgCacheKey := fmt.Sprintf("%s_childorgs", parentOrg.Id)
+	DeleteCache(ctx, suborgCacheKey)
+	DeleteCache(ctx, fmt.Sprintf("Organizations_%s", subOrg.Id))
 
 	err = SetUser(ctx, &user, true)
 	if err != nil {
@@ -28417,7 +28787,7 @@ func ValidateRequestOverload(resp http.ResponseWriter, request *http.Request, am
 
 	//log.Printf("\n\n\nIP: %s\n\n\n", foundIP)
 	if foundIP == "" || foundIP == "127.0.0.1" || foundIP == "::1" || foundIP == "[::1]" {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Skipping request overload check for IP: %s", foundIP)
 		}
 		return nil
@@ -28972,6 +29342,13 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if len(workflow.ID) == 0 || len(workflow.Name) == 0 {
+		log.Printf("[WARNING] Workflow %s is not valid. Missing ID or Name.", fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow is not valid"}`))
+		return
+	}
+
 	// FIXME: Check if this workflow has a parent workflow
 	if len(workflow.ParentWorkflowId) > 0 && workflow.ParentWorkflowId != fileId {
 		workflow, err = GetWorkflow(ctx, workflow.ParentWorkflowId)
@@ -29025,7 +29402,7 @@ func GetChildWorkflows(resp http.ResponseWriter, request *http.Request) {
 
 			// Only for Read-Only. No executions or impersonations.
 		} else if project.Environment == "cloud" && user.Verified == true && user.Active == true && user.SupportAccess == true && strings.HasSuffix(user.Username, "@shuffler.io") {
-			log.Printf("[AUDIT] Letting verified support admin %s access childs workflows for %s", user.Username, workflow.ID)
+			log.Printf("[AUDIT] Letting verified support admin %s access child workflows for %s", user.Username, workflow.ID)
 
 		} else {
 			log.Printf("[AUDIT] Wrong user (%s) for workflow %s (get child workflow). Verified: %t, Active: %t, SupportAccess: %t, Username: %s", user.Username, workflow.ID, user.Verified, user.Active, user.SupportAccess, user.Username)
@@ -29959,4 +30336,114 @@ func checkExecutionStatus(ctx context.Context, exec *WorkflowExecution) *Workflo
 	//log.Printf("\n\n[DEBUG][%s] Set workflow validation (%d) to '%s'\n\n", exec.ExecutionId, len(workflow.Validation.Errors), marshalledValidation)
 
 	return exec
+}
+
+func HandleDatastoreCategoryConfig(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Checking if it's a special region. All user-specific requests should
+	ctx := GetContext(request)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[WARNING] Api authentication failed in get org: %s", err)
+		resp.WriteHeader(401)
+		resp.Write([]byte(`{"success": false}`))
+		return
+	}
+
+	if user.Role != "admin" {
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Only admins can access this endpoint"}`))
+		return
+	}
+
+	categoryUpdate := DatastoreCategoryUpdate{}
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading body in datastore category config: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	err = json.Unmarshal(body, &categoryUpdate)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling body in datastore category config: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	if len(categoryUpdate.Category) == 0 || strings.ToLower(categoryUpdate.Category) == "default" {
+		categoryUpdate.Category = ""
+	}
+
+	// Validate input - especially for workflows
+	for automationId, automation := range categoryUpdate.Automations {
+		if len(automation.Name) == 0 {
+			continue
+		}
+
+		// Don't want to do this either just in case they have something configured, but unused
+		/*
+			if automation.Enabled != true {
+				continue
+			}
+		*/
+
+		if strings.ToLower(automation.Name) == "run workflow" {
+			foundWorkflowIds := ""
+			foundWorkflowIdIndex := -1
+
+			for optionIndex, option := range automation.Options {
+				if option.Key == "workflow_id" {
+					foundWorkflowIds = option.Value
+					foundWorkflowIdIndex = optionIndex
+					break
+				}
+			}
+
+			newWorkflows := []string{}
+			for _, workflowId := range strings.Split(foundWorkflowIds, ",") {
+				if len(workflowId) == 0 {
+					continue
+				}
+
+				wf, err := GetWorkflow(ctx, strings.TrimSpace(workflowId))
+				if err != nil {
+					log.Printf("[WARNING] Failed getting workflow '%s' for automation %s: %s", workflowId, automationId, err)
+					continue
+				}
+
+				if wf.OrgId != user.ActiveOrg.Id {
+					continue
+				}
+
+				newWorkflows = append(newWorkflows, workflowId)
+			}
+
+			categoryUpdate.Automations[automationId].Options[foundWorkflowIdIndex].Value = strings.Join(newWorkflows, ",")
+		}
+	}
+
+	if categoryUpdate.Settings.Timeout < 60 {
+		categoryUpdate.Settings.Timeout = 0
+	} else if categoryUpdate.Settings.Timeout > 2147483647 {
+		categoryUpdate.Settings.Timeout = 0
+	}
+
+	categoryUpdate.OrgId = user.ActiveOrg.Id
+	err = SetDatastoreCategoryConfig(ctx, categoryUpdate)
+	if err != nil {
+		log.Printf("[ERROR] Failed setting category config: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "%s"}`, err)))
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(`{"success": true}`))
 }
