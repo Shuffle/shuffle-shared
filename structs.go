@@ -3844,6 +3844,7 @@ type CategoryAction struct {
 	DryRun                bool   `json:"dry_run"`                 // If true, it will not actually execute the action, but instead just build the workflow
 	SkipWorkflow          bool   `json:"skip_workflow"`           // If true, it will not put it in a workflow, but instead just execute it
 	SkipOutputTranslation bool   `json:"skip_output_translation"` // If true, it will not translate the output to the default format for the label
+	SkipAuthentication 	  bool 	 `json:"skip_authentication"`
 	Environment           string `json:"environment"`             // The environment to use for the action (Orborus)
 	App                   string `jjson:"app"`                    // The app to use for the action (Orborus)
 	Action                string `json:"action"`                  // The action to use for the action (Orborus)
