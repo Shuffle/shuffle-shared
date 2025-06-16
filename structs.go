@@ -949,7 +949,7 @@ type Partner struct {
 	PartnerType       PartnerType `json:"partner_type" datastore:"partner_type"`
 	Country           string      `json:"country" datastore:"country"`
 	Region            string      `json:"region" datastore:"region"`
-	IsPublished       bool        `json:"ispublished" datastore:"ispublished"`
+	Public       bool        `json:"public" datastore:"public"`
 	Created           int64       `json:"created" datastore:"created"`
 	Edited            int64       `json:"edited" datastore:"edited"`
 }
@@ -974,7 +974,7 @@ type UsecaseInfo struct {
 			Content []string `datastore:"content" json:"content"`
 		} `datastore:"items" json:"items"`
 	} `datastore:"navigation" json:"navigation"`
-	Published bool  `datastore:"published" json:"published"`
+	Public bool  `datastore:"public" json:"public"`
 	Edited    int64 `datastore:"edited" json:"edited"`
 	Created   int64 `datastore:"created" json:"created"`
 }
@@ -1799,7 +1799,7 @@ type AlgoliaSearchPartner struct {
 	Country     string   `json:"country"`
 	Region      string   `json:"region"`
 	OrgId       string   `json:"org_id"`
-	IsPublished bool     `json:"ispublished"`
+	Public 		bool     `json:"public"`
 }
 
 type AlgoliaSearchUsecase struct {
@@ -1812,7 +1812,7 @@ type AlgoliaSearchUsecase struct {
 	PublicWorkflowID   string   `json:"public_workflow_id"`
 	SourceAppType      string   `json:"source_app_type"`
 	DestinationAppType string   `json:"destination_app_type"`
-	Published          bool     `json:"published"`
+	Public          bool     `json:"published"`
 	TimeEdited         int64    `json:"time_edited"`
 }
 

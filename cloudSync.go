@@ -655,7 +655,7 @@ func HandleAlgoliaUsecaseUpload(ctx context.Context, usecase UsecaseInfo, overwr
 			DestinationAppType: usecase.MainContent.DestinationAppType,
 			PublicWorkflowID:   usecase.MainContent.PublicWorkflowID,
 			TimeEdited:         timeNow,
-			Published: 		    usecase.Published,
+			Public: 		    usecase.Public,
 		},
 	}
 
