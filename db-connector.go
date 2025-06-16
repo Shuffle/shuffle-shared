@@ -17,11 +17,11 @@ import (
 	"os"
 	"strconv"
 
-	"sync"
 	"math"
 	"math/rand"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/datastore"
@@ -5170,28 +5170,28 @@ func DeleteUsersAccount(ctx context.Context, user *User) error {
 
 // Partners functions
 func SetPartner(ctx context.Context, partner *Partner) error {
-    if partner == nil {
-        return errors.New("partner cannot be nil")
-    }
+	if partner == nil {
+		return errors.New("partner cannot be nil")
+	}
 
-    nameKey := "Partners"
-    timeNow := int64(time.Now().Unix())
+	nameKey := "Partners"
+	timeNow := int64(time.Now().Unix())
 
-    // Set created time for new partners
-    if partner.Created == 0 {
-        partner.Created = timeNow
-    }
-    // Always update edited time
-    partner.Edited = timeNow
+	// Set created time for new partners
+	if partner.Created == 0 {
+		partner.Created = timeNow
+	}
+	// Always update edited time
+	partner.Edited = timeNow
 
-    // Create datastore key and save
-    k := datastore.NameKey(nameKey, partner.Id, nil)
-    _, err := project.Dbclient.Put(ctx, k, partner)
-    if err != nil {
-        return err
-    }
+	// Create datastore key and save
+	k := datastore.NameKey(nameKey, partner.Id, nil)
+	_, err := project.Dbclient.Put(ctx, k, partner)
+	if err != nil {
+		return err
+	}
 
-    // Update cache
+	// Update cache
 	if project.CacheDb {
 		cacheKey := fmt.Sprintf("%s_%s", nameKey, partner.Id)
 		orgCacheKey := fmt.Sprintf("%s_org_%s", nameKey, partner.OrgId)
@@ -5202,9 +5202,8 @@ func SetPartner(ctx context.Context, partner *Partner) error {
 		}
 	}
 
-    return nil
+	return nil
 }
-
 
 func GetPartnerById(ctx context.Context, id string) (*Partner, error) {
 	if id == "" {
@@ -11954,7 +11953,7 @@ func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCateg
 			err = json.Unmarshal(cacheData, &categories)
 			if err == nil {
 				return categories, nil
-			} 
+			}
 		}
 	}
 
@@ -12047,7 +12046,7 @@ func GetDatastoreCategories(ctx context.Context, orgId string) ([]DatastoreCateg
 		err = SetCache(ctx, cacheKey, cacheDataByte, 60)
 		if err != nil {
 			log.Printf("[WARNING] Failed setting datastore categories for org %s: %s", orgId, err)
-			return categories, nil 
+			return categories, nil
 		}
 	}
 
@@ -12204,9 +12203,9 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 	wg := sync.WaitGroup{}
 
 	// 1. Get the key first.
-	// 2. Validate suborg distribution and other category configs 
+	// 2. Validate suborg distribution and other category configs
 	cnt := 0
-	for index, cacheData := range allKeys { 
+	for index, cacheData := range allKeys {
 		// Disallowing setting of multiple categories at a time
 		if index > 0 && len(cacheData.Category) > 0 {
 			if mainCategory != cacheData.Category {
@@ -12218,15 +12217,15 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 		cnt += 1
 	}
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Uploading and validating %d keys to datastore", cnt)
 	}
 
 	cacheKeys := make(chan CacheKeyData, cnt)
 	datastoreKeys := make(chan datastore.Key, cnt)
-	for index, cacheData := range allKeys { 
+	for index, cacheData := range allKeys {
 		// 1. Get the key first.
-		// 2. Validate suborg distribution and other category configs 
+		// 2. Validate suborg distribution and other category configs
 
 		// Disallowing setting of multiple categories at a time
 		if index > 0 && len(cacheData.Category) > 0 {
@@ -12309,8 +12308,8 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 
 		for _, cacheData := range newArray {
 			meta := map[string]map[string]string{
-            	"index": {"_index": nameKey},
-        	}
+				"index": {"_index": nameKey},
+			}
 
 			metaLine, err := json.Marshal(meta)
 			if err != nil {
@@ -12339,7 +12338,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 
 		if err != nil {
 			body, err := ioutil.ReadAll(res.Body)
-			if err != nil { 
+			if err != nil {
 				log.Printf("[ERROR] Error getting response from Opensearch (set datastore key bulk): %s", err)
 				return err
 			}
@@ -12363,23 +12362,23 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 	log.Printf("[DEBUG] SetDatastoreKeyBulk: Successfully set %d keys", len(newArray))
 
 	/*
-	if project.CacheDb {
-		cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
-		err = SetCache(ctx, cacheKey, data, 30)
-		if err != nil {
-			log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
-		}
+		if project.CacheDb {
+			cacheKey := fmt.Sprintf("%s_%s", nameKey, cacheId)
+			err = SetCache(ctx, cacheKey, data, 30)
+			if err != nil {
+				log.Printf("[ERROR] Failed setting cache for set cache key '%s': %s", cacheKey, err)
+			}
 
-		// Delete cache in current org + category + child orgs
-		cursor := ""
-		currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, cacheData.OrgId, cacheData.Category)
-		DeleteCache(ctx, currentKey)
-
-		for _, suborg := range cacheData.SuborgDistribution {
-			currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, suborg, cacheData.Category)
+			// Delete cache in current org + category + child orgs
+			cursor := ""
+			currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, cacheData.OrgId, cacheData.Category)
 			DeleteCache(ctx, currentKey)
+
+			for _, suborg := range cacheData.SuborgDistribution {
+				currentKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, cursor, suborg, cacheData.Category)
+				DeleteCache(ctx, currentKey)
+			}
 		}
-	}
 	*/
 
 	// Look for category triggers
@@ -12391,11 +12390,11 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 			// Set it in the DB
 			categoryUpdate := DatastoreCategoryUpdate{
 				Category: mainCategory,
-				OrgId: orgId,
-				Id: uuid.NewV4().String(),
+				OrgId:    orgId,
+				Id:       uuid.NewV4().String(),
 
 				Settings: DatastoreCategorySettings{
-					Public: false,
+					Public:  false,
 					Timeout: 0,
 				},
 			}
@@ -12415,7 +12414,7 @@ func SetDatastoreKeyBulk(ctx context.Context, allKeys []CacheKeyData) error {
 						continue
 					}
 
-					if debug { 
+					if debug {
 						log.Printf("[DEBUG] Found automation %s to run (2). Value: %s", automation.Name, automation.Options[0].Value)
 					}
 
@@ -12516,11 +12515,11 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 			// Set it in the DB
 			categoryUpdate := DatastoreCategoryUpdate{
 				Category: cacheData.Category,
-				OrgId: cacheData.OrgId,
-				Id: uuid.NewV4().String(),
+				OrgId:    cacheData.OrgId,
+				Id:       uuid.NewV4().String(),
 
 				Settings: DatastoreCategorySettings{
-					Public: false,
+					Public:  false,
 					Timeout: 0,
 				},
 			}
@@ -12540,7 +12539,7 @@ func SetDatastoreKey(ctx context.Context, cacheData CacheKeyData) error {
 					continue
 				}
 
-				if debug { 
+				if debug {
 					log.Printf("[DEBUG] Found automation %s to run. Value: %s", automation.Name, automation.Options[0].Value)
 				}
 
@@ -12693,11 +12692,11 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 		}
 	}
 
-	// NOT returning without this, as we want to cache even when 
-	// there isn't data in the key. This just makes general loading of individual 
+	// NOT returning without this, as we want to cache even when
+	// there isn't data in the key. This just makes general loading of individual
 	// keys faster
 	if len(cacheData.Key) > 0 {
-		if debug { 
+		if debug {
 			log.Printf("[DEBUG] Found key '%s' in datastore with org '%s' and category '%s'", cacheData.Key, cacheData.OrgId, cacheData.Category)
 		}
 	}
@@ -13141,142 +13140,142 @@ func GetUsecase(ctx context.Context, name string) (*Usecase, error) {
 }
 
 func SetUsecaseNew(ctx context.Context, usecase *UsecaseInfo) error {
-    if usecase == nil {
-        return errors.New("usecase cannot be nil")
-    }
+	if usecase == nil {
+		return errors.New("usecase cannot be nil")
+	}
 
-    nameKey := "Usecases"
-    timeNow := int64(time.Now().Unix())
+	nameKey := "Usecases"
+	timeNow := int64(time.Now().Unix())
 
-    // Set created time for new usecase
-    if usecase.Created == 0 {
-        usecase.Created = timeNow
-    }
-    // Always update edited time
-    usecase.Edited = timeNow
+	// Set created time for new usecase
+	if usecase.Created == 0 {
+		usecase.Created = timeNow
+	}
+	// Always update edited time
+	usecase.Edited = timeNow
 
-    // Marshal data for storage and caching
-    data, err := json.Marshal(usecase)
-    if err != nil {
-        log.Printf("[WARNING] Failed marshalling in SetUsecaseNew: %s", err)
-        return err
-    }
+	// Marshal data for storage and caching
+	data, err := json.Marshal(usecase)
+	if err != nil {
+		log.Printf("[WARNING] Failed marshalling in SetUsecaseNew: %s", err)
+		return err
+	}
 
-    // Store in database based on type
-    if project.DbType == "opensearch" {
-        err = indexEs(ctx, nameKey, usecase.Id, data)
-        if err != nil {
-            log.Printf("[ERROR] Failed indexing usecase in OpenSearch: %s", err)
-            return err
-        }
-    } else {
-        key := datastore.NameKey(nameKey, usecase.Id, nil)
-        if _, err := project.Dbclient.Put(ctx, key, usecase); err != nil {
-            log.Printf("[ERROR] Error adding usecase: %s", err)
-            return err
-        }
-    }
+	// Store in database based on type
+	if project.DbType == "opensearch" {
+		err = indexEs(ctx, nameKey, usecase.Id, data)
+		if err != nil {
+			log.Printf("[ERROR] Failed indexing usecase in OpenSearch: %s", err)
+			return err
+		}
+	} else {
+		key := datastore.NameKey(nameKey, usecase.Id, nil)
+		if _, err := project.Dbclient.Put(ctx, key, usecase); err != nil {
+			log.Printf("[ERROR] Error adding usecase: %s", err)
+			return err
+		}
+	}
 
-    // Update cache
-    if project.CacheDb {
-        // Cache the usecase by ID
-        cacheKey := fmt.Sprintf("%s_%s", nameKey, usecase.Id)
+	// Update cache
+	if project.CacheDb {
+		// Cache the usecase by ID
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, usecase.Id)
 		partnerCacheKey := fmt.Sprintf("%s_partner_%s", nameKey, usecase.CompanyInfo.Id)
 		SetCache(ctx, partnerCacheKey, data, 30)
-        SetCache(ctx, cacheKey, data, 30)
-    }
+		SetCache(ctx, cacheKey, data, 30)
+	}
 
-    return nil
+	return nil
 }
 
 // GetIndividualUsecase retrieves a single usecase by its ID
 func GetIndividualUsecase(ctx context.Context, id string) (UsecaseInfo, error) {
-    nameKey := "Usecases"
-    usecase := UsecaseInfo{}
-    // Check cache first
-    if project.CacheDb {
-        cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-        cacheData, err := GetCache(ctx, cacheKey)
-        if err == nil {
-            // Cache hit
-            var usecase UsecaseInfo
-            cacheBytes, ok := cacheData.([]byte)
-            if ok {
-                err = json.Unmarshal(cacheBytes, &usecase)
-                if err == nil {
-                    return usecase, nil
-                }
-            }
-        }
-    }
+	nameKey := "Usecases"
+	usecase := UsecaseInfo{}
+	// Check cache first
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+		cacheData, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			// Cache hit
+			var usecase UsecaseInfo
+			cacheBytes, ok := cacheData.([]byte)
+			if ok {
+				err = json.Unmarshal(cacheBytes, &usecase)
+				if err == nil {
+					return usecase, nil
+				}
+			}
+		}
+	}
 
-    // Get from datastore if not in cache
-    k := datastore.NameKey(nameKey, id, nil)
-    err := project.Dbclient.Get(ctx, k, &usecase)
-    if err != nil {
+	// Get from datastore if not in cache
+	k := datastore.NameKey(nameKey, id, nil)
+	err := project.Dbclient.Get(ctx, k, &usecase)
+	if err != nil {
 		if strings.Contains(err.Error(), `cannot load field`) {
 			log.Printf("[ERROR] Error in getting usecase (3): %s", err)
 			err = nil
 		} else {
 			return usecase, fmt.Errorf("failed to get usecase by ID: %w", err)
 		}
-    }
-    
-    // Cache the result
-    if project.CacheDb {
-        data, err := json.Marshal(usecase)
-        if err == nil {
-            cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
-            SetCache(ctx, cacheKey, data, 30)
-        }
-    }
-    
-    return usecase, nil
+	}
+
+	// Cache the result
+	if project.CacheDb {
+		data, err := json.Marshal(usecase)
+		if err == nil {
+			cacheKey := fmt.Sprintf("%s_%s", nameKey, id)
+			SetCache(ctx, cacheKey, data, 30)
+		}
+	}
+
+	return usecase, nil
 }
 
 // GetUsecases retrieves multiple usecases by partner ID
 func GetPartnerUsecases(ctx context.Context, partnerId string) ([]UsecaseInfo, error) {
-    nameKey := "Usecases"
-    var usecases []UsecaseInfo
-    
-    // Check cache first
-    if project.CacheDb {
-        cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
-        cacheData, err := GetCache(ctx, cacheKey)
-        if err == nil {
-            var cachedUsecases []UsecaseInfo
-            cacheBytes, ok := cacheData.([]byte)
-            if ok {
-                err = json.Unmarshal(cacheBytes, &cachedUsecases)
-                if err == nil {
-                    return cachedUsecases, nil
-                }
-            }
-        }
-    }
+	nameKey := "Usecases"
+	var usecases []UsecaseInfo
 
-    // Get from datastore if not in cache
-    q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", partnerId)
-    _, err := project.Dbclient.GetAll(ctx, q, &usecases)
-    if err != nil {
-        if strings.Contains(err.Error(), `cannot load field`) {
+	// Check cache first
+	if project.CacheDb {
+		cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
+		cacheData, err := GetCache(ctx, cacheKey)
+		if err == nil {
+			var cachedUsecases []UsecaseInfo
+			cacheBytes, ok := cacheData.([]byte)
+			if ok {
+				err = json.Unmarshal(cacheBytes, &cachedUsecases)
+				if err == nil {
+					return cachedUsecases, nil
+				}
+			}
+		}
+	}
+
+	// Get from datastore if not in cache
+	q := datastore.NewQuery(nameKey).Filter("companyInfo.id=", partnerId)
+	_, err := project.Dbclient.GetAll(ctx, q, &usecases)
+	if err != nil {
+		if strings.Contains(err.Error(), `cannot load field`) {
 			log.Printf("[ERROR] Error in getting usecase (3): %s", err)
 			err = nil
 		} else {
 			return usecases, fmt.Errorf("failed to get usecases by partner ID: %w", err)
 		}
-    }
+	}
 
-    // Cache the results
-    if project.CacheDb && len(usecases) > 0 {
-        data, err := json.Marshal(usecases)
-        if err == nil {
-            cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
-            SetCache(ctx, cacheKey, data, 30)
-        }
-    }
+	// Cache the results
+	if project.CacheDb && len(usecases) > 0 {
+		data, err := json.Marshal(usecases)
+		if err == nil {
+			cacheKey := fmt.Sprintf("%s_partner_%s", nameKey, partnerId)
+			SetCache(ctx, cacheKey, data, 30)
+		}
+	}
 
-    return usecases, nil
+	return usecases, nil
 }
 
 func SetNewDeal(ctx context.Context, deal ResellerDeal) error {
@@ -13424,13 +13423,13 @@ func GetCacheKeyCount(ctx context.Context, orgId string, category string) (int, 
 		newCount, err := project.Dbclient.Count(ctx, query)
 		if err != nil {
 			//log.Printf("[ERROR] Error counting cache keys for org %s: %s", orgId, err)
-			return count, err 
+			return count, err
 		} else {
 			count = newCount
 		}
 	}
 
-	return count, nil 
+	return count, nil
 }
 
 func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int, inputcursor string) ([]CacheKeyData, string, error) {
@@ -13440,8 +13439,7 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 	}
 
 	cacheKey := fmt.Sprintf("%s_%s_%s_%s", nameKey, inputcursor, orgId, category)
-	// Look for 
-
+	// Look for
 
 	cursor := ""
 	cacheKeys := []CacheKeyData{}
@@ -13652,10 +13650,9 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 					if cacheKey.Edited >= editedTime {
 						newCacheKeys = append(newCacheKeys, cacheKey)
 					} else {
-						if debug { 
+						if debug {
 							log.Printf("[DEBUG] Should delete cache key '%s' with edited time %d. Timed out!", cacheKey.Key, cacheKey.Edited)
 						}
-
 
 						// URL encode the key
 						parsedRawkey := url.QueryEscape(cacheKey.Key)
@@ -13665,13 +13662,13 @@ func GetAllCacheKeys(ctx context.Context, orgId string, category string, max int
 						//	log.Printf("[ERROR] Failed finding cache key %s: %s", parsedKey, err)
 						//}
 						go DeleteKey(backgroundCtx, nameKey, parsedKey)
-						removedKeys = append(removedKeys, cacheKey.Key+cacheKey.Category) 
+						removedKeys = append(removedKeys, cacheKey.Key+cacheKey.Category)
 					}
 				}
 			}
 		}
 
-		// Find missing keys from 
+		// Find missing keys from
 		allNewCacheKeys := []CacheKeyData{}
 		for _, cacheKey := range cacheKeys {
 			if cacheKey.Category == "default" || len(cacheKey.Category) == 0 {

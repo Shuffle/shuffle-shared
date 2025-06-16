@@ -953,7 +953,7 @@ type Partner struct {
 	PartnerType       PartnerType `json:"partner_type" datastore:"partner_type"`
 	Country           string      `json:"country" datastore:"country"`
 	Region            string      `json:"region" datastore:"region"`
-	Public       bool        `json:"public" datastore:"public"`
+	Public            bool        `json:"public" datastore:"public"`
 	Created           int64       `json:"created" datastore:"created"`
 	Edited            int64       `json:"edited" datastore:"edited"`
 }
@@ -978,9 +978,9 @@ type UsecaseInfo struct {
 			Content []string `datastore:"content" json:"content"`
 		} `datastore:"items" json:"items"`
 	} `datastore:"navigation" json:"navigation"`
-	Public bool  `datastore:"public" json:"public"`
-	Edited    int64 `datastore:"edited" json:"edited"`
-	Created   int64 `datastore:"created" json:"created"`
+	Public  bool  `datastore:"public" json:"public"`
+	Edited  int64 `datastore:"edited" json:"edited"`
+	Created int64 `datastore:"created" json:"created"`
 }
 
 type Org struct {
@@ -4101,7 +4101,7 @@ type OrborusStats struct {
 
 	// Unique identifier for the current orborus runtime
 	// Used to track which Orborus can run
-	Uuid       string `json:"uuid" datastore:"uuid"`
+	Uuid string `json:"uuid" datastore:"uuid"`
 
 	OrgId        string `json:"org_id"`
 	Environment  string `json:"environment"`
@@ -4544,3 +4544,9 @@ type SyncKey struct {
 	SourceIP  string `json:"source_ip"`
 	CreatedAt int64  `json:"created_at"`
 }
+
+type partnerReturnStruct struct {
+	Success bool     `json:"success"`
+	Partner *Partner `json:"partner"`
+}
+

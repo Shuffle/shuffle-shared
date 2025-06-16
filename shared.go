@@ -9197,11 +9197,6 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	ctx := GetContext(request)
-
-	var partner *Partner
-	var err error
-
 	if len(partnerId) == 0 {
 		log.Printf("[ERROR] Partner ID is missing in request: %s", request.URL.String())
 		resp.WriteHeader(http.StatusBadRequest)
@@ -9209,18 +9204,13 @@ func HandleGetPartner(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	partner, err = GetPartnerById(ctx, partnerId)
+	ctx := GetContext(request)
+	partner, err := GetPartnerById(ctx, partnerId)
 
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partner: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
 		resp.Write([]byte(`{"success": false, "reason": "Failed to get partner"}`))
-		return
-	}
-
-	if partner == nil {
-		resp.WriteHeader(http.StatusNotFound)
-		resp.Write([]byte(`{"success": false, "reason": "Partner not found"}`))
 		return
 	}
 
@@ -18008,7 +17998,7 @@ func HandleListCacheKeys(resp http.ResponseWriter, request *http.Request) {
 			keys[keyIndex].WorkflowId = ""
 			keys[keyIndex].ExecutionId = ""
 			keys[keyIndex].PublicAuthorization = ""
-			keys[keyIndex].SuborgDistribution = []string{} 
+			keys[keyIndex].SuborgDistribution = []string{}
 		}
 	}
 
@@ -25577,7 +25567,6 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	var tmpData UsecaseInfo
-
 	err = json.Unmarshal(body, &tmpData)
 	if err != nil {
 		log.Printf("[WARNING] Failed unmarshalling usecase: %v", err)
@@ -25586,7 +25575,11 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	ctx := GetContext(request)
+	if tmpData.Id != Id {
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Usecase ID mismatch"}`))
+		return
+	}
 
 	// Add validation for required fields
 	if len(tmpData.MainContent.Title) == 0 {
@@ -25602,6 +25595,7 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	ctx := GetContext(request)
 	partner, err := GetPartnerById(ctx, user.ActiveOrg.Id)
 	if err != nil || partner == nil {
 		log.Printf("[WARNING] Partner doesn't exist: %v", err)
@@ -25611,27 +25605,30 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	overwrite := false
-
 	if len(tmpData.Id) > 0 {
 		overwrite = true
-	}
 
-	if len(tmpData.Id) == 0 {
+		// Validate if the org is correct in here
+		usecase, err := GetIndividualUsecase(ctx, tmpData.Id)
+		if err != nil {
+			log.Printf("[WARNING] Failed to get usecase by ID %s: %v", tmpData.Id, err)
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Failed to get usecase by ID"}`))
+			return
+		}
+
+		if usecase.CompanyInfo.Id != user.ActiveOrg.Id {
+			log.Printf("[WARNING] User %s (%s) is trying to overwrite usecase for partner %s (%s) but doesn't have access to it", user.Username, user.Id, tmpData.CompanyInfo.Name, tmpData.CompanyInfo.Id)
+			resp.WriteHeader(403)
+			resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
+			return
+		}
+
+	} else {
 		tmpData.Id = uuid.NewV4().String()
-	} else if tmpData.Id != Id && len(Id) > 0 {
-		// Handle mismatch between URL ID and body ID
-		log.Printf("[WARNING] ID mismatch: URL ID %s vs Body ID %s", Id, tmpData.Id)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "ID mismatch between URL and request body"}`))
-		return
 	}
 
-	if tmpData.CompanyInfo.Id != user.ActiveOrg.Id {
-		log.Printf("[WARNING] User %s (%s) is trying to publish usecase for partner %s (%s) but doesn't have access to it", user.Username, user.Id, tmpData.CompanyInfo.Name, tmpData.CompanyInfo.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
-		return
-	}
+	tmpData.CompanyInfo.Id = user.ActiveOrg.Id 
 
 	if tmpData.Public {
 		_, err = HandleAlgoliaUsecaseUpload(ctx, tmpData, overwrite)
@@ -25641,7 +25638,7 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 			resp.Write([]byte(`{"success": false, "reason": "Failed publishing usecase to Algolia"}`))
 			return
 		}
-	}else{
+	} else {
 		err = HandleAlgoliaUsecaseDeletion(ctx, tmpData.Id)
 		if err != nil {
 			log.Printf("[WARNING] Failed deleting usecase from Algolia: %v", err)
@@ -25697,9 +25694,7 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	ctx := GetContext(request)
-
 	partner, err := GetPartnerById(ctx, Id)
-
 	if err != nil {
 		log.Printf("[ERROR] Failed to get partner: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -25709,8 +25704,8 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 
 	// Gettting the partner's usecases
 	var usecases []UsecaseInfo
-	allUsecases, err := GetPartnerUsecases(ctx, Id)
 
+	allUsecases, err := GetPartnerUsecases(ctx, Id)
 	if err != nil {
 		log.Printf("[ERROR] Failed to get usecases: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -25725,7 +25720,7 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 				usecases = append(usecases, usecase)
 			}
 		}
-	}else {
+	} else {
 		usecases = allUsecases
 	}
 
@@ -25793,9 +25788,7 @@ func HandleGetIndividualUsecase(resp http.ResponseWriter, request *http.Request)
 	}
 
 	ctx := GetContext(request)
-
 	usecase, err := GetIndividualUsecase(ctx, Id)
-
 	if err != nil {
 		log.Printf("[ERROR] Failed to get usecase: %v", err)
 		resp.WriteHeader(http.StatusInternalServerError)
@@ -25804,7 +25797,7 @@ func HandleGetIndividualUsecase(resp http.ResponseWriter, request *http.Request)
 	}
 
 	if !usecase.Public {
-		if usecase.CompanyInfo.Id != user.ActiveOrg.Id{
+		if usecase.CompanyInfo.Id != user.ActiveOrg.Id {
 			log.Printf("[AUDIT] User %s (%s) tried to access non-public usecase %s (%s)", user.Username, user.Id, usecase.MainContent.Title, usecase.Id)
 			resp.WriteHeader(http.StatusForbidden)
 			resp.Write([]byte(`{"success": false, "reason": "This usecase is not public"}`))
