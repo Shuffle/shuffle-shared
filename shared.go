@@ -7718,35 +7718,7 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 		childWorkflow.Triggers = newTriggers
 		childWorkflow.Branches = newBranches
 
-		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
-		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
-		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
-
-		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow)
-		if err != nil {
-			log.Printf("[ERROR] Failed getting static workflow health for %s: %s", childWorkflow.ID, err)
-		}
-
-		err = SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
-		if err != nil {
-			log.Printf("[ERROR] Failed updating child workflow %s from parent workflow %s: %s", childWorkflow.ID, oldWorkflow.ID, err)
-		} else {
-			//log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
-
-			SetWorkflowRevision(ctx, childWorkflow)
-			passedOrg := Org{
-				Id:   childWorkflow.ExecutingOrg.Id,
-				Name: childWorkflow.ExecutingOrg.Name,
-			}
-
-			SetGitWorkflow(ctx, childWorkflow, &passedOrg)
-		}
-
-		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
-		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
-		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", parentWorkflow.ID))
-
-		// Update the org with all the relevant apps
+		// Update the org with all the relevant apps and doing it before health check
 		childOrg, err := GetOrg(ctx, childWorkflow.OrgId)
 		if err != nil {
 			log.Printf("[ERROR] Failed to load multi-tenant workflow org %s: %s", childWorkflow.OrgId, err)
@@ -7779,6 +7751,34 @@ func diffWorkflows(oldWorkflow Workflow, parentWorkflow Workflow, update bool) {
 				}
 			}
 		}
+
+		//log.Printf("[DEBUG] CHILD ACTIONS END: %d", len(childWorkflow.Actions))
+		//log.Printf("[DEBUG] CHILD TRIGGERS END: %d", len(childWorkflow.Triggers))
+		//log.Printf("[DEBUG] CHILD BRANCHES END: %d\n\n", len(childWorkflow.Branches))
+
+		childWorkflow, _, err = GetStaticWorkflowHealth(ctx, childWorkflow)
+		if err != nil {
+			log.Printf("[ERROR] Failed getting static workflow health for %s: %s", childWorkflow.ID, err)
+		}
+
+		err = SetWorkflow(ctx, childWorkflow, childWorkflow.ID)
+		if err != nil {
+			log.Printf("[ERROR] Failed updating child workflow %s from parent workflow %s: %s", childWorkflow.ID, oldWorkflow.ID, err)
+		} else {
+			//log.Printf("[INFO] Updated child workflow '%s' based on parent %s", childWorkflow.ID, oldWorkflow.ID)
+
+			SetWorkflowRevision(ctx, childWorkflow)
+			passedOrg := Org{
+				Id:   childWorkflow.ExecutingOrg.Id,
+				Name: childWorkflow.ExecutingOrg.Name,
+			}
+
+			SetGitWorkflow(ctx, childWorkflow, &passedOrg)
+		}
+
+		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", oldWorkflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", childWorkflow.ID))
+		go DeleteCache(ctx, fmt.Sprintf("workflow_%s_childworkflows", parentWorkflow.ID))
 	}
 }
 
