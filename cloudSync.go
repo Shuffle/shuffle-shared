@@ -2116,7 +2116,7 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Orborus UUID mismatch. This means another Orborus (Leader) is already handling this Runtime Location queue."}`)))
 				return errors.New("Orborus UUID mismatch")
 			} else {
-				env.Checkin = time.Now().Unix()
+				//env.Checkin = time.Now().Unix()
 			}
 		}
 	}
@@ -2124,8 +2124,8 @@ func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http
 	timeNow := time.Now().Unix()
 	if request.Method == "POST" {
 
-		// Updates every 120 seconds~
-		if time.Now().Unix() > env.Checkin+120 {
+		// Updates every 90 seconds~
+		if time.Now().Unix() > env.Checkin+90 {
 			env.RunningIp = GetRequestIp(request)
 
 			// Orborus label = custom label for Orborus
