@@ -25546,12 +25546,12 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 
 	ctx := GetContext(request)
 
-	// Check if the partner is public or not
-	partner, err := HandleAlgoliaPartnerSearch(ctx, Id)
+	partner, err := GetPartnerById(ctx, Id)
+
 	if err != nil {
-		log.Printf("[WARNING] Partner with Id %s is not public: %s", Id, err)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false}`))
+		log.Printf("[ERROR] Failed to get partner: %v", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get partner"}`))
 		return
 	}
 
@@ -25567,7 +25567,7 @@ func HandleGetPartnerUsecases(resp http.ResponseWriter, request *http.Request) {
 	}
 
 	// Filter to only include public usecases
-	if partner.ObjectID != user.ActiveOrg.Id {
+	if partner.Id != user.ActiveOrg.Id {
 		for _, usecase := range allUsecases {
 			if usecase.Public {
 				usecases = append(usecases, usecase)
@@ -25766,7 +25766,7 @@ func HandleDeleteUsecase(resp http.ResponseWriter, request *http.Request) {
 
 	// Delete usecase from database
 	nameKey := "Usecases"
-	DeleteCache(ctx, fmt.Sprintf("%s_%s", nameKey, usecase.CompanyInfo.Id))
+	DeleteCache(ctx, fmt.Sprintf("%s_partner_%s", nameKey, usecase.CompanyInfo.Id))
 	err = DeleteKey(ctx, nameKey, usecase.Id)
 	if err != nil {
 		log.Printf("[WARNING] Failed deleting usecase: %v", err)
