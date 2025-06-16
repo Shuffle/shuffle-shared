@@ -28018,20 +28018,22 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// check if the password is correct
-	if len(tmpData.Password) == 0 {
-		log.Printf("[WARNING] No password provided in delete org request")
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "No password provided"}`))
-		return
-	}
+	if user.SessionLogin {
+		// check if the password is correct
+		if len(tmpData.Password) == 0 {
+			log.Printf("[WARNING] No password provided in delete org request")
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "No password provided"}`))
+			return
+		}
 
-	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(tmpData.Password))
-	if err != nil {
-		log.Printf("[WARNING] Password for user %s is incorrect in delete org request", user.Username)
-		resp.WriteHeader(401)
-		resp.Write([]byte(`{"success": false, "reason": "Incorrect password"}`))
-		return
+		err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(tmpData.Password))
+		if err != nil {
+			log.Printf("[WARNING] Password for user %s is incorrect in delete org request", user.Username)
+			resp.WriteHeader(401)
+			resp.Write([]byte(`{"success": false, "reason": "Incorrect password"}`))
+			return
+		}
 	}
 
 	parentOrg, err := GetOrg(ctx, fileId)
