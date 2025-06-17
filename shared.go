@@ -25596,12 +25596,6 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	if tmpData.Id != Id {
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Usecase ID mismatch"}`))
-		return
-	}
-
 	// Add validation for required fields
 	if len(tmpData.MainContent.Title) == 0 {
 		resp.WriteHeader(http.StatusBadRequest)
@@ -25625,9 +25619,22 @@ func HandlePublishUsecase(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
+	if tmpData.CompanyInfo.Id != user.ActiveOrg.Id {
+		log.Printf("[WARNING] User %s (%s) is trying to publish usecase for partner %s (%s) but doesn't have access to it", user.Username, user.Id, tmpData.CompanyInfo.Name, tmpData.CompanyInfo.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized access to partner's usecases"}`))
+		return
+	}
+
 	overwrite := false
 	if len(tmpData.Id) > 0 {
 		overwrite = true
+
+		if tmpData.Id != Id {
+			resp.WriteHeader(400)
+			resp.Write([]byte(`{"success": false, "reason": "Usecase ID mismatch"}`))
+			return
+		}
 
 		// Validate if the org is correct in here
 		usecase, err := GetIndividualUsecase(ctx, tmpData.Id)
