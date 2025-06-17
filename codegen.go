@@ -609,8 +609,19 @@ func MakePythoncode(swagger *openapi3.Swagger, name, url, method string, paramet
 
 			// Add: client_id and client_secret in body as JSON?
 
-			// ADD: accessToken = field
-			authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
+			authType := "basic" 
+
+			// check x-jwt-auth-type
+			if swagger.Components.SecuritySchemes["x-jwt-auth-type-json"] != nil {
+				authType = "json"
+			}
+
+			if authType == "basic" {
+				// ADD: accessToken = field
+				authenticationSetup = fmt.Sprintf("authret = requests.get(f\"{url}%s\", headers=request_headers, auth=(username_basic, password_basic), verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)
+			} else {
+				authenticationSetup = fmt.Sprintf("authret = requests.post(f\"{url}%s\", headers=request_headers, json={\"username\": username_basic, \"password\": password_basic}, verify=False)\n        if 'access_token' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['access_token']}\"\n        elif 'jwt' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['jwt']}\"\n        elif 'accessToken' in authret.text:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.json()['accessToken']}\"\n        else:\n            request_headers[\"Authorization\"] = f\"Bearer {authret.text}\"\n        print(f\"Found Bearer auth: {authret.text}\")", api.Authentication.TokenUri)	
+			}
 
 			//log.Printf("[DEBUG] Appending jwt code for authenticationSetup:\n        %s", authenticationSetup)
 		}
