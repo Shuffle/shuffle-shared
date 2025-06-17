@@ -13906,6 +13906,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
+
 	changeActiveOrg := false
 	if orgerr == nil {
 		log.Printf("[DEBUG] Got org during signin: %s - checking SAML SSO", userdata.ActiveOrg.Id)
@@ -14092,11 +14093,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		log.Printf("[DEBUG] MFA login for user %s (%s)!", userdata.Username, userdata.Id)
 	}
 
-	//tutorialsFinished := userdata.PersonalInfo.Tutorials
-	//if len(org.SecurityFramework.SIEM.Name) > 0 || len(org.SecurityFramework.Network.Name) > 0 || len(org.SecurityFramework.EDR.Name) > 0 || len(org.SecurityFramework.Cases.Name) > 0 || len(org.SecurityFramework.IAM.Name) > 0 || len(org.SecurityFramework.Assets.Name) > 0 || len(org.SecurityFramework.Intel.Name) > 0 || len(org.SecurityFramework.Communication.Name) > 0 {
-	//	tutorialsFinished = append(tutorialsFinished, "find_integrations")
-	//}
-
 	// This is a hack to get the real IP address
 	// https://stackoverflow.com/questions/27234861/golang-http-request-returns-127-0-0-1
 	userdata.LoginInfo = append(userdata.LoginInfo, LoginInfo{
@@ -14140,6 +14136,8 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 	if err == nil {
 		loginData = string(newData)
 	}
+
+	log.Printf("HERE1")
 
 	// On cloud, we just generate a new org for them on the fly
 	// Onprem, the user shouldn't exist anymore, which means you would need to re-register. You should only get to this point if the user exists
@@ -14297,9 +14295,11 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 
 				userdata.Orgs = append(userdata.Orgs, newOrg.Id)
 			}
+
 			userdata.ActiveOrg.Id = userdata.Orgs[0]
 		}
 	}
+	log.Printf("HERE2")
 
 	regionUrl := ""
 	if project.Environment == "cloud" {
@@ -14317,6 +14317,7 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
+	log.Printf("HERE3")
 	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
