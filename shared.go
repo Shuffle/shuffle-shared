@@ -14137,8 +14137,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		loginData = string(newData)
 	}
 
-	log.Printf("HERE1")
-
 	// On cloud, we just generate a new org for them on the fly
 	// Onprem, the user shouldn't exist anymore, which means you would need to re-register. You should only get to this point if the user exists
 	if project.Environment != "cloud" {
@@ -14299,7 +14297,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 			userdata.ActiveOrg.Id = userdata.Orgs[0]
 		}
 	}
-	log.Printf("HERE2")
 
 	regionUrl := ""
 	if project.Environment == "cloud" {
@@ -14317,7 +14314,6 @@ func HandleLogin(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	log.Printf("HERE3")
 	if len(userdata.Session) != 0 && !changeActiveOrg {
 		log.Printf("[INFO] User session exists - resetting session")
 		expiration := time.Now().Add(3600 * time.Second)
