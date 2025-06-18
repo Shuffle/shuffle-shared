@@ -2,20 +2,20 @@ package shuffle
 
 import (
 	"bytes"
-	"net/url"
 	"context"
-	"regexp"
-	"io"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
-	"path/filepath"
 
 	//"github.com/algolia/algoliasearch-client-go/v3/algolia/opt"
 	"github.com/algolia/algoliasearch-client-go/v3/algolia/search"
@@ -444,6 +444,64 @@ func HandleAlgoliaCreatorSearch(ctx context.Context, username string) (AlgoliaSe
 	return foundUser, nil
 }
 
+func HandleAlgoliaPartnerSearch(ctx context.Context, orgId string) (AlgoliaSearchPartner, error) {
+
+	cacheKey := fmt.Sprintf("algolia_partner_%s", orgId)
+	searchPartner := AlgoliaSearchPartner{}
+	cache, err := GetCache(ctx, cacheKey)
+	if err == nil {
+		cacheData := []byte(cache.([]uint8))
+		err = json.Unmarshal(cacheData, &searchPartner)
+		if err == nil {
+			return searchPartner, nil
+		}
+	}
+
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return AlgoliaSearchPartner{}, errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("partners")
+	res, err := algoliaIndex.Search(orgId)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia partners: %s", err)
+		return AlgoliaSearchPartner{}, err
+	}
+
+	var newRecords []AlgoliaSearchPartner
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia partners: %s", err)
+		return AlgoliaSearchPartner{}, err
+	}
+
+	foundPartner := AlgoliaSearchPartner{}
+	for _, newRecord := range newRecords {
+		if newRecord.OrgId == orgId {
+			foundPartner = newRecord
+			break
+		}
+	}
+
+	if project.CacheDb {
+		data, err := json.Marshal(foundPartner)
+		if err != nil {
+			return foundPartner, nil
+		}
+
+		err = SetCache(ctx, cacheKey, data, 30)
+		if err != nil {
+			log.Printf("[WARNING] Failed updating algolia partner cache: %s", err)
+		}
+	}
+
+	return foundPartner, nil
+}
+
 func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool, isOrg bool) (string, error) {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
@@ -501,7 +559,7 @@ func HandleAlgoliaCreatorUpload(ctx context.Context, user User, overwrite bool, 
 	return user.Id, nil
 }
 
-func HandleAlgoliaCreatorDeletion(ctx context.Context, userId string) (error) {
+func HandleAlgoliaCreatorDeletion(ctx context.Context, userId string) error {
 	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
 	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
 	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
@@ -533,15 +591,125 @@ func HandleAlgoliaCreatorDeletion(ctx context.Context, userId string) (error) {
 		}
 	}
 
-	// Should delete it? 
+	// Should delete it?
 	if len(foundItem.ObjectID) > 0 {
 		_, err = algoliaIndex.DeleteObject(foundItem.ObjectID)
 		if err != nil {
 			log.Printf("[WARNING] Algolia Creator delete problem: %s", err)
 			return err
-		} 
+		}
 
 		log.Printf("[INFO] Successfully removed creator %s with ID %s FROM ALGOLIA!", foundItem.Username, userId)
+	}
+
+	return nil
+}
+
+// Usecase Algolia Upload
+func HandleAlgoliaUsecaseUpload(ctx context.Context, usecase UsecaseInfo, overwrite bool) (string, error) {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return "", errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("usecases")
+	res, err := algoliaIndex.Search(usecase.Id)
+	if err != nil {
+		log.Printf("[WARNING] Failed searching Algolia usecases: %s", err)
+		return "", err
+	}
+
+	var newRecords []AlgoliaSearchUsecase
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia partners: %s", err)
+		return "", err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == usecase.Id {
+			log.Printf("[INFO] Object %s already exists in Algolia", usecase.Id)
+
+			if overwrite {
+				break
+			} else {
+				return usecase.Id, errors.New("Usecase ID already exists!")
+			}
+		}
+	}
+
+	timeNow := int64(time.Now().Unix())
+	records := []AlgoliaSearchUsecase{
+		AlgoliaSearchUsecase{
+			ObjectID:           usecase.Id,
+			PartnerName:        usecase.CompanyInfo.Name,
+			PartnerId:          usecase.CompanyInfo.Id,
+			Name:               usecase.MainContent.Title,
+			Description:        usecase.MainContent.Description,
+			Categories:         usecase.MainContent.Categories,
+			SourceAppType:      usecase.MainContent.SourceAppType,
+			DestinationAppType: usecase.MainContent.DestinationAppType,
+			PublicWorkflowID:   usecase.MainContent.PublicWorkflowID,
+			TimeEdited:         timeNow,
+		},
+	}
+
+	_, err = algoliaIndex.SaveObjects(records)
+	if err != nil {
+		log.Printf("[WARNING] Algolia Object put err: %s", err)
+		return "", err
+	}
+
+	log.Printf("[INFO] SUCCESSFULLY UPLOADED partner %s with ID %s TO ALGOLIA!", usecase.MainContent.Title, usecase.Id)
+	return usecase.Id, nil
+}
+
+// Usecase deletion
+func HandleAlgoliaUsecaseDeletion(ctx context.Context, usecaseId string) error {
+	algoliaClient := os.Getenv("ALGOLIA_CLIENT")
+	algoliaSecret := os.Getenv("ALGOLIA_SECRET")
+	if len(algoliaClient) == 0 || len(algoliaSecret) == 0 {
+		log.Printf("[WARNING] ALGOLIA_CLIENT or ALGOLIA_SECRET not defined")
+		return errors.New("Algolia keys not defined")
+	}
+
+	algClient := search.NewClient(algoliaClient, algoliaSecret)
+	algoliaIndex := algClient.InitIndex("usecases")
+	res, err := algoliaIndex.Search(usecaseId)
+	if err != nil {
+		log.Printf("[ERROR] Failed searching Algolia usecases (%s): %s", usecaseId, err)
+		return err
+	}
+
+	var newRecords []AlgoliaSearchUsecase
+	err = res.UnmarshalHits(&newRecords)
+	if err != nil {
+		log.Printf("[WARNING] Failed unmarshaling from Algolia usecases: %s", err)
+		return err
+	}
+
+	//log.Printf("RECORDS: %d", len(newRecords))
+	foundItem := AlgoliaSearchUsecase{}
+	for _, newRecord := range newRecords {
+		if newRecord.ObjectID == usecaseId {
+			foundItem = newRecord
+			break
+		}
+	}
+
+	// Should delete it?
+	if len(foundItem.ObjectID) > 0 {
+		_, err = algoliaIndex.DeleteObject(foundItem.ObjectID)
+		if err != nil {
+			log.Printf("[WARNING] Algolia Usecase delete problem: %s", err)
+			return err
+		}
+
+		log.Printf("[INFO] Successfully removed usecase %s with ID %s FROM ALGOLIA!", foundItem.Name, usecaseId)
 	}
 
 	return nil
@@ -710,7 +878,6 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 		return org, nil
 	}
 
-
 	info, err := GetOrgStatistics(ctx, orgId)
 	if err == nil {
 		// log.Printf("[DEBUG] Found executions for org %s (%s): %d", org.Name, org.Id, info.MonthlyAppExecutions)
@@ -723,7 +890,7 @@ func ValidateExecutionUsage(ctx context.Context, orgId string) (*Org, error) {
 			org.SyncFeatures.AppExecutions.Limit = 15000000000
 		}
 
-		//log.Printf("[DEBUG] Org %s (%s) has values: org.LeadInfo.POV: %v, org.LeadInfo.Internal: %v", org.Name, org.Id, org.LeadInfo.POV, org.LeadInfo.Internal) 
+		//log.Printf("[DEBUG] Org %s (%s) has values: org.LeadInfo.POV: %v, org.LeadInfo.Internal: %v", org.Name, org.Id, org.LeadInfo.POV, org.LeadInfo.Internal)
 
 		// FIXME: When inside this, check if usage should be sent to the user
 		// if (org.SyncFeatures.AppExecutions.Usage > org.SyncFeatures.AppExecutions.Limit) && !(org.LeadInfo.POV || org.LeadInfo.Internal) {
@@ -763,7 +930,7 @@ func RedirectUserRequest(w http.ResponseWriter, req *http.Request) {
 	//req.Body = ioutil.NopCloser(bytes.NewReader(body))
 	url := fmt.Sprintf("%s://%s%s", proxyScheme, proxyHost, req.RequestURI)
 
-	if debug { 
+	if debug {
 		log.Printf("[DEBUG] Request (%s) request URL: %s. More: %s", req.Method, url, req.URL.String())
 	}
 
@@ -859,7 +1026,7 @@ func CheckCreatorSelfPermission(ctx context.Context, requestUser, creatorUser Us
 		}
 	}
 
-	return false 
+	return false
 }
 
 // Uploads updates for a workflow to a specific file on git
@@ -872,12 +1039,12 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		org.Defaults.WorkflowUploadUsername = workflow.BackupConfig.UploadUsername
 		org.Defaults.WorkflowUploadToken = workflow.BackupConfig.UploadToken
 
-		// FIXME: Decrypt here 
+		// FIXME: Decrypt here
 		if workflow.BackupConfig.TokensEncrypted {
-			log.Printf("[DEBUG] Should realtime decrypt token for org %s (%s)", org.Name, org.Id) 
+			log.Printf("[DEBUG] Should realtime decrypt token for org %s (%s)", org.Name, org.Id)
 			org.Defaults.TokensEncrypted = true
 		} else {
-			org.Defaults.TokensEncrypted = false 
+			org.Defaults.TokensEncrypted = false
 		}
 	}
 
@@ -923,7 +1090,6 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 		org.Defaults.WorkflowUploadBranch = "master"
 	}
 
-
 	if org.Defaults.WorkflowUploadRepo == "" || org.Defaults.WorkflowUploadToken == "" {
 		//log.Printf("[DEBUG] Missing Repo/Token during Workflow backup upload for org %s (%s)", org.Name, org.Id)
 		//return errors.New("Missing repo or token")
@@ -957,7 +1123,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 	// remove github backup info
 	workflow.BackupConfig = BackupConfig{}
 
-	// Use git to upload the workflow. 
+	// Use git to upload the workflow.
 	workflowData, err := json.MarshalIndent(workflow, "", "  ")
 	if err != nil {
 		log.Printf("[ERROR] Failed marshalling workflow %s (%s) for git upload: %s", workflow.Name, workflow.ID, err)
@@ -981,7 +1147,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 	// Specify the file path within the repository
 	repo, err := git.Clone(memory.NewStorage(), fs, &git.CloneOptions{
-    	URL: location,
+		URL: location,
 	})
 	if err != nil {
 		newErr := strings.ReplaceAll(err.Error(), org.Defaults.WorkflowUploadToken, "****")
@@ -989,7 +1155,7 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 		log.Printf("[ERROR] Error cloning repo '%s' (workflow backup): %s", newRepoName, newErr)
 		return err
-	} 
+	}
 
 	// Initialize a new Git repository in memory
 	w := &git.Worktree{}
@@ -1058,8 +1224,6 @@ func SetGitWorkflow(ctx context.Context, workflow Workflow, org *Org) error {
 
 	log.Printf("[DEBUG] File uploaded successfully to '%s'!", newRepoName)
 
-
-
 	return nil
 }
 
@@ -1113,7 +1277,6 @@ func CreateFs(basepath, pathname string) (billy.Filesystem, error) {
 	return fs, err
 }
 
-
 func loadAppConfigFromMain(fileId string) {
 	// Send request to /api/v1/apps/{fileId}/config
 	// Parse out the config and add it to the database
@@ -1130,8 +1293,8 @@ func loadAppConfigFromMain(fileId string) {
 	appApi := fmt.Sprintf("%s/api/v1/apps/%s/config", backendHost, fileId)
 	client := &http.Client{}
 	req, err := http.NewRequest(
-		"GET", 
-		appApi, 
+		"GET",
+		appApi,
 		nil,
 	)
 
@@ -1277,7 +1440,7 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 	location := strings.Split(request.URL.String(), "/")
 	var fileId string
 	activate := true
-	shouldDistributeToLocation := false 
+	shouldDistributeToLocation := false
 	if location[1] == "api" {
 		if len(location) <= 4 {
 			resp.WriteHeader(401)
@@ -1328,7 +1491,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			app = &selectedApp
 		} else {
 			log.Printf("[WARNING] Error getting app with ID %s (app config): %s", fileId, err)
-
 
 			// Automatic propagation to cloud regions
 			if project.Environment == "cloud" && gceProject != "shuffler" {
@@ -1504,10 +1666,9 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 			return
 		}
 
-
 		appName := fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(app.Name, " ", "-")), app.AppVersion)
 		if project.Environment == "cloud" {
-			if app.Public == true { 
+			if app.Public == true {
 			} else {
 				appName = fmt.Sprintf("%s_%s", strings.ToLower(strings.ReplaceAll(app.Name, " ", "-")), app.ID)
 			}
@@ -1529,7 +1690,6 @@ func ActivateWorkflowApp(resp http.ResponseWriter, request *http.Request) {
 				continue
 			}
 		}
-
 
 		resp.WriteHeader(200)
 		resp.Write([]byte(`{"success": true, "reason": "Re-download request sent to all relevant environments"}`))
@@ -1583,7 +1743,7 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 
 	// 1. Get child workflows of workflow
 	// 2. Map to the right ones
-	childWorkflows, err := ListChildWorkflows(ctx, workflow.ID) 
+	childWorkflows, err := ListChildWorkflows(ctx, workflow.ID)
 	if err != nil {
 		log.Printf("[ERROR] Failed getting child workflows for parent workflow %s: %s", workflow.ID, err)
 		return
@@ -1600,7 +1760,7 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 		}
 
 		// Check if the OrgId is still in the workflow.Sub
-		found := false 
+		found := false
 		for _, suborg := range workflow.SuborgDistribution {
 			if childWorkflow.OrgId == suborg {
 				found = true
@@ -1662,7 +1822,7 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 			newresp, err := client.Do(req)
 			if err != nil {
 				log.Printf("[ERROR] Failed running child workflow schedule: %s", err)
-				return 
+				return
 			}
 
 			defer newresp.Body.Close()
@@ -1682,8 +1842,6 @@ func HandleSuborgScheduleRun(request *http.Request, workflow *Workflow) {
 	}
 }
 
-
-
 // This is JUST for Singul actions with AI agents.
 // As AI Agents can have multiple types of runs, this could change every time.
 func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision AgentDecision) ([]byte, string, error) {
@@ -1701,19 +1859,18 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 
 	url := fmt.Sprintf("%s/api/v1/apps/categories/run?authorization=%s&execution_id=%s", baseUrl, execution.Authorization, execution.ExecutionId)
 
-
 	// Change timeout to be 30 seconds (just in case)
 	client := GetExternalClient(url)
 	client.Timeout = 60 * time.Second
 
 	parsedFields := TranslateBadFieldFormats(decision.Fields)
 	parsedAction := CategoryAction{
-		AppName: 	decision.Tool,
-		Label: 		decision.Action,
+		AppName: decision.Tool,
+		Label:   decision.Action,
 
 		Fields: parsedFields,
 
-		SkipWorkflow: true, 
+		SkipWorkflow: true,
 	}
 
 	marshalledAction, err := json.Marshal(parsedAction)
@@ -1746,14 +1903,14 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		}
 
 		/*
-		if !strings.HasPrefix(key, "X-") {
-			continue
-		}
+			if !strings.HasPrefix(key, "X-") {
+				continue
+			}
 
-		// Don't care about raw response
-		if key == "X-Raw-Response-Url" || key == "X-Apprun-Url" {
-			continue
-		}
+			// Don't care about raw response
+			if key == "X-Raw-Response-Url" || key == "X-Apprun-Url" {
+				continue
+			}
 		*/
 
 		foundValue := ""
@@ -1764,12 +1921,12 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 			}
 		}
 
-		debugUrl = foundValue 
+		debugUrl = foundValue
 		/*
-		returnHeaders = append(returnHeaders, Valuereplace{
-			Key: key,
-			Value: foundValue, 
-		})
+			returnHeaders = append(returnHeaders, Valuereplace{
+				Key: key,
+				Value: foundValue,
+			})
 		*/
 	}
 
@@ -1817,26 +1974,23 @@ func RunAgentDecisionSingulActionHandler(execution WorkflowExecution, decision A
 		return originalBody, debugUrl, errors.New("Failed running agent decision. Success false for Singul action")
 	}
 
-
 	/*
-	agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = string(rawResponse)
-	agentOutput.Decisions[decisionIndex].RunDetails.DebugUrl = debugUrl 
-	if err != nil {
-		log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
-		agentOutput.Decisions[decisionIndex].RunDetails.Status = "FAILED"
+		agentOutput.Decisions[decisionIndex].RunDetails.RawResponse = string(rawResponse)
+		agentOutput.Decisions[decisionIndex].RunDetails.DebugUrl = debugUrl
+		if err != nil {
+			log.Printf("[ERROR] Failed to run agent decision %#v: %s", decision, err)
+			agentOutput.Decisions[decisionIndex].RunDetails.Status = "FAILED"
 
-		resultMapping.Status = "FAILURE"
-		resultMapping.CompletedAt = time.Now().Unix()
-		agentOutput.CompletedAt = time.Now().Unix()
-	} else {
-		agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
-	}
+			resultMapping.Status = "FAILURE"
+			resultMapping.CompletedAt = time.Now().Unix()
+			agentOutput.CompletedAt = time.Now().Unix()
+		} else {
+			agentOutput.Decisions[decisionIndex].RunDetails.Status = "RUNNING"
+		}
 	*/
-
 
 	return body, debugUrl, nil
 }
-
 
 // Runs an Agent Decision -> returns the result from it
 // FIXME: Handle types: https://www.figma.com/board/V6Kg7KxbmuhIUyTImb20t1/Shuffle-AI-Agent-system?node-id=0-1&p=f&t=yIGaSXQYsYReR8cI-0
@@ -1855,8 +2009,8 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		cacheData := []byte(cache.([]uint8))
 		err = json.Unmarshal(cacheData, &foundDecision)
 		if err != nil {
-			log.Printf("[WARNING][%s] Failed agent decision unmarshal (not critical): %s", execution.ExecutionId, err) 
-		} 
+			log.Printf("[WARNING][%s] Failed agent decision unmarshal (not critical): %s", execution.ExecutionId, err)
+		}
 
 		if foundDecision.RunDetails.StartedAt > 0 {
 			log.Printf("[DEBUG][%s] Decision %s already has status '%s'. Returning as it's already started..", execution.ExecutionId, decision.RunDetails.Id, foundDecision.RunDetails.Status)
@@ -1877,10 +2031,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
-
-	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision) 
+	rawResponse, debugUrl, err := RunAgentDecisionSingulActionHandler(execution, decision)
 	decision.RunDetails.RawResponse = string(rawResponse)
-	decision.RunDetails.DebugUrl = debugUrl 
+	decision.RunDetails.DebugUrl = debugUrl
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed to run agent decision %#v: %s", execution.ExecutionId, decision, err)
 		decision.RunDetails.Status = "FAILURE"
@@ -1892,10 +2045,9 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 		decision.RunDetails.Status = "FINISHED"
 	}
 
-
 	// 1. Send this back as a result for an action
 	// Then the action itself should decide if it's done or not.
-	// Would it work to send JUST this decision result? 
+	// Would it work to send JUST this decision result?
 	// This could start the next step(s) automatically?
 	decision.RunDetails.CompletedAt = time.Now().Unix()
 	marshalledDecision, err = json.Marshal(decision)
@@ -1906,11 +2058,10 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	go SetCache(ctx, decisionId, marshalledDecision, 60)
 
 	// 1. Send an /api/v1/streams request? Due to concurrency, I think this is the only way (?)
-	// 2. On the streams API, make sure to: 
-	//     1. Check if the execution(s) are finished 
+	// 2. On the streams API, make sure to:
+	//     1. Check if the execution(s) are finished
 	//     2. Send the result through AI again to check if it changes (?). Should there be a verdict here?
 	//     3: Start the next steps of decisions after updates
-
 
 	baseUrl := "https://shuffler.io"
 	if os.Getenv("BASE_URL") != "" {
@@ -1930,14 +2081,14 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	client := GetExternalClient(url)
 
 	parsedAction := ActionResult{
-		ExecutionId: 	execution.ExecutionId,
-		Authorization: 	execution.Authorization,
+		ExecutionId:   execution.ExecutionId,
+		Authorization: execution.Authorization,
 
 		// Map in the node ID (action ID) and decision ID to set/continue the right result
 		Action: Action{
 			AppName: "AI Agent",
-			Label: fmt.Sprintf("Agent Decision %s", decision.RunDetails.Id),
-			ID: agentOutput.NodeId,
+			Label:   fmt.Sprintf("Agent Decision %s", decision.RunDetails.Id),
+			ID:      agentOutput.NodeId,
 		},
 		Status: fmt.Sprintf("agent_%s", decision.RunDetails.Id),
 		Result: string(marshalledDecision),
@@ -1946,7 +2097,7 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 	marshalledAction, err := json.Marshal(parsedAction)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed marshalling action in agent decision: %s", execution.ExecutionId, err)
-		return 
+		return
 	}
 
 	req, err := http.NewRequest(
@@ -1957,20 +2108,20 @@ func RunAgentDecisionAction(execution WorkflowExecution, agentOutput AgentOutput
 
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed agent decision request creation: %s", execution.ExecutionId, err)
-		return 
+		return
 	}
 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed sending agent decision result: %s", execution.ExecutionId, err)
-		return 
+		return
 	}
 
 	foundBody, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		log.Printf("[ERROR][%s] Failed reading body from agent decision: %s", execution.ExecutionId, err)
-		return 
+		return
 	}
 
 	if resp.StatusCode != 200 {
@@ -2007,7 +2158,7 @@ func HandleCloudSyncAuthentication(resp http.ResponseWriter, request *http.Reque
 	return SyncKey{}, errors.New("Missing authentication")
 }
 
-// Fixes potential decision return or reference problems: 
+// Fixes potential decision return or reference problems:
 // {{list_tickets}} -> $list_tickets
 // {{list_tickets[0].description}} -> $list_tickets.#0.description
 // {{ticket.description}} -> $ticket.description
@@ -2074,7 +2225,6 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 				stringBuild += matchValue
 			}
 
-
 			if len(match) > 1 {
 				field.Value = strings.ReplaceAll(field.Value, match[0], stringBuild)
 				fields[fieldIndex].Value = field.Value
@@ -2086,4 +2236,91 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 	}
 
 	return fields
+}
+
+func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http.ResponseWriter, env *Environment) error {
+	if len(env.Id) == 0 || len(env.Name) == 0 {
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Environment ID or Name is not set"}`)))
+		return errors.New("Environment ID or Name is not set")
+	}
+
+	orborusLabel := request.Header.Get("x-orborus-label")
+
+	var orboruserr error
+	var orborusData OrborusStats
+	body, bodyerr := ioutil.ReadAll(request.Body)
+	if bodyerr == nil {
+		orboruserr := json.Unmarshal(body, &orborusData)
+		if orboruserr == nil {
+			if time.Now().Unix() > env.Checkin+120 {
+				if debug {
+					log.Printf("[DEBUG] Failover orborus to %s", orborusData.Uuid)
+				}
+
+				env.OrborusUuid = orborusData.Uuid
+			}
+
+			if env.OrborusUuid != orborusData.Uuid && len(env.OrborusUuid) > 0 {
+				resp.WriteHeader(409)
+				resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Orborus UUID mismatch. This means another Orborus (Leader) is already handling this Runtime Location queue."}`)))
+				return errors.New("Orborus UUID mismatch")
+			} else {
+				//env.Checkin = time.Now().Unix()
+			}
+		}
+	}
+
+	timeNow := time.Now().Unix()
+	if request.Method == "POST" {
+
+		// Updates every 90 seconds~
+		if time.Now().Unix() > env.Checkin+90 {
+			env.RunningIp = GetRequestIp(request)
+
+			// Orborus label = custom label for Orborus
+			if len(orborusLabel) > 0 {
+				env.RunningIp = orborusLabel
+			}
+
+			// Set the checkin cache
+			if bodyerr == nil && orboruserr == nil {
+				orborusData.RunningIp = env.RunningIp
+
+				env.OrborusUuid = orborusData.Uuid
+
+				marshalled, err := json.Marshal(orborusData)
+				if err == nil {
+					// Store for a full day. It's reset anyway in the UI at a certain point
+					cacheKey := fmt.Sprintf("queueconfig-%s-%s", env.Name, env.OrgId)
+					go SetCache(context.Background(), cacheKey, marshalled, 1440)
+				}
+
+				if orborusData.Swarm {
+					env.Licensed = true
+					env.RunType = "docker"
+				}
+
+				if orborusData.Kubernetes {
+					env.RunType = "k8s"
+				}
+
+				orborusData.DataLake = env.DataLake
+			}
+
+			env.Checkin = timeNow
+			err := SetEnvironment(ctx, env)
+			if err != nil {
+				log.Printf("[ERROR] Failed updating environment: %s", err)
+			}
+		}
+	}
+
+	if env.Archived {
+		resp.WriteHeader(400)
+		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Can't use archived environments. Make a new environment or restore the existing one."}`)))
+		return errors.New("Environment is archived")
+	}
+
+	return nil
 }

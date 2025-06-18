@@ -2145,7 +2145,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 		// autogeneration of app IDs, and export/imports of workflows
 		idFound := false
 		nameVersionFound := false
-		nameFound := false
 
 		discoveredApp := WorkflowApp{}
 		for _, innerApp := range workflowapps {
@@ -2172,7 +2171,8 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 					action.Public = innerApp.Public
 					action.Generated = innerApp.Generated
 					action.ReferenceUrl = innerApp.ReferenceUrl
-					nameVersionFound = true
+
+					idFound = true
 					break
 				}
 			}
@@ -2188,8 +2188,6 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 					action.Public = innerApp.Public
 					action.Generated = innerApp.Generated
 					action.ReferenceUrl = innerApp.ReferenceUrl
-
-					nameFound = true
 					break
 				}
 			}
@@ -2213,29 +2211,35 @@ func GetStaticWorkflowHealth(ctx context.Context, workflow Workflow) (Workflow, 
 
 		if !idFound {
 			if nameVersionFound {
-			} else if nameFound {
 			} else {
 				//log.Printf("[WARNING] ID, Name AND version for %s:%s (%s) was NOT found", action.AppName, action.AppVersion, action.AppID)
 				handled := false
 
 				if project.Environment == "cloud" {
-					appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
-					if err == nil && len(appid.ObjectID) > 0 {
-						//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
-						tmpApp, err := GetApp(ctx, appid.ObjectID, user, false)
-						if err == nil {
+					tmpApp, err := GetApp(ctx, action.AppID, user, false)
+					if err == nil {
 							handled = true
 							action.AppID = tmpApp.ID
-
 							if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
 							} else {
 								newOrgApps = append(newOrgApps, action.AppID)
 							}
-
 							workflowapps = append(workflowapps, *tmpApp)
-						}
 					} else {
-						//log.Printf("[WARNING] Failed finding name %s in Algolia", action.AppName)
+						appid, err := HandleAlgoliaAppSearch(ctx, action.AppName)
+						if err == nil && len(appid.ObjectID) > 0 {
+							//log.Printf("[INFO] Found NEW appid %s for app %s", appid, action.AppName)
+							tmpApp, err = GetApp(ctx, appid.ObjectID, user, false)
+							if err == nil {
+								handled = true
+								action.AppID = tmpApp.ID
+								if strings.ToLower(tmpApp.Name) == "http" || strings.ToLower(tmpApp.Name) == "email" || strings.ToLower(tmpApp.Name) == "shuffle tools" {
+								}else {
+									newOrgApps = append(newOrgApps, action.AppID)
+								}
+								workflowapps = append(workflowapps, *tmpApp)
+							}
+						}
 					}
 				}
 

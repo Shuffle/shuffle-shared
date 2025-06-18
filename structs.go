@@ -505,6 +505,10 @@ type Environment struct {
 	Auth       string `json:"auth" datastore:"auth"`
 	Queue      int    `json:"queue" datastore:"queue"`
 
+	// Unique identifier to a single Orborus runtime
+	// This makes leader/follower model work for failovers
+	OrborusUuid string `json:"orborus_uuid" datastore:"orborus_uuid"`
+
 	Licensed bool       `json:"licensed" datastore:"licensed"`
 	RunType  string     `json:"run_type" datastore:"run_type"`
 	DataLake LakeConfig `json:"data_lake" datastore:"data_lake"`
@@ -884,6 +888,7 @@ type OrgMini struct {
 	Role      string     `json:"role" datastore:"role"`
 	ChildOrgs []OrgMini  `json:"child_orgs" datastore:"child_orgs"`
 	RegionUrl string     `json:"region_url" datastore:"region_url"`
+	IsPartner bool       `json:"is_partner" datastore:"is_partner"`
 
 	// Branding related
 	Image      string      `json:"image" datastore:"image,noindex"`
@@ -923,6 +928,59 @@ type LeadInfo struct {
 	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
 
 	Creator bool `json:"creator,omitempty" datastore:"creator"`
+}
+
+// Partners Structs
+type PartnerType struct {
+	TechPartner         bool `json:"tech_partner,omitempty" datastore:"tech_partner"`
+	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
+	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
+	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
+}
+
+type Partner struct {
+	Id                string      `json:"id" datastore:"id"`
+	Name              string      `json:"name" datastore:"name"`
+	Description       string      `json:"description" datastore:"description"`
+	OrgId             string      `json:"org_id" datastore:"org_id"`
+	ImageUrl          string      `json:"image_url" datastore:"image_url,noindex"`
+	LandscapeImageUrl string      `json:"landscape_image_url" datastore:"landscape_image_url,noindex"`
+	ArticleUrl        string      `json:"article_url" datastore:"article_url,noindex"`
+	WebsiteUrl        string      `json:"website_url" datastore:"website_url,noindex"`
+	Expertise         []string    `json:"expertise" datastore:"expertise"`
+	Services          []string    `json:"services" datastore:"services"`
+	Solutions         []string    `json:"solutions" datastore:"solutions"`
+	PartnerType       PartnerType `json:"partner_type" datastore:"partner_type"`
+	Country           string      `json:"country" datastore:"country"`
+	Region            string      `json:"region" datastore:"region"`
+	Public            bool        `json:"public" datastore:"public"`
+	Created           int64       `json:"created" datastore:"created"`
+	Edited            int64       `json:"edited" datastore:"edited"`
+}
+
+type UsecaseInfo struct {
+	Id          string `json:"id" datastore:"id"`
+	CompanyInfo struct {
+		Name string `datastore:"name" json:"name"`
+		Id   string `datastore:"id" json:"id"`
+	} `datastore:"companyInfo" json:"companyInfo"`
+	MainContent struct {
+		Title              string   `datastore:"title" json:"title"`
+		Description        string   `datastore:"description" json:"description"`
+		Categories         []string `datastore:"categories" json:"categories"`
+		PublicWorkflowID   string   `datastore:"PublicWorkflowId" json:"publicWorkflowId"`
+		SourceAppType      string   `datastore:"sourceAppType" json:"sourceAppType"`
+		DestinationAppType string   `datastore:"destinationAppType" json:"destinationAppType"`
+	} `datastore:"mainContent" json:"mainContent"`
+	Navigation struct {
+		Items []struct {
+			Name    string   `datastore:"name" json:"name"`
+			Content []string `datastore:"content" json:"content"`
+		} `datastore:"items" json:"items"`
+	} `datastore:"navigation" json:"navigation"`
+	Public  bool  `datastore:"public" json:"public"`
+	Edited  int64 `datastore:"edited" json:"edited"`
+	Created int64 `datastore:"created" json:"created"`
 }
 
 type Org struct {
@@ -1737,6 +1795,32 @@ type AlgoliaSearchCreator struct {
 	WorkStatus      string          `datastore:"work_status" json:"work_status"`
 	Url             string          `datastore:"url" json:"url"`
 	IsOrg           bool            `datastore:"is_org" json:"is_org"`
+}
+
+type AlgoliaSearchPartner struct {
+	ObjectID    string   `json:"objectID"`
+	TimeEdited  int64    `json:"time_edited"`
+	SquareImage string   `json:"square_image"`
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	PartnerType []string `json:"partner_type"`
+	Solutions   []string `json:"solutions"`
+	Country     string   `json:"country"`
+	Region      string   `json:"region"`
+	OrgId       string   `json:"org_id"`
+}
+
+type AlgoliaSearchUsecase struct {
+	ObjectID           string   `json:"objectID"`
+	PartnerName        string   `json:"partner_name"`
+	PartnerId          string   `json:"partner_id"`
+	Name               string   `json:"name"`
+	Description        string   `json:"description"`
+	Categories         []string `json:"categories"`
+	PublicWorkflowID   string   `json:"public_workflow_id"`
+	SourceAppType      string   `json:"source_app_type"`
+	DestinationAppType string   `json:"destination_app_type"`
+	TimeEdited         int64    `json:"time_edited"`
 }
 
 type AlgoliaSearchWorkflow struct {
@@ -4013,7 +4097,12 @@ type Suggestion struct {
 
 // Parse out CPU, memory and disk. Make struct
 type OrborusStats struct {
+	// Environment name~
 	Id string `json:"id"`
+
+	// Unique identifier for the current orborus runtime
+	// Used to track which Orborus can run
+	Uuid string `json:"uuid" datastore:"uuid"`
 
 	OrgId        string `json:"org_id"`
 	Environment  string `json:"environment"`
@@ -4456,3 +4545,9 @@ type SyncKey struct {
 	SourceIP  string `json:"source_ip"`
 	CreatedAt int64  `json:"created_at"`
 }
+
+type partnerReturnStruct struct {
+	Success bool     `json:"success"`
+	Partner *Partner `json:"partner"`
+}
+

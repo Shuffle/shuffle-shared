@@ -4333,11 +4333,12 @@ func handleDatastoreAutomationWebhook(ctx context.Context, marshalledBody []byte
 	return nil
 }
 
-func handleRunDatastoreAutomation(ctx context.Context, cacheData CacheKeyData, automation DatastoreAutomation) error {
+func handleRunDatastoreAutomation(cacheData CacheKeyData, automation DatastoreAutomation) error {
 	if len(cacheData.OrgId) == 0 {
 		return errors.New("CacheKeyData.OrgId is required for handleRunAutomation")
 	}
 
+	ctx := context.Background()
 	parsedName := strings.ReplaceAll(strings.ToLower(automation.Name), " ", "_")
 
 	// Unmarshal cacheData.Value to parsedOutput
