@@ -926,6 +926,7 @@ type LeadInfo struct {
 	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
 	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
 	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
+	ChannelPartner	  bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
 
 	Creator bool `json:"creator,omitempty" datastore:"creator"`
 }
@@ -936,6 +937,7 @@ type PartnerType struct {
 	IntegrationPartner  bool `json:"integration_partner,omitempty" datastore:"integration_partner"`
 	DistributionPartner bool `json:"distribution_partner,omitempty" datastore:"distribution_partner"`
 	ServicePartner      bool `json:"service_partner,omitempty" datastore:"service_partner"`
+	ChannelPartner	  bool `json:"channel_partner,omitempty" datastore:"channel_partner"`
 }
 
 type Partner struct {
