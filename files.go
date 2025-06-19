@@ -390,6 +390,16 @@ func HandleDeleteFile(resp http.ResponseWriter, request *http.Request) {
 			}
 		}
 		file.Status = "deleted"
+
+		if len(file.SuborgDistribution) > 0 {
+			log.Printf("[INFO] File %s (%s) has suborg distribution, removing it from suborgs", file.Filename, file.Id)
+			for _, suborg := range file.SuborgDistribution {
+				cacheKey := fmt.Sprintf("files_%s_%s", suborg, file.Namespace)
+				DeleteCache(ctx, cacheKey)
+			}
+			file.SuborgDistribution = []string{}
+		}
+
 		err = SetFile(ctx, *file)
 		if err != nil {
 			log.Printf("[ERROR] Failed setting file to deleted: %s", err)
