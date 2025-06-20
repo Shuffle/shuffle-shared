@@ -12130,6 +12130,10 @@ func HandleEditOrg(resp http.ResponseWriter, request *http.Request) {
 			if lead == "service partner" {
 				newLeadinfo.ServicePartner = true
 			}
+
+			if lead == "channel partner" {
+				newLeadinfo.ChannelPartner = true
+			}
 		}
 
 		org.LeadInfo = newLeadinfo
