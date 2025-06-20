@@ -949,6 +949,7 @@ type Partner struct {
 	LandscapeImageUrl string      `json:"landscape_image_url" datastore:"landscape_image_url,noindex"`
 	ArticleUrl        string      `json:"article_url" datastore:"article_url,noindex"`
 	WebsiteUrl        string      `json:"website_url" datastore:"website_url,noindex"`
+	ContactEmail	 string      `json:"contact_email" datastore:"contact_email,noindex"`
 	Expertise         []string    `json:"expertise" datastore:"expertise"`
 	Services          []string    `json:"services" datastore:"services"`
 	Solutions         []string    `json:"solutions" datastore:"solutions"`
