@@ -15083,7 +15083,9 @@ func updateExecutionParent(ctx context.Context, executionParent, returnValue, pa
 
 				sendRequest = true
 			} else {
-				log.Printf("[DEBUG][%s] Found subflow result. Sending result with input data", foundResult.ExecutionId)
+				if debug { 
+					log.Printf("[DEBUG][%s] Found subflow result. Sending result with input data", foundResult.ExecutionId)
+				}
 
 				foundResult.StartedAt = timeNow
 				foundResult.CompletedAt = timeNow
@@ -19159,8 +19161,62 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 	}
 
 	if appId != action.AppID {
-		if appId == "agent" {
+
+		// Used for standalone runs stared on /agents
+		if appId == "agent_starter" { 
+			workflowId := uuid.NewV4().String()
+			action.SourceWorkflow = workflowId
+			action.StartedAt = int64(time.Now().Unix())
+
+			if len(action.ID) != 36 {
+				action.ID = uuid.NewV4().String()
+			}
+
+			exec := WorkflowExecution{
+				Workflow: Workflow{
+					ID: workflowId,
+					Actions: []Action{
+						action,
+					},
+
+					OrgId: user.ActiveOrg.Id,
+					Owner: user.Username,
+					Start: action.ID,
+				},
+				Type: "AGENT",
+				Start: action.ID,
+				Status: "EXECUTING",
+				ExecutionId: workflowId,
+				ExecutionOrg: user.ActiveOrg.Id,
+				StartedAt: int64(time.Now().Unix()),
+				Authorization: uuid.NewV4().String(),
+			}
+
+			SetWorkflowExecution(ctx, exec, true)
+
+			action, err := HandleAiAgentExecutionStart(exec, action) 
+			if err != nil {
+				log.Printf("[ERROR] Failed to handle AI agent execution start: %s", err)
+			}
+			exec.Workflow.Actions[0] = action
+
+			newExec, err := GetWorkflowExecution(ctx, exec.ExecutionId)
+			if err != nil {
+				log.Printf("[ERROR] Failed to get workflow execution after starting agent: %s", err)
+			} else {
+				return *newExec, nil
+			}
+
+			return exec, nil
+
+		} else if appId == "agent" {
+			// This is used in HandleAiAgentExecutionStart as a way to 
+			// run a single action with a specific appId
+
+			// Also used for rerunning a single decision within an existing shuffle_agent execution on the /agents page.
+
 			action.AppID = "agent"
+
 		} else if strings.ToLower(appId) == "http" || strings.ToLower(action.AppID) == "http" {
 			action.AppID = "http"
 		} else {
@@ -19500,8 +19556,8 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 			return workflowExecution, err
 		}
 
-		if workflow.OrgId != user.ActiveOrg.Id {
-			return workflowExecution, errors.New("Workflow doesn't belong to the same organization")
+		if workflow.OrgId != user.ActiveOrg.Id && len(workflow.ID) > 0 {
+			return workflowExecution, errors.New(fmt.Sprintf("Workflow doesn't belong to the same organization (%s vs %s)", workflow.OrgId, user.ActiveOrg.Id))
 		}
 
 		// Check if the execution exists
@@ -20531,7 +20587,7 @@ func ValidateNewWorkerExecution(ctx context.Context, body []byte, shouldReset bo
 
 	baseExecution, err := GetWorkflowExecution(ctx, execution.ExecutionId)
 	if err != nil {
-		log.Printf("[ERROR] Failed getting execution (workflowqueue) %s: %s", execution.ExecutionId, err)
+		log.Printf("[ERROR][%s] Failed getting execution (workflowqueue): %s", execution.ExecutionId, err)
 		return err
 	}
 

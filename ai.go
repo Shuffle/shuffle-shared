@@ -6279,7 +6279,9 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 }
 
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) (Action, error) {
-	log.Printf("\n\nAI AGENT REWRITE (first request?). PARAMS: %d\n\n", len(startNode.Parameters))
+	if debug { 
+		log.Printf("\n\nAI AGENT REWRITE (first request?). PARAMS: %d\n\n", len(startNode.Parameters))
+	}
 
 	//openai "github.com/sashabaranov/go-openai"
 	// Create the OpenAI body struct
@@ -6397,7 +6399,10 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 		return startNode, errors.New("Unhandled Singul BODY for OpenAI agent (first request)")
 	}
-	//log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
+
+	if debug { 
+		log.Printf("\n\n\n[DEBUG] BODY for AI Agent (first request): %s\n\n\n", string(initialAgentRequestBody))
+	}
 
 	// Hardcoded for now
 	aiNode := Action{}
@@ -6672,6 +6677,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 			decisionString = fmt.Sprintf("%s]", decisionString)
 		}
 
+		if !strings.HasPrefix(decisionString, `[`) && !strings.HasSuffix(decisionString, `]`) {
+			//decisionString = choicesString
+			decisionString = fmt.Sprintf("[%s]", decisionString)
+		}
+
 		// Set the raw response
 		if !strings.HasPrefix(decisionString, `[`) || !strings.HasSuffix(decisionString, `]`) {
 			decisionString = choicesString
@@ -6687,7 +6697,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 				err = json.Unmarshal([]byte(decisionString), &mappedDecisions)
 				if err != nil {
-					log.Printf("[ERROR][%s] Failed unmarshalling decisions in AI Agent response (2): %s", execution.ExecutionId, err)
+					log.Printf("[ERROR][%s] Failed unmarshalling decisions in AI Agent response (2): %s. String: %s", execution.ExecutionId, err, decisionString)
 					resultMapping.Status = "FAILURE"
 
 					// Updating the OUTPUT in some way to help the user a bit.
