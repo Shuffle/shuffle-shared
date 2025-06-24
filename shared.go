@@ -28791,29 +28791,29 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// get the request body
-	type ReturnData struct {
-		OrgId    string `json:"suborg_id"`
-		Password string `json:"password"`
-	}
-
-	var tmpData ReturnData
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[WARNING] Failed reading body in delete org: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
-	}
-
-	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling body in delete org: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshalling body"}`))
-		return
-	}
-
 	if user.SessionLogin {
+
+		// get the request body
+		type ReturnData struct {
+			Password string `json:"password"`
+		}
+
+		var tmpData ReturnData
+		body, err := ioutil.ReadAll(request.Body)
+		if err != nil {
+			log.Printf("[WARNING] Failed reading body in delete org: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		}
+
+		err = json.Unmarshal(body, &tmpData)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshalling body in delete org: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed unmarshalling body"}`))
+			return
+		}
+
 		// check if the password is correct
 		if len(tmpData.Password) == 0 {
 			log.Printf("[WARNING] No password provided in delete org request")
@@ -28831,7 +28831,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	parentOrg, err := GetOrg(ctx, fileId)
+	subOrg, err := GetOrg(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
 		resp.WriteHeader(500)
@@ -28839,18 +28839,18 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	subOrg, err := GetOrg(ctx, tmpData.OrgId)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting org '%s': %s", tmpData.OrgId, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+	if len(subOrg.CreatorOrg) == 0 {
+		log.Printf("[WARNING] Org '%s' has no parent org. Not deleting.", fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org is not a child org of the parent org"}`))
 		return
 	}
 
-	if subOrg.CreatorOrg != parentOrg.Id {
-		log.Printf("[WARNING] Org '%s' is not a child org of '%s'. Not deleting.", tmpData.OrgId, fileId)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Org is not a child org of the parent org"}`))
+	parentOrg, err := GetOrg(ctx, subOrg.CreatorOrg)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
 		return
 	}
 
