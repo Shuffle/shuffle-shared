@@ -19166,7 +19166,6 @@ func PrepareSingleAction(ctx context.Context, user User, appId string, body []by
 		if appId == "agent_starter" { 
 			workflowId := uuid.NewV4().String()
 			action.SourceWorkflow = workflowId
-			action.StartedAt = int64(time.Now().Unix())
 
 			if len(action.ID) != 36 {
 				action.ID = uuid.NewV4().String()
@@ -23886,19 +23885,21 @@ func PrepareWorkflowExecution(ctx context.Context, workflow Workflow, request *h
 		// Verify if the action environment exists and append
 		found := false
 		for _, env := range allEnvs {
-			if env.Name == action.Environment {
-				found = true
-
-				if env.Type == "cloud" {
-					cloudExec = true
-				} else if env.Type == "onprem" {
-					onpremExecution = true
-				} else {
-					log.Printf("[ERROR] No handler for environment type %s", env.Type)
-					return workflowExecution, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No handler for environment type %s", env.Type))
-				}
-				break
+			if strings.ToLower(env.Name) != strings.ToLower(action.Environment) {
+				continue
 			}
+
+			found = true
+
+			if env.Type == "cloud" || strings.ToLower(env.Name) == "cloud" {
+				cloudExec = true
+			} else if env.Type == "onprem" {
+				onpremExecution = true
+			} else {
+				log.Printf("[ERROR] No handler for environment type %s", env.Type)
+				return workflowExecution, ExecInfo{}, "No active environments found", errors.New(fmt.Sprintf("No handler for environment type %s", env.Type))
+			}
+			break
 		}
 
 		if !found {

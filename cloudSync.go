@@ -2240,13 +2240,18 @@ func TranslateBadFieldFormats(fields []Valuereplace) []Valuereplace {
 
 func HandleOrborusFailover(ctx context.Context, request *http.Request, resp http.ResponseWriter, env *Environment) error {
 	if len(env.Id) == 0 || len(env.Name) == 0 {
-		resp.WriteHeader(400)
-		resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Environment ID or Name is not set"}`)))
-		return errors.New("Environment ID or Name is not set")
+
+		// Avoiding this onprem as it doesn't make sense
+		if project.Environment == "cloud" {
+			resp.WriteHeader(400)
+			resp.Write([]byte(fmt.Sprintf(`{"success": false, "reason": "Environment ID or Name is not set"}`)))
+			return errors.New("Environment ID or Name is not set")
+		}  else {
+			return nil
+		}
 	}
 
 	orborusLabel := request.Header.Get("x-orborus-label")
-
 	var orboruserr error
 	var orborusData OrborusStats
 	body, bodyerr := ioutil.ReadAll(request.Body)

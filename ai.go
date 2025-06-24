@@ -7052,7 +7052,7 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Work
 		return workflow, errors.New("Organization ID is empty")
 	}
 
-	parsedActiontype := actionType
+	parsedActiontype := strings.ReplaceAll(strings.ToLower(actionType), " ", "_")
 	if strings.Contains(strings.ToLower(actionType), "threat feed") {
 		parsedActiontype = "threatlist_monitor"
 	}
@@ -7081,7 +7081,54 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Work
 		}
 	}
 
-	if parsedActiontype == "threatlist_monitor" {
+	if parsedActiontype == "ingest_tickets" {
+		log.Printf("INGESTING TICKETS YAY")
+
+		defaultWorkflow := Workflow{
+			Name: actionType,
+			Description: "Monitor threatlists and ingest regularly",
+			OrgId: orgId,
+			Start: startActionId,
+			Actions: []Action{
+				Action{
+					Name: "Cases",
+					AppID: "integration",
+					AppName: "Singul",
+					ID: startActionId,
+					AppVersion: "1.0.0",
+					Environment: actionEnv,
+					Label: "List tickets",
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "action",
+							Value: "list_tickets",
+						},
+					},
+				},
+			},
+			Triggers: []Trigger{
+				Trigger{
+					ID: startTriggerId,
+					TriggerType: "SCHEDULE",
+					Label: "Pull threatlist URLs",
+					Environment: triggerEnv,
+					Parameters: []WorkflowAppActionParameter{
+						WorkflowAppActionParameter{
+							Name:  "cron",
+							Value: "0 0 * * *", 
+						},
+						WorkflowAppActionParameter{
+							Name:  "execution_argument",
+							Value: "Automatically configured by Shuffle", 
+						},
+					},
+				},
+			},
+		}
+
+		workflow = defaultWorkflow
+		workflow.OrgId = orgId
+	} else if parsedActiontype == "threatlist_monitor" {
 		defaultWorkflow := Workflow{
 			Name: actionType,
 			Description: "Monitor threatlists and ingest regularly",
@@ -7218,6 +7265,27 @@ func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Work
 		}
 	}
 
+	if len(workflow.Actions)+len(workflow.Triggers) > 1 {
+		if len(workflow.Branches) == 0 {
+			// Connect from trigger -> action
+
+			sourceId := ""
+			destId := ""
+			if len(workflow.Triggers) == 1 {
+				sourceId = workflow.Triggers[0].ID
+				destId = workflow.Start
+			}
+
+			newBranch := Branch{
+				SourceID: sourceId,
+				DestinationID: destId,
+				ID: uuid.NewV4().String(),
+			}
+
+			workflow.Branches = append(workflow.Branches, newBranch)
+		}
+	}
+
 	return workflow, nil
 }
 
@@ -7300,13 +7368,14 @@ func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
 	copy(uuidBytes, hashBytes)
 	workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
 
-
-	log.Printf("Getting workflow with ID %s for category '%s'", workflowId, categoryAction.Label)
+	if debug {
+		log.Printf("[DEBUG] Getting workflow with ID %s for category '%s'", workflowId, categoryAction.Label)
+	}
 
 	ctx := GetContext(request)
 	workflow, err := GetWorkflow(ctx, workflowId)
 	if err != nil || workflow.ID == "" {
-		log.Printf("[ERROR] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
+		log.Printf("[WARNING] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
 	}
 
 	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction.Label)
