@@ -7908,7 +7908,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					// Check if current user is one of the few allowed
 					// This can only happen if the workflow doesn't already have an owner
-					found := false
 					if user.PublicProfile.Public && len(allowList) > 0 {
 						allowListSplit := strings.Split(allowList, ",")
 						for _, username := range allowListSplit {
@@ -7921,16 +7920,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								log.Printf("[ERROR] Algolia Creator search error in public workflow edit: %s", err)
 								continue
 							}
-
-							found = true
 							break
 						}
-					}
-
-					if !found {
-						resp.WriteHeader(403)
-						resp.Write([]byte(`{"success": false}`))
-						return
 					}
 				}
 
@@ -7953,6 +7944,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			}
+
 
 			// FIX: Should check if this workflow has already been saved?
 			if !correctUser {
