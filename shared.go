@@ -7888,6 +7888,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 		workflow.InputQuestions[qIndex].Required = true
 	}
 
+	isPartner := false
 	correctUser := false
 	if user.Id != tmpworkflow.Owner || tmpworkflow.Public == true {
 		log.Printf("[AUDIT] User %s is accessing workflow %s (save workflow)", user.Username, tmpworkflow.ID)
@@ -7900,47 +7901,80 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 			// Just making sure
 			if project.Environment == "cloud" {
 				//algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, username)
-
-				algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
+				
+				org, err := GetOrg(ctx, user.ActiveOrg.Id)
 				if err != nil {
-					allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
-					log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s. Username: %s. ACL controlled with GITHUB_USER_ALLOWLIST environment variable. Allowed users: %#v", user.Id, tmpworkflow.ID, err, user.PublicProfile.GithubUsername, allowList)
+					log.Printf("[WARNING] Failed getting org '%s': %s", user.ActiveOrg.Id, err)
+					resp.WriteHeader(500)
+					resp.Write([]byte(`{"success": false, "reason": "Failed getting your org details"}`))
+					return
+				}
 
-					// Check if current user is one of the few allowed
-					// This can only happen if the workflow doesn't already have an owner
-					if user.PublicProfile.Public && len(allowList) > 0 {
-						allowListSplit := strings.Split(allowList, ",")
-						for _, username := range allowListSplit {
-							if username != user.PublicProfile.GithubUsername {
-								continue
-							}
+				if org.LeadInfo.TechPartner || org.LeadInfo.IntegrationPartner || org.LeadInfo.DistributionPartner || org.LeadInfo.ServicePartner || org.LeadInfo.ChannelPartner {
+					isPartner = true
+				}
 
-							algoliaUser, err = HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
-							if err != nil {
-								log.Printf("[ERROR] Algolia Creator search error in public workflow edit: %s", err)
-								continue
+				if isPartner {
+					partner, err := GetPartnerById(ctx, user.ActiveOrg.Id)
+
+					if err != nil {
+						log.Printf("[ERROR] Failed to get partner: %v", err)
+						resp.WriteHeader(http.StatusInternalServerError)
+						resp.Write([]byte(`{"success": false, "reason": "Failed to get partner"}`))
+						return
+					}
+
+					if partner.Id != user.ActiveOrg.Id {
+						log.Printf("[WARNING] User %s (%s) is trying to save a public workflow %s, but their org %s is not the owner of the workflow. Org ID: %s", user.Username, user.Id, tmpworkflow.ID, user.ActiveOrg.Name, user.ActiveOrg.Id)
+						resp.WriteHeader(403)
+						resp.Write([]byte(`{"success": false, "reason": "Your org is not the owner of this public workflow"}`))
+						return
+					}
+					correctUser = true
+					tmpworkflow.Public = true
+					workflow.Public = true
+				} else {
+					algoliaUser, err := HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
+					if err != nil {
+						allowList := os.Getenv("GITHUB_USER_ALLOWLIST")
+						log.Printf("[WARNING] User with ID %s for Workflow %s could not be found (workflow update): %s. Username: %s. ACL controlled with GITHUB_USER_ALLOWLIST environment variable. Allowed users: %#v", user.Id, tmpworkflow.ID, err, user.PublicProfile.GithubUsername, allowList)
+
+						// Check if current user is one of the few allowed
+						// This can only happen if the workflow doesn't already have an owner
+						if user.PublicProfile.Public && len(allowList) > 0 {
+							allowListSplit := strings.Split(allowList, ",")
+							for _, username := range allowListSplit {
+								if username != user.PublicProfile.GithubUsername {
+									continue
+								}
+
+								algoliaUser, err = HandleAlgoliaCreatorSearch(ctx, user.PublicProfile.GithubUsername)
+								if err != nil {
+									log.Printf("[ERROR] Algolia Creator search error in public workflow edit: %s", err)
+									continue
+								}
+								break
 							}
-							break
 						}
 					}
-				}
 
-				wf2 := PublicCheck{}
-				err = json.Unmarshal([]byte(body), &wf2)
-				if err != nil {
-					log.Printf("[ERROR] Failed workflow unmarshaling (save - 2): %s", err)
-				}
+					wf2 := PublicCheck{}
+					err = json.Unmarshal([]byte(body), &wf2)
+					if err != nil {
+						log.Printf("[ERROR] Failed workflow unmarshaling (save - 2): %s", err)
+					}
 
-				if algoliaUser.ObjectID == user.Id || ArrayContains(algoliaUser.Synonyms, user.Id) {
-					log.Printf("[WARNING] User %s (%s) has access to edit %s! Keep it public!!", user.Username, user.Id, workflow.ID)
+					if algoliaUser.ObjectID == user.Id || ArrayContains(algoliaUser.Synonyms, user.Id) {
+						log.Printf("[WARNING] User %s (%s) has access to edit %s! Keep it public!!", user.Username, user.Id, workflow.ID)
 
-					// Means the owner is using the workflow for their org
-					if wf2.UserEditing == false {
-						correctUser = false
-					} else {
-						correctUser = true
-						tmpworkflow.Public = true
-						workflow.Public = true
+						// Means the owner is using the workflow for their org
+						if wf2.UserEditing == false {
+							correctUser = false
+						} else {
+							correctUser = true
+							tmpworkflow.Public = true
+							workflow.Public = true
+						}
 					}
 				}
 			}
