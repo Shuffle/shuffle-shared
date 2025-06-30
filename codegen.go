@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -3935,14 +3936,20 @@ func DownloadDockerImageBackend(topClient *http.Client, imageName string) error 
 		return nil
 	}
 
+	var dwnImage sync.Mutex
+
 	// Remove from downloadedImages after 5 minutes for a redownload
 	time.AfterFunc(time.Minute*5, func() {
-		for i, img := range downloadedImages {
-			if img == imageName {
-				downloadedImages = append(downloadedImages[:i], downloadedImages[i+1:]...)
-				//log.Printf("[DEBUG] Removed image %s from downloaded images after 10 minutes, as to allow re-downloads.", imageName)
+		dwnImage.Lock()
+		defer dwnImage.Unlock()
+
+		cleanedImages := downloadedImages[:0] // len=0 cap=same, ptr same
+		for _, img := range downloadedImages {
+			if img != imageName {
+				cleanedImages = append(cleanedImages, img)
 			}
 		}
+		downloadedImages = cleanedImages
 	})
 
 	if ArrayContains(downloadedImages, imageName) && project.Environment == "worker" {
