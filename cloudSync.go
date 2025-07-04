@@ -844,6 +844,10 @@ func handleAlgoliaWorkflowUpdate(ctx context.Context, workflow Workflow) (string
 	record.Priority = GetWorkflowPriority(workflow)
 	record.Validated = workflow.Validated
 
+	if len(workflow.Owner) > 0 {
+		record.Creator = workflow.Owner
+	}
+
 	records := []AlgoliaSearchWorkflow{
 		record,
 	}
