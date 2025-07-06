@@ -7908,7 +7908,6 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 
 					// Check if current user is one of the few allowed
 					// This can only happen if the workflow doesn't already have an owner
-					found := false
 					if user.PublicProfile.Public && len(allowList) > 0 {
 						allowListSplit := strings.Split(allowList, ",")
 						for _, username := range allowListSplit {
@@ -7921,16 +7920,8 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 								log.Printf("[ERROR] Algolia Creator search error in public workflow edit: %s", err)
 								continue
 							}
-
-							found = true
 							break
 						}
-					}
-
-					if !found {
-						resp.WriteHeader(403)
-						resp.Write([]byte(`{"success": false}`))
-						return
 					}
 				}
 
@@ -7953,6 +7944,7 @@ func SaveWorkflow(resp http.ResponseWriter, request *http.Request) {
 					}
 				}
 			}
+
 
 			// FIX: Should check if this workflow has already been saved?
 			if !correctUser {
@@ -28791,29 +28783,29 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	// get the request body
-	type ReturnData struct {
-		OrgId    string `json:"suborg_id"`
-		Password string `json:"password"`
-	}
-
-	var tmpData ReturnData
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[WARNING] Failed reading body in delete org: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
-	}
-
-	err = json.Unmarshal(body, &tmpData)
-	if err != nil {
-		log.Printf("[WARNING] Failed unmarshalling body in delete org: %s", err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed unmarshalling body"}`))
-		return
-	}
-
 	if user.SessionLogin {
+
+		// get the request body
+		type ReturnData struct {
+			Password string `json:"password"`
+		}
+
+		var tmpData ReturnData
+		body, err := ioutil.ReadAll(request.Body)
+		if err != nil {
+			log.Printf("[WARNING] Failed reading body in delete org: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed reading body"}`))
+		}
+
+		err = json.Unmarshal(body, &tmpData)
+		if err != nil {
+			log.Printf("[WARNING] Failed unmarshalling body in delete org: %s", err)
+			resp.WriteHeader(500)
+			resp.Write([]byte(`{"success": false, "reason": "Failed unmarshalling body"}`))
+			return
+		}
+
 		// check if the password is correct
 		if len(tmpData.Password) == 0 {
 			log.Printf("[WARNING] No password provided in delete org request")
@@ -28831,7 +28823,7 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		}
 	}
 
-	parentOrg, err := GetOrg(ctx, fileId)
+	subOrg, err := GetOrg(ctx, fileId)
 	if err != nil {
 		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
 		resp.WriteHeader(500)
@@ -28839,18 +28831,18 @@ func HandleDeleteOrg(resp http.ResponseWriter, request *http.Request) {
 		return
 	}
 
-	subOrg, err := GetOrg(ctx, tmpData.OrgId)
-	if err != nil {
-		log.Printf("[WARNING] Failed getting org '%s': %s", tmpData.OrgId, err)
-		resp.WriteHeader(500)
-		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
+	if len(subOrg.CreatorOrg) == 0 {
+		log.Printf("[WARNING] Org '%s' has no parent org. Not deleting.", fileId)
+		resp.WriteHeader(400)
+		resp.Write([]byte(`{"success": false, "reason": "Org is not a child org of the parent org"}`))
 		return
 	}
 
-	if subOrg.CreatorOrg != parentOrg.Id {
-		log.Printf("[WARNING] Org '%s' is not a child org of '%s'. Not deleting.", tmpData.OrgId, fileId)
-		resp.WriteHeader(400)
-		resp.Write([]byte(`{"success": false, "reason": "Org is not a child org of the parent org"}`))
+	parentOrg, err := GetOrg(ctx, subOrg.CreatorOrg)
+	if err != nil {
+		log.Printf("[WARNING] Failed getting org '%s': %s", fileId, err)
+		resp.WriteHeader(500)
+		resp.Write([]byte(`{"success": false, "reason": "Failed getting org details"}`))
 		return
 	}
 
