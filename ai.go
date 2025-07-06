@@ -356,7 +356,7 @@ func FindHttpBody(fullBody []byte) (HTTPOutput, []byte, error) {
 	httpOutput := &HTTPOutput{} 
 	err := json.Unmarshal(fullBody, &kmsResponse)
 	if err != nil {
-		log.Printf("[ERROR] %s - Failed to unmarshal Schemaless response to match SubflowData struct (1): %s", string(fullBody), err)
+		log.Printf("[ERROR] Failed to unmarshal schemaless response '%s': %s - Match SubflowData struct (1)", err, string(fullBody))
 		return *httpOutput, []byte{}, err
 	}
 
@@ -4703,7 +4703,7 @@ func DeleteFileSingul(ctx context.Context, filepath string) error {
 	*/
 
 	//return DeleteFile(ctx, fileId)
-	log.Printf("[ERROR] DeleteFileSingul() is not implemented for shuffle backend, meaning self-correcting measure may not work.")
+	//log.Printf("[ERROR] DeleteFileSingul() is not implemented for shuffle backend, meaning self-correcting measure may not work.")
 	return nil 
 }
 
@@ -6309,16 +6309,20 @@ func runSupportRequest(ctx context.Context, input QueryInput) string {
 }
 
 func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) (Action, error) {
-	if debug { 
-		log.Printf("\n\nAI AGENT REWRITE (first request?). PARAMS: %d\n\n", len(startNode.Parameters))
-	}
-
 	//openai "github.com/sashabaranov/go-openai"
 	// Create the OpenAI body struct
-	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions  within categories you can choose from: ask: ask for human help. singul: `
+	systemMessage := `You are a general AI agent. You can make decisions based on the user input. You should output a list of decisions based on the input. Available actions within categories you can choose from are below. Only use built-in actions such as analyze (ai analysis) or ask (human analysis) if it makes sense.
+
+built-in: 
+analyze 
+ask 
+
+singul: `
 	userMessage := ""
 
-	openaiAllowedApps := []string{"openai", "grok"}
+	// Don't think this matters much
+	// See: https://github.com/Shuffle/singul?tab=readme-ov-file#llm-controls
+	openaiAllowedApps := []string{"openai"}
 	runOpenaiRequest := false
 	appname := ""
 
@@ -6342,9 +6346,11 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 					continue
 				}
 
-				systemMessage += fmt.Sprintf(", %s", strings.ReplaceAll(actionStr, " " , "_"))
+				systemMessage += fmt.Sprintf("%s\n", strings.ReplaceAll(actionStr, " " , "_"))
 
 			}
+
+			systemMessage += "\n\n"
 		}
 
 		if param.Name == "memory" {
@@ -6374,8 +6380,8 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 	completionRequest := openai.ChatCompletionRequest{
 		//Model: "gpt-4o-mini",
-		//Model: "gpt-4o",
-		Model: "o4-mini",
+		//Model: "gpt-4.1-mini",
+		Model: "o4-mini", // "gpt-4o-mini" is the same as "4o-mini" in OpenAI API
 		Messages: []openai.ChatCompletionMessage{
 			{
 				Role:    openai.ChatMessageRoleSystem,
@@ -6406,7 +6412,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (4): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (4): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6422,7 +6428,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (5): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6474,7 +6480,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (6): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (6): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6511,7 +6517,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (7): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (7): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6526,7 +6532,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (8): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (8): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6550,7 +6556,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		execution.Status = "ABORTED"
 		execution.Results = append(execution.Results, ActionResult{
 			Status: "ABORTED",
-			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (9): %s"}`, err),
+			Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (9): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 			Action: startNode,
 		})
 		go SetWorkflowExecution(ctx, execution, true)
@@ -6620,7 +6626,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 			execution.Status = "ABORTED"
 			execution.Results = append(execution.Results, ActionResult{
 				Status: "ABORTED",
-				Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (1): %s"}`, err),
+				Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (1): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 				Action: startNode,
 			})
 			go SetWorkflowExecution(ctx, execution, true)
@@ -6649,7 +6655,7 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 				execution.Status = "ABORTED"
 				execution.Results = append(execution.Results, ActionResult{
 					Status: "ABORTED",
-					Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): %s"}`, err),
+					Result: fmt.Sprintf(`{"success": false, "reason": "Failed to start AI Agent (3): %s"}`, strings.Replace(err.Error(), `"`, `\"`, -1)),
 					Action: startNode,
 				})
 				go SetWorkflowExecution(ctx, execution, true)
@@ -6715,6 +6721,16 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 		// Set the raw response
 		if !strings.HasPrefix(decisionString, `[`) || !strings.HasSuffix(decisionString, `]`) {
 			decisionString = choicesString
+		}
+
+		// Find the first one and remove anything until that point
+		if !strings.HasPrefix(decisionString, `[`) {
+			firstIndex := strings.Index(decisionString, "[")
+			if firstIndex != -1 {
+				decisionString = decisionString[firstIndex:]
+			} else {
+				log.Printf("[WARNING][%s] No '[' found in AI Agent response. Using full response: %s", execution.ExecutionId, decisionString)
+			}
 		}
 
 		errorMessage := ""
