@@ -33,8 +33,9 @@ import (
 
 //var model = "gpt-4-turbo-preview"
 //var model = "gpt-4o-mini"
+//var model = "o4-mini"
 var standalone bool
-var model = "o4-mini"
+var model = "gpt-4.1-mini"
 var fallbackModel = ""
 var assistantId = os.Getenv("OPENAI_ASSISTANT_ID") 
 var assistantModel = model
@@ -719,6 +720,7 @@ Strict output rules to follow:
 3. Output Format:
    - Provide corrected JSON
    - No comments. Must be valid JSON.
+   - Headers should be separated by newline between each key:value pair
    - Do NOT make the same output mistake twice. 
 
 4. Error Handling:
@@ -1325,7 +1327,7 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 
 		if len(foundCategory.Name) == 0 {
 			log.Printf("[DEBUG] No category found for app %s (%s). Checking based on input label, then using that category in app setup", app.Name, app.ID)
-			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. Output as only JSON."`
+			systemMessage := `Your goal is to find the correct CATEGORY for the app to be in. Synonyms are accepted, and you should be very critical to not make mistakes. If none match, don't add any. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate. If it exists, return {"success": true, "category": "<category>"} where <category> is replaced with the category found. If it does not exist, return {"success": false, "category": "Other"}. Output as JSON."`
 
 			categories := ""
 			for _, category := range availableCategories {
@@ -1423,13 +1425,34 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 	//userMessage := "The available actions are as follows:\n"
 
 	if cacheGeterr != nil {
-		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: cases = alerts = issues = tasks, or messages = chats = communicate = contacts. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as only JSON."`
+		systemMessage := `Your goal is to find the most correct action for a specific label from the actions. You have to pick the most likely action. Synonyms are accepted, and you should be very critical to not make mistakes. A synonym example can be something like: case = alert = ticket = issue = task, or message = chat = communication. Be extra careful of not confusing LIST and GET operations, based on the user query, respond with the most likely action. If it exists, return {"success": true, "action": "<action>"} where <action> is replaced with the action found. If it does not exist, Last case scenario is return {"success": false, "action": ""}. Output as JSON."`
 		userMessage := fmt.Sprintf("Out of the following actions, which action matches '%s'?\n", label)
 
+		//changedNames := map[string]string{}
 		for _, action := range app.Actions {
 			if action.Name == "custom_action" {
 				continue
 			}
+
+			//userMessage += fmt.Sprintf("%s\n", action.Name)	
+			/*
+			newName := action.Name
+			if strings.HasPrefix(newName, "get_list") {
+				newName = strings.Replace(newName, "get_list", "list", 1)
+			} 
+
+			if strings.HasPrefix(newName, "post_") {
+				newName = strings.Replace(newName, "post_", "", 1)
+			} else if strings.HasPrefix(newName, "patch_") {
+				newName = strings.Replace(newName, "patch_", "", 1)
+			} else if strings.HasPrefix(newName, "put_") {
+				newName = strings.Replace(newName, "put_", "", 1)
+			} 
+
+			if newName != action.Name {
+				changedNames[action.Name] = newName
+			}
+			*/
 
 			userMessage += fmt.Sprintf("%s\n", action.Name)	
 		}
@@ -1438,8 +1461,14 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 			userMessage += fmt.Sprintf("\nUse the keys provided by the user. Your goal is to guess the action name with it's name as well. Keys: %s\n", strings.Join(keys, ", "))
 		}
 
-		log.Printf("[INFO] System message (find action): %s", systemMessage)
-		log.Printf("[INFO] User message (find action): %s", userMessage)
+		if debug { 
+			log.Printf("[DEBUG] System message (find action): %s", systemMessage)
+			log.Printf("[DEBUG] User message (find action): %s", userMessage)
+		}
+
+		if project.Environment == "cloud" {
+
+		}
 
 		output, err := RunAiQuery(systemMessage, userMessage) 
 		if err != nil {
@@ -1447,10 +1476,11 @@ func AutofixAppLabels(app WorkflowApp, label string, keys []string) (WorkflowApp
 			return app, WorkflowAppAction{}
 		} 
 
+		if debug {
+			log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
+		}
+
 		output = FixContentOutput(output)
-
-		log.Printf("[DEBUG] Autocomplete output for label '%s' in '%s' (%d actions): %s", label, app.Name, len(app.Actions), output)
-
 		err = json.Unmarshal([]byte(output), &actionStruct)
 		if err != nil {
 			log.Printf("[ERROR] FAILED action mapping parsed output: %s", output)
@@ -6862,6 +6892,135 @@ func HandleAiAgentExecutionStart(execution WorkflowExecution, startNode Action) 
 
 }
 
+// Generates Workflows based on Singul
+// Main question: 
+// - Should we pre-define these? Or should it just "figure it out"?
+
+// Specific requirement for threatlist(s):
+// - URLs
+// - Where to put it (?)
+
+func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
+	cors := HandleCors(resp, request)
+	if cors {
+		return
+	}
+
+	// Input data:
+	// Data type (e.g. list_tickets, list_assets, threatlist_monitor etc)
+	user, err := HandleApiAuthentication(resp, request)
+	if err != nil {
+		log.Printf("[INFO] Failed to authenticate user in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusUnauthorized)
+		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
+		return
+	}
+
+	if user.Role == "org-reader" {
+		log.Printf("[WARNING] Org-reader doesn't have access to generate singul workflows: %s (%s)", user.Username, user.Id)
+		resp.WriteHeader(403)
+		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
+		return
+	}
+
+	body, err := ioutil.ReadAll(request.Body)
+	if err != nil {
+		log.Printf("[ERROR] Failed reading request body in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
+		return
+	}
+
+	categoryAction := CategoryAction{}
+	err = json.Unmarshal(body, &categoryAction)
+	if err != nil {
+		log.Printf("[ERROR] Failed unmarshalling request body in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to parse request body"}`))
+		return
+	}
+
+	if len(categoryAction.Label) == 0 {
+		log.Printf("[ERROR] No label found in request body in GenerateSingulWorkflows")
+		resp.WriteHeader(http.StatusBadRequest)
+		resp.Write([]byte(`{"success": false, "reason": "No label found in request body"}`))
+		return
+	}
+
+	log.Printf("[AUDIT] Allowing user %s (%s) to generate singul workflows for category '%s'", user.Username, user.Id, categoryAction.Label)
+
+	// Removing unecessary fields just in case
+	categoryAction = CategoryAction{
+		AppName: categoryAction.AppName,
+		Label: categoryAction.Label,
+
+		Fields: categoryAction.Fields,
+		Category: categoryAction.Category,
+	}
+
+	// Deterministic IDs for the specific type. This is to ensure
+	// we just modify the existing one.
+	seedString := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, categoryAction.Label)
+	//if len(categoryAction.AppName) > 0 && categoryAction.AppName != categoryAction.Label {
+	//	seedString = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, categoryAction.Label, categoryAction.AppName)
+	//}
+
+	hash := sha1.New()
+	hash.Write([]byte(seedString))
+	hashBytes := hash.Sum(nil)
+
+	uuidBytes := make([]byte, 16)
+	copy(uuidBytes, hashBytes)
+	workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
+
+	if debug {
+		log.Printf("[DEBUG] Getting workflow with ID %s for category '%s'", workflowId, categoryAction.Label)
+	}
+
+	ctx := GetContext(request)
+	workflow, err := GetWorkflow(ctx, workflowId)
+	if err != nil || workflow.ID == "" {
+		log.Printf("[WARNING] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
+	}
+
+	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction)
+	if err != nil {
+		log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
+		return
+	}
+
+	workflow = &newWorkflow
+	workflow.ID = workflowId
+
+	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
+		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", workflowId, user.ActiveOrg.Id, workflow.OrgId)
+		resp.WriteHeader(http.StatusForbidden)
+		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
+		return
+	}
+
+	if len(workflow.ID) == 0 || len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
+		log.Printf("[ERROR] No workflow found for ID %s in GenerateSingulWorkflows", workflowId)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
+		return
+	}
+
+	workflow.OrgId = user.ActiveOrg.Id
+	err = SetWorkflow(ctx, *workflow, workflow.ID)
+	if err != nil {
+		log.Printf("[ERROR] Failed to set workflow in GenerateSingulWorkflows: %s", err)
+		resp.WriteHeader(http.StatusInternalServerError)
+		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
+		return
+	}
+
+	resp.WriteHeader(http.StatusOK)
+	resp.Write([]byte(fmt.Sprintf(`{"success": true, "reason": "Workflow generated", "id": "%s"}`, workflow.ID)))
+}
+
 // Runs ANY AI query based on the system message and user message.
 // This can also be overridden by passing in a custom OpenAI ChatCompletion request
 func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.ChatCompletionRequest) (string, error) {
@@ -7038,380 +7197,4 @@ func RunAiQuery(systemMessage, userMessage string, incomingRequest ...openai.Cha
 	}
 
 	return contentOutput, nil
-}
-
-// These are just specific examples for specific cases
-// FIXME: Should these be loaded from public workflows?
-// I kind of think so ~
-// That means each algorithm needs to be written as if-statements to
-// replace a specific part of a workflow :thinking:
-
-// Should workflows be written as YAML and be text-editable? 
-func GetDefaultWorkflowByType(workflow Workflow, orgId, actionType string) (Workflow, error) {
-	if len(orgId) == 0 {
-		return workflow, errors.New("Organization ID is empty")
-	}
-
-	parsedActiontype := strings.ReplaceAll(strings.ToLower(actionType), " ", "_")
-	if strings.Contains(strings.ToLower(actionType), "threat feed") {
-		parsedActiontype = "threatlist_monitor"
-	}
-
-	// If-else with specific rules per workflow
-	// Make sure it uses workflow -> copies data, as 
-	startActionId := uuid.NewV4().String()
-	startTriggerId := uuid.NewV4().String()
-
-	actionEnv := "cloud"
-	triggerEnv := "cloud"
-	ctx := context.Background()
-	if project.Environment != "cloud" {
-		triggerEnv = "onprem"
-
-		envs, err := GetEnvironments(ctx, orgId)
-		if err == nil { 
-			for _, env := range envs {
-				if env.Default {
-					actionEnv = env.Name
-					break
-				}
-			}
-		} else { 
-			actionEnv = "shuffle"
-		}
-	}
-
-	if parsedActiontype == "ingest_tickets" {
-		log.Printf("INGESTING TICKETS YAY")
-
-		defaultWorkflow := Workflow{
-			Name: actionType,
-			Description: "Monitor threatlists and ingest regularly",
-			OrgId: orgId,
-			Start: startActionId,
-			Actions: []Action{
-				Action{
-					Name: "Cases",
-					AppID: "integration",
-					AppName: "Singul",
-					ID: startActionId,
-					AppVersion: "1.0.0",
-					Environment: actionEnv,
-					Label: "List tickets",
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "action",
-							Value: "list_tickets",
-						},
-					},
-				},
-			},
-			Triggers: []Trigger{
-				Trigger{
-					ID: startTriggerId,
-					TriggerType: "SCHEDULE",
-					Label: "Pull threatlist URLs",
-					Environment: triggerEnv,
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "cron",
-							Value: "0 0 * * *", 
-						},
-						WorkflowAppActionParameter{
-							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle", 
-						},
-					},
-				},
-			},
-		}
-
-		workflow = defaultWorkflow
-		workflow.OrgId = orgId
-	} else if parsedActiontype == "threatlist_monitor" {
-		defaultWorkflow := Workflow{
-			Name: actionType,
-			Description: "Monitor threatlists and ingest regularly",
-			OrgId: orgId,
-			Start: startActionId,
-			Actions: []Action{
-				Action{
-					Name: "GET",
-					AppID: "HTTP",
-					AppName: "HTTP",
-					ID: startActionId,
-					AppVersion: "1.4.0",
-					Environment: actionEnv,
-					Label: "Get threatlist URLs",
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "url",
-							Value: "$shuffle_cache.threatlist_urls.value.#",
-						},
-					},
-				},
-				Action{
-					Name: "parse_ioc",
-					AppID: "Shuffle Tools",
-					AppName: "Shuffle Tools",
-					ID: uuid.NewV4().String(),
-					AppVersion: "1.2.0",
-					Environment: actionEnv,
-					Label: "Parse IOC",
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "input_string",
-							Value: "$get_threatlist_urls.#.body",
-						},
-						WorkflowAppActionParameter{
-							Name:  "input_type",
-							Value: "domain,ipv4,sha256",
-						},
-					},
-				},
-			},
-			Triggers: []Trigger{
-				Trigger{
-					ID: startTriggerId,
-					TriggerType: "SCHEDULE",
-					Label: "Pull threatlist URLs",
-					Environment: triggerEnv,
-					Parameters: []WorkflowAppActionParameter{
-						WorkflowAppActionParameter{
-							Name:  "cron",
-							Value: "0 0 * * *", 
-						},
-						WorkflowAppActionParameter{
-							Name:  "execution_argument",
-							Value: "Automatically configured by Shuffle", 
-						},
-					},
-				},
-			},
-		}
-
-		// For now while testing
-		workflow = defaultWorkflow
-		workflow.OrgId = orgId
-
-		/*
-		if len(workflow.WorkflowVariables) == 0 {
-			workflow.WorkflowVariables = defaultWorkflow.WorkflowVariables
-		}
-
-		if len(workflow.Actions) == 0 {
-			workflow.Actions = defaultWorkflow.Actions
-		}
-
-		// Rules specific to this one
-		if len(workflow.Triggers) == 0 {
-			workflow.Triggers = defaultWorkflow.Triggers
-		}
-		*/
-
-		// Get the item with key "threatlist_urls" from datastore
-		ctx := GetContext(nil)
-		_, err := GetDatastoreKey(ctx, "threatlist_urls", "")
-		if err != nil {
-			//log.Printf("[INFO] Failed to get threatlist URLs from datastore. Making it.: %s", err)
-			urls := []string{
-				"https://sslbl.abuse.ch/blacklist/sslblacklist.csv",
-			}
-
-			jsonMarshalled, err := json.Marshal(urls)
-			if err != nil {
-				log.Printf("[ERROR] Failed to marshal threatlist URLs: %s", err)
-			} else {
-				key := CacheKeyData{
-					Key: "threatlist_urls",
-					Value: fmt.Sprintf(`%s`, string(jsonMarshalled)),
-					OrgId: orgId,
-				}
-
-				err = SetDatastoreKey(ctx, key)
-				if err != nil {
-					log.Printf("[ERROR] Failed to set threatlist URLs in datastore: %s", err)
-				} else {
-					log.Printf("[INFO] Successfully set threatlist URLs in datastore")
-				}
-			}
-		}
-	}
-
-	if len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
-		return workflow, errors.New("Workflow name or ID is empty")
-	}
-
-	if workflow.Actions[0].Position.X == 0 && workflow.Actions[0].Position.Y == 0 {
-		addition := float64(200)
-		startXPosition := float64(0)
-		startYPosition := float64(0)
-		for triggerIndex, _ := range workflow.Triggers {
-			workflow.Triggers[triggerIndex].Position = Position{
-				X: startXPosition,
-				Y: startYPosition,
-			}
-
-			startXPosition += addition 
-		}
-
-		for actionIndex, _ := range workflow.Actions {
-			workflow.Actions[actionIndex].Position = Position{
-				X: startXPosition,
-				Y: startYPosition, 
-			}
-
-			startXPosition += addition 
-		}
-	}
-
-	if len(workflow.Actions)+len(workflow.Triggers) > 1 {
-		if len(workflow.Branches) == 0 {
-			// Connect from trigger -> action
-
-			sourceId := ""
-			destId := ""
-			if len(workflow.Triggers) == 1 {
-				sourceId = workflow.Triggers[0].ID
-				destId = workflow.Start
-			}
-
-			newBranch := Branch{
-				SourceID: sourceId,
-				DestinationID: destId,
-				ID: uuid.NewV4().String(),
-			}
-
-			workflow.Branches = append(workflow.Branches, newBranch)
-		}
-	}
-
-	return workflow, nil
-}
-
-// Generates Workflows based on Singul
-// Main question: 
-// - Should we pre-define these? Or should it just "figure it out"?
-
-// Specific requirement for threatlist(s):
-// - URLs
-// - Where to put it (?)
-
-func GenerateSingulWorkflows(resp http.ResponseWriter, request *http.Request) {
-	cors := HandleCors(resp, request)
-	if cors {
-		return
-	}
-
-	// Input data:
-	// Data type (e.g. list_tickets, list_assets, threatlist_monitor etc)
-	user, err := HandleApiAuthentication(resp, request)
-	if err != nil {
-		log.Printf("[INFO] Failed to authenticate user in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusUnauthorized)
-		resp.Write([]byte(`{"success": false, "reason": "Unauthorized"}`))
-		return
-	}
-
-	if user.Role == "org-reader" {
-		log.Printf("[WARNING] Org-reader doesn't have access to generate singul workflows: %s (%s)", user.Username, user.Id)
-		resp.WriteHeader(403)
-		resp.Write([]byte(`{"success": false, "reason": "Read only user"}`))
-		return
-	}
-
-	body, err := ioutil.ReadAll(request.Body)
-	if err != nil {
-		log.Printf("[ERROR] Failed reading request body in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to read request body"}`))
-		return
-	}
-
-	categoryAction := CategoryAction{}
-	err = json.Unmarshal(body, &categoryAction)
-	if err != nil {
-		log.Printf("[ERROR] Failed unmarshalling request body in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to parse request body"}`))
-		return
-	}
-
-	if len(categoryAction.Label) == 0 {
-		log.Printf("[ERROR] No label found in request body in GenerateSingulWorkflows")
-		resp.WriteHeader(http.StatusBadRequest)
-		resp.Write([]byte(`{"success": false, "reason": "No label found in request body"}`))
-		return
-	}
-
-	log.Printf("[AUDIT] Allowing user %s (%s) to generate singul workflows for category '%s'", user.Username, user.Id, categoryAction.Label)
-
-	// Removing unecessary fields just in case
-	categoryAction = CategoryAction{
-		AppName: categoryAction.AppName,
-		Label: categoryAction.Label,
-		Fields: categoryAction.Fields,
-	}
-
-	// Deterministic IDs for the specific type. This is to ensure
-	// we just modify the required.
-	seedString := fmt.Sprintf("%s_%s", user.ActiveOrg.Id, categoryAction.Label)
-	if len(categoryAction.AppName) > 0 && categoryAction.AppName != categoryAction.Label {
-		seedString = fmt.Sprintf("%s_%s_%s", user.ActiveOrg.Id, categoryAction.Label, categoryAction.AppName)
-	}
-
-	hash := sha1.New()
-	hash.Write([]byte(seedString))
-	hashBytes := hash.Sum(nil)
-
-	uuidBytes := make([]byte, 16)
-	copy(uuidBytes, hashBytes)
-	workflowId := uuid.Must(uuid.FromBytes(uuidBytes)).String()
-
-	if debug {
-		log.Printf("[DEBUG] Getting workflow with ID %s for category '%s'", workflowId, categoryAction.Label)
-	}
-
-	ctx := GetContext(request)
-	workflow, err := GetWorkflow(ctx, workflowId)
-	if err != nil || workflow.ID == "" {
-		log.Printf("[WARNING] Failed to get workflow by ID in GenerateSingulWorkflows: %s", err)
-	}
-
-	newWorkflow, err := GetDefaultWorkflowByType(*workflow, user.ActiveOrg.Id, categoryAction.Label)
-	if err != nil {
-		log.Printf("[ERROR] Failed to get default workflow in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to get default workflow for this category. Please contact support@shuffler.io"}`))
-		return
-	}
-
-	workflow = &newWorkflow
-	workflow.ID = workflowId
-
-	if workflow.OrgId != user.ActiveOrg.Id && len(workflow.OrgId) > 0 {
-		log.Printf("[ERROR] Workflow with ID %s is not owned by the current organization (%s). It belongs to %s", workflowId, user.ActiveOrg.Id, workflow.OrgId)
-		resp.WriteHeader(http.StatusForbidden)
-		resp.Write([]byte(`{"success": false, "reason": "Workflow does not belong to your organization. Please contact support@shuffler.io if this persists"}`))
-		return
-	}
-
-	if len(workflow.ID) == 0 || len(workflow.Name) == 0 || len(workflow.Actions) == 0 {
-		log.Printf("[ERROR] No workflow found for ID %s in GenerateSingulWorkflows", workflowId)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false, "reason": "No workflow found for this ID"}`))
-		return
-	}
-
-	workflow.OrgId = user.ActiveOrg.Id
-	err = SetWorkflow(ctx, *workflow, workflow.ID)
-	if err != nil {
-		log.Printf("[ERROR] Failed to set workflow in GenerateSingulWorkflows: %s", err)
-		resp.WriteHeader(http.StatusInternalServerError)
-		resp.Write([]byte(`{"success": false, "reason": "Failed to set workflow"}`))
-		return
-	}
-
-	resp.WriteHeader(http.StatusOK)
-	resp.Write([]byte(`{"success": true, "reason": "Not implemented yet"}`)) 
 }

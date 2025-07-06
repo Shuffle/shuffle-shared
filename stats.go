@@ -1340,7 +1340,9 @@ func handleDailyCacheUpdate(executionInfo *ExecutionInfo) *ExecutionInfo {
 	executionInfo.WeeklyCloudExecutions = 0
 	executionInfo.WeeklyOnpremExecutions = 0
 
+	// Cleans up "random" stats as well
 	for additionIndex, _ := range executionInfo.Additions {
+		executionInfo.Additions[additionIndex].Value = 0
 		executionInfo.Additions[additionIndex].DailyValue = 0
 	}
 
@@ -1459,6 +1461,7 @@ func HandleIncrement(dataType string, orgStatistics *ExecutionInfo, increment ui
 
 	if appendCustom {
 		//log.Printf("[DEBUG] Appending custom data type %s for org %s", dataType, orgStatistics.OrgId)
+		dataType = strings.ToLower(strings.Replace(dataType, " ", "_", -1))
 
 		found := false
 		for additionIndex, addition := range orgStatistics.Additions {

@@ -1114,6 +1114,7 @@ func SanitizeExecution(workflowExecution WorkflowExecution) WorkflowExecution {
 	return workflowExecution
 }
 
+// Sanitizes Liquid formatting to ensure it can't run retroactively
 func sanitizeString(input string) string {
 	// Sanitize instances of {{...}}
 	for strings.Contains(input, "{{") && strings.Contains(input, "}}") {
@@ -12693,13 +12694,12 @@ func GetDatastoreKey(ctx context.Context, id string, category string) (*CacheKey
 	}
 
 	// NOT returning without this, as we want to cache even when
-	// there isn't data in the key. This just makes general loading of individual
-	// keys faster
-	if len(cacheData.Key) > 0 {
-		if debug {
-			log.Printf("[DEBUG] Found key '%s' in datastore with org '%s' and category '%s'", cacheData.Key, cacheData.OrgId, cacheData.Category)
-		}
-	}
+	// there isn't data in the key. This just makes general loading of individual keys faster
+	//if len(cacheData.Key) > 0 {
+	//	if debug {
+	//		log.Printf("[DEBUG] Found key '%s' in datastore with org '%s' and category '%s'", cacheData.Key, cacheData.OrgId, cacheData.Category)
+	//	}
+	//}
 
 	if project.CacheDb {
 		data, err := json.Marshal(cacheData)

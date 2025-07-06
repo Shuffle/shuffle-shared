@@ -29933,11 +29933,11 @@ func HandleExecutionCacheIncrement(ctx context.Context, execution WorkflowExecut
 	}
 
 	for key, value := range actionLabelSuccess {
-		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("categorylabel_success_%s", key), value)
+		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("singul_success_%s", key), value)
 	}
 
 	for key, value := range actionLabelFails {
-		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("categorylabel_fail_%s", key), value)
+		IncrementCache(ctx, execution.ExecutionOrg, fmt.Sprintf("singul_fail_%s", key), value)
 	}
 }
 
