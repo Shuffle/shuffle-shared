@@ -206,6 +206,7 @@ type WorkflowApp struct {
 	Description              string              `json:"description" datastore:"description,noindex"`
 	DocumentationDownloadUrl string              `json:"documentation_download_url" datastore:"documentation_download_url"`
 	PrimaryUsecases          []string            `json:"primary_usecases" yaml:"primary_usecases"  datastore:"primary_usecases"`
+	SubOrgDistribution       []string            `json:"suborg_distribution" yaml:"suborg_distribution" datastore:"suborg_distribution"`
 
 	SkippedBuild bool `json:"skipped_build" yaml:"skipped_build" required:false datastore:"skipped_build"`
 	//SelectedTemplate WorkflowApp         `json:"selected_template" datastore:"selected_template,noindex"`

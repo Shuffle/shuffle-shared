@@ -13513,6 +13513,11 @@ func GetWorkflowAppConfig(resp http.ResponseWriter, request *http.Request) {
 				}
 			}
 
+			if ArrayContains(app.SubOrgDistribution, user.ActiveOrg.Id) {
+				log.Printf("[AUDIT] User %s (%s) is in suborg %s for app %s (%s)", user.Username, user.Id, user.ActiveOrg.Id, app.Name, app.ID)
+				exit = false
+			}
+
 			if exit {
 				log.Printf("[AUDIT] Wrong user (%s) for app %s (%s) - get app config", user.Username, app.Name, app.ID)
 				resp.WriteHeader(401)
