@@ -4142,6 +4142,7 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 	for _, user := range data.Users {
 		user.Password = ""
 		user.Session = ""
+		user.ApiKey = ""
 		user.PrivateApps = []WorkflowApp{}
 		user.MFA = MFAInfo{}
 		user.Authentication = []UserAuth{}
@@ -4149,6 +4150,8 @@ func SetOrg(ctx context.Context, data Org, id string) error {
 		user.PublicProfile = PublicProfile{}
 		user.LoginInfo = []LoginInfo{}
 		user.PersonalInfo = PersonalInfo{}
+
+		//user.Orgs = []string{}
 
 		newUsers = append(newUsers, user)
 	}
@@ -13871,7 +13874,9 @@ func GetAppStats(ctx context.Context, id string) (*Conversionevents, error) {
 	} else {
 		key := datastore.NameKey(nameKey, id, nil)
 		if err := project.Dbclient.Get(ctx, key, stats); err != nil {
-			log.Printf("[WARNING] Error in appstats loading of %s: %s", id, err)
+			if !strings.Contains(err.Error(), `cannot load field`) {
+				log.Printf("[ERROR] Error in appstats loading of %s: %s", id, err)
+			}
 		}
 	}
 
